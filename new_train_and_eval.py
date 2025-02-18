@@ -60,7 +60,6 @@ def transform_node_feats(a):
     transformed[:, 6] = torch.where(a[:, 6] == 3, 1,
     torch.where(a[:, 6] == 0, 20, torch.where(a[:, 6] == 1, 10,
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
-
     return transformed
 
 
