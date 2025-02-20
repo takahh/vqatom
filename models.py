@@ -61,7 +61,6 @@ class WeightedThreeHopGCN(nn.Module):
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
         new_graph_dict = {}
-        new_edata_dict = {}
 
         for etype in batched_graph.etypes:
             # Apply to_simple for each edge type
