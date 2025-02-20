@@ -58,6 +58,8 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         # collect data for molecule images
         # --------------------------------
+        batched_graph = dgl.remove_self_loop(batched_graph)
+        batched_graph = dgl.to_simple(batched_graph, return_counts=None)
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         print("sample_adj")
