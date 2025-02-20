@@ -60,7 +60,8 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
-        batched_graph = dgl.to_simple(batched_graph, return_counts=True, copy_edata=True)
+        batched_graph, counts = dgl.to_simple(batched_graph, return_counts=True, copy_edata=True)
+        print(counts)
         adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         print("sample_adj")
