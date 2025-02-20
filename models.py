@@ -61,7 +61,7 @@ class WeightedThreeHopGCN(nn.Module):
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         print("sample_adj")
-        print(sample_adj)
+        print(sample_adj[:20, :20])
         if batched_graph_base:
             adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
