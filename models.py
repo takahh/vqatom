@@ -60,8 +60,18 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
-        batched_graph, counts = dgl.to_simple(batched_graph, return_counts=True, copy_edata=True)
-        print(counts)
+        new_graph_dict = {}
+        new_edata_dict = {}
+
+        for etype in batched_graph.etypes:
+            # Apply to_simple for each edge type
+            simple_graph, counts = dgl.to_simple(
+                batched_graph[etype], return_counts=True, copy_edata=True
+            )
+            new_graph_dict[etype] = simple_graph
+
+        # Create a new heterograph with the simplified edges
+        batched_graph = dgl.heterograph(new_graph_dict)
         adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         print("sample_adj")
