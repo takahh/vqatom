@@ -311,6 +311,8 @@ def run_inductive(
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = 400  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
+                    if i == 3:
+                        break
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # -----------------------------------------------
