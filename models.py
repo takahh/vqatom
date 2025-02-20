@@ -61,19 +61,26 @@ class WeightedThreeHopGCN(nn.Module):
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
 
-        # Explicitly use "_E" as the edge type
-        etype = "_E"
+        etype = "_E"  # Assuming this is the correct edge type
 
         if etype in batched_graph.etypes:
-            simple_graph, counts = dgl.to_simple(
-                batched_graph[etype], return_counts=True, copy_edata=True
-            )
+            subgraph = batched_graph[etype]
 
-            # Reconstruct the heterogeneous graph with the simplified edges
-            batched_graph = dgl.heterograph({etype: simple_graph.edges()})
+            if subgraph.num_edges() > 0:  # Ensure edges exist before simplification
+                simple_graph, counts = dgl.to_simple(
+                    subgraph, return_counts=True, copy_edata=True
+                )
 
-            # If you want to preserve edge data, manually assign it back
-            batched_graph.edata.update(simple_graph.edata)
+                # Reconstruct the heterogeneous graph
+                batched_graph = dgl.heterograph({etype: simple_graph.edges()})
+
+                # Transfer edge data if needed
+                if "edata" in subgraph.ndata:
+                    batched_graph.edata.update(simple_graph.edata)
+
+                print("Simplification successful.")
+            else:
+                print(f"No edges to simplify for edge type {etype}.")
         else:
             print(f"Edge type '{etype}' not found in the graph.")
 
