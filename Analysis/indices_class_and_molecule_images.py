@@ -87,10 +87,14 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
         mol_bond = arr_bond_order[mask]
+        print("mol_features")
+        print(mol_features)
         print("mol_bond")
         print(mol_bond)
         print("mol_src")
         print(mol_src)
+        print("mol_dst")
+        print(mol_dst)
 
         # Create RDKit molecule
         mol = Chem.RWMol()

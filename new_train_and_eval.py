@@ -180,7 +180,11 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
-
+            print("===================")
+            print("filtered_adj_matrix")
+            print(filtered_adj_matrix)
+            print("filtered_attr_matrix")
+            print(filtered_attr_matrix)
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             #
             # # Add self-loops if needed
