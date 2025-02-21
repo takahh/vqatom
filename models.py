@@ -56,6 +56,7 @@ class WeightedThreeHopGCN(nn.Module):
             self.vq(h, init_feat, epoch)
         import dgl
         import dgl
+        import dgl
 
         # --------------------------------
         # Collect data for molecule images
@@ -85,8 +86,12 @@ class WeightedThreeHopGCN(nn.Module):
                 print("Simplified graph edge data keys:", simple_graph.edata.keys())
 
                 if simple_graph.num_edges() > 0:
-                    # Convert the simple graph back into a heterogeneous graph
-                    new_data_dict = {etype: simple_graph.edges()}
+                    # Convert back to heterogeneous graph
+                    src, dst = simple_graph.edges()
+
+                    # Explicitly set the correct edge type
+                    new_data_dict = {(etype, "to", etype): (src, dst)}
+
                     num_nodes_dict = {
                         ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes
                     }
