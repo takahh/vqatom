@@ -61,59 +61,36 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
-        if batched_graph.is_homogeneous:
-            print("The graph is homogeneous.")
-        else:
-            print("The graph is heterogeneous.")
+        import dgl
+        import torch
 
-        etype = "_E"  # Assuming this is the correct edge type
+        # -------------------------------
+        # Collect data for molecule images
+        # -------------------------------
+        batched_graph = dgl.remove_self_loop(batched_graph)
+        batched_graph = batched_graph.to("cpu")
+
+        print(f"Graph is homogeneous: {batched_graph.is_homogeneous}")
         print(f"Available edge types: {batched_graph.etypes}")
 
-        adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
-        sample_adj = adj_matrix.to_dense()
-        print("sample_adj")
-        print(sample_adj[:20, :20])
-        # Ensure the edge type exists
-        if etype in batched_graph.etypes:
-            subgraph = batched_graph[etype]
-            print(f"Subgraph ({etype}) has {subgraph.num_edges()} edges.")
+        # Get adjacency matrix
+        adj = batched_graph.adjacency_matrix(scipy_fmt="coo")
 
-            if subgraph.num_edges() > 0:  # Ensure edges exist before simplification
-                # Debug: Check edge data before simplification
-                print("Subgraph edge data keys:", subgraph.edata.keys())
+        # Zero out upper triangular part (excluding diagonal)
+        mask = adj.row > adj.col  # Keep only lower-triangular part
+        src = torch.tensor(adj.row[mask])
+        dst = torch.tensor(adj.col[mask])
 
-                # Convert to a simple graph (homogeneous)
-                simple_graph, counts = dgl.to_simple(
-                    subgraph, return_counts=True, copy_edata=True
-                )
-                print(f"Simplified graph has {simple_graph.num_edges()} edges.")
+        # Create a new graph with only the lower triangular edges
+        batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
-                # Debug: Check edge data after simplification
-                print("Simplified graph edge data keys:", simple_graph.edata.keys())
+        print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
 
-                if simple_graph.num_edges() > 0:
-                    # Convert back to heterogeneous graph
-                    src, dst = simple_graph.edges()
+        # If edge data exists, transfer it back
+        if "weight" in batched_graph.edata:
+            batched_graph.edata["weight"] = torch.tensor(adj.data[mask])
 
-                    # Explicitly assign back the edge type
-                    new_data_dict = {('_N', etype, '_N'): (src, dst)}
-
-                    # Use the original node type for correct reconstruction
-                    num_nodes_dict = {ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes}
-
-                    batched_graph = dgl.heterograph(new_data_dict, num_nodes_dict=num_nodes_dict)
-
-                    # Ensure edge data is transferred
-                    for key in simple_graph.edata.keys():
-                        batched_graph.edges[etype].data[key] = simple_graph.edata[key]
-
-                    print("Simplification successful. New edge types:", batched_graph.etypes)
-                else:
-                    print("Warning: Simplified graph has no edges. Skipping reconstruction.")
-            else:
-                print(f"No edges to simplify for edge type {etype}.")
-        else:
-            print(f"Error: Edge type '{etype}' not found in the graph.")
+        print("Simplification successful.")
 
         # Create a new heterograph with the simplified edges
         # batched_graph = dgl.heterograph(batched_graph)
