@@ -55,28 +55,20 @@ class WeightedThreeHopGCN(nn.Module):
 
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
+        import torch
 
-        edge_weight = batched_graph[edge_type].edata["weight"].float()
-        print(edge_weight.shape)
-        # Convert edge_weight using dictionary mapping
-        weight1 = self.bond_weight(torch.tensor([1], dtype=torch.long, device=edge_weight.device))
-        weight2 = self.bond_weight(torch.tensor([2], dtype=torch.long, device=edge_weight.device))
-        weight3 = self.bond_weight(torch.tensor([3], dtype=torch.long, device=edge_weight.device))
-        weight4 = self.bond_weight(torch.tensor([4], dtype=torch.long, device=edge_weight.device))
+        # Assuming bond_weight is an embedding layer
+        bond_weight = torch.nn.Embedding(5, 1)  # Example with 5 embeddings of size 1
 
-        transformed_edge_weight = torch.where(
-            edge_weight == 1.0, weight1,
-            torch.where(
-                edge_weight == 2.0, weight2,
-                torch.where(
-                    edge_weight == 3.0, weight3,
-                    torch.where(
-                        edge_weight == 4.0, weight4,
-                        torch.zeros_like(weight1, dtype=torch.float)  # Default value for unmatched cases
-                    )
-                )
-            )
-        ).to(dtype=torch.float, device=edge_weight.device)
+        edge_weight = batched_graph[edge_type].edata["weight"].long()  # Ensure long dtype for indexing
+
+        # Map edge weights to embedding indices (default 0 for unknown weights)
+        weight_map = torch.tensor([0, 1, 2, 3, 4], dtype=torch.long, device=edge_weight.device)
+        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight,
+                                     torch.tensor(0, device=edge_weight.device))
+
+        # Get transformed edge weights
+        transformed_edge_weight = bond_weight(mapped_indices).squeeze(-1)
 
         # edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         edge_weight = transformed_edge_weight
