@@ -85,8 +85,8 @@ class WeightedThreeHopGCN(nn.Module):
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
-        # Restore edge weight
-        batched_graph.edata["weight"] = edge_weight
+        # Correct way to get weights from dense adjacency matrix
+        batched_graph.edata["weight"] = adj[src, dst]  # Extracts weight properly
 
         print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
         print("Edge weight restored successfully.")
