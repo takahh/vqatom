@@ -283,6 +283,8 @@ def main():
     arr_src = arr_src[mask]
     arr_dst = arr_dst[mask]
     arr_bond_order = arr_bond_order[mask]
+    print(f"src {arr_src}")
+    print(f"dst {arr_dst}")
 
     # -------------------------------------
     # rebuild attr matrix
@@ -306,8 +308,10 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
+    arr_adj = arr_adj[0:100, 0:100]
     subset_adj_matrix = arr_adj[0:200, 0:200]
-    subset_adj_base_matrix = arr_adj_base[0:200, 0:200]
+    subset_adj_base_matrix = arr_adj_base[0:100, 0:100]
+    print(f"subset_adj_base_matrix {subset_adj_base_matrix}")
     subset_attr_matrix = arr_feat[:200]
     # -------------------------------------
     # split the matrix into molecules

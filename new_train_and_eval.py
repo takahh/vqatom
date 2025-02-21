@@ -182,6 +182,8 @@ def convert_to_dgl(adj_batch, attr_batch):
             mask = src > dst
             src = src[mask]
             dst = dst[mask]
+            print(f"src {src[:17]}")
+            print(f"dst {dst[:17]}")
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             #
