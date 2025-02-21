@@ -63,12 +63,20 @@ class WeightedThreeHopGCN(nn.Module):
         weight2 = self.bond_weight(torch.tensor([2], dtype=torch.long, device=edge_weight.device))
         weight3 = self.bond_weight(torch.tensor([3], dtype=torch.long, device=edge_weight.device))
         weight4 = self.bond_weight(torch.tensor([4], dtype=torch.long, device=edge_weight.device))
-        transformed_edge_weight = (
-            torch.where(edge_weight == 1.0, weight1,
-            torch.where(edge_weight == 2.0, weight2,
-            torch.where(edge_weight == 3.0, weight3,
-            torch.where(edge_weight == 4.0, weight4,
-            )))).to(dtype=torch.float, device=edge_weight.device))
+
+        transformed_edge_weight = torch.where(
+            edge_weight == 1.0, weight1,
+            torch.where(
+                edge_weight == 2.0, weight2,
+                torch.where(
+                    edge_weight == 3.0, weight3,
+                    torch.where(
+                        edge_weight == 4.0, weight4,
+                        torch.zeros_like(weight1, dtype=torch.float)  # Default value for unmatched cases
+                    )
+                )
+            )
+        ).to(dtype=torch.float, device=edge_weight.device)
 
         edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         h = self.linear_0(features)  # Convert to expected shape
