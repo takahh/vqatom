@@ -59,12 +59,15 @@ class WeightedThreeHopGCN(nn.Module):
         edge_weight = batched_graph[edge_type].edata["weight"].float()
         print(edge_weight.shape)
         # Convert edge_weight using dictionary mapping
+        weight1 = self.bond_weight(torch.tensor([1], dtype=torch.long, device=edge_weight.device))
+        weight2 = self.bond_weight(torch.tensor([2], dtype=torch.long, device=edge_weight.device))
+        weight3 = self.bond_weight(torch.tensor([3], dtype=torch.long, device=edge_weight.device))
+        weight4 = self.bond_weight(torch.tensor([4], dtype=torch.long, device=edge_weight.device))
         transformed_edge_weight = (
-            torch.where(edge_weight == 1.0, self.bond_weight(torch.tensor([1], dtype=torch.long, device=edge_weight.device)),
-            torch.where(edge_weight == 2.0, self.bond_weight(torch.tensor([2], dtype=torch.long, device=edge_weight.device)),
-            torch.where(edge_weight == 3.0, self.bond_weight(torch.tensor([3], dtype=torch.long, device=edge_weight.device)),
-            torch.where(edge_weight == 4.0, self.bond_weight(torch.tensor([4], dtype=torch.long, device=edge_weight.device)),
-            torch.ones_like(edge_weight, dtype=torch.float, device=edge_weight.device)
+            torch.where(edge_weight == 1.0, weight1,
+            torch.where(edge_weight == 2.0, weight2,
+            torch.where(edge_weight == 3.0, weight3,
+            torch.where(edge_weight == 4.0, weight4,
             )))).to(dtype=torch.float, device=edge_weight.device))
 
         edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
