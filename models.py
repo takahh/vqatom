@@ -61,8 +61,6 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
-        import dgl
-        import torch
 
         # -------------------------------
         # Collect data for molecule images
