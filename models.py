@@ -54,41 +54,55 @@ class WeightedThreeHopGCN(nn.Module):
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
             self.vq(h, init_feat, epoch)
+        import dgl
 
         # --------------------------------
-        # collect data for molecule images
+        # Collect data for molecule images
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
 
-        etype = "_E"
+        etype = "_E"  # Assuming this is the correct edge type
         print(f"Available edge types: {batched_graph.etypes}")
 
+        # Ensure the edge type exists
         if etype in batched_graph.etypes:
             subgraph = batched_graph[etype]
             print(f"Subgraph ({etype}) has {subgraph.num_edges()} edges.")
 
-            if subgraph.num_edges() > 0:
+            if subgraph.num_edges() > 0:  # Ensure edges exist before simplification
+                # Debug: Check edge data before simplification
+                print("Subgraph edge data keys:", subgraph.edata.keys())
+
+                # Convert to simple graph
                 simple_graph, counts = dgl.to_simple(
                     subgraph, return_counts=True, copy_edata=True
                 )
                 print(f"Simplified graph has {simple_graph.num_edges()} edges.")
 
-                # Ensure heterograph reconstruction is correct
-                batched_graph = dgl.heterograph(
-                    {etype: simple_graph.edges()},
-                    num_nodes_dict={ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes}
-                )
+                # Debug: Check edge data after simplification
+                print("Simplified graph edge data keys:", simple_graph.edata.keys())
 
-                # Ensure edge data transfer is correct
-                if "edata" in subgraph.edata:
-                    batched_graph.edata.update(simple_graph.edata)
+                # Ensure edges exist in the simplified graph
+                if simple_graph.num_edges() > 0:
+                    # Preserve node count to avoid index mismatches
+                    batched_graph = dgl.heterograph(
+                        {etype: simple_graph.edges()},
+                        num_nodes_dict={ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes}
+                    )
 
-                print("Simplification successful.")
+                    # Transfer edge data if it exists
+                    if simple_graph.edata:
+                        for key in simple_graph.edata.keys():
+                            batched_graph.edges[etype].data[key] = simple_graph.edata[key]
+
+                    print("Simplification successful.")
+                else:
+                    print("Warning: Simplified graph has no edges. Skipping reconstruction.")
             else:
                 print(f"No edges to simplify for edge type {etype}.")
         else:
-            print(f"Edge type '{etype}' not found in the graph.")
+            print(f"Error: Edge type '{etype}' not found in the graph.")
 
         # Create a new heterograph with the simplified edges
         # batched_graph = dgl.heterograph(batched_graph)
