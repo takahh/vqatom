@@ -56,12 +56,6 @@ class WeightedThreeHopGCN(nn.Module):
             self.vq(h, init_feat, epoch)
         import dgl
 
-        # --------------------------------
-        # Collect data for molecule images
-        # --------------------------------
-        batched_graph = dgl.remove_self_loop(batched_graph)
-        batched_graph = batched_graph.to("cpu")
-
         # -------------------------------
         # Collect data for molecule images
         # -------------------------------
@@ -71,20 +65,29 @@ class WeightedThreeHopGCN(nn.Module):
         print(f"Graph is homogeneous: {batched_graph.is_homogeneous}")
         print(f"Available edge types: {batched_graph.etypes}")
 
-        # Get adjacency matrix in COO format
-        adj = batched_graph.adjacency_matrix()  # No scipy_fmt argument
-
-        # Convert to COO format manually
+        # Get adjacency matrix and edge attributes
+        adj = batched_graph.adjacency_matrix()
         src, dst = adj.indices()
+
+        # Ensure "edge_type" exists before proceeding
+        if "edge_type" in batched_graph.edata:
+            edge_type = batched_graph.edata["edge_type"]
+        else:
+            edge_type = torch.zeros(len(src), dtype=torch.long)  # Default if missing
 
         # Keep only the lower triangle (remove duplicates)
         mask = src > dst
         src, dst = src[mask], dst[mask]
+        edge_type = edge_type[mask]  # Filter edge attributes
 
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
+        # Restore edge_type
+        batched_graph.edata["edge_type"] = edge_type
+
         print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
+        print("Edge type restored.")
 
         # If edge data exists, transfer it back
         if "weight" in batched_graph.edata:
