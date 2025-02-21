@@ -80,6 +80,9 @@ class WeightedThreeHopGCN(nn.Module):
 
         # edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         edge_weight = transformed_edge_weight
+        print("Model device:", next(self.parameters()).device)
+        print("Features device:", features.device)
+
         h = self.linear_0(features)  # Convert to expected shape
         # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
