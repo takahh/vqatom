@@ -108,7 +108,8 @@ class WeightedThreeHopGCN(nn.Module):
         else:
             src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
-        sample_hop_info = batched_graph.edata["edge_type"]
+        # sample_hop_info = batched_graph.edata["edge_type"]
+        sample_hop_info = None
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
