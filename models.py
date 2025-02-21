@@ -65,11 +65,13 @@ class WeightedThreeHopGCN(nn.Module):
         print(f"Graph is homogeneous: {batched_graph.is_homogeneous}")
         print(f"Available edge types: {batched_graph.etypes}")
 
-        # Get adjacency matrix and edge attributes
-        adj = batched_graph.adjacency_matrix()  # Returns DGL SparseMatrix
-        src, dst = adj.indices()
+        # Convert adjacency matrix to dense format
+        adj = batched_graph.adjacency_matrix().to_dense()  # Converts to dense tensor
 
-        # Extract edge weights correctly
+        # Extract edges from adjacency matrix
+        src, dst = adj.nonzero(as_tuple=True)  # Extracts row & col indices
+
+        # Ensure "weight" exists before proceeding
         if "weight" in batched_graph.edata:
             edge_weight = batched_graph.edata["weight"]
         else:
@@ -83,8 +85,8 @@ class WeightedThreeHopGCN(nn.Module):
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
-        # Correctly extract weights from DGL SparseMatrix
-        batched_graph.edata["weight"] = adj.val[mask] if adj.val is not None else edge_weight
+        # Restore edge weight
+        batched_graph.edata["weight"] = edge_weight
 
         print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
         print("Edge weight restored successfully.")
