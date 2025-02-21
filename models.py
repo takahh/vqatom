@@ -57,6 +57,7 @@ class WeightedThreeHopGCN(nn.Module):
         import dgl
         import dgl
         import dgl
+        import dgl
 
         # --------------------------------
         # Collect data for molecule images
