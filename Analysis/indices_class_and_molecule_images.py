@@ -279,12 +279,15 @@ def main():
     arr_bond_order = getdata(bond_order_file)
 
     # choose data only hop=1
-    mask = np.isin(arr_hoptype, 1)
-    arr_src = arr_src[mask]
-    arr_dst = arr_dst[mask]
-    arr_bond_order = arr_bond_order[mask]
+    # mask = np.isin(arr_hoptype, 1)
     print(f"src {arr_src}")
     print(f"dst {arr_dst}")
+    # arr_src = arr_src[mask]
+    # arr_dst = arr_dst[mask]
+    # arr_bond_order = arr_bond_order[mask]
+    print(f"src {arr_src}")
+    print(f"dst {arr_dst}")
+    print(f"arr_bond_order {arr_bond_order}")
 
     # -------------------------------------
     # rebuild attr matrix

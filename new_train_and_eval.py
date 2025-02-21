@@ -184,8 +184,6 @@ def convert_to_dgl(adj_batch, attr_batch):
             dst = dst[mask]
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-            # # Add self-loops if needed
-            # base_g = dgl.add_self_loop(base_g)
 
             # Assign node features
             base_g.ndata["feat"] = filtered_attr_matrix
@@ -317,33 +315,6 @@ def run_inductive(
                         break
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
-                    # -----------------------------------------------
-                    # エッジのないノードがあるか確認
-                    # -----------------------------------------------
-                    # for i, g in enumerate(dgl.unbatch(batched_graph)):
-                    #     zero_in_degree_nodes = torch.where(g.in_degrees() == 0)[0]
-                    #     if len(zero_in_degree_nodes) > 0:
-                    #         print(f"Graph {i} has zero in-degree nodes: {zero_in_degree_nodes.tolist()}")
-                    #         # Convert to dense adjacency matrix
-                    #         adj_matrix = g.adjacency_matrix().to_dense()
-                    #         print(f"Adjacency Matrix of Graph {i}:")
-                    #         print(adj_matrix)
-                    #         print(f"Feature Matrix of Graph {i}:")
-                    #         print(g.ndata["feat"])  # Prints the full feature matrix
-
-                    # # Get the first graph from the batch
-                    # first_graph = dgl.unbatch(batched_graph)[0]
-                    # # Compute in-degrees and out-degrees
-                    # in_degrees = first_graph.in_degrees()
-                    # out_degrees = first_graph.out_degrees()
-                    # # Find nodes with no incoming edges
-                    # zero_in_degree_nodes = torch.where(in_degrees == 0)[0]
-                    # print(f"Nodes with zero in-degree: {zero_in_degree_nodes.tolist()}")
-                    # # Find nodes with no outgoing edges
-                    # zero_out_degree_nodes = torch.where(out_degrees == 0)[0]
-                    # print(f"Nodes with zero out-degree: {zero_out_degree_nodes.tolist()}")
-
-
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
