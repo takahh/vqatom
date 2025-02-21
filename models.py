@@ -15,6 +15,21 @@ import torch.nn as nn
 import dgl.nn as dglnn
 
 
+class BondWeightLayer(nn.Module):
+    def __init__(self, bond_types=4, hidden_dim=64):
+        super().__init__()
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()  # Output weight in range (0,1)
+        )
+
+    def forward(self, edge_types):
+        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        return edge_weight
+
+
 class WeightedThreeHopGCN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats):
         super(WeightedThreeHopGCN, self).__init__()
@@ -24,6 +39,10 @@ class WeightedThreeHopGCN(nn.Module):
         self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="both", weight=True)
         self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
+        self.single_bond_weight = BondWeightLayer(bond_types=1, hidden_dim=args.hidden_dim)
+        self.double_bond_weight = BondWeightLayer(bond_types=2, hidden_dim=args.hidden_dim)
+        self.triple_bond_weight = BondWeightLayer(bond_types=3, hidden_dim=args.hidden_dim)
+        self.aroma_bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         # self.codebook_size = args.codebook_size
 
     def reset_kmeans(self):
@@ -41,6 +60,8 @@ class WeightedThreeHopGCN(nn.Module):
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
 
         edge_weight = batched_graph[edge_type].edata["weight"].float()
+        print(edge_weight.shape)
+
         edge_weight = edge_weight / edge_weight.max()  # Normalize weights (optional)
         h = self.linear_0(features)  # Convert to expected shape
         # 3-hop message passing
