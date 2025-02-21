@@ -55,7 +55,6 @@ class WeightedThreeHopGCN(nn.Module):
 
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-        import torch
 
         # Assuming bond_weight is an embedding layer
         bond_weight = torch.nn.Embedding(5, 1)  # Example with 5 embeddings of size 1
