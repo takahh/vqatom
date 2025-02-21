@@ -90,7 +90,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
         print("Edge weight restored successfully.")
-
+        print(F'adj.data {adj.data}')
         # If edge data exists, transfer it back
         if "weight" in batched_graph.edata:
             batched_graph.edata["weight"] = torch.tensor(adj.data[mask])
