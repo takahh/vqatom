@@ -233,7 +233,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             edge_weights = full_adj_matrix[new_src, new_dst]
 
             # Assign weights
-            extended_g.edata["weight"] = edge_weights.float()
+            # extended_g.edata["weight"] = edge_weights.float()
 
             # ------------------------------------------
             # Assign edge types to distinguish connections
@@ -250,7 +250,7 @@ def convert_to_dgl(adj_batch, attr_batch):
                 else:
                     edge_types[idx] = 0  # Unknown
 
-            extended_g.edata["edge_type"] = edge_types
+            # extended_g.edata["edge_type"] = edge_types
 
             # ------------------------------------------
             # Assign node features
