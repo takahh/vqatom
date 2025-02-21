@@ -69,6 +69,10 @@ class WeightedThreeHopGCN(nn.Module):
         etype = "_E"  # Assuming this is the correct edge type
         print(f"Available edge types: {batched_graph.etypes}")
 
+        adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
+        sample_adj = adj_matrix.to_dense()
+        print("sample_adj")
+        print(sample_adj[:20, :20])
         # Ensure the edge type exists
         if etype in batched_graph.etypes:
             subgraph = batched_graph[etype]
