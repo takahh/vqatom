@@ -18,6 +18,7 @@ import dgl.nn as dglnn
 class BondWeightLayer(nn.Module):
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
