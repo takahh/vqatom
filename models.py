@@ -55,6 +55,7 @@ class WeightedThreeHopGCN(nn.Module):
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
             self.vq(h, init_feat, epoch)
         import dgl
+        import dgl
 
         # --------------------------------
         # Collect data for molecule images
@@ -74,7 +75,7 @@ class WeightedThreeHopGCN(nn.Module):
                 # Debug: Check edge data before simplification
                 print("Subgraph edge data keys:", subgraph.edata.keys())
 
-                # Convert to simple graph
+                # Convert to a simple graph
                 simple_graph, counts = dgl.to_simple(
                     subgraph, return_counts=True, copy_edata=True
                 )
@@ -83,18 +84,18 @@ class WeightedThreeHopGCN(nn.Module):
                 # Debug: Check edge data after simplification
                 print("Simplified graph edge data keys:", simple_graph.edata.keys())
 
-                # Ensure edges exist in the simplified graph
                 if simple_graph.num_edges() > 0:
-                    # Preserve node count to avoid index mismatches
-                    batched_graph = dgl.heterograph(
-                        {etype: simple_graph.edges()},
-                        num_nodes_dict={ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes}
-                    )
+                    # Convert the simple graph back into a heterogeneous graph
+                    new_data_dict = {etype: simple_graph.edges()}
+                    num_nodes_dict = {
+                        ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes
+                    }
 
-                    # Transfer edge data if it exists
-                    if simple_graph.edata:
-                        for key in simple_graph.edata.keys():
-                            batched_graph.edges[etype].data[key] = simple_graph.edata[key]
+                    batched_graph = dgl.heterograph(new_data_dict, num_nodes_dict=num_nodes_dict)
+
+                    # Ensure edge data is transferred
+                    for key in simple_graph.edata.keys():
+                        batched_graph.edges[etype].data[key] = simple_graph.edata[key]
 
                     print("Simplification successful.")
                 else:
