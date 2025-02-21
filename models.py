@@ -69,25 +69,25 @@ class WeightedThreeHopGCN(nn.Module):
         adj = batched_graph.adjacency_matrix()
         src, dst = adj.indices()
 
-        # Ensure "edge_type" exists before proceeding
-        if "edge_type" in batched_graph.edata:
-            edge_type = batched_graph.edata["edge_type"]
+        # Ensure "weight" exists before proceeding
+        if "weight" in batched_graph.edata:
+            edge_weight = batched_graph.edata["weight"]
         else:
-            edge_type = torch.zeros(len(src), dtype=torch.long)  # Default if missing
+            edge_weight = torch.ones(len(src), dtype=torch.float)  # Default weight if missing
 
         # Keep only the lower triangle (remove duplicates)
         mask = src > dst
         src, dst = src[mask], dst[mask]
-        edge_type = edge_type[mask]  # Filter edge attributes
+        edge_weight = edge_weight[mask]  # Filter edge weights
 
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
-        # Restore edge_type
-        batched_graph.edata["edge_type"] = edge_type
+        # Restore edge weight
+        batched_graph.edata["weight"] = edge_weight
 
         print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
-        print("Edge type restored.")
+        print("Edge weight restored.")
 
         # If edge data exists, transfer it back
         if "weight" in batched_graph.edata:
