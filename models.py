@@ -46,7 +46,9 @@ class WeightedThreeHopGCN(nn.Module):
         self.vq._codebook.reset_kmeans()
 
     def forward(self, batched_graph, features, epoch, batched_graph_base=None):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = batched_graph.device  # Get the correct device
+        self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
         # Move graph and features to the same device
         batched_graph = batched_graph.to(device)
