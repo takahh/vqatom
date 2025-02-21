@@ -47,8 +47,11 @@ class WeightedThreeHopGCN(nn.Module):
 
     def forward(self, batched_graph, features, epoch, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Move graph and features to the same device
         batched_graph = batched_graph.to(device)
-        features = transform_node_feats(features)
+        features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
+
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
         edge_type = "_E"  # Batched heterogeneous graph edge type
@@ -56,18 +59,18 @@ class WeightedThreeHopGCN(nn.Module):
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
 
-        # Assuming bond_weight is an embedding layer
-        bond_weight = torch.nn.Embedding(5, 1)  # Example with 5 embeddings of size 1
+        # Move bond_weight embedding layer to the same device
+        self.bond_weight = self.bond_weight.to(device)
 
-        edge_weight = batched_graph[edge_type].edata["weight"].long()  # Ensure long dtype for indexing
+        edge_weight = batched_graph[edge_type].edata["weight"].to(
+            device).long()  # Ensure it's on the correct device
 
         # Map edge weights to embedding indices (default 0 for unknown weights)
-        weight_map = torch.tensor([0, 1, 2, 3, 4], dtype=torch.long, device=edge_weight.device)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight,
-                                     torch.tensor(0, device=edge_weight.device))
+                                     torch.zeros_like(edge_weight))
 
         # Get transformed edge weights
-        transformed_edge_weight = bond_weight(mapped_indices).squeeze(-1)
+        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
 
         # edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         edge_weight = transformed_edge_weight
