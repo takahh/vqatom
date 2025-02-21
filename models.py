@@ -55,16 +55,16 @@ class WeightedThreeHopGCN(nn.Module):
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
             self.vq(h, init_feat, epoch)
         import dgl
-        import dgl
-        import dgl
-        import dgl
-        import dgl
 
         # --------------------------------
         # Collect data for molecule images
         # --------------------------------
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
+        if batched_graph.is_homogeneous:
+            print("The graph is homogeneous.")
+        else:
+            print("The graph is heterogeneous.")
 
         etype = "_E"  # Assuming this is the correct edge type
         print(f"Available edge types: {batched_graph.etypes}")
@@ -130,14 +130,6 @@ class WeightedThreeHopGCN(nn.Module):
             print(f"dst {dst[:20]}")
             print(f"sample_bond_info {sample_bond_info[:20]}")
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
-            # np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-            # np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
-            # np.savez(f"./sample_adj_{epoch}", sample_list_test[2].cpu()[:1000, :1000])
-            # np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:1000])
-            # np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:1000])
-            # np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:1000])
-            # np.savez(f"./sample_hop_type_{epoch}", sample_list_test[6].cpu()[:1000])
-            # np.savez(f"./sample_adj_base_{epoch}", sample_list_test[7].cpu()[:1000])
         else:
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
