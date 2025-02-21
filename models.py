@@ -62,46 +62,30 @@ class WeightedThreeHopGCN(nn.Module):
         batched_graph = dgl.remove_self_loop(batched_graph)
         batched_graph = batched_graph.to("cpu")
 
-        print(f"Graph is homogeneous: {batched_graph.is_homogeneous}")
-        print(f"Available edge types: {batched_graph.etypes}")
-
         # Convert adjacency matrix to dense format
         adj = batched_graph.adjacency_matrix().to_dense()  # Converts to dense tensor
 
         # Extract edges from adjacency matrix
         src, dst = adj.nonzero(as_tuple=True)  # Extracts row & col indices
-
-        # Ensure "weight" exists before proceeding
-        if "weight" in batched_graph.edata:
-            edge_weight = batched_graph.edata["weight"]
-        else:
-            edge_weight = torch.ones(len(src), dtype=torch.float)  # Default weight if missing
-
+        print(f"src before {src[:17]}")
+        print(f"dst before {dst[:17]}")
         # Keep only the lower triangle (remove duplicates)
         mask = src > dst
         src, dst = src[mask], dst[mask]
-        edge_weight = edge_weight[mask]  # Filter edge weights
-
+        print(f"src after {src[:17]}")
+        print(f"dst after {dst[:17]}")
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
 
         # Correct way to get weights from dense adjacency matrix
         batched_graph.edata["weight"] = adj[src, dst]  # Extracts weight properly
 
-        print(f"Graph after removing redundant edges: {batched_graph.num_edges()} edges.")
-        print("Edge weight restored successfully.")
-        # If edge data exists, transfer it back
-        # if "weight" in batched_graph.edata:
-        #     batched_graph.edata["weight"] = torch.tensor(adj.data[mask])
-
-        print("Simplification successful.")
-
         # Create a new heterograph with the simplified edges
         # batched_graph = dgl.heterograph(batched_graph)
         adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         print("sample_adj")
-        print(sample_adj[:20, :20])
+        print(sample_adj[:17, :17])
         if batched_graph_base:
             adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
