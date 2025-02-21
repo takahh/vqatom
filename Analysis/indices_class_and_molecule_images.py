@@ -13,7 +13,7 @@ CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1300
 FONTSIZE = 40
 EPOCH = 1
-PATH = "/Users/taka/Documents/vqgraph_0217/"
+PATH = "/Users/taka/Documents/vqgraph_0221/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"

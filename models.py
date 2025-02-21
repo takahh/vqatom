@@ -63,7 +63,7 @@ class WeightedThreeHopGCN(nn.Module):
         if batched_graph_base:
             adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
-        src, dst = batched_graph.all_edges()
+        src, dst = batched_graph_base.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
         sample_hop_info = batched_graph.edata["edge_type"]
         if batched_graph_base:
