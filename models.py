@@ -58,6 +58,7 @@ class WeightedThreeHopGCN(nn.Module):
         import dgl
         import dgl
         import dgl
+        import dgl
 
         # --------------------------------
         # Collect data for molecule images
@@ -77,7 +78,7 @@ class WeightedThreeHopGCN(nn.Module):
                 # Debug: Check edge data before simplification
                 print("Subgraph edge data keys:", subgraph.edata.keys())
 
-                # Convert to a simple graph
+                # Convert to a simple graph (homogeneous)
                 simple_graph, counts = dgl.to_simple(
                     subgraph, return_counts=True, copy_edata=True
                 )
@@ -90,12 +91,11 @@ class WeightedThreeHopGCN(nn.Module):
                     # Convert back to heterogeneous graph
                     src, dst = simple_graph.edges()
 
-                    # Explicitly set the correct edge type
-                    new_data_dict = {(etype, "to", etype): (src, dst)}
+                    # Explicitly assign back the edge type
+                    new_data_dict = {('_N', etype, '_N'): (src, dst)}
 
-                    num_nodes_dict = {
-                        ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes
-                    }
+                    # Use the original node type for correct reconstruction
+                    num_nodes_dict = {ntype: batched_graph.num_nodes(ntype) for ntype in batched_graph.ntypes}
 
                     batched_graph = dgl.heterograph(new_data_dict, num_nodes_dict=num_nodes_dict)
 
@@ -103,7 +103,7 @@ class WeightedThreeHopGCN(nn.Module):
                     for key in simple_graph.edata.keys():
                         batched_graph.edges[etype].data[key] = simple_graph.edata[key]
 
-                    print("Simplification successful.")
+                    print("Simplification successful. New edge types:", batched_graph.etypes)
                 else:
                     print("Warning: Simplified graph has no edges. Skipping reconstruction.")
             else:
