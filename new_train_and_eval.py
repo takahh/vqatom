@@ -172,8 +172,6 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
             num_total_nodes = nonzero_mask.sum().item()
-            print(f"attr_matrix {attr_matrix}")
-            print(f"num_total_nodes {num_total_nodes}")
             filtered_attr_matrix = attr_matrix[nonzero_mask]
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
 
@@ -186,7 +184,9 @@ def convert_to_dgl(adj_batch, attr_batch):
             dst = dst[mask]
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-            #
+            dummy_src, dummy_dst = base_g.all_edges()
+            print(f"dummy_src {dummy_src[:30]}")
+            print(f"dummy_dst {dummy_dst[:30]}")
             # # Add self-loops if needed
             # base_g = dgl.add_self_loop(base_g)
 
