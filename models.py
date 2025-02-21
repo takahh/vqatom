@@ -23,6 +23,7 @@ class BondWeightLayer(nn.Module):
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()  # Output weight in range (0,1)
         )
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
     def forward(self, edge_types):
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
@@ -48,7 +49,6 @@ class WeightedThreeHopGCN(nn.Module):
     def forward(self, batched_graph, features, epoch, batched_graph_base=None):
         device = batched_graph.device  # Get the correct device
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
-        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
         # Move graph and features to the same device
         batched_graph = batched_graph.to(device)
