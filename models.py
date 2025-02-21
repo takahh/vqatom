@@ -71,13 +71,15 @@ class WeightedThreeHopGCN(nn.Module):
         print(f"Graph is homogeneous: {batched_graph.is_homogeneous}")
         print(f"Available edge types: {batched_graph.etypes}")
 
-        # Get adjacency matrix
-        adj = batched_graph.adjacency_matrix(scipy_fmt="coo")
+        # Get adjacency matrix in COO format
+        adj = batched_graph.adjacency_matrix()  # No scipy_fmt argument
 
-        # Zero out upper triangular part (excluding diagonal)
-        mask = adj.row > adj.col  # Keep only lower-triangular part
-        src = torch.tensor(adj.row[mask])
-        dst = torch.tensor(adj.col[mask])
+        # Convert to COO format manually
+        src, dst = adj.indices()
+
+        # Keep only the lower triangle (remove duplicates)
+        mask = src > dst
+        src, dst = src[mask], dst[mask]
 
         # Create a new graph with only the lower triangular edges
         batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
