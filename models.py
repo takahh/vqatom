@@ -54,54 +54,36 @@ class WeightedThreeHopGCN(nn.Module):
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
             self.vq(h, init_feat, epoch)
-        import dgl
 
-        # -------------------------------
-        # Collect data for molecule images
-        # -------------------------------
-        batched_graph = dgl.remove_self_loop(batched_graph)
-        batched_graph = batched_graph.to("cpu")
-
-        # Convert adjacency matrix to dense format
-        adj = batched_graph.adjacency_matrix().to_dense()  # Converts to dense tensor
-
-        # Extract edges from adjacency matrix
-        src, dst = adj.nonzero(as_tuple=True)  # Extracts row & col indices
-        print(f"src before {src[:17]}")
-        print(f"dst before {dst[:17]}")
-        # Keep only the lower triangle (remove duplicates)
-        mask = src > dst
-        src, dst = src[mask], dst[mask]
-        print(f"src after {src[:17]}")
-        print(f"dst after {dst[:17]}")
-        # Create a new graph with only the lower triangular edges
-        batched_graph = dgl.graph((src, dst), num_nodes=batched_graph.num_nodes())
-
-        # Correct way to get weights from dense adjacency matrix
-        batched_graph.edata["weight"] = adj[src, dst]  # Extracts weight properly
-
-        # Create a new heterograph with the simplified edges
-        # batched_graph = dgl.heterograph(batched_graph)
-        adj_matrix = batched_graph.to("cuda").adjacency_matrix().to_dense()
+        # --------------------------------
+        # collect data for molecule images
+        # --------------------------------
+        adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
-        print("sample_adj")
-        print(sample_adj[:17, :17])
         if batched_graph_base:
             adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
         src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
-        # sample_hop_info = batched_graph.edata["edge_type"]
+        sample_hop_info = batched_graph.edata["edge_type"]
+        print("=============")
+        print(f"src {src}")
+        print(f"dst {dst}")
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
-            print("=============")
-            print(f"src {src[:20]}")
-            print(f"dst {dst[:20]}")
-            print(f"sample_bond_info {sample_bond_info[:20]}")
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None, sample_adj_base]
+            print(f"sample_bond_info {sample_bond_info}")
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
+            # np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
+            # np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
+            # np.savez(f"./sample_adj_{epoch}", sample_list_test[2].cpu()[:1000, :1000])
+            # np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:1000])
+            # np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:1000])
+            # np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:1000])
+            # np.savez(f"./sample_hop_type_{epoch}", sample_list_test[6].cpu()[:1000])
+            # np.savez(f"./sample_adj_base_{epoch}", sample_list_test[7].cpu()[:1000])
         else:
             sample_bond_info = batched_graph.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
         return (h_list, h, loss, dist, codebook,
                 [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(), sil_loss.item()],

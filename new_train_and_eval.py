@@ -179,7 +179,10 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Create the base graph (only 1-hop edges) with filtered_adj_matrix edge info
             # ------------------------------------------
             src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
+            print(f"src {src[:17]}")
+            print(f"src {dst[:17]}")
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
+            print(f"edge_weights {edge_weights[:3, 17]}")
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             #
             # # Add self-loops if needed
