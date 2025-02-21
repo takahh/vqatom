@@ -39,10 +39,7 @@ class WeightedThreeHopGCN(nn.Module):
         self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="both", weight=True)
         self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
-        self.single_bond_weight = BondWeightLayer(bond_types=1, hidden_dim=args.hidden_dim)
-        self.double_bond_weight = BondWeightLayer(bond_types=2, hidden_dim=args.hidden_dim)
-        self.triple_bond_weight = BondWeightLayer(bond_types=3, hidden_dim=args.hidden_dim)
-        self.aroma_bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
+        self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         # self.codebook_size = args.codebook_size
 
     def reset_kmeans(self):
@@ -61,8 +58,15 @@ class WeightedThreeHopGCN(nn.Module):
 
         edge_weight = batched_graph[edge_type].edata["weight"].float()
         print(edge_weight.shape)
+        # Convert edge_weight using dictionary mapping
+        transformed_edge_weight = (
+            torch.where(edge_weight == 1.0, self.bond_weight(1.0),
+            torch.where(edge_weight == 2.0, self.bond_weight(2.0),
+            torch.where(edge_weight == 3.0, self.bond_weight(3.0),
+            torch.where(edge_weight == 4.0, self.bond_weight(4.0), 1.0))))
+            ).to(dtype=torch.float, device=edge_weight.device)
 
-        edge_weight = edge_weight / edge_weight.max()  # Normalize weights (optional)
+        edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         h = self.linear_0(features)  # Convert to expected shape
         # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
