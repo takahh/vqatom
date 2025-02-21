@@ -67,7 +67,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Map edge weights to embedding indices (default 0 for unknown weights)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight,
-                                     torch.zeros_like(edge_weight))
+                                     torch.one_like(edge_weight))
 
         # Get transformed edge weights
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
