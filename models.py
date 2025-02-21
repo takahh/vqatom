@@ -107,17 +107,17 @@ class WeightedThreeHopGCN(nn.Module):
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
         src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
-        sample_hop_info = batched_graph.edata["edge_type"]
+        # sample_hop_info = batched_graph.edata["edge_type"]
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
             print("=============")
             print(f"src {src[:20]}")
             print(f"dst {dst[:20]}")
             print(f"sample_bond_info {sample_bond_info[:20]}")
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None, sample_adj_base]
         else:
             sample_bond_info = batched_graph.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None]
         return (h_list, h, loss, dist, codebook,
                 [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(), sil_loss.item()],
