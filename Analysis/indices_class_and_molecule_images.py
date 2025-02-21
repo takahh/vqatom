@@ -9,8 +9,8 @@ from icecream import ic
 import matplotlib.pyplot as plt
 from rdkit.Geometry import Point2D
 
-CANVAS_WIDTH = 2000
-CANVAS_HEIGHT = 1300
+CANVAS_WIDTH = 2300
+CANVAS_HEIGHT = 1500
 FONTSIZE = 40
 EPOCH = 1
 PATH = "/Users/taka/Documents/vqgraph_0221/"
