@@ -166,9 +166,9 @@ def convert_to_dgl(adj_batch, attr_batch):
     extended_graphs = []
 
     for i in range(len(adj_batch)):  # Loop over each molecule set
-        if i == 12:
-            break
-        print(f"{i} - {adj_batch[i].shape}")
+        # if i == 12:
+        #     break
+        # print(f"{i} - {adj_batch[i].shape}")
         # Reshape the current batch
         adj_matrices = adj_batch[i].view(1000, 100, 100)
         attr_matrices = attr_batch[i].view(1000, 100, 7)
