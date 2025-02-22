@@ -12,7 +12,7 @@ from rdkit.Geometry import Point2D
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 5
+EPOCH = 45
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -75,7 +75,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
 
     images = []
-    for i in range(n_components - 1):
+    for i in range(n_components - 2):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
