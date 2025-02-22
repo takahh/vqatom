@@ -12,8 +12,8 @@ from rdkit.Geometry import Point2D
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 1
-PATH = "/Users/taka/Documents/vqgraph_0221/"
+EPOCH = 5
+PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -75,7 +75,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
 
     images = []
-    for i in range(n_components - 2):
+    for i in range(n_components - 1):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -140,6 +140,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
                 bond_type = bond_type_map.get(bond_order, Chem.BondType.SINGLE)
                 # print(f"Adding bond: {src_mol} - {dst_mol} (Bond type: {bond_type})")
                 mol.AddBond(src_mol, dst_mol, bond_type)
+                print(bond_type)
 
                 # **Mark atoms and bonds as aromatic if needed**
                 if bond_order == 4:  # Aromatic bond
@@ -265,7 +266,7 @@ def main():
     bond_order_file = f"{path}sample_bond_num_{EPOCH}.npz"
     src_file = f"{path}sample_src_{EPOCH}.npz"
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
-    hoptype_file = f"{path}sample_hop_type_{EPOCH}.npz"
+    # hoptype_file = f"{path}sample_hop_type_{EPOCH}.npz"
 
     arr_indices = getdata(indices_file)   # indices of the input
     arr_adj = getdata(adj_file)       # assigned quantized code vec indices
@@ -275,7 +276,7 @@ def main():
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
-    arr_hoptype = getdata(hoptype_file)
+    # arr_hoptype = getdata(hoptype_file)
     arr_bond_order = getdata(bond_order_file)
 
     # choose data only hop=1
@@ -311,11 +312,11 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    arr_adj = arr_adj[0:100, 0:100]
-    subset_adj_matrix = arr_adj[0:200, 0:200]
+    arr_adj = arr_adj[0:300, 0:300]
+    subset_adj_matrix = arr_adj[0:300, 0:300]
     subset_adj_base_matrix = arr_adj_base[0:100, 0:100]
     print(f"subset_adj_base_matrix {subset_adj_base_matrix}")
-    subset_attr_matrix = arr_feat[:200]
+    subset_attr_matrix = arr_feat[:300]
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
