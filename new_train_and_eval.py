@@ -5,17 +5,11 @@ import glob
 import numpy as np
 from models import WeightedThreeHopGCN
 import copy
-import torch
-import dgl
 from utils import set_seed
 import dgl.dataloading
 from train_teacher import get_args
 import dgl
-import torch
-from scipy.sparse.csgraph import connected_components
-from scipy.sparse import csr_matrix
-import dgl
-import torch
+import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
 DATAPATH = "data/both_mono"
@@ -276,7 +270,8 @@ def run_inductive(
         conf,
         model,
         optimizer,
-        accumulation_steps=1
+        accumulation_steps,
+        logger
 ):
     import gc
     import torch
@@ -295,7 +290,6 @@ def run_inductive(
         # --------------------------------
         # Train
         # --------------------------------
-        print("Train ---")
         if conf["train_or_infer"] == "train":
             # Iterate through batches
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
@@ -327,9 +321,14 @@ def run_inductive(
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
 
         # --------------------------------
+        # Save model
+        # --------------------------------
+        state = copy.deepcopy(model.state_dict())
+        torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
+        model.load_state_dict(state)
+        # --------------------------------
         # Test
         # --------------------------------
-        print("Test ---")
         test_loss_list = []
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 5, None), start=5):
             # print(f"idx {idx}")
@@ -375,15 +374,9 @@ def run_inductive(
               f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
               f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
               f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]): 7f}")
-        import logging
 
-        # Configure logging (adjust format, level, handlers as needed)
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
         # Log training losses
-        logging.info(
+        logger.info(
             f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
             f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]):7f}, "
             f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]):7f}, "
@@ -395,7 +388,7 @@ def run_inductive(
         )
 
         # Log testing losses
-        logging.info(
+        logger.info(
             f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
             f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]):7f}, "
             f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]):7f}, "
