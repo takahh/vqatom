@@ -156,7 +156,12 @@ import torch
 
 
 def convert_to_dgl(adj_batch, attr_batch):
-    """Converts a batch of adjacency matrices and attributes to two lists of DGLGraphs."""
+    """
+    Converts a batch of adjacency matrices and attributes to two lists of DGLGraphs.
+
+    This version includes optimizations such as vectorized edge-type assignment,
+    and avoids unnecessary copies where possible.
+    """
     base_graphs = []
     extended_graphs = []
 
@@ -164,14 +169,16 @@ def convert_to_dgl(adj_batch, attr_batch):
         if i == 12:
             break
         print(f"{i} - {adj_batch[i].shape}")
+        # Reshape the current batch
         adj_matrices = adj_batch[i].view(1000, 100, 100)
         attr_matrices = attr_batch[i].view(1000, 100, 7)
 
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
+
             # ------------------------------------------
-            # Remove padding
+            # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
             nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
             num_total_nodes = nonzero_mask.sum().item()
@@ -179,28 +186,25 @@ def convert_to_dgl(adj_batch, attr_batch):
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
 
             # ------------------------------------------
-            # Create the base graph (only 1-hop edges) with filtered_adj_matrix edge info
+            # Create the base graph (only 1-hop edges)
             # ------------------------------------------
             src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
+            # Only consider one direction to avoid duplicate edges
             mask = src > dst
             src = src[mask]
             dst = dst[mask]
-            edge_weights = filtered_adj_matrix[src, dst]  # Extract weights from the adjacency matrix
+            edge_weights = filtered_adj_matrix[src, dst]  # Extract weights for 1-hop edges
+
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-
-            # Assign node features
             base_g.ndata["feat"] = filtered_attr_matrix
-
-            # Assign edge weights from filtered_adj_matrix
             base_g.edata["weight"] = edge_weights.float()
-
-            # Assign edge types (you might want to customize this based on adjacency)
+            # You can optionally customize edge types for the base graph; here we assign all 1-hop edges.
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
 
             base_graphs.append(base_g)
 
             # ------------------------------------------
-            # Generate adjacency for 2-hop and 3-hop edges
+            # Generate 2-hop and 3-hop adjacency matrices
             # ------------------------------------------
             adj_2hop = dgl.khop_adj(base_g, 2)
             adj_3hop = dgl.khop_adj(base_g, 3)
@@ -209,59 +213,44 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Combine adjacency matrices into one
             # ------------------------------------------
             full_adj_matrix = filtered_adj_matrix.clone()
-            # print(f"full_adj {full_adj_matrix[:30, :30]}")
+            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
 
-            # Add 2-hop connections with a distinct weight (0.5)
-            full_adj_matrix += (adj_2hop * 0.5)
-
-            # Add 3-hop connections with a distinct weight (0.3)
-            full_adj_matrix += (adj_3hop * 0.3)
-
-            # Ensure no self-edges unless explicitly added later
+            # Ensure diagonal values are set to 1.0 (self-connections)
             torch.diagonal(full_adj_matrix).fill_(1.0)
 
             # ------------------------------------------
-            # Create a graph from the combined adjacency matrix
+            # Create the extended graph from the full adjacency matrix
             # ------------------------------------------
-            src, dst = full_adj_matrix.nonzero(as_tuple=True)
-            extended_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-
-            # Add self-loops
+            src_full, dst_full = full_adj_matrix.nonzero(as_tuple=True)
+            extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
             extended_g = dgl.add_self_loop(extended_g)
-
-            # ------------------------------------------
-            # Assign edge weights correctly
-            # ------------------------------------------
             new_src, new_dst = extended_g.edges()
-            edge_weights = full_adj_matrix[new_src, new_dst]
 
-            # Assign weights
+            # Assign edge weights from the full adjacency matrix
+            edge_weights = full_adj_matrix[new_src, new_dst]
             extended_g.edata["weight"] = edge_weights.float()
 
             # ------------------------------------------
-            # Assign edge types to distinguish connections
+            # Vectorized assignment of edge types
             # ------------------------------------------
-            edge_types = torch.zeros(len(new_src), dtype=torch.int)
+            one_hop = filtered_adj_matrix[new_src, new_dst] > 0
+            two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
+            three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
+            edge_types = torch.zeros_like(new_src, dtype=torch.int)
+            edge_types[one_hop] = 1
+            edge_types[two_hop] = 2
+            edge_types[three_hop] = 3
 
-            for idx, (s, d) in enumerate(zip(new_src, new_dst)):
-                if filtered_adj_matrix[s, d] > 0:
-                    edge_types[idx] = 1  # 1-hop edge
-                elif adj_2hop[s, d] > 0:
-                    edge_types[idx] = 2  # 2-hop edge
-                elif adj_3hop[s, d] > 0:
-                    edge_types[idx] = 3  # 3-hop edge
-                else:
-                    edge_types[idx] = 0  # Unknown
-
-            # extended_g.edata["edge_type"] = edge_types
+            extended_g.edata["edge_type"] = edge_types
 
             # ------------------------------------------
-            # Assign node features
+            # Assign node features to the extended graph
             # ------------------------------------------
             extended_g.ndata["feat"] = filtered_attr_matrix
 
             # ------------------------------------------
-            # Validate the feature cutoff
+            # Validate that remaining features are zero (if applicable)
             # ------------------------------------------
             remaining_features = attr_matrix[base_g.num_nodes():]
             if not torch.all(remaining_features == 0):
