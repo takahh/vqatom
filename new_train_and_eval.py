@@ -329,7 +329,7 @@ def run_inductive(
         # Test
         # --------------------------------
         test_loss_list = []
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 10, None), start=10):
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 10, None), start=6):
             if idx == 1:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
