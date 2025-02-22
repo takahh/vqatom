@@ -163,7 +163,7 @@ def convert_to_dgl(adj_batch, attr_batch):
     for i in range(len(adj_batch)):  # Loop over each molecule set
         if i == 12:
             break
-        # print(f"{i} - {adj_batch[i].shape}")
+        print(f"{i} - {adj_batch[i].shape}")
         adj_matrices = adj_batch[i].view(1000, 100, 100)
         attr_matrices = attr_batch[i].view(1000, 100, 7)
 
@@ -311,6 +311,7 @@ def run_inductive(
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 10:
                     break
+                print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = 500  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
