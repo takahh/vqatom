@@ -12,7 +12,7 @@ from rdkit.Geometry import Point2D
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 3
+EPOCH = 6
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
