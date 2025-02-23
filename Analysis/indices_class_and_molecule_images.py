@@ -8,11 +8,13 @@ import numpy as np
 from icecream import ic
 import matplotlib.pyplot as plt
 from rdkit.Geometry import Point2D
+from rdkit.Chem.Draw import rdMolDraw2D
+
 
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 6
+EPOCH = 2
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -161,6 +163,8 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
             print(f"Sanitization warning: {e}")
 
         # Draw the molecule
+        mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
+
         drawer = Draw.MolDraw2DCairo(1500, 1000)  # Adjusted canvas size
         options = drawer.drawOptions()
         options.atomLabelFontSize = 4  # Increase font size for better readability
@@ -168,7 +172,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         for idx, label in atom_labels.items():
             options.atomLabels[idx] = label  # Assign custom labels to atoms
 
-        drawer.DrawMolecule(mol)
+        mol_for_drawing.DrawMolecule(mol)
         drawer.FinishDrawing()
 
         # Convert binary image data to an image
