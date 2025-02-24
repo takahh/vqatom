@@ -624,7 +624,7 @@ class EuclideanCodebook(nn.Module):
     def init_embed_(self, data):
         # if self.initted:
         #     return
-        embed, cluster_size = gmm(
+        embed, cluster_size = mini_batch_kmeans(
             data,
             self.codebook_size,
             self.kmeans_iters,
@@ -633,13 +633,13 @@ class EuclideanCodebook(nn.Module):
             # all_reduce_fn=self.kmeans_all_reduce_fn
         )
 #
-            # def kmeans(
-            #         samples,
-            #         num_clusters,
-            #         num_iters=100,
-            #         use_cosine_sim=False,
-            #         all_reduce_fn=noop
-            # ):
+            def kmeans(
+                    samples,
+                    num_clusters,
+                    num_iters=100,
+                    use_cosine_sim=False,
+                    all_reduce_fn=noop
+            ):
         # embed, cluster_size = kmeans(
         #     data,
         #     self.codebook_size,
