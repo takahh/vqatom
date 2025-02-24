@@ -632,14 +632,7 @@ class EuclideanCodebook(nn.Module):
             # sample_fn=self.sample_fn,
             # all_reduce_fn=self.kmeans_all_reduce_fn
         )
-#
-            def kmeans(
-                    samples,
-                    num_clusters,
-                    num_iters=100,
-                    use_cosine_sim=False,
-                    all_reduce_fn=noop
-            ):
+
         # embed, cluster_size = kmeans(
         #     data,
         #     self.codebook_size,
