@@ -194,18 +194,21 @@ def batched_bincount(x, *, minlength):
     return target
 
 
-import torch
 from torch.distributions import MultivariateNormal
 
+
 def gmm(
-    samples,
-    cluster_size=1500,  # Fixed number of clusters
-    num_iters=50,
-    sample_fn=None,  # Optional sampling function
-    all_reduce_fn=lambda x: x  # No-op by default
+        samples,
+        cluster_size=1500,  # Fixed number of clusters
+        num_iters=50,
+        sample_fn=None,  # Optional sampling function
+        all_reduce_fn=lambda x: x  # No-op by default
 ):
     """
     Optimized Gaussian Mixture Model (GMM) with a fixed number of clusters.
+
+    Vectorized over clusters using batched distributions and einsum to compute
+    the M-step without Python loops.
 
     Args:
         samples: Tensor of shape [num_codebooks, num_samples, dim].
@@ -221,103 +224,48 @@ def gmm(
     num_codebooks, num_samples, dim = samples.shape
     num_clusters = cluster_size
 
-    # Initialize means using k-means++ logic
+    # Initialize means with k-means++ logic per codebook
     means = torch.empty(num_codebooks, num_clusters, dim, dtype=samples.dtype, device=samples.device)
     for h in range(num_codebooks):
-        means[h, 0] = samples[h][torch.randint(0, num_samples, (1,))]
+        means[h, 0] = samples[h, torch.randint(0, num_samples, (1,))]
         for k in range(1, num_clusters):
-            dists = torch.cdist(samples[h], means[h, :k], p=2) ** 2
+            # Compute squared distances between each sample and the current centers.
+            dists = torch.cdist(samples[h].unsqueeze(0), means[h, :k].unsqueeze(0), p=2).squeeze(0) ** 2
             min_dists, _ = torch.min(dists, dim=1)
-            prob = min_dists / min_dists.sum()
+            prob = min_dists / (min_dists.sum() + 1e-9)
             chosen_idx = torch.multinomial(prob, 1)
             means[h, k] = samples[h, chosen_idx]
 
     # Initialize covariances and weights
-    covariances = torch.eye(dim, device=samples.device).unsqueeze(0).unsqueeze(0).repeat(num_codebooks, num_clusters, 1, 1)
-    weights = torch.ones(num_codebooks, num_clusters, device=samples.device) / num_clusters
-    for _ in range(num_iters):
-        # E-step: Compute responsibilities in log-space for numerical stability
-        log_probs = torch.zeros(num_codebooks, num_samples, num_clusters, device=samples.device)
-        for k in range(num_clusters):
-            try:
-                # Assuming means and covariances are already defined
-                mvn = MultivariateNormal(
-                    means[:, k, :],
-                    scale_tril=torch.linalg.cholesky(covariances[:, k, :, :])
-                )
-            except torch.linalg.LinAlgError as e:
-                # Handle errors specific to Cholesky decomposition
-                print(f"Cholesky decomposition error at {_}, {k}th: {e}")
-            except ValueError as e:
-                # Handle errors specific to the MultivariateNormal initialization
-                print(f"Invalid input for MultivariateNormal at {_}, {k}th: {e}")
-            except Exception as e:
-                # Handle any other unexpected errors
-                print(f"An unexpected error occurred at {_}, {k}th: {e}")
-            log_probs[:, :, k] = mvn.log_prob(samples)
+    covariances = torch.eye(dim, device=samples.device).expand(num_codebooks, num_clusters, dim, dim).clone()
+    weights = torch.full((num_codebooks, num_clusters), 1.0 / num_clusters, device=samples.device, dtype=samples.dtype)
 
-        # Add log weights and compute responsibilities
-        log_probs += weights.log().unsqueeze(1)
-        log_probs = log_probs.detach()
+    epsilon = 1e-6  # Regularization for numerical stability
 
+    for iter in range(num_iters):
+        # Ensure covariances are positive definite by adding a small epsilon.
+        cov_eps = covariances + torch.eye(dim, device=samples.device).unsqueeze(0).unsqueeze(0) * epsilon
+        # Build batched distributions: shape [num_codebooks, num_clusters]
+        mvn = MultivariateNormal(loc=means, covariance_matrix=cov_eps)
+        # Compute log probabilities for each sample across all clusters at once.
+        # samples.unsqueeze(2) has shape [C, N, 1, D], which broadcasts with mvn's [C, K, D]
+        log_probs = mvn.log_prob(samples.unsqueeze(2))  # [C, N, K]
+        # Incorporate cluster weights
+        log_probs = log_probs + weights.log().unsqueeze(1)
+        # Compute responsibilities via softmax over clusters (axis=-1)
         responsibilities = torch.softmax(log_probs, dim=-1)
-        responsibilities = responsibilities.detach()
-        # Normalize responsibilities
-        responsibilities /= responsibilities.sum(dim=-1, keepdim=True)
-
-        # Debugging: Ensure shapes are correct
-        assert responsibilities.shape == (num_codebooks, num_samples, num_clusters), "Responsibilities shape mismatch"
-        assert samples.shape == (num_codebooks, num_samples, dim), "Samples shape mismatch"
 
         # M-step: Update means
-        resp_sums = responsibilities.sum(dim=1, keepdim=True)  # Shape: [num_codebooks, 1, num_clusters]
-        weighted_samples = responsibilities.unsqueeze(-1) * samples.unsqueeze(
-            2)  # Shape: [num_codebooks, num_samples, num_clusters, dim]
+        resp_sums = responsibilities.sum(dim=1, keepdim=True)  # [C, 1, K]
+        weighted_samples = responsibilities.unsqueeze(-1) * samples.unsqueeze(2)  # [C, N, K, D]
+        means = weighted_samples.sum(dim=1) / (resp_sums.squeeze(1).unsqueeze(-1) + 1e-9)
 
-        weighted_samples = weighted_samples.detach()
-        cluster_sums = weighted_samples.sum(dim=1)  # Sum over samples, shape: [num_codebooks, num_clusters, dim]
-        means = cluster_sums / (resp_sums.squeeze(1).unsqueeze(-1) + 1e-9)  # Normalize by sum of responsibilities
+        # M-step: Update covariances via a vectorized einsum.
+        diff = samples.unsqueeze(2) - means.unsqueeze(1)  # [C, N, K, D]
+        covariances = torch.einsum('cnk,cnkd,cnke->ckde', responsibilities, diff, diff)
+        covariances = covariances / (resp_sums.squeeze(1).unsqueeze(-1).unsqueeze(-1) + 1e-9)
 
-        # Compute covariances
-        diff = samples.unsqueeze(2) - means.unsqueeze(1)  # Shape: [num_codebooks, num_samples, num_clusters, dim]
-
-        diff = diff.detach()
-        epsilon = 1e-6  # Small regularization term for numerical stability
-        chunk_size = 20  # Adjust to manage memory usage
-        weighted_diffs = []
-
-        # Compute weighted differences in chunks to avoid memory issues
-        for i in range(0, responsibilities.shape[2], chunk_size):
-            chunk = (
-                    responsibilities[:, :, i:i + chunk_size].unsqueeze(-1).unsqueeze(-1) *
-                    diff[:, :, i:i + chunk_size].unsqueeze(-2) *
-                    diff[:, :, i:i + chunk_size].unsqueeze(-1)
-            )
-            weighted_diffs.append(chunk)
-            del chunk  # Free memory immediately to reduce usage
-            torch.cuda.empty_cache()
-
-        # Concatenate chunks and compute covariances
-        weighted_diffs_tensor = torch.cat(weighted_diffs, dim=2)
-        cluster_covariances = weighted_diffs_tensor.sum(dim=1)  # Sum over samples
-        resp_sums_expanded = resp_sums.squeeze(1).unsqueeze(-1).unsqueeze(-1)  # Expand dimensions
-        covariances = cluster_covariances / (resp_sums_expanded + 1e-9)  # Normalize
-        covariances += torch.eye(covariances.shape[-1], device=covariances.device) * epsilon  # Add regularization
-
-        # Verify Cholesky decomposition for stability
-        for k in range(covariances.shape[1]):
-            try:
-                cholesky_factor = torch.linalg.cholesky(covariances[:, k, :, :])
-            except torch._C._LinAlgError:
-                print(f"Cluster {k} covariance matrix is not positive definite.")
-        torch.cuda.memory_summary()
-        del log_probs, diff, weighted_diffs, weighted_diffs_tensor, cluster_covariances
-        torch.cuda.empty_cache()
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    # Compute final cluster assignments
+    # Final cluster assignments based on highest responsibility
     bins = torch.argmax(responsibilities, dim=-1)
     return means, bins
 
