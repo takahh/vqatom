@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 2
+EPOCH = 13
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -94,6 +94,8 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
+    print("n_components")
+    print(n_components)
 
     images = []
     for i in range(n_components - 2):
@@ -283,7 +285,6 @@ def main():
     bond_order_file = f"{path}sample_bond_num_{EPOCH}.npz"
     src_file = f"{path}sample_src_{EPOCH}.npz"
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
-    # hoptype_file = f"{path}sample_hop_type_{EPOCH}.npz"
 
     arr_indices = getdata(indices_file)   # indices of the input
     arr_adj = getdata(adj_file)       # assigned quantized code vec indices
@@ -293,19 +294,7 @@ def main():
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
-    # arr_hoptype = getdata(hoptype_file)
     arr_bond_order = getdata(bond_order_file)
-
-    # choose data only hop=1
-    # mask = np.isin(arr_hoptype, 1)
-    print(f"src {arr_src}")
-    print(f"dst {arr_dst}")
-    # arr_src = arr_src[mask]
-    # arr_dst = arr_dst[mask]
-    # arr_bond_order = arr_bond_order[mask]
-    print(f"src {arr_src}")
-    print(f"dst {arr_dst}")
-    print(f"arr_bond_order {arr_bond_order}")
 
     # -------------------------------------
     # rebuild attr matrix
@@ -331,9 +320,10 @@ def main():
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
     arr_adj = arr_adj[0:300, 0:300]
     subset_adj_matrix = arr_adj[0:300, 0:300]
-    subset_adj_base_matrix = arr_adj_base[0:100, 0:100]
-    print(f"subset_adj_base_matrix {subset_adj_base_matrix}")
+    subset_adj_base_matrix = arr_adj_base[0:300, 0:300]
     subset_attr_matrix = arr_feat[:300]
+    print(f"arr_adj {arr_adj.shape}")
+    print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
