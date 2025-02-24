@@ -194,13 +194,6 @@ def batched_bincount(x, *, minlength):
     return target
 
 
-# data,
-# self.codebook_size,
-# self.kmeans_iters,
-# # use_cosine_sim=True,
-# sample_fn = self.sample_fn,
-# all_reduce_fn = self.kmeans_all_reduce_fn
-
 import torch
 from torch.distributions import MultivariateNormal
 
