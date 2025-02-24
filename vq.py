@@ -196,6 +196,9 @@ def batched_bincount(x, *, minlength):
 
 from torch.distributions import MultivariateNormal
 
+import torch
+from torch.distributions import MultivariateNormal
+
 
 def gmm(
         samples,
@@ -208,7 +211,8 @@ def gmm(
     Optimized Gaussian Mixture Model (GMM) with a fixed number of clusters.
 
     Vectorized over clusters using batched distributions and einsum to compute
-    the M-step without Python loops.
+    the M-step without Python loops. Log probabilities are computed in chunks
+    to reduce memory usage.
 
     Args:
         samples: Tensor of shape [num_codebooks, num_samples, dim].
@@ -241,18 +245,28 @@ def gmm(
     weights = torch.full((num_codebooks, num_clusters), 1.0 / num_clusters, device=samples.device, dtype=samples.dtype)
 
     epsilon = 1e-6  # Regularization for numerical stability
+    chunk_size = 50  # Adjust this value based on your memory constraints
 
     for iter in range(num_iters):
-        # Ensure covariances are positive definite by adding a small epsilon.
+        # Add regularization to ensure positive-definiteness.
         cov_eps = covariances + torch.eye(dim, device=samples.device).unsqueeze(0).unsqueeze(0) * epsilon
-        # Build batched distributions: shape [num_codebooks, num_clusters]
-        mvn = MultivariateNormal(loc=means, covariance_matrix=cov_eps)
-        # Compute log probabilities for each sample across all clusters at once.
-        # samples.unsqueeze(2) has shape [C, N, 1, D], which broadcasts with mvn's [C, K, D]
-        log_probs = mvn.log_prob(samples.unsqueeze(2))  # [C, N, K]
-        # Incorporate cluster weights
+
+        # Compute log probabilities in chunks to avoid OOM
+        log_probs_chunks = []
+        for start in range(0, num_clusters, chunk_size):
+            end = min(start + chunk_size, num_clusters)
+            mvn_chunk = MultivariateNormal(
+                loc=means[:, start:end, :],
+                covariance_matrix=cov_eps[:, start:end, :, :]
+            )
+            # samples.unsqueeze(2) has shape [C, N, 1, D]
+            # mvn_chunk.log_prob broadcasts over the cluster dimension: result [C, N, chunk_size]
+            log_probs_chunk = mvn_chunk.log_prob(samples.unsqueeze(2))
+            log_probs_chunks.append(log_probs_chunk)
+        log_probs = torch.cat(log_probs_chunks, dim=2)  # [C, N, K]
+
+        # Incorporate cluster weights and compute responsibilities
         log_probs = log_probs + weights.log().unsqueeze(1)
-        # Compute responsibilities via softmax over clusters (axis=-1)
         responsibilities = torch.softmax(log_probs, dim=-1)
 
         # M-step: Update means
@@ -260,7 +274,7 @@ def gmm(
         weighted_samples = responsibilities.unsqueeze(-1) * samples.unsqueeze(2)  # [C, N, K, D]
         means = weighted_samples.sum(dim=1) / (resp_sums.squeeze(1).unsqueeze(-1) + 1e-9)
 
-        # M-step: Update covariances via a vectorized einsum.
+        # M-step: Update covariances via vectorized einsum.
         diff = samples.unsqueeze(2) - means.unsqueeze(1)  # [C, N, K, D]
         covariances = torch.einsum('cnk,cnkd,cnke->ckde', responsibilities, diff, diff)
         covariances = covariances / (resp_sums.squeeze(1).unsqueeze(-1).unsqueeze(-1) + 1e-9)
