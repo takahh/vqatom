@@ -98,7 +98,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
     print(n_components)
 
     images = []
-    for i in range(n_components - 2):
+    for i in range(n_components - 1):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -318,10 +318,11 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    arr_adj = arr_adj[0:300, 0:300]
-    subset_adj_matrix = arr_adj[0:300, 0:300]
-    subset_adj_base_matrix = arr_adj_base[0:300, 0:300]
-    subset_attr_matrix = arr_feat[:300]
+    limit_num = 200
+    arr_adj = arr_adj[0:limit_num, 0:limit_num]
+    subset_adj_matrix = arr_adj[0:limit_num, 0:limit_num]
+    subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
+    subset_attr_matrix = arr_feat[:limit_num]
     print(f"arr_adj {arr_adj.shape}")
     print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
     # -------------------------------------
