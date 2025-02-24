@@ -202,8 +202,8 @@ from torch.distributions import MultivariateNormal
 
 def gmm(
         samples,
-        cluster_size=1500,  # Fixed number of clusters
-        num_iters=50,
+        cluster_size=500,  # Fixed number of clusters
+        num_iters=30,
         sample_fn=None,  # Optional sampling function
         all_reduce_fn=lambda x: x  # No-op by default
 ):
@@ -245,7 +245,7 @@ def gmm(
     weights = torch.full((num_codebooks, num_clusters), 1.0 / num_clusters, device=samples.device, dtype=samples.dtype)
 
     epsilon = 1e-6  # Regularization for numerical stability
-    chunk_size = 20  # Adjust this value based on your memory constraints
+    chunk_size = 10  # Adjust this value based on your memory constraints
 
     for iter in range(num_iters):
         # Add regularization to ensure positive-definiteness.
