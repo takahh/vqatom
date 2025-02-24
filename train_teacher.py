@@ -262,12 +262,11 @@ def run(args):
 
     """ Model config """
     conf = {}
-    if args.model_config_path is not None:
-        conf = get_training_config(args.model_config_path, args.teacher, args.dataset)
+    # if args.model_config_path is not None:
+    #     conf = get_training_config(args.model_config_path, args.teacher, args.dataset)
     conf = dict(args.__dict__, **conf)
     conf["device"] = device
     # logger.info(f"conf: {conf}")
-    conf["chunk_size"] = args.chunk_size
     """ Model init """
     from models import WeightedThreeHopGCN
     model = WeightedThreeHopGCN(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim)
