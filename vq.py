@@ -918,6 +918,7 @@ class VectorQuantize(nn.Module):
             lamb_div_elec_state=1,
             lamb_div_charge=1,
             lamb_sil=0.01,
+            lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
             sample_codebook_temp=0.,
@@ -948,6 +949,7 @@ class VectorQuantize(nn.Module):
         self.lamb_div_h_num = lamb_div_h_num
         self.lamb_div_elec_state = lamb_div_elec_state
         self.lamb_div_charge = lamb_div_charge
+        self.lamb_equiv_atom = lamb_equiv_atom
         self.lamb_sil = lamb_sil
         self.pair_weight = pair_weight
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
@@ -1190,7 +1192,7 @@ class VectorQuantize(nn.Module):
         print(f"atom_type_div_loss {atom_type_div_loss}")
 
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss)
+                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
     def forward(
             self,
@@ -1268,7 +1270,7 @@ class VectorQuantize(nn.Module):
         # Calculate Codebook Losses
         # ---------------------------------
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize)
+          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize)
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')  # Reduce if 2D with shape [b, 1]
@@ -1280,7 +1282,8 @@ class VectorQuantize(nn.Module):
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
+                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+                + self.lamb_equiv_atom * equiv_atom_loss)
         if is_multiheaded:
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
