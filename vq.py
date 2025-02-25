@@ -349,7 +349,6 @@ def kmeans(
 
     return means, bins
 
-
 def mini_batch_kmeans(
         samples,
         num_clusters,
@@ -361,68 +360,70 @@ def mini_batch_kmeans(
     # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
     dtype, device = samples.dtype, samples.device
-    samples = samples.to("cuda")
+    samples = samples.to(device)
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
-    # randomly select the first centroid for each codebook
-    means[:, 0] = samples[:, torch.randint(0, num_samples, (1,))]
+    # Randomly select the first centroid for each codebook (indices generated on GPU)
+    first_idx = torch.randint(0, num_samples, (1,), device=device)
+    # Squeeze to remove the extra dimension if needed
+    means[:, 0] = samples[:, first_idx].squeeze(1)
 
     # K-Means++: initialize remaining centroids using distance-based sampling
     for k in range(1, num_clusters):
         if use_cosine_sim:
+            # Compute cosine-based distances
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
+            # Compute Euclidean distances
             dists = torch.cdist(samples, means[:, :k], p=2)
-        min_dists = dists.min(dim=-1).values  # distance to nearest selected centroid
+        # Find the minimum distance for each point to an existing centroid
+        min_dists = dists.min(dim=-1).values
+        # Compute probability distribution for sampling the next centroid
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
+        # Sample one new centroid per codebook (generate indices on GPU)
         next_centroid_idx = torch.multinomial(probs, 1)
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+        # Use advanced indexing to assign the new centroids (squeeze to remove extra dim)
+        means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
 
     # Initialize counts to track the number of points assigned to each centroid
     counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
 
     # Iterative optimization with mini-batches
     for _ in range(num_iters):
-        # Sample a mini-batch of points (same indices for all codebooks)
-        batch_indices = torch.randint(0, num_samples, (batch_size,))
+        # Sample a mini-batch of points (indices generated on GPU)
+        batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
         batch = samples[:, batch_indices]  # shape: (num_codebooks, batch_size, dim)
 
-        # Compute distances (or cosine similarities)
+        # Compute distances or cosine similarities
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -torch.cdist(batch, means, p=2)  # negative distances so argmax gives nearest
+            # Use negative distances so that argmax yields the nearest centroid
+            dists = -torch.cdist(batch, means, p=2)
 
         # Assign each mini-batch point to the closest centroid
         assignments = torch.argmax(dists, dim=-1)  # shape: (num_codebooks, batch_size)
 
         # Accumulate per-cluster sums for the current mini-batch
         batch_sums = torch.zeros_like(means)
-        # Use the same repeat utility as before to broadcast the assignments over the feature dim.
         batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
 
-        # Count how many points fell into each cluster in the mini-batch
+        # Count how many points fall into each cluster in the mini-batch
         batch_counts = batched_bincount(assignments, minlength=num_clusters)
 
-        # Update the running counts
+        # Update the running counts and store the old counts for averaging
         old_counts = counts.clone().to(dtype)
-        counts = counts + batch_counts  # update integer counts
+        counts = counts + batch_counts
 
-        # Convert counts to float for computing weighted averages
+        # Update centroids only for clusters that received new points
         counts_float = counts.to(dtype)
-        batch_counts_float = batch_counts.to(dtype)
-
-        # For clusters that received new points, update the centroids with a running average:
-        # new_mean = (old_count * old_mean + batch_sum) / (old_count + batch_count)
-        update_mask = (batch_counts > 0).unsqueeze(-1)  # shape: (num_codebooks, num_clusters, 1)
-        # Only update clusters with nonzero batch_counts
+        update_mask = (batch_counts > 0).unsqueeze(-1)
         if update_mask.any():
-            # Compute the weighted sum of the old centroid and the new mini-batch contribution.
-            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
-                                                                                                 'h n -> h n 1')
+            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float, 'h n -> h n 1')
             means = torch.where(update_mask, new_means, means)
 
+        # Synchronize centroids and counts if using a distributed setting
         all_reduce_fn(counts)
         all_reduce_fn(means)
 
