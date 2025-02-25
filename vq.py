@@ -1077,7 +1077,7 @@ class VectorQuantize(nn.Module):
 
 
 
-    def fast_find_equivalence_groups(latents):
+    def fast_find_equivalence_groups(self, latents):
 
         from collections import defaultdict
         """
