@@ -1030,12 +1030,14 @@ class VectorQuantize(nn.Module):
         same_type_mask = (atom_types[:, None] == atom_types[None, :]).float()  # Mask for same atom type
 
         # Compute positive and negative losses
-        positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
+        # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
         negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
                                                              min=0.0) ** 2  # Push apart different types
 
         # Combine and return mean loss
-        return (positive_loss + negative_loss).mean()
+        # return (positive_loss + negative_loss).mean()
+        # Combine and return mean loss
+        return (negative_loss).mean()
 
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
