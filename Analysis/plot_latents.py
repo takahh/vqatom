@@ -69,6 +69,8 @@ def plot_graph(cb_arr, latent_arr, mode, epoch, param, cb_size, batch_size, para
             # plt.savefig(f"./plot_epoch{epoch}")
 
     elif mode == "umap":
+        print(cb_arr)
+
         n_neibogher = param
         min_dist = param2
         n_epochs = 5000
@@ -139,7 +141,7 @@ def main():
     arr_list = []
     DIMENSION = 64
     BATCH = 8000
-    EPOCH = 6
+    EPOCH = 4
     EPOCH2 = EPOCH + 1
 
     # MODE = "tsne"

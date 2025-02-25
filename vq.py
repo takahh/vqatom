@@ -1072,6 +1072,72 @@ class VectorQuantize(nn.Module):
         return embed_ind, loss
 
 
+
+    def fast_find_equivalence_groups(latents):
+
+        from collections import defaultdict
+        """
+        Finds equivalence groups where two vectors belong to the same group if they are identical.
+
+        Uses hashing for fast lookup instead of O(N^2) comparisons.
+
+        Args:
+            latents (torch.Tensor): Tensor of shape (N, D), where N is the number of vectors and D is the embedding dimension.
+
+        Returns:
+            equivalence_groups (list of list): A list of index groups where each sublist contains indices of identical vectors.
+        """
+        hash_map = defaultdict(list)  # Dictionary to store groups by unique vector
+
+        # Convert tensor rows into hashable tuples and store indices
+        for idx, vector in enumerate(latents):
+            key = tuple(vector.tolist())  # Convert tensor to a hashable tuple
+            hash_map[key].append(idx)
+
+        # Extract only groups with more than one element
+        equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
+
+        return equivalence_groups
+
+
+    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups):
+        """
+        VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
+        are assigned to the same discrete codebook entry.
+
+        Args:
+            embeddings (torch.Tensor): The continuous embeddings before quantization (N, D).
+            embed_ind (torch.Tensor): The assigned cluster indices after quantization (N,).
+            num_clusters (int): Total number of clusters in the codebook.
+            equivalence_groups (list of list): Groups of atom indices that should be clustered together.
+
+        Returns:
+            loss (torch.Tensor): Regularization loss ensuring equivalent atoms have the same cluster index.
+        """
+
+        loss = 0.0
+        num_groups = len(equivalence_groups)
+
+        # Detach embed_ind from the computational graph to prevent gradients
+        embed_ind = embed_ind.detach()
+
+        for group in equivalence_groups:
+            if len(group) < 2:
+                continue  # Skip if there are no equivalent atoms in this group
+
+            # Get cluster indices of equivalent atoms
+            cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
+
+            # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
+            pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
+            loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
+
+        # Normalize by number of groups
+        loss = loss / (num_groups + 1e-6)  # Avoid division by zero
+
+        return loss
+
+
     def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, min_distance=0.5):
         # Normalize embeddings (optional: remove if not necessary)
         embed_ind.to("cuda")
@@ -1108,31 +1174,10 @@ class VectorQuantize(nn.Module):
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
+        equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list)
 
-        # print("------ before -------")
-        # print(f"x.latents_for_sil: {latents_for_sil.requires_grad}")
-        # print(f"x.latents_for_sil: {latents_for_sil.grad_fn}")
-        # print(f"x.embed_ind_for_sil: {embed_ind_for_sil.requires_grad}")
-        # print(f"x.embed_ind_for_sil: {embed_ind_for_sil.grad_fn}")
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        # print("------ after (fast_silhouette_loss) -------")
-        # print(f"x.requires_grad: {sil_loss.requires_grad}")
-        # print(f"x.grad_fn: {sil_loss.grad_fn}")
-
-        # ---------------------------------------------------------------
-        # loss to assign different codes for different chemical elements
-        # ---------------------------------------------------------------
-        # atom_type_div_loss = differentiable_codebook_loss(init_feat[:, 0], embed_ind, self.codebook_size)
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat)
-        # print(f"init_feat: {init_feat.shape}")
-        # print(f"init_feat: {init_feat[0]}")
-        # print(f"quantized: {quantized.shape}")
-        # print(f"quantized: {quantized[0]}")
-
-        # atom_type_div_loss = feat_elem_divergence_loss(embed_ind, init_feat[:, 0], self.codebook_size)
-        # atom_type_div_loss = atom_type_div_loss + compute_contrastive_loss(latents, embed_ind)
-        # print(f"init_feat[:, 0] {init_feat[:10, :]} -----------------+++++++++++++++")
-        # init_feat[:, 0] tensor([18., -2., 18.,  ..., 18., -2., -2.], device='cuda:0') -----------------+++++++++++++++
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
@@ -1140,24 +1185,9 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
-        # print(f"elec_div_loss: {elec_state_div_loss:.4f}")
-        # print(f"charge_div_loss: {charge_div_loss:.4f}")
-        # print(f"atom div {atom_type_div_loss}, bond num {bond_num_div_loss}, aroma div {aroma_div_loss}, ringy div {ringy_div_loss}")
-        # print(f"init_feat shape {init_feat.shape}")
-        # print(f"init_feat {init_feat[0, :]}")
-        # h_num_div_loss = None
-        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        # bond_num_div_loss = None
-        # aroma_div_loss = None
-        # ringy_div_loss = None
-        # h_num_div_loss = None
-
-        # bond_num_div_loss = torch.tensor(feat_elem_divergence_loss(embed_ind, init_feat[:, 1]))
-        # aroma_div_loss = torch.tensor(feat_elem_divergence_loss(embed_ind, init_feat[:, 4]))
-        # ringy_div_loss = torch.tensor(feat_elem_divergence_loss(embed_ind, init_feat[:, 5]))
-        # h_num_div_loss = torch.tensor(feat_elem_divergence_loss(embed_ind, init_feat[:, 6]))
+        print(f"sil_loss {sil_loss}")
+        print(f"equivalent_atom_loss {equivalent_atom_loss}")
+        print(f"atom_type_div_loss {atom_type_div_loss}")
 
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss)
@@ -1194,66 +1224,23 @@ class VectorQuantize(nn.Module):
         # --------------------------------------------------
         # quantize here
         # --------------------------------------------------
-
-        # print("------ before _cpdebook() -------")
-        # print(f"x.requires_grad: {x.requires_grad}")
-        # print(f"x.grad_fn: {x.grad_fn}")
-        # quantize, embed_ind, dist, self.embed, flatten, init_cb
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x)
-        # この時点の embed_ind を渡して書き込むべき！！！
-        # quantize　: 各データに対応する codebook vector
-        # embed_ind : 各データに対応する codebook vector のインデックス
-        # dist      : codebook の距離行列
-        # embed     : codebook  ← これをプロットに使いたい
-        # latents   : 潜在変数ベクトル
-        # print(" &&&&&&&&&&&& middle of vq forward 0")
-        # print(f"sparsity_loss.requires_grad: {embed_ind.requires_grad}")
-        # print(f"sparsity_loss.grad_fn: {embed_ind.grad_fn}")
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1)
         x_tmp = x_tmp.unsqueeze(0)
-        # print(f"++++++++++++++++++")
-        # print(f"quantize {quantize.shape}")  # [1, 1, 1852, 256])
-        # print(f"quantize {quantize}")
-        # print(f"++++++++++++++++++")
-        # print(f"x_tmp {x_tmp.shape}")  # [1, 1, 1852, 256])
-        # print(f"x_tmp {x_tmp}")
-        codes = self.get_codes_from_indices(embed_ind)
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
-
-        # print(" &&&&&&&&&&&& quantize  ")
-        # print(f"quantize.requires_grad: {quantize.requires_grad}")
-        # print(f"quantize.grad_fn: {quantize.grad_fn}")
-        # print(f"quantize.shape: {quantize.shape}")
-        # print(f"quantize: {quantize}")
-        # print(f"++++++++++++++++++")
-        # print(f"quantize {quantize.shape}")  # [1, 1, 1852, 256])
-        # print(f"quantize {quantize}")
         loss = torch.zeros(1, device=device, requires_grad=True)
-        # loss = torch.tensor([0.], device=device, requires_grad=self.training)
         # --------------------------------------------------
         # calculate loss about codebook itself in training
         # --------------------------------------------------
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        margin_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        spread_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        div_ele_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        pair_distance_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
-        bond_num_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        aroma_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        ringy_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        h_num_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        charge_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        elec_state_div_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        silh_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         # if self.training:
         if self.commitment_weight > 0:  # 0.25 is assigned
             detached_quantize = quantize.detach()
 
             if exists(mask):
-                # with variable lengthed sequences
                 commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
 
                 if is_multiheaded:
@@ -1262,13 +1249,9 @@ class VectorQuantize(nn.Module):
 
                 commit_loss = commit_loss[mask].mean()
             else:
-                # print(f"x {x.shape}")
-                # print(f"detached_quantize {detached_quantize.shape}")
                 commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
             raw_commit_loss = commit_loss
-            # loss = loss + commit_loss * self.commitment_weight
 
-        # if self.margin_weight > 0:  # now skip because it is zero
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
@@ -1286,42 +1269,14 @@ class VectorQuantize(nn.Module):
         # ---------------------------------
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
           h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize)
-        # margin_loss, spread_loss = orthogonal_loss_fn(codebook)
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
-            # print("embed_ind.ndim == 2")
             embed_ind = rearrange(embed_ind, 'b 1 -> b')  # Reduce if 2D with shape [b, 1]
         elif embed_ind.ndim == 1:
-            # print("embed_ind.ndim == 1")
             embed_ind = embed_ind  # Leave as is if already 1D
         else:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        # print(" &&&&&&&&&&&& middle of vq forward 1")
-        # print(f"sparsity_loss.requires_grad: {embed_ind.requires_grad}")
-        # print(f"sparsity_loss.grad_fn: {embed_ind.grad_fn}")
-        # ---------------------------------
-        # Calculate silouhette Losses
-        # ---------------------------------
-        # silh_loss = silhouette_loss(latents, embed_ind, codebook.shape[0])
-
-        # ---------------------------------
-        # linearly combine losses !!!!
-        # ---------------------------------
-        # loss = self.lamb_div_ele * div_ele_loss
-        # print(" &&&&&&&&&&&& loss  ")
-        # print(f"requires_grad: {loss.requires_grad}")
-        # print(f"grad_fn: {loss.grad_fn}")
-        # print(f"shape: {loss.shape}")
-        # print(f"value: {loss}")
-        # loss = (loss + margin_loss * self.margin_weight + pair_distance_loss * self.pair_weight +
-        #         self.spread_weight * spread_loss + self.lamb_sil * silh_loss)
-        # if div_ele_loss < 0.001:
-        #     loss = (loss + self.lamb_sil * silh_loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
-        #             + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
-        #             + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-        #             + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
-        # else:
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
@@ -1334,30 +1289,20 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
-        # print("====================")
-        # print(f"quantize: {quantize.shape}")
-        # print(f"quantize: {quantize}")
         quantize = self.project_out(quantize)
 
         if need_transpose:
-            # print("need_transpose !!!!!!!")
             quantize = rearrange(quantize, 'b n d -> b d n')
 
         if self.accept_image_fmap:
-            # print("accept_image_fmap !!!!!!!")
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
         if only_one:
-            # print("only_one !!!!!!!")
             quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        # print("------ the end of vq forward () -------")
-        # print(f"sparsity_loss.requires_grad: {embed_ind.requires_grad}")
-        # print(f"sparsity_loss.grad_fn: {embed_ind.grad_fn}")
-        # quantized, _, commit_loss, dist, codebook, raw_commit_loss, latents, margin_loss, spread_loss, pair_loss, detached_quantize, x, init_cb
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss)
