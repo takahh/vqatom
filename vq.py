@@ -1136,6 +1136,15 @@ class VectorQuantize(nn.Module):
                 continue  # Skip if there are no equivalent atoms in this group
 
             # Get cluster indices of equivalent atoms
+            if cluster_indices.numel() == 0:
+                logger.warning("cluster_indices is empty!")
+            else:
+                try:
+                    max_index = cluster_indices.max().item()
+                    logger.info(f"Max index in cluster_indices: {max_index}")
+                except RuntimeError as e:
+                    logger.error(f"Error computing max index: {e}")
+
             cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
             logger.info("Max index in cluster_indices:", cluster_indices.max().item())  # Debugging output
             logger.info("Cluster indices:", cluster_indices)
