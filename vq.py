@@ -1127,7 +1127,7 @@ class VectorQuantize(nn.Module):
         # Detach embed_ind from the computational graph to prevent gradients
         embed_ind = embed_ind.detach()
         print("equivalence_groups")
-        print(equivalence_groups.shape)
+        print(len(equivalence_groups))
         print(equivalence_groups)
         for group in equivalence_groups:
             if len(group) < 2:
