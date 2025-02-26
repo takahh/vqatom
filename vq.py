@@ -1106,7 +1106,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def vq_codebook_regularization_loss(self, cluster_indices, embed_ind, equivalence_groups, logger):
+    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
         are assigned to the same discrete codebook entry.
@@ -1119,7 +1119,7 @@ class VectorQuantize(nn.Module):
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
         # Ensure cluster_indices is detached from computational graph
-        cluster_indices = cluster_indices.detach()
+        # cluster_indices = cluster_indices.detach()
 
         logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
 
@@ -1197,6 +1197,7 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+                                                        # cluster_indices, embed_ind, equivalence_groups, logger
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
