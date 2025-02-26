@@ -1142,20 +1142,20 @@ class VectorQuantize(nn.Module):
 
             # Ensure indices are within codebook bounds
             max_index = equivalent_cluster_indices.max().item()
-            if max_index >= args.codebook_size:
-                logger.error(f"Index {max_index} exceeds codebook size {args.codebook_size}")
-                continue
-
-            logger.info(f"Max index in cluster_indices: {max_index}")
-            logger.info(f"Cluster indices shape: {equivalent_cluster_indices.shape}")
+            # if max_index >= args.codebook_size:
+            #     logger.error(f"Index {max_index} exceeds codebook size {args.codebook_size}")
+            #     continue
+            #
+            # logger.info(f"Max index in cluster_indices: {max_index}")
+            # logger.info(f"Cluster indices shape: {equivalent_cluster_indices.shape}")
 
             # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
             pairwise_diffs = torch.cdist(
                 equivalent_cluster_indices.unsqueeze(1).float(),
                 equivalent_cluster_indices.unsqueeze(1).float()
             )
-            logger.info("torch.mean(pairwise_diffs)")
-            logger.info(torch.mean(pairwise_diffs))
+            # logger.info("torch.mean(pairwise_diffs)")
+            # logger.info(torch.mean(pairwise_diffs))
             loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
 
         # Normalize by number of groups
