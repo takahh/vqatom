@@ -1112,14 +1112,14 @@ class VectorQuantize(nn.Module):
                 continue  # Skip if the group is too small
 
             group_tensor = torch.tensor(group, device=embed_ind.device)  # Move indices to the correct device
-
+            logger.info(f"group_tensor {group_tensor}" )
             if torch.max(group_tensor) >= embed_ind.shape[0]:
                 logger.warning(f"Skipping group {group} - Index out of bounds!")
                 continue  # Skip this group
 
             # Extract cluster indices for equivalent atoms
             equivalent_cluster_indices = torch.index_select(embed_ind, 0, group_tensor)
-
+            logger.info(f"equivalent_cluster_indices {equivalent_cluster_indices}")
             # Ensure indices are within codebook bounds
             max_index = torch.max(equivalent_cluster_indices).item()
             if max_index >= args.codebook_size:
