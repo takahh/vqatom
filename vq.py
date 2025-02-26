@@ -1212,7 +1212,6 @@ class VectorQuantize(nn.Module):
             self,
             x,
             init_feat,
-            epoch=None,
             mask=None
     ):
         only_one = x.ndim == 2
