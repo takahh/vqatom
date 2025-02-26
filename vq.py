@@ -1114,7 +1114,7 @@ class VectorQuantize(nn.Module):
         args = get_args()
         loss = 0.0
         num_groups = len(equivalence_groups)
-
+        embed_ind = torch.squeeze(embed_ind)
         import os
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
