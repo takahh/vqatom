@@ -1129,7 +1129,7 @@ class VectorQuantize(nn.Module):
             # Compute pairwise agreement loss efficiently
             equivalent_cluster_indices = equivalent_cluster_indices.unsqueeze(1).float()
             pairwise_diffs = torch.cdist(equivalent_cluster_indices, equivalent_cluster_indices, p=2)
-
+            logger.info(f"pairwise_diffs {pairwise_diffs}")
             # Update loss in a memory-friendly way
             loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
 
