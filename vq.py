@@ -1043,7 +1043,6 @@ class VectorQuantize(nn.Module):
 
             if cluster_indices.numel() == 0:
                 continue  # Skip empty clusters
-
             # Compute inter-cluster distances
             other_mask = ~cluster_mask
             if other_mask.sum() > 0:
