@@ -47,7 +47,7 @@ class WeightedThreeHopGCN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, batched_graph, features, epoch, batched_graph_base=None):
+    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
@@ -89,7 +89,7 @@ class WeightedThreeHopGCN(nn.Module):
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
-            self.vq(h, init_feat, epoch)
+            self.vq(h, init_feat, epoch, logger)
 
         # --------------------------------
         # collect data for molecule images
@@ -735,14 +735,14 @@ class Model(nn.Module):
                 norm_type=conf["norm_type"],
             ).to(conf["device"])
 
-    def forward(self, data, feats, epoch):
+    def forward(self, data, feats, epoch, logger):
         """
         data: a graph `g` or a `dataloader` of blocks
         """
         if "MLP" in self.model_name:
             return self.encoder(feats)
         else:
-            return self.encoder(data, feats, epoch)
+            return self.encoder(data, feats, epoch, logger)
 
     def forward_fitnet(self, data, feats):
         """

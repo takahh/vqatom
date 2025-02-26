@@ -1106,7 +1106,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups):
+    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
         are assigned to the same discrete codebook entry.
@@ -1128,34 +1128,34 @@ class VectorQuantize(nn.Module):
 
         # Detach embed_ind from the computational graph to prevent gradients
         embed_ind = embed_ind.detach()
-        print("equivalence_groups")
-        print(len(equivalence_groups))
-        print(equivalence_groups)
+        logger.info("equivalence_groups")
+        logger.info(len(equivalence_groups))
+        logger.info(equivalence_groups)
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if there are no equivalent atoms in this group
 
             # Get cluster indices of equivalent atoms
             cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
-            print("Max index in cluster_indices:", cluster_indices.max().item())  # Debugging output
-            print("Cluster indices:", cluster_indices)
-            print("Shape of cluster indices:", cluster_indices.shape)
+            logger.info("Max index in cluster_indices:", cluster_indices.max().item())  # Debugging output
+            logger.info("Cluster indices:", cluster_indices)
+            logger.info("Shape of cluster indices:", cluster_indices.shape)
 
             assert cluster_indices.max() < args.codebook_size, f"Index {cluster_indices.max()} is out of bounds"
-            print(cluster_indices.shape)  # Check the shape of cluster_indices
-            print(args.codebook_size.shape)  # Check the shape of the codebook tensor
+            logger.info(cluster_indices.shape)  # Check the shape of cluster_indices
+            logger.info(args.codebook_size.shape)  # Check the shape of the codebook tensor
 
             # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
-            # pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
-            # loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
+            pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
+            loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
 
         # Normalize by number of groups
         loss = loss / (num_groups + 1e-6)  # Avoid division by zero
 
         return loss
 
-
-    def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, min_distance=0.5):
+                                # embed_ind, codebook, init_feat, latents, quantize, logger
+    def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
         # Normalize embeddings (optional: remove if not necessary)
         embed_ind.to("cuda")
         t.to("cuda")
@@ -1192,7 +1192,7 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
-        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list)
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
@@ -1284,7 +1284,7 @@ class VectorQuantize(nn.Module):
         # Calculate Codebook Losses
         # ---------------------------------
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize)
+          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')  # Reduce if 2D with shape [b, 1]

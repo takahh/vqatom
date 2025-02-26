@@ -57,7 +57,7 @@ def transform_node_feats(a):
     return transformed
 
 
-def train_sage(model, g, feats, optimizer, epoch, accumulation_steps=1):
+def train_sage(model, g, feats, optimizer, epoch, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     feats = feats.to(device)  # Ensure loss is also on GPU
@@ -66,7 +66,7 @@ def train_sage(model, g, feats, optimizer, epoch, accumulation_steps=1):
     scaler = torch.cuda.amp.GradScaler()
     optimizer.zero_grad()
     with torch.cuda.amp.autocast():
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch) # g is blocks
+        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch, logger) # g is blocks
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
@@ -306,7 +306,7 @@ def run_inductive(
                         batched_feats = batched_graph.ndata["feat"]
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
-                        model, batched_graph, batched_feats, optimizer, epoch, accumulation_steps)
+                        model, batched_graph, batched_feats, optimizer, epoch, accumulation_steps, logger)
                     model.reset_kmeans()
                     cb_new = model.vq._codebook.init_embed_(latents)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
