@@ -1106,57 +1106,52 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def vq_codebook_regularization_loss(self, cluster_indices, equivalence_groups, logger):
+    def vq_codebook_regularization_loss(self, cluster_indices, embed_ind, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
         are assigned to the same discrete codebook entry.
-
-        Args:
-            embeddings (torch.Tensor): The continuous embeddings before quantization (N, D).
-            embed_ind (torch.Tensor): The assigned cluster indices after quantization (N,).
-            num_clusters (int): Total number of clusters in the codebook.
-            equivalence_groups (list of list): Groups of atom indices that should be clustered together.
-
-        Returns:
-            loss (torch.Tensor): Regularization loss ensuring equivalent atoms have the same cluster index.
         """
         args = get_args()
         loss = 0.0
         num_groups = len(equivalence_groups)
+
         import os
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
-        # Detach embed_ind from the computational graph to prevent gradients
+        # Ensure cluster_indices is detached from computational graph
         cluster_indices = cluster_indices.detach()
-        logger.info("equivalence_groups")
-        logger.info(len(equivalence_groups))
-        logger.info(equivalence_groups)
+
+        logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
+
         for group in equivalence_groups:
             if len(group) < 2:
-                continue  # Skip if there are no equivalent atoms in this group
-            logger.info("cluster_indices")
-            logger.info(cluster_indices)
-            # Get cluster indices of equivalent atoms
-            if cluster_indices.numel() == 0:
-                logger.warning("cluster_indices is empty!")
-            else:
-                try:
-                    max_index = cluster_indices.max().item()
-                    logger.info(f"Max index in cluster_indices: {max_index}")
-                except RuntimeError as e:
-                    logger.error(f"Error computing max index: {e}")
+                continue  # Skip if the group is too small
 
-            cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
-            logger.info("Max index in cluster_indices:", cluster_indices.max().item())  # Debugging output
-            logger.info("Cluster indices:", cluster_indices)
-            logger.info("Shape of cluster indices:", cluster_indices.shape)
+            logger.info(f"Processing group: {group}")
 
-            assert cluster_indices.max() < args.codebook_size, f"Index {cluster_indices.max()} is out of bounds"
-            logger.info(cluster_indices.shape)  # Check the shape of cluster_indices
-            logger.info(args.codebook_size.shape)  # Check the shape of the codebook tensor
+            # Ensure indices are within valid bounds
+            if max(group) >= embed_ind.shape[0]:
+                logger.error(
+                    f"Index out of bounds! Max group index {max(group)} >= embed_ind size {embed_ind.shape[0]}")
+                continue  # Skip this group
+
+            # Extract cluster indices for equivalent atoms
+            equivalent_cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
+
+            # Ensure indices are within codebook bounds
+            max_index = equivalent_cluster_indices.max().item()
+            if max_index >= args.codebook_size:
+                logger.error(f"Index {max_index} exceeds codebook size {args.codebook_size}")
+                continue
+
+            logger.info(f"Max index in cluster_indices: {max_index}")
+            logger.info(f"Cluster indices shape: {equivalent_cluster_indices.shape}")
 
             # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
-            pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
+            pairwise_diffs = torch.cdist(
+                equivalent_cluster_indices.unsqueeze(1).float(),
+                equivalent_cluster_indices.unsqueeze(1).float()
+            )
             loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
 
         # Normalize by number of groups
@@ -1164,7 +1159,7 @@ class VectorQuantize(nn.Module):
 
         return loss
 
-                                # embed_ind, codebook, init_feat, latents, quantize, logger
+        # embed_ind, codebook, init_feat, latents, quantize, logger
     def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
         # Normalize embeddings (optional: remove if not necessary)
         embed_ind.to("cuda")
