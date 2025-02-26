@@ -1152,6 +1152,8 @@ class VectorQuantize(nn.Module):
                 equivalent_cluster_indices.unsqueeze(1).float(),
                 equivalent_cluster_indices.unsqueeze(1).float()
             )
+            print("torch.mean(pairwise_diffs)")
+            print(torch.mean(pairwise_diffs))
             loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
 
         # Normalize by number of groups
