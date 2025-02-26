@@ -1134,7 +1134,8 @@ class VectorQuantize(nn.Module):
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if there are no equivalent atoms in this group
-
+            logger.info("cluster_indices")
+            logger.info(cluster_indices)
             # Get cluster indices of equivalent atoms
             if cluster_indices.numel() == 0:
                 logger.warning("cluster_indices is empty!")
