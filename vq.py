@@ -1126,13 +1126,19 @@ class VectorQuantize(nn.Module):
 
         # Detach embed_ind from the computational graph to prevent gradients
         embed_ind = embed_ind.detach()
-
+        print("equivalence_groups")
+        print(equivalence_groups.shape)
+        print(equivalence_groups)
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if there are no equivalent atoms in this group
 
             # Get cluster indices of equivalent atoms
             cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
+            print("Max index in cluster_indices:", cluster_indices.max().item())  # Debugging output
+            print("Cluster indices:", cluster_indices)
+            print("Shape of cluster indices:", cluster_indices.shape)
+
             assert cluster_indices.max() < args.codebook_size, f"Index {cluster_indices.max()} is out of bounds"
             print(cluster_indices.shape)  # Check the shape of cluster_indices
             print(args.codebook_size.shape)  # Check the shape of the codebook tensor
