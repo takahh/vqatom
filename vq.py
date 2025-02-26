@@ -10,6 +10,8 @@ from einops import rearrange, repeat
 from torch.distributions import MultivariateNormal
 from torch.distributions.multivariate_normal import MultivariateNormal
 
+from train_teacher import get_args
+
 
 def exists(val):
     return val is not None
@@ -1118,7 +1120,7 @@ class VectorQuantize(nn.Module):
         Returns:
             loss (torch.Tensor): Regularization loss ensuring equivalent atoms have the same cluster index.
         """
-
+        args = get_args()
         loss = 0.0
         num_groups = len(equivalence_groups)
 
@@ -1131,6 +1133,9 @@ class VectorQuantize(nn.Module):
 
             # Get cluster indices of equivalent atoms
             cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
+            assert cluster_indices.max() < args.codebook_size, f"Index {cluster_indices.max()} is out of bounds"
+            print(cluster_indices.shape)  # Check the shape of cluster_indices
+            print(args.codebook_size.shape)  # Check the shape of the codebook tensor
 
             # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
             pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
