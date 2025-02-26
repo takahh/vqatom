@@ -56,7 +56,7 @@ def transform_node_feats(a):
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
     return transformed
 
-
+#            model, batched_graph, batched_feats, optimizer, epoch, accumulation_steps, logger)
 def train_sage(model, g, feats, optimizer, epoch, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -306,7 +306,7 @@ def run_inductive(
                         batched_feats = batched_graph.ndata["feat"]
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
-                        model, batched_graph, batched_feats, optimizer, epoch, accumulation_steps, logger)
+                        model, batched_graph, batched_feats, optimizer, epoch, logger)
                     model.reset_kmeans()
                     cb_new = model.vq._codebook.init_embed_(latents)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
