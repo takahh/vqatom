@@ -77,7 +77,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         # edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         edge_weight = transformed_edge_weight
-        features.to(device)
+        features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
         # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
@@ -88,7 +88,7 @@ class WeightedThreeHopGCN(nn.Module):
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = \
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss, equivalent_atom_loss) = \
             self.vq(h, init_feat, logger)
 
         # --------------------------------
@@ -113,7 +113,8 @@ class WeightedThreeHopGCN(nn.Module):
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
         return (h_list, h, loss, dist, codebook,
                 [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(), sil_loss.item()],
+                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(),
+                 sil_loss.item(), equivalent_atom_loss.item()],
                 x, detached_quantize, latents, sample_list)
 
 
