@@ -1006,41 +1006,27 @@ class VectorQuantize(nn.Module):
         codes, = unpack(codes, ps, 'b * d')
         return codes
 
+    import torch
 
-    def compute_contrastive_loss(self, z, atom_types, margin=1.0):
+    def compute_contrastive_loss(quantized, atom_types):
         """
-        Contrastive loss to separate different atom types.
+        Compute contrastive loss efficiently while keeping gradients for backpropagation.
         """
-        # Compute pairwise distances
-        pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
+        # Compute pairwise distances (keeps requires_grad)
+        pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
 
-        # Mask the diagonal (distances to itself)
-        mask = ~torch.eye(pairwise_distances.size(0), dtype=torch.bool)
-        non_diag_distances = pairwise_distances[mask]
+        # Enable memory efficiency using automatic mixed precision
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # Create mask for positive pairs (same atom type)
+            same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
 
-        # Compute mean, max, and min distances
-        mean_distance = non_diag_distances.mean().item()
-        max_distance = non_diag_distances.max().item()
-        min_distance = non_diag_distances.min().item()
+            # Ensure only positive pairs contribute to loss
+            num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
 
-        # Print results
-        print(f"Mean distance: {mean_distance:.4f}")
-        print(f"Max distance: {max_distance:.4f}")
-        print(f"Min distance: {min_distance:.4f}")
+            # Compute loss while preserving gradients
+            positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
 
-        # Create a mask for same atom types
-        same_type_mask = (atom_types[:, None] == atom_types[None, :]).float()  # Mask for same atom type
-
-        # Compute positive and negative losses
-        # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
-        negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
-                                                             min=0.0) ** 2  # Push apart different types
-
-        # Combine and return mean loss
-        # return (positive_loss + negative_loss).mean()
-        # Combine and return mean loss
-        return (negative_loss).mean()
-
+        return positive_loss  # Loss remains differentiable
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
         # Preprocess clusters to ensure the desired number of non-empty clusters
