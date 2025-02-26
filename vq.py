@@ -1146,8 +1146,8 @@ class VectorQuantize(nn.Module):
             print(args.codebook_size.shape)  # Check the shape of the codebook tensor
 
             # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
-            pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
-            loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
+            # pairwise_diffs = torch.cdist(cluster_indices.unsqueeze(1).float(), cluster_indices.unsqueeze(1).float())
+            # loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
 
         # Normalize by number of groups
         loss = loss / (num_groups + 1e-6)  # Avoid division by zero
