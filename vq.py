@@ -1106,7 +1106,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
+    def vq_codebook_regularization_loss(self, cluster_indices, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
         are assigned to the same discrete codebook entry.
@@ -1127,7 +1127,7 @@ class VectorQuantize(nn.Module):
         os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
         # Detach embed_ind from the computational graph to prevent gradients
-        embed_ind = embed_ind.detach()
+        cluster_indices = cluster_indices.detach()
         logger.info("equivalence_groups")
         logger.info(len(equivalence_groups))
         logger.info(equivalence_groups)
