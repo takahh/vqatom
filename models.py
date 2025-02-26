@@ -81,9 +81,9 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.linear_0(features)  # Convert to expected shape
         # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = torch.relu(h)  # Activation function
+        # h = torch.relu(h)  # Activation function
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = torch.relu(h)
+        # h = torch.relu(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,

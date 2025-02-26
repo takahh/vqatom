@@ -1184,9 +1184,9 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
-        print(f"sil_loss {sil_loss}")
-        print(f"equivalent_atom_loss {equivalent_atom_loss}")
-        print(f"atom_type_div_loss {atom_type_div_loss}")
+        # print(f"sil_loss {sil_loss}")
+        # print(f"equivalent_atom_loss {equivalent_atom_loss}")
+        # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
     #  self.vq(h, init_feat, logger)
