@@ -1123,6 +1123,8 @@ class VectorQuantize(nn.Module):
         args = get_args()
         loss = 0.0
         num_groups = len(equivalence_groups)
+        import os
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
         # Detach embed_ind from the computational graph to prevent gradients
         embed_ind = embed_ind.detach()
