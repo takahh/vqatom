@@ -1122,7 +1122,9 @@ class VectorQuantize(nn.Module):
         # cluster_indices = cluster_indices.detach()
 
         logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
-
+        logger.info("embed_ind.shape")
+        logger.info(embed_ind.shape)
+        logger.info(embed_ind)
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if the group is too small
