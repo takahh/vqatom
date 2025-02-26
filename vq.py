@@ -1105,61 +1105,48 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-
     def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
-        are assigned to the same discrete codebook entry.
+        are assigned to the same discrete codebook entry while being memory efficient.
         """
         args = get_args()
-        loss = 0.0
+        loss = torch.tensor(0.0, device=embed_ind.device, requires_grad=True)  # Keep it learnable
         num_groups = len(equivalence_groups)
-        embed_ind = torch.squeeze(embed_ind)
-        import os
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
 
-        # Ensure cluster_indices is detached from computational graph
-        # cluster_indices = cluster_indices.detach()
+        # Ensure correct shape to avoid unnecessary squeeze/unsqueeze calls
+        embed_ind = embed_ind.view(-1)  # Flatten instead of squeeze()
 
-        logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
-        logger.info("embed_ind.shape")
-        logger.info(embed_ind.shape)
-        logger.info(embed_ind)
+        # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
+        #
+        # logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
+        # logger.info(f"embed_ind.shape: {embed_ind.shape}")
+
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if the group is too small
 
-            logger.info(f"Processing group: {group}")
+            group_tensor = torch.tensor(group, device=embed_ind.device)  # Move indices to the correct device
 
-            # Ensure indices are within valid bounds
-            if max(group) >= embed_ind.shape[0]:
-                logger.error(
-                    f"Index out of bounds! Max group index {max(group)} >= embed_ind size {embed_ind.shape[0]}")
+            if torch.max(group_tensor) >= embed_ind.shape[0]:
+                logger.warning(f"Skipping group {group} - Index out of bounds!")
                 continue  # Skip this group
 
             # Extract cluster indices for equivalent atoms
-            equivalent_cluster_indices = embed_ind[group]  # Tensor of shape (|group|,)
+            equivalent_cluster_indices = torch.index_select(embed_ind, 0, group_tensor)
 
             # Ensure indices are within codebook bounds
-            max_index = equivalent_cluster_indices.max().item()
-            # if max_index >= args.codebook_size:
-            #     logger.error(f"Index {max_index} exceeds codebook size {args.codebook_size}")
-            #     continue
-            #
-            # logger.info(f"Max index in cluster_indices: {max_index}")
-            # logger.info(f"Cluster indices shape: {equivalent_cluster_indices.shape}")
+            max_index = torch.max(equivalent_cluster_indices).item()
+            if max_index >= args.codebook_size:
+                logger.warning(f"Skipping group {group} - Index {max_index} exceeds codebook size {args.codebook_size}")
+                continue
 
-            # Compute pairwise agreement loss: Encourage all in the group to map to the same cluster
-            pairwise_diffs = torch.cdist(
-                equivalent_cluster_indices.unsqueeze(1).float(),
-                equivalent_cluster_indices.unsqueeze(1).float()
-            )
-            # logger.info("torch.mean(pairwise_diffs)")
-            # logger.info(torch.mean(pairwise_diffs))
-            loss += torch.mean(pairwise_diffs)  # Encourage equivalent atoms to have the same cluster index
+            # Compute pairwise agreement loss efficiently
+            equivalent_cluster_indices = equivalent_cluster_indices.unsqueeze(1).float()
+            pairwise_diffs = torch.cdist(equivalent_cluster_indices, equivalent_cluster_indices, p=2)
 
-        # Normalize by number of groups
-        loss = loss / (num_groups + 1e-6)  # Avoid division by zero
+            # Update loss in a memory-friendly way
+            loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
 
         return loss
 
