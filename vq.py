@@ -390,6 +390,8 @@ def mini_batch_kmeans(
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
 
         # Sample next centroid efficiently
+        probs = torch.clamp(probs, min=1e-10)  # Avoid invalid values
+        probs = probs / probs.sum()  # Normalize
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
 
