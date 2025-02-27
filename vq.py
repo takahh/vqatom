@@ -444,7 +444,7 @@ def batched_embedding(indices, embeds):
 
 import torch
 
-def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5, num_atom_types=100, chunk_size=1024):
+def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5, num_atom_types=100, chunk_size=512):
     """
     Memory-efficient contrastive loss computation to separate different atom types using embeddings.
     """
