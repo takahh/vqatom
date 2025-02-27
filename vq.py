@@ -1194,6 +1194,8 @@ class VectorQuantize(nn.Module):
     import torch
 
     def forward(self, x, init_feat, logger, mask=None):
+        import time
+
         start_total = time.perf_counter()
 
         only_one = x.ndim == 2
