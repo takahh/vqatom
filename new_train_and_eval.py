@@ -252,7 +252,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Assign node features to the extended graph
             # ------------------------------------------
             extended_g.ndata["feat"] = filtered_attr_matrix
-
+            extended_g = dgl.add_self_loop(extended_g)
             # ------------------------------------------
             # Validate that remaining features are zero (if applicable)
             # ------------------------------------------
