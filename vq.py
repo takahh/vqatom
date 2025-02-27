@@ -479,6 +479,8 @@ def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5
 
             # Compute pairwise squared Euclidean distance using vectorized operations
             pairwise_distances_sq = z_chunk_norm_sq + z_norm_sq.T - 2 * torch.matmul(z_chunk, z.T)
+            if z.shape[0] == z_chunk.shape[0]:  # Ensure proper shape when using chunking
+                z = z.unsqueeze(0)  # Reshape if needed
             pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))  # Ensure no NaNs
 
             # Compute pairwise cosine similarity (efficiently using einsum)
