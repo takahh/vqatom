@@ -88,7 +88,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
 
-
     return loss, loss_list3, latent_list, latents
 
 
@@ -371,7 +370,7 @@ def run_inductive(
 
         print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
-
+        print(f"loss_list_list_train {loss_list_list_train}")
         print(f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
               f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
               f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
