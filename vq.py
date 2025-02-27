@@ -1313,15 +1313,6 @@ class VectorQuantize(nn.Module):
 
         end_total = time.perf_counter()
 
-        # Log timing
-        logger.info(f"Projection in time: {end_project_in - start_project_in:.4f} sec")
-        logger.info(f"Quantization time: {end_quantization - start_quantization:.4f} sec")
-        logger.info(f"Commitment loss computation time: {end_commitment_loss - start_commitment_loss:.4f} sec")
-        logger.info(f"Codebook processing time: {end_codebook - start_codebook:.4f} sec")
-        logger.info(f"Loss computation time: {end_loss_computation - start_loss_computation:.4f} sec")
-        logger.info(f"Rearrange and reshape time: {end_rearrange - start_rearrange:.4f} sec")
-        logger.info(f"Total forward pass time: {end_total - start_total:.4f} sec")
-
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss, equiv_atom_loss)
