@@ -203,7 +203,8 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             mask = src > dst  # Avoid duplicate edges
             src, dst = src[mask], dst[mask]
             edge_weights = filtered_adj_matrix[src, dst].to(device)
-            print(f"edge_weights {edge_weights}")
+            print(f"src {src}")
+            print(f"dst {dst}")
 
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
             base_g.ndata["feat"] = filtered_attr_matrix
