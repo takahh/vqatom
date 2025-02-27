@@ -1079,11 +1079,13 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
+
     def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
         """
         VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
         are assigned to the same discrete codebook entry while being memory efficient.
         """
+        embed_ind = embed_ind.to('cuda')
         args = get_args()
         loss = torch.tensor(0.0, device=embed_ind.device, requires_grad=True)  # Keep it learnable
         num_groups = len(equivalence_groups)
