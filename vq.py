@@ -463,30 +463,32 @@ def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5
 
     # Compute loss in chunks to reduce memory usage
     for i in range(0, num_samples, chunk_size):
-        end_i = min(i + chunk_size, num_samples)
 
-        # Compute pairwise distances in chunks
-        z_chunk = z[i:end_i]  # Small chunk of `z`
-        pairwise_distances = torch.cdist(z_chunk, z, p=2)  # Chunkwise pairwise distances
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            end_i = min(i + chunk_size, num_samples)
 
-        # Compute similarity only for this chunk
-        atom_types_chunk = atom_types[i:end_i]
-        pairwise_similarities = torch.mm(atom_types_chunk, atom_types.T)  # Cosine similarity
+            # Compute pairwise distances in chunks
+            z_chunk = z[i:end_i]  # Small chunk of `z`
+            pairwise_distances = torch.cdist(z_chunk, z, p=2)  # Chunkwise pairwise distances
 
-        # Create same-type mask based on similarity threshold
-        same_type_mask = (pairwise_similarities >= threshold).float()  # Binary mask
+            # Compute similarity only for this chunk
+            atom_types_chunk = atom_types[i:end_i]
+            pairwise_similarities = torch.mm(atom_types_chunk, atom_types.T)  # Cosine similarity
 
-        # Compute loss components in a memory-efficient way
-        negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
+            # Create same-type mask based on similarity threshold
+            same_type_mask = (pairwise_similarities >= threshold).float()  # Binary mask
 
-        if index == 0:
-            positive_loss = same_type_mask * pairwise_distances ** 2
-            loss = (positive_loss + negative_loss).sum()  # Sum within chunk
-        else:
-            loss = negative_loss.sum()
+            # Compute loss components in a memory-efficient way
+            negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
 
-        total_loss += loss
-        total_count += pairwise_distances.numel()  # Track number of elements
+            if index == 0:
+                positive_loss = same_type_mask * pairwise_distances ** 2
+                loss = (positive_loss + negative_loss).sum()  # Sum within chunk
+            else:
+                loss = negative_loss.sum()
+
+            total_loss += loss
+            total_count += pairwise_distances.numel()  # Track number of elements
 
     return total_loss / total_count / 10000  # Normalize final loss
 
@@ -999,30 +1001,30 @@ class VectorQuantize(nn.Module):
 
     import torch
 
-    def compute_contrastive_loss(quantized, atom_types, margin=1.0):
-        """
-        Compute contrastive loss efficiently while keeping gradients for backpropagation.
-        """
-        # Compute pairwise distances (keeps requires_grad)
-        pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
-
-        # Enable memory efficiency using automatic mixed precision
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            # Create mask for positive pairs (same atom type)
-            same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
-
-            # Ensure only positive pairs contribute to loss
-            num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
-
-            # Compute loss while preserving gradients
-            positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
-
-            # Compute positive and negative losses
-            # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
-            negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
-                                                                 min=0.0) ** 2  # Push apart different types
-        # Combine and return mean loss
-        return (positive_loss + negative_loss).mean()
+    # def compute_contrastive_loss(quantized, atom_types, margin=1.0):
+    #     """
+    #     Compute contrastive loss efficiently while keeping gradients for backpropagation.
+    #     """
+    #     # Compute pairwise distances (keeps requires_grad)
+    #     pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
+    #
+    #     # Enable memory efficiency using automatic mixed precision
+    #     with torch.autocast(device_type="cuda", dtype=torch.float16):
+    #         # Create mask for positive pairs (same atom type)
+    #         same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
+    #
+    #         # Ensure only positive pairs contribute to loss
+    #         num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
+    #
+    #         # Compute loss while preserving gradients
+    #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
+    #
+    #         # Compute positive and negative losses
+    #         # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
+    #         negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
+    #                                                              min=0.0) ** 2  # Push apart different types
+    #     # Combine and return mean loss
+    #     return (positive_loss + negative_loss).mean()
 
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
