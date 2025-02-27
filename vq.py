@@ -447,54 +447,60 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 import torch
+import torch
 
 def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5, num_atom_types=100, chunk_size=512):
     """
-    Memory-efficient contrastive loss computation to separate different atom types using embeddings.
+    Optimized memory-efficient contrastive loss computation.
     """
     z = z.to("cuda", non_blocking=True)
     atom_types = atom_types.to("cuda", non_blocking=True)
 
-    # One-hot encoding without storing the full matrix in memory
+    # One-hot encode atom types (avoiding unnecessary storage)
     atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
 
-    # Normalize the atom_types vectors (to prevent large dot products)
+    # Normalize atom_types once to avoid redundant computation
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
+
+    # Precompute norms for pairwise distance calculation
+    z_norm_sq = (z ** 2).sum(dim=-1, keepdim=True)
 
     num_samples = z.shape[0]
     total_loss = 0.0
     total_count = 0
 
-    # Compute loss in chunks to reduce memory usage
     for i in range(0, num_samples, chunk_size):
+        end_i = min(i + chunk_size, num_samples)
 
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            end_i = min(i + chunk_size, num_samples)
+        with torch.autocast(device_type="cuda", dtype=torch.float16):  # Mixed precision speeds up computation
+            # Select chunk of `z`
+            z_chunk = z[i:end_i]
+            z_chunk_norm_sq = z_norm_sq[i:end_i]
 
-            # Compute pairwise distances in chunks
-            z_chunk = z[i:end_i]  # Small chunk of `z`
-            pairwise_distances = torch.cdist(z_chunk, z, p=2)  # Chunkwise pairwise distances
+            # Compute pairwise squared Euclidean distance using vectorized operations
+            pairwise_distances_sq = z_chunk_norm_sq + z_norm_sq.T - 2 * torch.matmul(z_chunk, z.T)
+            pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))  # Ensure no NaNs
 
-            # Compute similarity only for this chunk
+            # Compute pairwise cosine similarity (efficiently using einsum)
             atom_types_chunk = atom_types[i:end_i]
-            pairwise_similarities = torch.mm(atom_types_chunk, atom_types.T)  # Cosine similarity
+            pairwise_similarities = torch.einsum("bd,nd->bn", atom_types_chunk, atom_types)  # Faster than `mm`
 
-            # Create same-type mask based on similarity threshold
-            same_type_mask = (pairwise_similarities >= threshold).float()  # Binary mask
+            # Create same-type mask
+            same_type_mask = (pairwise_similarities >= threshold).float()
 
-            # Compute loss components in a memory-efficient way
+            # Compute contrastive loss
             negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
 
             if index == 0:
                 positive_loss = same_type_mask * pairwise_distances ** 2
-                loss = (positive_loss + negative_loss).sum()  # Sum within chunk
+                loss = (positive_loss + negative_loss).sum()
             else:
                 loss = negative_loss.sum()
 
             total_loss += loss
-            total_count += pairwise_distances.numel()  # Track number of elements
+            total_count += pairwise_distances.numel()
 
-    return total_loss / total_count / 10000  # Normalize final loss
+    return total_loss / total_count / 10000  # Normalize loss
 
 
 
