@@ -443,19 +443,14 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, index=10, margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
-    # One-hot encode atom types
-    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
-    # print(f"🚨 atom_types: {atom_types}")
-    # print(f"🚨 num_atom_types: {num_atom_types}")
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
 
     try:
-        # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
         atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
     except Exception as e:
         print("Error in one_hot:", e)
@@ -474,20 +469,18 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_
     # Create the mask for "same type" based on similarity threshold
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
-    # Compute positive loss (pull same types together)
-    positive_loss = same_type_mask * pairwise_distances ** 2
-
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
-    # print("same_type_mask shape:", same_type_mask.shape)
-    # print("pairwise_distances shape:", pairwise_distances.shape)
-    # print("Min index in mask:",
-    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
-    # print("Max index in mask:",
-    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
-    # Combine and return mean loss
-    return (positive_loss + negative_loss).mean() / 10000
+    if index == 0:
+       # Compute positive loss (pull same types together)
+        positive_loss = same_type_mask * pairwise_distances ** 2
+
+        # Combine and return mean loss
+        return (positive_loss + negative_loss).mean() / 10000
+    else:
+        return (negative_loss).mean() / 10000
+
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
@@ -997,7 +990,7 @@ class VectorQuantize(nn.Module):
 
     import torch
 
-    def compute_contrastive_loss(quantized, atom_types):
+    def compute_contrastive_loss(quantized, atom_types, margin=1.0):
         """
         Compute contrastive loss efficiently while keeping gradients for backpropagation.
         """
@@ -1015,7 +1008,13 @@ class VectorQuantize(nn.Module):
             # Compute loss while preserving gradients
             positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
 
-        return positive_loss  # Loss remains differentiable
+            # Compute positive and negative losses
+            # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
+            negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
+                                                                 min=0.0) ** 2  # Push apart different types
+        # Combine and return mean loss
+        return (positive_loss + negative_loss).mean()
+
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
         # Preprocess clusters to ensure the desired number of non-empty clusters
@@ -1168,7 +1167,7 @@ class VectorQuantize(nn.Module):
         # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], 0)
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
         elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])

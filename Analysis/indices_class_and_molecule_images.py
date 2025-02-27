@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 6
+EPOCH = 5
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -75,7 +75,9 @@ def to_superscript(number):
         "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"
     }
     return "".join(superscript_map.get(char, char) for char in str(number))
-def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
+
+def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order,
+                                              adj_matrix_base):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
@@ -107,7 +109,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
 
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
-        atom_mapping, atom_labels = {}, {}  # Maps indices and assigns labels
+        atom_mapping, atom_labels = {}, {}
 
         # Add atoms and annotate with class labels
         for idx, features in zip(component_indices, mol_features):
@@ -119,7 +121,13 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
             # Annotate atom with its class label
             class_label = node_to_class.get(idx, "Unknown")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
-            atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
+            color = "black"
+            if element == "O":
+                color = "red"
+            elif element == "N":
+                color = "blue"
+
+            atom_labels[atom_idx] = (f"{element}{class_label}", color)
 
         # Define bond type map
         bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE,
@@ -164,38 +172,51 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         # Update molecule properties before further processing
         mol.UpdatePropertyCache(strict=False)
 
-        # Try 3D embedding, fallback to 2D if it fails
+        # **Generate 2D coordinates with uniform bond lengths**
+        AllChem.Compute2DCoords(mol)
+
+        # **Ensure consistent bond lengths and molecule structure**
         try:
-            mol = Chem.AddHs(mol)  # Add explicit hydrogens
-            AllChem.EmbedMolecule(mol, AllChem.ETKDG())
-            AllChem.UFFOptimizeMolecule(mol)
-            mol = Chem.RemoveHs(mol)  # Remove explicit hydrogens after embedding
-        except Exception as e:
-            print(f"Error in 3D embedding: {e}")
-            AllChem.Compute2DCoords(mol)  # Fallback to 2D
+            ref_mol = Chem.Mol(mol)  # Create a reference molecule
+            AllChem.GenerateDepictionMatching2DStructure(mol, ref_mol)
+        except:
+            print("Depiction matching failed, using default 2D coordinates.")
 
         # Prepare the molecule for drawing
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
-        # Create a drawing canvas
-        drawer = Draw.MolDraw2DCairo(1500, 1000)
+        # Create a drawing canvas (Increased Resolution for Clarity)
+        drawer = Draw.MolDraw2DCairo(2000, 1500)  # High resolution
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 4  # Increase font size for readability
+        options.atomLabelFontSize = 12  # Bigger font for better readability
+        options.bondLineWidth = 3  # Thicker bonds
 
-        # Assign custom labels
-        for idx, label in atom_labels.items():
-            options.atomLabels[idx] = label
+        # Create lists for highlighting atoms with **semi-transparent colors**
+        highlight_atoms = []
+        highlight_colors = {}
 
-        # Draw and store the molecule
-        drawer.DrawMolecule(mol_for_drawing)
-        drawer.FinishDrawing()
+        for idx, (label, color) in atom_labels.items():
+            options.atomLabels[idx] = label  # Assign label
+
+            # Assign transparent colors using RGBA (last value controls transparency)
+            if color == "red":  # Oxygen (O)
+                highlight_atoms.append(idx)
+                highlight_colors[idx] = (1.0, 0.0, 0.0, 0.4)  # Red with 40% transparency
+            elif color == "blue":  # Nitrogen (N)
+                highlight_atoms.append(idx)
+                highlight_colors[idx] = (0.0, 0.0, 1.0, 0.4)  # Blue with 40% transparency
+
+        # **Fix: Draw molecule with transparent highlights**
+        drawer.DrawMolecule(mol_for_drawing, highlightAtoms=highlight_atoms, highlightAtomColors=highlight_colors)
+
+        drawer.FinishDrawing()  # Now finish the drawing process
         img_data = drawer.GetDrawingText()
         img = Image.open(BytesIO(img_data))
         images.append(img)
 
     # Display images
     for i, img in enumerate(images):
-        plt.figure(dpi=250)
+        plt.figure(figsize=(10, 7))  # Bigger figure size
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
