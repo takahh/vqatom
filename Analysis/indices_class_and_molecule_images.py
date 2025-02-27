@@ -167,7 +167,15 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
                     bond.SetIsAromatic(True)
 
         # Compute 2D coordinates for drawing.
-        AllChem.Compute2DCoords(mol)
+        # AllChem.Compute2DCoords(mol)
+        try:
+            Chem.SanitizeMol(mol)  # Ensure valid valences
+            mol = Chem.AddHs(mol)  # Now add explicit hydrogens
+            AllChem.EmbedMolecule(mol, AllChem.ETKDG())
+            AllChem.UFFOptimizeMolecule(mol)
+        except Exception as e:
+            print(f"Error during molecule processing: {e}")
+            AllChem.Compute2DCoords(mol)  # Fallback to 2D if 3D fails
 
         # Sanitize the molecule without kekulization to preserve aromatic flags.
         try:
