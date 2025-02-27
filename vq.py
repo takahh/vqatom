@@ -457,7 +457,6 @@ def mini_batch_kmeans(
         logger.info(f"K-Means++ initialization time: {end_kmeans_init - start_kmeans_init:.4f} sec")
         logger.info(f"K-Means++ centroid selection time: {end_kmeans_pp - start_kmeans_pp:.4f} sec")
         logger.info(f"Total iterative optimization time: {end_iterations - start_iterations:.4f} sec")
-        logger.info(f"  - Batch sampling time: {end_batch_sample - start_batch_sample:.4f} sec")
         logger.info(f"  - Distance computation time: {end_distance_calc - start_distance_calc:.4f} sec")
         logger.info(f"  - Cluster assignment time: {end_assignment - start_assignment:.4f} sec")
         logger.info(f"  - Cluster update time: {end_cluster_update - start_cluster_update:.4f} sec")
