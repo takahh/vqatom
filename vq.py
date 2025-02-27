@@ -647,11 +647,11 @@ class EuclideanCodebook(nn.Module):
         self.embed_avg.data.copy_(embed.clone())
         self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
         self.cluster_size.data.copy_(cluster_size)
-        self.initted.data.copy_(torch.Tensor([True]))
 
         return embed
 
     def replace(self, batch_samples, batch_mask):
+        self.initted.data.copy_(torch.Tensor([True]))
         for ind, (samples, mask) in enumerate(zip(batch_samples.unbind(dim=0), batch_mask.unbind(dim=0))):
             if not torch.any(mask):
                 continue
@@ -671,37 +671,46 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
+
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x):
+    def forward(self, x, logger):
+        import time
+
+        start_total = time.perf_counter()
+
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
+        start_rearrange = time.perf_counter()
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-
-        shape, dtype = x.shape, x.dtype
         flatten = rearrange(x, 'h ... d -> h (...) d')
-        # flatten = flatten.half()  # Convert to float16 before KMeans
+        end_rearrange = time.perf_counter()
+
         # ----------------------------------------------------
-        # set the initial codebook vectors by kmeans
+        # set the initial codebook vectors by k-means
         # ----------------------------------------------------
-        # print(f"run kmeans init")
+        start_init_codebook = time.perf_counter()
         self.init_embed_(flatten)
-        # torch.cuda.synchronize()
-        # torch.cuda.empty_cache()  # Clears unused memory
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
+        end_init_codebook = time.perf_counter()
+
+        start_distance_calc = time.perf_counter()
         dist = -torch.cdist(flatten, embed, p=2)
+        end_distance_calc = time.perf_counter()
+
         # ----------------------------------------------------
         # get codebook ID assigned
         # ----------------------------------------------------
+        start_codebook_assignment = time.perf_counter()
         embed_ind = get_ind(dist)
-        embed_onehot = embed_ind
         indices = torch.argmax(embed_ind, dim=-1, keepdim=True)  # Non-differentiable forward pass
         embed_ind = indices + (embed_ind - embed_ind.detach())  # Straight-through trick
         indices = embed_ind[:, :, 0]  # Keep the float tensor
         proxy_indices = indices.long()  # Convert to integer for forward pass
         embed_ind = proxy_indices + (indices - indices.detach())
+        end_codebook_assignment = time.perf_counter()
 
         # Validate values
         if embed_ind.min() < 0:
@@ -709,27 +718,22 @@ class EuclideanCodebook(nn.Module):
         if embed_ind.max() >= self.codebook_size:
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
+
+        start_embedding_lookup = time.perf_counter()
         embed_ind = embed_ind.unsqueeze(0)
-        # ----------------------------------------------------
-        # set the initial codebook vectors by kmeans
-        # ----------------------------------------------------
         quantize = batched_embedding(embed_ind, self.embed)
-        # -----------------------------------------------------------------------------
-        # Update centroids (in an ML friendly way)
-        # -----------------------------------------------------------------------------
-        # if self.training:
-        #     cluster_size = embed_onehot.sum(dim=1)
-        #     self.all_reduce_fn(cluster_size)
-        #     self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
-        #
-        #     embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-        #     self.all_reduce_fn(embed_sum.contiguous())
-        #     self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
-        #
-        #     cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-        #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-        #     self.embed = torch.nn.Parameter(embed_normalized)
-        #     self.expire_codes_(x)
+        end_embedding_lookup = time.perf_counter()
+
+        end_total = time.perf_counter()
+
+        # Log timing
+        logger.info(f"Rearrange time: {end_rearrange - start_rearrange:.4f} sec")
+        logger.info(f"Codebook initialization time: {end_init_codebook - start_init_codebook:.4f} sec")
+        logger.info(f"Distance computation time: {end_distance_calc - start_distance_calc:.4f} sec")
+        logger.info(f"Codebook assignment time: {end_codebook_assignment - start_codebook_assignment:.4f} sec")
+        logger.info(f"Embedding lookup time: {end_embedding_lookup - start_embedding_lookup:.4f} sec")
+        logger.info(f"Total forward pass time: {end_total - start_total:.4f} sec")
+
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
@@ -1223,7 +1227,7 @@ class VectorQuantize(nn.Module):
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
 
-        quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x)
+        quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
