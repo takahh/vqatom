@@ -400,7 +400,6 @@ def run_inductive(
             f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]):7f}, "
             f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]):7f}, "
         )
-
         # Log testing losses
         logger.info(
             f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
