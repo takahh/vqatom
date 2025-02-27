@@ -1128,24 +1128,24 @@ class VectorQuantize(nn.Module):
                 continue  # Skip if the group is too small
 
             group_tensor = torch.tensor(group, device=embed_ind.device)  # Move indices to the correct device
-            logger.info(f"group_tensor {group_tensor}" )
+            # logger.info(f"group_tensor {group_tensor}" )
             if torch.max(group_tensor) >= embed_ind.shape[0]:
-                logger.warning(f"Skipping group {group} - Index out of bounds!")
+                # logger.warning(f"Skipping group {group} - Index out of bounds!")
                 continue  # Skip this group
 
             # Extract cluster indices for equivalent atoms
             equivalent_cluster_indices = torch.index_select(embed_ind, 0, group_tensor)
-            logger.info(f"equivalent_cluster_indices {equivalent_cluster_indices}")
+            # logger.info(f"equivalent_cluster_indices {equivalent_cluster_indices}")
             # Ensure indices are within codebook bounds
             max_index = torch.max(equivalent_cluster_indices).item()
             if max_index >= args.codebook_size:
-                logger.warning(f"Skipping group {group} - Index {max_index} exceeds codebook size {args.codebook_size}")
+                # logger.warning(f"Skipping group {group} - Index {max_index} exceeds codebook size {args.codebook_size}")
                 continue
 
             # Compute pairwise agreement loss efficiently
             equivalent_cluster_indices = equivalent_cluster_indices.unsqueeze(1).float()
             pairwise_diffs = torch.cdist(equivalent_cluster_indices, equivalent_cluster_indices, p=2)
-            logger.info(f"pairwise_diffs {pairwise_diffs}")
+            # logger.info(f"pairwise_diffs {pairwise_diffs}")
             # Update loss in a memory-friendly way
             loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
 
