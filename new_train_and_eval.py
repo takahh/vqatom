@@ -56,7 +56,7 @@ def transform_node_feats(a):
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
     return transformed
 
-#            model, batched_graph, batched_feats, optimizer, epoch, accumulation_steps, logger)
+#            # model, batched_graph, batched_feats, optimizer, epoch, logger)
 def train_sage(model, g, feats, optimizer, epoch, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -80,7 +80,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     return loss, loss_list3, latent_list, latents
 
 
-def evaluate(model, g, feats, epoch, g_base):
+def evaluate(model, g, feats, epoch, logger, g_base):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     feats = feats.to(device)  # Ensure feats are on GPU
@@ -88,7 +88,7 @@ def evaluate(model, g, feats, epoch, g_base):
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
     with torch.no_grad():
-        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, g_base)  # g is blocks
+        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
@@ -343,9 +343,9 @@ def run_inductive(
                 # Ensure node features are correctly extracted
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
-                # batched_feats = batched_graph.ndata["feat"]
+                # model, g, feats, epoch, logger, g_base
                 test_loss, loss_list_test, latent_train, latents, sample_list_test = evaluate(
-                    model, batched_graph, batched_feats, epoch, batched_graph_base)
+                    model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
                 torch.cuda.synchronize()
