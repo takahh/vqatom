@@ -314,6 +314,7 @@ def main():
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
     arr_bond_order = getdata(bond_order_file)
+    arr_bond_order += 1
 
     # -------------------------------------
     # rebuild attr matrix
