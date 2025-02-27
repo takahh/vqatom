@@ -107,10 +107,11 @@ class WeightedThreeHopGCN(nn.Module):
             src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
-        print(f"self.bond_weight(mapped_indices) {self.bond_weight(mapped_indices)}")
-        print(f"init_feat {init_feat}")
-        print(f"src {src}")
-        print(f"dst {dst}")
+        print(f"self.bond_weight(mapped_indices) {self.bond_weight(mapped_indices)[:30]}")
+        print(f"init_feat {init_feat[:30]}")
+        print(f"src {src[:30]}")
+        print(f"dst {dst[:30]}")
+        print(f"---------")
 
         sample_hop_info = None
         if batched_graph_base:
