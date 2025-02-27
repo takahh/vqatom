@@ -182,6 +182,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
             Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL & ~Chem.SanitizeFlags.SANITIZE_KEKULIZE)
         except Exception as e:
             print(f"Sanitization warning: {e}")
+        mol = Chem.RemoveHs(mol)  # Remove explicit hydrogens after embedding
 
         # Prepare the molecule for drawing with kekulization disabled.
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
