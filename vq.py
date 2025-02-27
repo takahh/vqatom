@@ -356,7 +356,7 @@ import torch
 from einops import rearrange
 
 
-def fast_mini_batch_kmeans(
+def mini_batch_kmeans(
         samples,
         num_clusters,
         batch_size=256,
