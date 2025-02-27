@@ -352,85 +352,89 @@ def kmeans(
     return means, bins
 
 
-def mini_batch_kmeans(
+import torch
+from einops import rearrange
+
+
+def fast_mini_batch_kmeans(
         samples,
         num_clusters,
         batch_size=256,
         num_iters=100,
-        logger=None,
-        use_cosine_sim=False,
-        all_reduce_fn=noop
+        use_cosine_sim=False
 ):
-    import time
-
-
-    # Get basic dimensions and move tensors to GPU
+    """
+    Optimized Mini-batch K-Means Clustering with Faster Computation.
+    Keeps computation graph intact for backpropagation.
+    """
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
 
-    samples = samples.to('cuda')
+    samples = samples.to('cuda', non_blocking=True)
     dtype, device = samples.dtype, samples.device
 
-    # K-Means++ initialization
+    # Initialize centroids using K-Means++
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
     first_idx = torch.randint(0, num_samples, (1,), device=device)
     means[:, 0] = samples[:, first_idx].squeeze(1)
-    for k in range(1, num_clusters):
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-        else:
-            dists = torch.cdist(samples, means[:, :k], p=2) ** 2  # ** Use squared Euclidean distance **
 
-        # More efficient way to compute min distances without calling .values
+    for k in range(1, num_clusters):
+        # Compute squared Euclidean distance to previous centroids
+        dists = torch.cdist(samples, means[:, :k], p=2) ** 2 if not use_cosine_sim else 1 - (
+                    samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+
+        # Get min distance for each sample (no redundant indexing)
         min_dists, _ = torch.min(dists, dim=-1)
 
-        # Normalize to avoid overflow issues in probabilities
-        min_dists = min_dists + 1e-10  # Small epsilon to prevent division errors
+        # Normalize to avoid numerical issues
+        min_dists = min_dists + 1e-10
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
 
-        # Faster centroid selection
+        # Sample next centroid efficiently
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
-
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
 
-    # Initialize counts to track the number of points assigned to each centroid
+    # Precompute squared means for Euclidean distance
+    means_squared = (means ** 2).sum(dim=-1, keepdim=True)
+
     counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
 
-    # Iterative optimization with mini-batches
-    means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
-
     for _ in range(num_iters):
-        # Precompute squared batch for fast distance computation
+        # Sample batch
         batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
         batch = samples[:, batch_indices]
-        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)  # Precompute squared batch
+        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)
 
+        # Compute distances
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
             dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
 
-        assignments = torch.argmax(dists, dim=-1)  # Assign clusters
+        # Assign each sample to nearest centroid
+        assignments = torch.argmin(dists, dim=-1)  # Faster than `argmax` for Euclidean distance
 
+        # Compute new means with batched updates
         batch_sums = torch.zeros_like(means)
-        batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
-        batch_counts = batched_bincount(assignments, minlength=num_clusters)
+        batch_sums.scatter_add_(1, assignments.unsqueeze(-1).expand(-1, -1, dim), batch)
 
+        # Count cluster assignments
+        batch_counts = torch.zeros_like(counts)
+        batch_counts.scatter_add_(1, assignments, torch.ones_like(assignments, dtype=torch.int64))
+
+        # Smoothly update centroids using running averages
         old_counts = counts.clone().to(dtype)
         counts = counts + batch_counts
 
+        # Update means only for assigned clusters
         counts_float = counts.to(dtype)
         update_mask = (batch_counts > 0).unsqueeze(-1)
 
         if update_mask.any():
-            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
-                                                                                                 'h n -> h n 1')
+            new_means = (old_counts.unsqueeze(-1) * means + batch_sums) / counts_float.unsqueeze(-1)
             means = torch.where(update_mask, new_means, means)
 
-        all_reduce_fn(counts)
-        all_reduce_fn(means)
-
         if use_cosine_sim:
-            means = l2norm(means)
+            means = means / (torch.norm(means, dim=-1, keepdim=True) + 1e-8)  # Normalize for cosine similarity
 
     return means, counts
 
