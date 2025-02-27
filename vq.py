@@ -645,10 +645,16 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, logger):
-
+        #
+        # samples,
+        # num_clusters,
+        # batch_size=256,
+        # num_iters=100,
+        # logger=None,
         embed, cluster_size = mini_batch_kmeans(
             data,
             self.codebook_size,
+            256,
             self.kmeans_iters,
             logger
             # use_cosine_sim=True,
