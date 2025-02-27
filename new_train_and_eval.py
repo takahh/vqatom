@@ -294,8 +294,8 @@ def run_inductive(
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     for epoch in range(1, conf["max_epoch"] + 1):
-        loss_list_list_train = [[]] * 10
-        loss_list_list_test = [[]] * 10
+        loss_list_list_train = [[]] * 11
+        loss_list_list_test = [[]] * 11
         loss_list = []
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
@@ -333,8 +333,6 @@ def run_inductive(
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
-                    print("len(loss_list_list_train)")
-                    print(len(loss_list_list_train))
 
         # --------------------------------
         # Save model
@@ -372,7 +370,6 @@ def run_inductive(
 
         print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
-        print(f"loss_list_list_train {len(loss_list_list_train)}")
         print(f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
               f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
               f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
