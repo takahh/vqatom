@@ -366,8 +366,9 @@ def mini_batch_kmeans(
 
     # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
+
+    samples = samples.to('cuda')
     dtype, device = samples.dtype, samples.device
-    samples = samples.to(device)
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
