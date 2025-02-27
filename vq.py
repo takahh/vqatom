@@ -378,18 +378,23 @@ def mini_batch_kmeans(
     first_idx = torch.randint(0, num_samples, (1,), device=device)
     means[:, 0] = samples[:, first_idx].squeeze(1)
     end_kmeans_init = time.perf_counter()
-
-    # K-Means++: initialize remaining centroids using distance-based sampling
     start_kmeans_pp = time.perf_counter()
     for k in range(1, num_clusters):
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
-            dists = torch.cdist(samples, means[:, :k], p=2)
+            dists = torch.cdist(samples, means[:, :k], p=2) ** 2  # ** Use squared Euclidean distance **
 
-        min_dists = dists.min(dim=-1).values
+        # More efficient way to compute min distances without calling .values
+        min_dists, _ = torch.min(dists, dim=-1)
+
+        # Normalize to avoid overflow issues in probabilities
+        min_dists = min_dists + 1e-10  # Small epsilon to prevent division errors
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
-        next_centroid_idx = torch.multinomial(probs, 1)
+
+        # Faster centroid selection
+        next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
+
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
     end_kmeans_pp = time.perf_counter()
 
@@ -398,21 +403,25 @@ def mini_batch_kmeans(
 
     # Iterative optimization with mini-batches
     start_iterations = time.perf_counter()
+    means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
+
     for _ in range(num_iters):
-        start_batch_sample = time.perf_counter()
+        start_distance_calc = time.perf_counter()
+
+        # Precompute squared batch for fast distance computation
         batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
         batch = samples[:, batch_indices]
-        end_batch_sample = time.perf_counter()
+        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)  # Precompute squared batch
 
-        start_distance_calc = time.perf_counter()
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -torch.cdist(batch, means, p=2)
+            dists = -2 * (batch @ rearrange(means, 'h n d -> h d n')) + means_squared + batch_squared
+
         end_distance_calc = time.perf_counter()
 
         start_assignment = time.perf_counter()
-        assignments = torch.argmax(dists, dim=-1)
+        assignments = torch.argmax(dists, dim=-1)  # Assign clusters
         end_assignment = time.perf_counter()
 
         start_cluster_update = time.perf_counter()
@@ -425,6 +434,7 @@ def mini_batch_kmeans(
 
         counts_float = counts.to(dtype)
         update_mask = (batch_counts > 0).unsqueeze(-1)
+
         if update_mask.any():
             new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
                                                                                                  'h n -> h n 1')
@@ -435,6 +445,7 @@ def mini_batch_kmeans(
 
         if use_cosine_sim:
             means = l2norm(means)
+
         end_cluster_update = time.perf_counter()
     end_iterations = time.perf_counter()
 
