@@ -416,7 +416,7 @@ def mini_batch_kmeans(
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -2 * (batch @ rearrange(means, 'h n d -> h d n')) + means_squared + batch_squared
+            dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
 
         end_distance_calc = time.perf_counter()
 
