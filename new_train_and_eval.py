@@ -411,6 +411,7 @@ def run_inductive(
             f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]):7f}, "
             f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]):7f}, "
         )
+        #  [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
         np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
         np.savez(f"./sample_adj_{epoch}", sample_list_test[2].cpu()[:500, :500])
@@ -418,5 +419,5 @@ def run_inductive(
         np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:500])
         np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:500])
         # np.savez(f"./sample_hop_type_{epoch}", None)
-        np.savez(f"./sample_adj_base_{epoch}", sample_list_test[7].cpu()[:500])
+        # np.savez(f"./sample_adj_base_{epoch}", sample_list_test[7].cpu()[:500])
 
