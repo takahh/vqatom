@@ -166,12 +166,19 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
     """
     Converts a batch of adjacency matrices and attributes to two lists of DGLGraphs, optimized for GPU execution.
     """
-    base_graphs = []
-    extended_graphs = []
 
-    # Move input tensors to GPU if not already
+    # Ensure input is a tensor
+    if isinstance(adj_batch, tuple):
+        adj_batch = torch.stack(adj_batch)  # Convert tuple to tensor if necessary
+    if isinstance(attr_batch, tuple):
+        attr_batch = torch.stack(attr_batch)  # Convert tuple to tensor if necessary
+
+    # Move to GPU
     adj_batch = adj_batch.to(device)
     attr_batch = attr_batch.to(device)
+
+    base_graphs = []
+    extended_graphs = []
 
     for i in range(len(adj_batch)):  # Loop over each molecule set
         adj_matrices = adj_batch[i].view(1000, 100, 100)
