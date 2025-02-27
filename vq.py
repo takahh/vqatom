@@ -673,7 +673,7 @@ class EuclideanCodebook(nn.Module):
 
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger):
+    def forward(self, x, logger=None):
         import time
 
         start_total = time.perf_counter()
