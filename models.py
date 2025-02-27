@@ -49,72 +49,55 @@ class WeightedThreeHopGCN(nn.Module):
 
     import time
     import torch
-
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
-
-        # Move graph and features to the same device
-        batched_graph = batched_graph.to(device)
-        features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
-
-        h = features.clone()
-        init_feat = h.clone()  # Store initial features (for later use)
-        edge_type = "_E"  # Batched heterogeneous graph edge type
-
-        if edge_type not in batched_graph.etypes:
-            raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-
-        # Move bond_weight embedding layer to the same device
         self.bond_weight = self.bond_weight.to(device)
 
-        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
+        # Move features and graph data to GPU in one step
+        features = transform_node_feats(features)
+        edge_weight = batched_graph["_E"].edata["weight"].long()
+        features, edge_weight = features.to(device), edge_weight.to(device)
 
-        # Map edge weights to embedding indices (default 0 for unknown weights)
-        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
-                                     torch.zeros_like(edge_weight))
+        # Optimize edge weight mapping
+        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3)
+        edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
 
-        # Get transformed edge weights
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        edge_weight = transformed_edge_weight
+        # Optimize feature processing
+        h = self.linear_0(features)
+        init_feat = features.detach()  # Use detach() instead of clone()
 
-        features = features.to(device)
-        h = self.linear_0(features)  # Convert to expected shape
+        # Use CUDA stream for parallel GNN computation
+        stream = torch.cuda.Stream()
+        with torch.cuda.stream(stream):
+            h1 = self.conv1(batched_graph["_E"], h, edge_weight=edge_weight)
+            h2 = self.conv2(batched_graph["_E"], h, edge_weight=edge_weight)
+            h3 = self.conv3(batched_graph["_E"], h, edge_weight=edge_weight)
+        h = h1 + h2 + h3  # Merge results
 
-        # 3-hop message passing
-        h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-
-        h_list = []
+        # Compute VQ layer
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h, init_feat, logger)
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h,
+                                                                                                                   init_feat,
+                                                                                                                   logger)
+
+        # Reduce memory usage in loss list
         losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
-                 pair_loss.item(), sil_loss.item()]
-        # --------------------------------
-        # collect data for molecule images
-        # --------------------------------
-        adj_matrix = batched_graph.adjacency_matrix().to_dense()
-        sample_adj = adj_matrix.to_dense()
-        if batched_graph_base:
-            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
-            sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
-            src, dst = batched_graph_base.all_edges()
-        else:
-            src, dst = batched_graph.all_edges()
+                    h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
+                    pair_loss.item(), sil_loss.item()]
+
+        # Optimize adjacency matrix storage
+        with torch.no_grad():
+            sample_adj = batched_graph.adjacency_matrix().to_dense()
+            if batched_graph_base:
+                sample_adj_base = batched_graph_base.adjacency_matrix().to_dense()
+
+        src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
-        sample_hop_info = None
-        if batched_graph_base:
-            sample_bond_info = batched_graph_base.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
-        else:
-            sample_bond_info = batched_graph.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
-        # print("return losses from Weighted model")
-        return (h_list, h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
+        sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
+
+        return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
 
 class MLP(nn.Module):
