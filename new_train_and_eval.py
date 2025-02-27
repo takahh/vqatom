@@ -64,11 +64,7 @@ import torch
 def train_sage(model, g, feats, optimizer, epoch, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Track time
-    start_total = time.perf_counter()
-
     model.to(device)
-    feats = feats.to(device)  # Ensure loss is also on GPU
 
     model.train()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
@@ -76,39 +72,22 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler = torch.cuda.amp.GradScaler()
     optimizer.zero_grad()
 
-    start_forward = time.perf_counter()
-
     with torch.cuda.amp.autocast():
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
                                                                                                         logger)  # g is blocks
-
-    end_forward = time.perf_counter()
-
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
 
-    start_backward = time.perf_counter()
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    end_backward = time.perf_counter()
-
-    start_optimizer = time.perf_counter()
     scaler.unscale_(optimizer)
     scaler.step(optimizer)
     scaler.update()
     optimizer.zero_grad()
-    end_optimizer = time.perf_counter()
 
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
 
-    end_total = time.perf_counter()
-
-    # Log timing
-    logger.info(f"Forward pass time: {end_forward - start_forward:.4f} sec")
-    logger.info(f"Backward pass time: {end_backward - start_backward:.4f} sec")
-    logger.info(f"Optimizer step time: {end_optimizer - start_optimizer:.4f} sec")
-    logger.info(f"Total training time: {end_total - start_total:.4f} sec")
 
     return loss, loss_list3, latent_list, latents
 

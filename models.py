@@ -52,9 +52,6 @@ class WeightedThreeHopGCN(nn.Module):
 
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        import time
-        start_total = time.perf_counter()
-
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
         # Move graph and features to the same device
@@ -99,7 +96,6 @@ class WeightedThreeHopGCN(nn.Module):
         # --------------------------------
         # collect data for molecule images
         # --------------------------------
-        start_graph_data = time.perf_counter()
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         if batched_graph_base:

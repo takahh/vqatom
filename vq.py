@@ -363,22 +363,16 @@ def mini_batch_kmeans(
 ):
     import time
 
-    start_total = time.perf_counter()
 
     # Get basic dimensions and move tensors to GPU
-    start_data_prep = time.perf_counter()
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
     dtype, device = samples.dtype, samples.device
     samples = samples.to(device)
-    end_data_prep = time.perf_counter()
 
     # K-Means++ initialization
-    start_kmeans_init = time.perf_counter()
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
     first_idx = torch.randint(0, num_samples, (1,), device=device)
     means[:, 0] = samples[:, first_idx].squeeze(1)
-    end_kmeans_init = time.perf_counter()
-    start_kmeans_pp = time.perf_counter()
     for k in range(1, num_clusters):
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
@@ -396,18 +390,14 @@ def mini_batch_kmeans(
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
 
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
-    end_kmeans_pp = time.perf_counter()
 
     # Initialize counts to track the number of points assigned to each centroid
     counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
 
     # Iterative optimization with mini-batches
-    start_iterations = time.perf_counter()
     means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
 
     for _ in range(num_iters):
-        start_distance_calc = time.perf_counter()
-
         # Precompute squared batch for fast distance computation
         batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
         batch = samples[:, batch_indices]
@@ -418,13 +408,8 @@ def mini_batch_kmeans(
         else:
             dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
 
-        end_distance_calc = time.perf_counter()
-
-        start_assignment = time.perf_counter()
         assignments = torch.argmax(dists, dim=-1)  # Assign clusters
-        end_assignment = time.perf_counter()
 
-        start_cluster_update = time.perf_counter()
         batch_sums = torch.zeros_like(means)
         batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
         batch_counts = batched_bincount(assignments, minlength=num_clusters)
@@ -445,22 +430,6 @@ def mini_batch_kmeans(
 
         if use_cosine_sim:
             means = l2norm(means)
-
-        end_cluster_update = time.perf_counter()
-    end_iterations = time.perf_counter()
-
-    end_total = time.perf_counter()
-
-    # Log timing only if logger is provided
-    if logger:
-        logger.info(f"Data preparation time: {end_data_prep - start_data_prep:.4f} sec")
-        logger.info(f"K-Means++ initialization time: {end_kmeans_init - start_kmeans_init:.4f} sec")
-        logger.info(f"K-Means++ centroid selection time: {end_kmeans_pp - start_kmeans_pp:.4f} sec")
-        logger.info(f"Total iterative optimization time: {end_iterations - start_iterations:.4f} sec")
-        logger.info(f"  - Distance computation time: {end_distance_calc - start_distance_calc:.4f} sec")
-        logger.info(f"  - Cluster assignment time: {end_assignment - start_assignment:.4f} sec")
-        logger.info(f"  - Cluster update time: {end_cluster_update - start_cluster_update:.4f} sec")
-        logger.info(f"Total K-Means training time: {end_total - start_total:.4f} sec")
 
     return means, counts
 
@@ -712,41 +681,32 @@ class EuclideanCodebook(nn.Module):
     def forward(self, x, logger=None):
         import time
 
-        start_total = time.perf_counter()
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
-        start_rearrange = time.perf_counter()
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = rearrange(x, 'h ... d -> h (...) d')
-        end_rearrange = time.perf_counter()
 
         # ----------------------------------------------------
         # set the initial codebook vectors by k-means
         # ----------------------------------------------------
-        start_init_codebook = time.perf_counter()
         self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
-        end_init_codebook = time.perf_counter()
 
-        start_distance_calc = time.perf_counter()
         dist = -torch.cdist(flatten, embed, p=2)
-        end_distance_calc = time.perf_counter()
 
         # ----------------------------------------------------
         # get codebook ID assigned
         # ----------------------------------------------------
-        start_codebook_assignment = time.perf_counter()
         embed_ind = get_ind(dist)
         indices = torch.argmax(embed_ind, dim=-1, keepdim=True)  # Non-differentiable forward pass
         embed_ind = indices + (embed_ind - embed_ind.detach())  # Straight-through trick
         indices = embed_ind[:, :, 0]  # Keep the float tensor
         proxy_indices = indices.long()  # Convert to integer for forward pass
         embed_ind = proxy_indices + (indices - indices.detach())
-        end_codebook_assignment = time.perf_counter()
 
         # Validate values
         if embed_ind.min() < 0:
@@ -755,12 +715,8 @@ class EuclideanCodebook(nn.Module):
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
 
-        start_embedding_lookup = time.perf_counter()
         embed_ind = embed_ind.unsqueeze(0)
         quantize = batched_embedding(embed_ind, self.embed)
-        end_embedding_lookup = time.perf_counter()
-
-        end_total = time.perf_counter()
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
@@ -1222,14 +1178,8 @@ class VectorQuantize(nn.Module):
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
-    import time
-    import torch
 
     def forward(self, x, init_feat, logger, mask=None):
-        import time
-
-        start_total = time.perf_counter()
-
         only_one = x.ndim == 2
         x = x.to("cuda")
 
@@ -1246,11 +1196,8 @@ class VectorQuantize(nn.Module):
         if need_transpose:
             x = rearrange(x, 'b d n -> b n d')
 
-        start_project_in = time.perf_counter()
         x = self.project_in(x)
-        end_project_in = time.perf_counter()
 
-        start_quantization = time.perf_counter()
         if is_multiheaded:
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
@@ -1263,9 +1210,7 @@ class VectorQuantize(nn.Module):
             quantize = x_tmp + (quantize - x_tmp)
 
         loss = torch.zeros(1, device=device, requires_grad=True)
-        end_quantization = time.perf_counter()
 
-        start_commitment_loss = time.perf_counter()
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
@@ -1282,9 +1227,7 @@ class VectorQuantize(nn.Module):
                 commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
 
             raw_commit_loss = commit_loss
-        end_commitment_loss = time.perf_counter()
 
-        start_codebook = time.perf_counter()
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
@@ -1295,9 +1238,7 @@ class VectorQuantize(nn.Module):
         if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
-        end_codebook = time.perf_counter()
 
-        start_loss_computation = time.perf_counter()
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
@@ -1313,9 +1254,7 @@ class VectorQuantize(nn.Module):
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
                 + self.lamb_equiv_atom * equiv_atom_loss)
-        end_loss_computation = time.perf_counter()
 
-        start_rearrange = time.perf_counter()
         if is_multiheaded:
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
@@ -1337,9 +1276,6 @@ class VectorQuantize(nn.Module):
             quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
-        end_rearrange = time.perf_counter()
-
-        end_total = time.perf_counter()
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
