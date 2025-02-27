@@ -351,86 +351,106 @@ def kmeans(
 
     return means, bins
 
+
 def mini_batch_kmeans(
         samples,
         num_clusters,
         batch_size=256,
         num_iters=100,
         use_cosine_sim=False,
-        all_reduce_fn=noop
+        all_reduce_fn=noop,
+        logger=None
 ):
+    import time
+
+    start_total = time.perf_counter()
+
     # Get basic dimensions and move tensors to GPU
+    start_data_prep = time.perf_counter()
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
     dtype, device = samples.dtype, samples.device
     samples = samples.to(device)
+    end_data_prep = time.perf_counter()
 
     # K-Means++ initialization
+    start_kmeans_init = time.perf_counter()
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
-    # Randomly select the first centroid for each codebook (indices generated on GPU)
     first_idx = torch.randint(0, num_samples, (1,), device=device)
-    # Squeeze to remove the extra dimension if needed
     means[:, 0] = samples[:, first_idx].squeeze(1)
+    end_kmeans_init = time.perf_counter()
 
     # K-Means++: initialize remaining centroids using distance-based sampling
+    start_kmeans_pp = time.perf_counter()
     for k in range(1, num_clusters):
         if use_cosine_sim:
-            # Compute cosine-based distances
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
-            # Compute Euclidean distances
             dists = torch.cdist(samples, means[:, :k], p=2)
-        # Find the minimum distance for each point to an existing centroid
+
         min_dists = dists.min(dim=-1).values
-        # Compute probability distribution for sampling the next centroid
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
-        # Sample one new centroid per codebook (generate indices on GPU)
         next_centroid_idx = torch.multinomial(probs, 1)
-        # Use advanced indexing to assign the new centroids (squeeze to remove extra dim)
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
+    end_kmeans_pp = time.perf_counter()
 
     # Initialize counts to track the number of points assigned to each centroid
     counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
 
     # Iterative optimization with mini-batches
+    start_iterations = time.perf_counter()
     for _ in range(num_iters):
-        # Sample a mini-batch of points (indices generated on GPU)
+        start_batch_sample = time.perf_counter()
         batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
-        batch = samples[:, batch_indices]  # shape: (num_codebooks, batch_size, dim)
+        batch = samples[:, batch_indices]
+        end_batch_sample = time.perf_counter()
 
-        # Compute distances or cosine similarities
+        start_distance_calc = time.perf_counter()
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
-            # Use negative distances so that argmax yields the nearest centroid
             dists = -torch.cdist(batch, means, p=2)
+        end_distance_calc = time.perf_counter()
 
-        # Assign each mini-batch point to the closest centroid
-        assignments = torch.argmax(dists, dim=-1)  # shape: (num_codebooks, batch_size)
+        start_assignment = time.perf_counter()
+        assignments = torch.argmax(dists, dim=-1)
+        end_assignment = time.perf_counter()
 
-        # Accumulate per-cluster sums for the current mini-batch
+        start_cluster_update = time.perf_counter()
         batch_sums = torch.zeros_like(means)
         batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
-
-        # Count how many points fall into each cluster in the mini-batch
         batch_counts = batched_bincount(assignments, minlength=num_clusters)
 
-        # Update the running counts and store the old counts for averaging
         old_counts = counts.clone().to(dtype)
         counts = counts + batch_counts
 
-        # Update centroids only for clusters that received new points
         counts_float = counts.to(dtype)
         update_mask = (batch_counts > 0).unsqueeze(-1)
         if update_mask.any():
-            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float, 'h n -> h n 1')
+            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
+                                                                                                 'h n -> h n 1')
             means = torch.where(update_mask, new_means, means)
 
-        # Synchronize centroids and counts if using a distributed setting
         all_reduce_fn(counts)
         all_reduce_fn(means)
 
         if use_cosine_sim:
             means = l2norm(means)
+        end_cluster_update = time.perf_counter()
+    end_iterations = time.perf_counter()
+
+    end_total = time.perf_counter()
+
+    # Log timing only if logger is provided
+    if logger:
+        logger.info(f"Data preparation time: {end_data_prep - start_data_prep:.4f} sec")
+        logger.info(f"K-Means++ initialization time: {end_kmeans_init - start_kmeans_init:.4f} sec")
+        logger.info(f"K-Means++ centroid selection time: {end_kmeans_pp - start_kmeans_pp:.4f} sec")
+        logger.info(f"Total iterative optimization time: {end_iterations - start_iterations:.4f} sec")
+        logger.info(f"  - Batch sampling time: {end_batch_sample - start_batch_sample:.4f} sec")
+        logger.info(f"  - Distance computation time: {end_distance_calc - start_distance_calc:.4f} sec")
+        logger.info(f"  - Cluster assignment time: {end_assignment - start_assignment:.4f} sec")
+        logger.info(f"  - Cluster update time: {end_cluster_update - start_cluster_update:.4f} sec")
+        logger.info(f"Total K-Means training time: {end_total - start_total:.4f} sec")
 
     return means, counts
 
@@ -725,14 +745,6 @@ class EuclideanCodebook(nn.Module):
         end_embedding_lookup = time.perf_counter()
 
         end_total = time.perf_counter()
-
-        # Log timing
-        logger.info(f"Rearrange time: {end_rearrange - start_rearrange:.4f} sec")
-        logger.info(f"Codebook initialization time: {end_init_codebook - start_init_codebook:.4f} sec")
-        logger.info(f"Distance computation time: {end_distance_calc - start_distance_calc:.4f} sec")
-        logger.info(f"Codebook assignment time: {end_codebook_assignment - start_codebook_assignment:.4f} sec")
-        logger.info(f"Embedding lookup time: {end_embedding_lookup - start_embedding_lookup:.4f} sec")
-        logger.info(f"Total forward pass time: {end_total - start_total:.4f} sec")
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
