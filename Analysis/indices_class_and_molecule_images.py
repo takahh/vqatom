@@ -75,15 +75,12 @@ def to_superscript(number):
         "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"
     }
     return "".join(superscript_map.get(char, char) for char in str(number))
-
 def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
     from rdkit.Chem import AllChem, Draw
-    # from rdkit.Chem.Draw import rdMolDraw2D
     import rdkit.Chem.Draw.rdMolDraw2D as rdMolDraw2D
-
     from scipy.sparse.csgraph import connected_components
     from PIL import Image
     from io import BytesIO
@@ -94,118 +91,109 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
-    print("n_components")
-    print(n_components)
+    print(f"Number of molecular components detected: {n_components}")
 
     images = []
-    for i in range(n_components - 1):
-        print(f"$$$$$$$$$$$$$$$$$$$. {i}")
+    for i in range(n_components):
+        print(f"Processing molecule {i + 1}/{n_components}...")
+
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
-        # Extract subgraph features for this component
         mol_features = feature_matrix[component_indices]
 
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
-        mol_src = arr_src[mask]
-        mol_dst = arr_dst[mask]
-        mol_bond = arr_bond_order[mask]
-        print("mol_features:", mol_features)
-        print("mol_bond:", mol_bond)
-        print("mol_src:", mol_src)
-        print("mol_dst:", mol_dst)
+        mol_src, mol_dst, mol_bond = arr_src[mask], arr_dst[mask], arr_bond_order[mask]
 
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
-        atom_mapping = {}  # Map original node index to RDKit atom index
-        atom_labels = {}   # For custom atom labels in the drawing
+        atom_mapping, atom_labels = {}, {}  # Maps indices and assigns labels
 
         # Add atoms and annotate with class labels
         for idx, features in zip(component_indices, mol_features):
-            atomic_num = int(features[0])  # Assume the first feature is the atomic number
+            atomic_num = int(features[0])  # Assume first feature is atomic number
             atom = Chem.Atom(atomic_num)
             atom_idx = mol.AddAtom(atom)
             atom_mapping[idx] = atom_idx
 
-            # Annotate atom with its class label if available
+            # Annotate atom with its class label
             class_label = node_to_class.get(idx, "Unknown")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
             atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
 
-        # Define a bond type map
-        bond_type_map = {1: Chem.BondType.SINGLE,
-                         2: Chem.BondType.DOUBLE,
-                         3: Chem.BondType.TRIPLE,
-                         4: Chem.BondType.AROMATIC}
+        # Define bond type map
+        bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE,
+                         3: Chem.BondType.TRIPLE, 4: Chem.BondType.AROMATIC}
 
-        # Build a dictionary for unique bonds.
+        # Build a dictionary for unique bonds
         unique_bonds = {}
         for src, dst, bond_order in zip(mol_src, mol_dst, mol_bond):
             src, dst, bond_order = int(src), int(dst), int(bond_order)
-            # Ensure both atoms exist in the mapping.
             if src not in atom_mapping or dst not in atom_mapping:
                 continue
             src_mol, dst_mol = atom_mapping[src], atom_mapping[dst]
-            # Avoid self-bonds.
             if src_mol == dst_mol:
-                continue
-            # Use a sorted tuple so bond direction doesn't matter.
+                continue  # Avoid self-bonds
             key = tuple(sorted([src_mol, dst_mol]))
-            # If the same bond appears multiple times, use the maximum bond order.
-            unique_bonds[key] = max(unique_bonds.get(key, 0), bond_order)
+            unique_bonds[key] = max(unique_bonds.get(key, 0), bond_order)  # Keep the highest bond order
 
-        # Now add each unique bond to the molecule.
+        # Add unique bonds to molecule
         for (src_mol, dst_mol), bond_order in unique_bonds.items():
             bond_type = bond_type_map.get(bond_order, Chem.BondType.SINGLE)
             mol.AddBond(src_mol, dst_mol, bond_type)
-            # If the bond should be aromatic, update the aromatic flags.
-            if bond_order == 4:
+            if bond_order == 4:  # If aromatic, update flags
                 mol.GetAtomWithIdx(src_mol).SetIsAromatic(True)
                 mol.GetAtomWithIdx(dst_mol).SetIsAromatic(True)
-                bond = mol.GetBondBetweenAtoms(src_mol, dst_mol)
-                if bond is not None:
-                    bond.SetIsAromatic(True)
 
-        # Compute 2D coordinates for drawing.
-        # AllChem.Compute2DCoords(mol)
+        # Sanitize and validate molecule
         try:
-            Chem.SanitizeMol(mol)  # Ensure valid valences
-            mol = Chem.AddHs(mol)  # Now add explicit hydrogens
-            AllChem.EmbedMolecule(mol, AllChem.ETKDG())
-            AllChem.UFFOptimizeMolecule(mol)
-        except Exception as e:
-            print(f"Error during molecule processing: {e}")
-            AllChem.Compute2DCoords(mol)  # Fallback to 2D if 3D fails
-
-        # Sanitize the molecule without kekulization to preserve aromatic flags.
-        try:
-            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL & ~Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
         except Exception as e:
             print(f"Sanitization warning: {e}")
-        mol = Chem.RemoveHs(mol)  # Remove explicit hydrogens after embedding
+            continue  # Skip molecule if sanitization fails
 
-        # Prepare the molecule for drawing with kekulization disabled.
+        # **Fix invalid nitrogen valences**
+        for atom in mol.GetAtoms():
+            if atom.GetSymbol() == "N" and atom.GetTotalValence() > 3:
+                print(f"Fixing nitrogen at index {atom.GetIdx()}")
+                for bond in atom.GetBonds():
+                    if bond.GetBondType() == Chem.BondType.SINGLE:
+                        mol.RemoveBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
+                        break  # Remove only one bond to correct valence
+
+        # Update molecule properties before further processing
+        mol.UpdatePropertyCache(strict=False)
+
+        # Try 3D embedding, fallback to 2D if it fails
+        try:
+            mol = Chem.AddHs(mol)  # Add explicit hydrogens
+            AllChem.EmbedMolecule(mol, AllChem.ETKDG())
+            AllChem.UFFOptimizeMolecule(mol)
+            mol = Chem.RemoveHs(mol)  # Remove explicit hydrogens after embedding
+        except Exception as e:
+            print(f"Error in 3D embedding: {e}")
+            AllChem.Compute2DCoords(mol)  # Fallback to 2D
+
+        # Prepare the molecule for drawing
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
-        # Create a drawing canvas.
+        # Create a drawing canvas
         drawer = Draw.MolDraw2DCairo(1500, 1000)
         options = drawer.drawOptions()
         options.atomLabelFontSize = 4  # Increase font size for readability
 
-        # Assign custom labels.
+        # Assign custom labels
         for idx, label in atom_labels.items():
             options.atomLabels[idx] = label
 
-        # Draw the molecule.
+        # Draw and store the molecule
         drawer.DrawMolecule(mol_for_drawing)
         drawer.FinishDrawing()
-
-        # Convert the drawing to an image.
         img_data = drawer.GetDrawingText()
         img = Image.open(BytesIO(img_data))
         images.append(img)
 
-    # Display all images.
+    # Display images
     for i, img in enumerate(images):
         plt.figure(dpi=250)
         plt.title(f"Molecule {i + 1}")
@@ -214,7 +202,6 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
 
     plt.tight_layout()
     plt.show()
-
 
 
 import torch
