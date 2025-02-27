@@ -100,7 +100,7 @@ class WeightedThreeHopGCN(nn.Module):
         src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
-        sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
+        sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst, sample_adj_base]
 
         return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
