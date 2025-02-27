@@ -341,16 +341,19 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     model.reset_kmeans()
-                    cb_new = model.vq._codebook.init_embed_(latents)
+
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
                     del batched_graph, batched_feats, chunk
                     gc.collect()
                     torch.cuda.empty_cache()
-                    np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-                    latents = torch.squeeze(latents)
-                    # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
-                    np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
+                    args = get_args()
+                    if args.get_umap_data:
+                        cb_new = model.vq._codebook.init_embed_(latents, logger)
+                        np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
+                        latents = torch.squeeze(latents)
+                        # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
+                        np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
 
         # --------------------------------

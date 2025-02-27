@@ -71,6 +71,7 @@ def get_args():
     parser.add_argument("--val_size", type=int, default=14849)
     parser.add_argument("--test_size", type=int, default=14849)
 
+    parser.add_argument("--get_umap_data", action="store_true", help="Enable UMAP data processing")
     parser.add_argument("--percent", type=float, default=1)
     parser.add_argument("--dataset", type=str, default="cora", help="Dataset")
     parser.add_argument("--data_path", type=str, default="./data", help="Path to data")
