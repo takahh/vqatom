@@ -1189,20 +1189,20 @@ class VectorQuantize(nn.Module):
         # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
-    #  self.vq(h, init_feat, logger)
-    def forward(
-            self,
-            x,
-            init_feat,
-            logger,
-            mask=None
-    ):
+
+    import time
+    import torch
+
+    def forward(self, x, init_feat, logger, mask=None):
+        start_total = time.perf_counter()
+
         only_one = x.ndim == 2
         x = x.to("cuda")
+
         if only_one:
             x = rearrange(x, 'b d -> b 1 d')
-        shape, device, heads, is_multiheaded, codebook_size = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
 
+        shape, device, heads, is_multiheaded, codebook_size = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
         need_transpose = not self.channel_last and not self.accept_image_fmap
 
         if self.accept_image_fmap:
@@ -1212,67 +1212,66 @@ class VectorQuantize(nn.Module):
         if need_transpose:
             x = rearrange(x, 'b d n -> b n d')
 
+        start_project_in = time.perf_counter()
         x = self.project_in(x)
-        ##############################################################
-        # ここまで見た
-        ##############################################################
+        end_project_in = time.perf_counter()
+
+        start_quantization = time.perf_counter()
         if is_multiheaded:
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
-        # --------------------------------------------------
-        # quantize here
-        # --------------------------------------------------
+
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x)
         quantize = quantize.squeeze(0)
-        x_tmp = x.squeeze(1)
-        x_tmp = x_tmp.unsqueeze(0)
+        x_tmp = x.squeeze(1).unsqueeze(0)
+
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
+
         loss = torch.zeros(1, device=device, requires_grad=True)
-        # --------------------------------------------------
-        # calculate loss about codebook itself in training
-        # --------------------------------------------------
+        end_quantization = time.perf_counter()
+
+        start_commitment_loss = time.perf_counter()
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
-        # if self.training:
-        if self.commitment_weight > 0:  # 0.25 is assigned
+
+        if self.commitment_weight > 0:
             detached_quantize = quantize.detach()
 
             if exists(mask):
                 commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-
                 if is_multiheaded:
                     mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
                                   h=commit_loss.shape[1] // mask.shape[0])
-
                 commit_loss = commit_loss[mask].mean()
             else:
                 commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-            raw_commit_loss = commit_loss
 
+            raw_commit_loss = commit_loss
+        end_commitment_loss = time.perf_counter()
+
+        start_codebook = time.perf_counter()
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
-            # only calculate orthogonal loss for the activated codes for this batch
             unique_code_ids = torch.unique(embed_ind)
-            codebook = torch.squeeze(codebook)
-            codebook = codebook[unique_code_ids]
+            codebook = torch.squeeze(codebook)[unique_code_ids]
 
         num_codes = codebook.shape[0]
         if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
-        # ---------------------------------
-        # Calculate Codebook Losses
-        # ---------------------------------
+        end_codebook = time.perf_counter()
+
+        start_loss_computation = time.perf_counter()
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
+         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
+            self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
+
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
-            embed_ind = rearrange(embed_ind, 'b 1 -> b')  # Reduce if 2D with shape [b, 1]
-        elif embed_ind.ndim == 1:
-            embed_ind = embed_ind  # Leave as is if already 1D
-        else:
+            embed_ind = rearrange(embed_ind, 'b 1 -> b')
+        elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
@@ -1280,6 +1279,9 @@ class VectorQuantize(nn.Module):
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
                 + self.lamb_equiv_atom * equiv_atom_loss)
+        end_loss_computation = time.perf_counter()
+
+        start_rearrange = time.perf_counter()
         if is_multiheaded:
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
@@ -1301,6 +1303,18 @@ class VectorQuantize(nn.Module):
             quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
+        end_rearrange = time.perf_counter()
+
+        end_total = time.perf_counter()
+
+        # Log timing
+        logger.info(f"Projection in time: {end_project_in - start_project_in:.4f} sec")
+        logger.info(f"Quantization time: {end_quantization - start_quantization:.4f} sec")
+        logger.info(f"Commitment loss computation time: {end_commitment_loss - start_commitment_loss:.4f} sec")
+        logger.info(f"Codebook processing time: {end_codebook - start_codebook:.4f} sec")
+        logger.info(f"Loss computation time: {end_loss_computation - start_loss_computation:.4f} sec")
+        logger.info(f"Rearrange and reshape time: {end_rearrange - start_rearrange:.4f} sec")
+        logger.info(f"Total forward pass time: {end_total - start_total:.4f} sec")
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
