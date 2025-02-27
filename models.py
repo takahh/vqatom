@@ -47,13 +47,21 @@ class WeightedThreeHopGCN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
+    import time
+    import torch
+
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        import time
+        start_total = time.perf_counter()
+
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
         # Move graph and features to the same device
+        start_data_move = time.perf_counter()
         batched_graph = batched_graph.to(device)
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
+        end_data_move = time.perf_counter()
 
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
@@ -65,8 +73,8 @@ class WeightedThreeHopGCN(nn.Module):
         # Move bond_weight embedding layer to the same device
         self.bond_weight = self.bond_weight.to(device)
 
-        edge_weight = batched_graph[edge_type].edata["weight"].to(
-            device).long()  # Ensure it's on the correct device
+        start_edge_weight = time.perf_counter()
+        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
 
         # Map edge weights to embedding indices (default 0 for unknown weights)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
@@ -74,26 +82,34 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Get transformed edge weights
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-
-        # edge_weight = transformed_edge_weight / transformed_edge_weight.max()  # Normalize weights (optional)
         edge_weight = transformed_edge_weight
+        end_edge_weight = time.perf_counter()
+
+        start_linear = time.perf_counter()
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
+        end_linear = time.perf_counter()
+
         # 3-hop message passing
+        start_gnn = time.perf_counter()
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = torch.relu(h)  # Activation function
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = torch.relu(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
+        end_gnn = time.perf_counter()
+
+        start_vq = time.perf_counter()
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss, equivalent_atom_loss) = \
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
+         equivalent_atom_loss) = \
             self.vq(h, init_feat, logger)
+        end_vq = time.perf_counter()
 
         # --------------------------------
         # collect data for molecule images
         # --------------------------------
+        start_graph_data = time.perf_counter()
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         if batched_graph_base:
@@ -103,7 +119,6 @@ class WeightedThreeHopGCN(nn.Module):
         else:
             src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
-        # sample_hop_info = batched_graph.edata["edge_type"]
         sample_hop_info = None
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
@@ -111,9 +126,23 @@ class WeightedThreeHopGCN(nn.Module):
         else:
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
+        end_graph_data = time.perf_counter()
+
+        end_total = time.perf_counter()
+
+        # Log timing
+        logger.info(f"Data transfer time: {end_data_move - start_data_move:.4f} sec")
+        logger.info(f"Edge weight processing time: {end_edge_weight - start_edge_weight:.4f} sec")
+        logger.info(f"Linear transformation time: {end_linear - start_linear:.4f} sec")
+        logger.info(f"GNN message passing time: {end_gnn - start_gnn:.4f} sec")
+        logger.info(f"VQ processing time: {end_vq - start_vq:.4f} sec")
+        logger.info(f"Graph adjacency processing time: {end_graph_data - start_graph_data:.4f} sec")
+        logger.info(f"Total forward pass time: {end_total - start_total:.4f} sec")
+
         return (h_list, h, loss, dist, codebook,
                 [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(),
+                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
+                 pair_loss.item(),
                  sil_loss.item(), equivalent_atom_loss.item()],
                 x, detached_quantize, latents, sample_list)
 
