@@ -51,17 +51,22 @@ class WeightedThreeHopGCN(nn.Module):
     import torch
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bond_weight = self.bond_weight.to(device)
 
-        # Move features and graph data to GPU in one step
-        features = transform_node_feats(features)
-        edge_weight = batched_graph["_E"].edata["weight"].long()
-        features, edge_weight = features.to(device), edge_weight.to(device)
+        # Move the entire batched graph to GPU before using it
+        batched_graph = batched_graph.to(device)
 
-        # Optimize edge weight mapping
+        # Move features and edge weights to the same device
+        features = transform_node_feats(features).to(device)
+        edge_weight = batched_graph.edata["weight"].long().to(device)
+
+        # Ensure edge weights are mapped correctly
         mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3)
         edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
 
+        # Now assign edge weights to the graph
+        batched_graph.edata["_edge_weight"] = edge_weight  # ✅ No error now!
+
+        # Proceed with the rest of the forward pass...
         # Optimize feature processing
         h = self.linear_0(features)
         init_feat = features.detach()  # Use detach() instead of clone()
