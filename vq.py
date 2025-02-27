@@ -357,9 +357,9 @@ def mini_batch_kmeans(
         num_clusters,
         batch_size=256,
         num_iters=100,
+        logger=None,
         use_cosine_sim=False,
-        all_reduce_fn=noop,
-        logger=None
+        all_reduce_fn=noop
 ):
     import time
 
@@ -644,13 +644,13 @@ class EuclideanCodebook(nn.Module):
 
 
     @torch.jit.ignore
-    def init_embed_(self, data):
-        # if self.initted:
-        #     return
+    def init_embed_(self, data, logger):
+
         embed, cluster_size = mini_batch_kmeans(
             data,
             self.codebook_size,
             self.kmeans_iters,
+            logger
             # use_cosine_sim=True,
             # sample_fn=self.sample_fn,
             # all_reduce_fn=self.kmeans_all_reduce_fn
@@ -711,7 +711,7 @@ class EuclideanCodebook(nn.Module):
         # set the initial codebook vectors by k-means
         # ----------------------------------------------------
         start_init_codebook = time.perf_counter()
-        self.init_embed_(flatten)
+        self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
         end_init_codebook = time.perf_counter()
