@@ -101,6 +101,7 @@ class WeightedThreeHopGCN(nn.Module):
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
         if batched_graph_base:
+            src, dst = batched_graph_base.all_edges()
             sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst, sample_adj_base]
         else:
             sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst]
