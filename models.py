@@ -27,6 +27,8 @@ class BondWeightLayer(nn.Module):
         self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
     def forward(self, edge_types):
+        device = self.bond_embedding.weight.device  # Get the correct device of the embedding layer
+        edge_types = edge_types.to(device)  # Move edge_types to the same device
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
