@@ -680,15 +680,14 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        import time
-
+        device = x.device
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-        flatten = rearrange(x, 'h ... d -> h (...) d')
+        flatten = rearrange(x, 'h ... d -> h (...) d').to(device)
 
         # ----------------------------------------------------
         # set the initial codebook vectors by k-means
@@ -696,9 +695,6 @@ class EuclideanCodebook(nn.Module):
         self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
-        print(f"flatten device: {flatten.device}")  # Should be cuda or cpu
-        print(f"embed device: {embed.device}")  # Should match flatten.device
-
         dist = -torch.cdist(flatten, embed, p=2)
 
         # ----------------------------------------------------
