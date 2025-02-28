@@ -454,7 +454,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.95, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
