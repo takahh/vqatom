@@ -486,7 +486,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.95, num_atom
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
     # Compute positive loss (pull same types together)
-    positive_loss = same_type_mask * pairwise_distances ** 2
+    # positive_loss = same_type_mask * pairwise_distances ** 2
 
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
@@ -498,7 +498,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.95, num_atom
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
     # Combine and return mean loss
-    return (positive_loss + negative_loss).mean() / 10000
+    return negative_loss.mean() / 10000
+    # return (positive_loss + negative_loss).mean() / 10000
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
