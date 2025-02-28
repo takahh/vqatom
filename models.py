@@ -82,8 +82,8 @@ class WeightedThreeHopGCN(nn.Module):
         bond_feats = self.bond_weight(mapped_indices).to(device)  # Ensure bond_feats is on the same device
 
         # Ensure edge_mlp is on the same device
-        self.bond_weight.edge_mlp = self.bond_weight.edge_mlp.to(device)  # Move MLP to the correct device
-        edge_weight = self.bond_weight.edge_mlp(bond_feats).squeeze().to(device)  # Ensure output is on the correct device
+        # self.bond_weight.edge_mlp = self.bond_weight.edge_mlp.to(device)  # Move MLP to the correct device
+        # edge_weight = self.bond_weight.edge_mlp(bond_feats).squeeze().to(device)  # Ensure output is on the correct device
 
         # Assign edge weights to the graph
         batched_graph.edata["_edge_weight"] = edge_weight
