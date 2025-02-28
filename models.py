@@ -112,9 +112,11 @@ class WeightedThreeHopGCN(nn.Module):
                                                                                                                    logger)
 
         # Reduce memory usage in loss list
-        losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                    h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
-                    pair_loss.item(), sil_loss.item()]
+        losslist = [sil_loss.item()]
+        # Reduce memory usage in loss list
+        # losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
+        #             h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
+        #             pair_loss.item(), sil_loss.item()]
 
         # Optimize adjacency matrix storage
         with torch.no_grad():
