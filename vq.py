@@ -448,10 +448,12 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
+import torch
+import torch.nn.functional as F
 
 def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=512):
     """
-    Loss that exaggerates contamination in latent vector groups.
+    Loss that exaggerates contamination in latent vector groups, fully differentiable.
 
     Args:
         z (torch.Tensor): Latent vectors of shape (N, D)
@@ -462,7 +464,7 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom
         chunk_size (int): Batch size for processing
 
     Returns:
-        torch.Tensor: Contamination-sensitive contrastive loss
+        torch.Tensor: Contamination-sensitive contrastive loss (fully differentiable)
     """
     # Move tensors to GPU
     z = z.to("cuda", non_blocking=True)
@@ -491,18 +493,18 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom
             atom_types_chunk = atom_types_onehot[i:end_i]
             pairwise_similarities = torch.einsum("bd,nd->bn", atom_types_chunk, atom_types_onehot)
 
-            # Create same-type mask
-            same_type_mask = (pairwise_similarities >= threshold).float()
+            # 🔥 **Smooth Sigmoid for Differentiability**
+            same_type_mask = torch.sigmoid((pairwise_similarities - threshold) * 100)  # Soft approximation of >=
 
-            # Contamination detection: Count how many atom types are in each group
-            group_contamination = same_type_mask.sum(dim=-1)  # Higher values = more mixed types
+            # Compute contamination (differentiable)
+            group_contamination = same_type_mask.sum(dim=-1)  # Counts different atom types in the group
 
             # Compute base contrastive loss
             negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
 
-            # **Exaggerate contamination penalty**
-            contamination_penalty = torch.exp(group_contamination)  # Exponentially increase penalty for mixed groups
-            exaggerated_loss = contamination_penalty * negative_loss  # Amplify loss for contaminated groups
+            # **Exaggerate contamination penalty** (fully differentiable)
+            contamination_penalty = torch.exp(group_contamination)  # Higher penalty for contaminated groups
+            exaggerated_loss = contamination_penalty * negative_loss  # Scale loss by contamination
 
             # Sum up loss
             loss = exaggerated_loss.sum()
@@ -510,7 +512,6 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom
             total_count += pairwise_distances.numel()
 
     return total_loss / (total_count * 10000)  # Normalize loss
-
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
