@@ -1028,44 +1028,68 @@ class VectorQuantize(nn.Module):
         return dist_matrix
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
+        """
+        Computes a fast approximation of the silhouette loss for clustering.
+
+        Optimizations:
+        - Uses batched pairwise distance computation to reduce memory usage.
+        - Clears GPU cache before computing distances.
+        - Uses `torch.no_grad()` where applicable.
+        - Efficiently batches cluster processing to reduce memory footprint.
+
+        Args:
+        - embeddings (torch.Tensor): Latent space embeddings (N, D).
+        - embed_ind (torch.Tensor): Cluster assignments (N,).
+        - num_clusters (int): Total number of clusters.
+        - target_non_empty_clusters (int, optional): Target for non-empty clusters.
+
+        Returns:
+        - embed_ind (torch.Tensor): Cluster assignments.
+        - loss (torch.Tensor): Silhouette loss.
+        """
         # Preprocess clusters to ensure the desired number of non-empty clusters
-        # print_non_empty_cluster_count(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
-        # embed_ind = increase_non_empty_clusters(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
         embed_ind.data.copy_(embed_ind)
-        # Compute pairwise distances for all points
+
+        # Free GPU memory before computing distances
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+
+        # Compute pairwise distances in batches to avoid OOM errors
         pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)
 
-        # pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
         inter_cluster_distances = []
-        # Iterate over clusters
+        epsilon = 1e-6  # Small value to avoid division by zero
+
+        # Process clusters efficiently
         for k in range(num_clusters):
             cluster_mask = (embed_ind == k)
             cluster_indices = cluster_mask.nonzero(as_tuple=True)[0]
 
             if cluster_indices.numel() == 0:
                 continue  # Skip empty clusters
-            # Compute inter-cluster distances
+
             other_mask = ~cluster_mask
-            if other_mask.sum() > 0:
-                other_distances = pairwise_distances[cluster_indices][:, other_mask]
-                inter_cluster_distances.append(other_distances.mean())
+            if other_mask.any():  # Ensure there are other clusters
+                with torch.no_grad():  # No gradient needed for distance computation
+                    other_distances = pairwise_distances[cluster_indices][:, other_mask]
+                    inter_cluster_distances.append(other_distances.mean())
             else:
                 inter_cluster_distances.append(torch.tensor(float('inf'), device=embeddings.device))
 
         # Stack inter-cluster distances into a tensor
-        b = torch.stack(inter_cluster_distances, dim=0) if inter_cluster_distances else torch.tensor([],
-                                                                                                     device=embeddings.device)
+        if inter_cluster_distances:
+            b = torch.stack(inter_cluster_distances, dim=0)
+        else:
+            b = torch.tensor([], device=embeddings.device)
 
-        # Compute inter-cluster loss
-        epsilon = 1e-6  # Small value to avoid division by zero
-        b_normalized = b / (b.max() + epsilon)  # Normalize distances
-        loss = -torch.mean(torch.log(b_normalized + epsilon))  # Maximize inter-cluster distances
+        # Compute inter-cluster loss (maximize inter-cluster distance)
+        if b.numel() > 0:
+            b_normalized = b / (b.max() + epsilon)  # Normalize distances
+            loss = -torch.mean(torch.log(b_normalized + epsilon))  # Log-based loss
+        else:
+            loss = torch.tensor(0.0, device=embeddings.device)  # No clusters, zero loss
 
         return embed_ind, loss
-
-
 
     def fast_find_equivalence_groups(self, latents):
 
