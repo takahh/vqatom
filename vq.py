@@ -350,90 +350,58 @@ def kmeans(
         )
 
     return means, bins
+def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
+    """
+    Computes a differentiable silhouette loss for clustering.
 
+    Args:
+    - embeddings (torch.Tensor): Latent space embeddings (N, D), should be on GPU.
+    - embed_ind (torch.Tensor): Cluster assignments (N,), should be on GPU.
+    - num_clusters (int): Total number of clusters.
 
-def mini_batch_kmeans(
-        samples,
-        num_clusters,
-        batch_size=256,
-        num_iters=100,
-        logger=None,
-        use_cosine_sim=False,
-        all_reduce_fn=noop
-):
-    import time
+    Returns:
+    - embed_ind (torch.Tensor): Cluster assignments (stays on GPU).
+    - loss (torch.Tensor): Silhouette loss (differentiable, stays on GPU).
+    """
 
+    device = embeddings.device  # Ensure all computations remain on the same device
 
-    # Get basic dimensions and move tensors to GPU
-    num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
+    # Compute pairwise distances (Must be GPU compatible inside the function)
+    pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)
 
-    samples = samples.to('cuda')
-    dtype, device = samples.dtype, samples.device
+    inter_cluster_distances = []
+    epsilon = torch.tensor(1e-6, device=device, requires_grad=False)  # Ensure epsilon is on GPU
 
-    # K-Means++ initialization
-    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
-    first_idx = torch.randint(0, num_samples, (1,), device=device)
-    means[:, 0] = samples[:, first_idx].squeeze(1)
-    for k in range(1, num_clusters):
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+    for k in range(num_clusters):
+        cluster_mask = (embed_ind == k).to(device)  # Ensure cluster_mask is on GPU
+        cluster_indices = cluster_mask.nonzero(as_tuple=True)[0]
+
+        if cluster_indices.numel() == 0:
+            continue  # Skip empty clusters
+
+        other_mask = (~cluster_mask).to(device)  # Ensure other_mask is on GPU
+        if other_mask.any():  # Ensure there are other clusters
+            other_distances = pairwise_distances[cluster_indices][:, other_mask]
+            inter_cluster_distances.append(other_distances.mean())  # No torch.no_grad()
         else:
-            dists = torch.cdist(samples, means[:, :k], p=2) ** 2  # ** Use squared Euclidean distance **
+            inter_cluster_distances.append(
+                torch.full((1,), float('inf'), device=device, requires_grad=True)
+            )
 
-        # More efficient way to compute min distances without calling .values
-        min_dists, _ = torch.min(dists, dim=-1)
+    # Stack inter-cluster distances into a tensor
+    if inter_cluster_distances:
+        b = torch.stack(inter_cluster_distances, dim=0).to(device)
+    else:
+        b = torch.zeros(1, device=device, requires_grad=True)
 
-        # Normalize to avoid overflow issues in probabilities
-        min_dists = min_dists + 1e-10  # Small epsilon to prevent division errors
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
+    # Compute silhouette-based loss
+    if b.numel() > 0:
+        b_normalized = b / (b.max() + epsilon)  # Normalize distances
+        loss = -torch.mean(torch.log(b_normalized + epsilon))  # Log-based loss
+    else:
+        loss = torch.tensor(0.0, device=device, requires_grad=True)  # Ensure differentiability
 
-        # Faster centroid selection
-        next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
-
-        means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
-
-    # Initialize counts to track the number of points assigned to each centroid
-    counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
-
-    # Iterative optimization with mini-batches
-    means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
-
-    for _ in range(num_iters):
-        # Precompute squared batch for fast distance computation
-        batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
-        batch = samples[:, batch_indices]
-        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)  # Precompute squared batch
-
-        if use_cosine_sim:
-            dists = batch @ rearrange(means, 'h n d -> h d n')
-        else:
-            dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
-
-        assignments = torch.argmax(dists, dim=-1)  # Assign clusters
-
-        batch_sums = torch.zeros_like(means)
-        batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
-        batch_counts = batched_bincount(assignments, minlength=num_clusters)
-
-        old_counts = counts.clone().to(dtype)
-        counts = counts + batch_counts
-
-        counts_float = counts.to(dtype)
-        update_mask = (batch_counts > 0).unsqueeze(-1)
-
-        if update_mask.any():
-            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
-                                                                                                 'h n -> h n 1')
-            means = torch.where(update_mask, new_means, means)
-
-        all_reduce_fn(counts)
-        all_reduce_fn(means)
-
-        if use_cosine_sim:
-            means = l2norm(means)
-
-    return means, counts
-
+    return embed_ind, loss
 
 def batched_embedding(indices, embeds):
     device = embeds.device
