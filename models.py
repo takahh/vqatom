@@ -97,6 +97,8 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Compute GNN layers
         h = self.linear_0(features)
+        init_feat = features.detach()  # Use detach() instead of clone()
+
         h1 = self.conv1(batched_graph, h, edge_weight=edge_weight)
         h2 = self.conv2(batched_graph, h, edge_weight=edge_weight)
         h3 = self.conv3(batched_graph, h, edge_weight=edge_weight)
