@@ -352,91 +352,85 @@ def kmeans(
     return means, bins
 
 
-import torch
-from einops import rearrange
-
-
 def mini_batch_kmeans(
         samples,
         num_clusters,
         batch_size=256,
         num_iters=100,
-        use_cosine_sim=False
+        logger=None,
+        use_cosine_sim=False,
+        all_reduce_fn=noop
 ):
-    """
-    Optimized Mini-batch K-Means Clustering with Faster Computation.
-    Keeps computation graph intact for backpropagation.
-    """
+    import time
+
+
+    # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
 
-    samples = samples.to('cuda', non_blocking=True)
+    samples = samples.to('cuda')
     dtype, device = samples.dtype, samples.device
 
-    # Initialize centroids using K-Means++
+    # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
     first_idx = torch.randint(0, num_samples, (1,), device=device)
     means[:, 0] = samples[:, first_idx].squeeze(1)
-
     for k in range(1, num_clusters):
-        # Compute squared Euclidean distance to previous centroids
-        dists = torch.cdist(samples, means[:, :k], p=2) ** 2 if not use_cosine_sim else 1 - (
-                    samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+        if use_cosine_sim:
+            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+        else:
+            dists = torch.cdist(samples, means[:, :k], p=2) ** 2  # ** Use squared Euclidean distance **
 
-        # Get min distance for each sample (no redundant indexing)
+        # More efficient way to compute min distances without calling .values
         min_dists, _ = torch.min(dists, dim=-1)
 
-        # Normalize to avoid numerical issues
-        min_dists = min_dists + 1e-10
+        # Normalize to avoid overflow issues in probabilities
+        min_dists = min_dists + 1e-10  # Small epsilon to prevent division errors
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
 
-        # Sample next centroid efficiently
-        probs = torch.clamp(probs, min=1e-10)  # Avoid invalid values
-        probs = probs / probs.sum()  # Normalize
+        # Faster centroid selection
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
+
         means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
 
-    # Precompute squared means for Euclidean distance
-    means_squared = (means ** 2).sum(dim=-1, keepdim=True)
-
+    # Initialize counts to track the number of points assigned to each centroid
     counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
 
+    # Iterative optimization with mini-batches
+    means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
+
     for _ in range(num_iters):
-        # Sample batch
+        # Precompute squared batch for fast distance computation
         batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
         batch = samples[:, batch_indices]
-        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)
+        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)  # Precompute squared batch
 
-        # Compute distances
         if use_cosine_sim:
             dists = batch @ rearrange(means, 'h n d -> h d n')
         else:
             dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
 
-        # Assign each sample to nearest centroid
-        assignments = torch.argmin(dists, dim=-1)  # Faster than `argmax` for Euclidean distance
+        assignments = torch.argmax(dists, dim=-1)  # Assign clusters
 
-        # Compute new means with batched updates
         batch_sums = torch.zeros_like(means)
-        batch_sums.scatter_add_(1, assignments.unsqueeze(-1).expand(-1, -1, dim), batch)
+        batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
+        batch_counts = batched_bincount(assignments, minlength=num_clusters)
 
-        # Count cluster assignments
-        batch_counts = torch.zeros_like(counts)
-        batch_counts.scatter_add_(1, assignments, torch.ones_like(assignments, dtype=torch.int64))
-
-        # Smoothly update centroids using running averages
         old_counts = counts.clone().to(dtype)
         counts = counts + batch_counts
 
-        # Update means only for assigned clusters
         counts_float = counts.to(dtype)
         update_mask = (batch_counts > 0).unsqueeze(-1)
 
         if update_mask.any():
-            new_means = (old_counts.unsqueeze(-1) * means + batch_sums) / counts_float.unsqueeze(-1)
+            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
+                                                                                                 'h n -> h n 1')
             means = torch.where(update_mask, new_means, means)
 
+        all_reduce_fn(counts)
+        all_reduce_fn(means)
+
         if use_cosine_sim:
-            means = means / (torch.norm(means, dim=-1, keepdim=True) + 1e-8)  # Normalize for cosine similarity
+            means = l2norm(means)
 
     return means, counts
 
@@ -448,13 +442,8 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
-import torch
-import torch.nn.functional as F
 
-import torch
-import torch.nn.functional as F
-
-def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.95, num_atom_types=1000):
+def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
@@ -486,7 +475,7 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.95, num_ato
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
     # Compute positive loss (pull same types together)
-    # positive_loss = same_type_mask * pairwise_distances ** 2
+    positive_loss = same_type_mask * pairwise_distances ** 2
 
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
@@ -498,8 +487,7 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.95, num_ato
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
     # Combine and return mean loss
-    return negative_loss.mean() / 10000
-    # return (positive_loss + negative_loss).mean() / 10000
+    return (positive_loss + negative_loss).mean() / 10000
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
@@ -1009,31 +997,25 @@ class VectorQuantize(nn.Module):
 
     import torch
 
-    # def compute_contrastive_loss(quantized, atom_types, margin=1.0):
-    #     """
-    #     Compute contrastive loss efficiently while keeping gradients for backpropagation.
-    #     """
-    #     # Compute pairwise distances (keeps requires_grad)
-    #     pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
-    #
-    #     # Enable memory efficiency using automatic mixed precision
-    #     with torch.autocast(device_type="cuda", dtype=torch.float16):
-    #         # Create mask for positive pairs (same atom type)
-    #         same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
-    #
-    #         # Ensure only positive pairs contribute to loss
-    #         num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
-    #
-    #         # Compute loss while preserving gradients
-    #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
-    #
-    #         # Compute positive and negative losses
-    #         # positive_loss = same_type_mask * pairwise_distances ** 2  # Pull same types together
-    #         negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances,
-    #                                                              min=0.0) ** 2  # Push apart different types
-    #     # Combine and return mean loss
-    #     return (positive_loss + negative_loss).mean()
+    def compute_contrastive_loss(quantized, atom_types):
+        """
+        Compute contrastive loss efficiently while keeping gradients for backpropagation.
+        """
+        # Compute pairwise distances (keeps requires_grad)
+        pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
 
+        # Enable memory efficiency using automatic mixed precision
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # Create mask for positive pairs (same atom type)
+            same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
+
+            # Ensure only positive pairs contribute to loss
+            num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
+
+            # Compute loss while preserving gradients
+            positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
+
+        return positive_loss  # Loss remains differentiable
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
         # Preprocess clusters to ensure the desired number of non-empty clusters
@@ -1186,7 +1168,7 @@ class VectorQuantize(nn.Module):
         # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], 0)
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
         elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
