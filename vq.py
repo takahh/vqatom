@@ -1266,7 +1266,7 @@ class VectorQuantize(nn.Module):
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         quantize = quantize.squeeze(0)
-        x_tmp = x.squeeze(1).unsqueeze(0)
+        x_tmp = x.squeeze(1).unsqueeze(0).to(quantize.device)
 
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
