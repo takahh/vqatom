@@ -1017,14 +1017,30 @@ class VectorQuantize(nn.Module):
 
         return positive_loss  # Loss remains differentiable
 
-    def batched_cdist(self, x, chunk_size=1024):
+    def batched_cdist(self, x, chunk_size=512):
+        """
+        Computes pairwise distances in batches to reduce memory usage.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (N, D).
+            chunk_size (int): Number of rows/columns to process at a time.
+
+        Returns:
+            torch.Tensor: Pairwise distance matrix (N, N).
+        """
         n = x.shape[0]
-        dist_matrix = torch.zeros((n, n), device=x.device)
+        device = x.device
+
+        # Avoid preallocating full (N, N) matrix
+        dist_matrix = torch.empty((n, n), device=device)
+
         for i in range(0, n, chunk_size):
             for j in range(0, n, chunk_size):
-                dist_matrix[i:i + chunk_size, j:j + chunk_size] = torch.cdist(
-                    x[i:i + chunk_size], x[j:j + chunk_size]
-                )
+                with torch.no_grad():  # Reduce memory usage
+                    dist_matrix[i:i + chunk_size, j:j + chunk_size] = torch.cdist(
+                        x[i:i + chunk_size], x[j:j + chunk_size]
+                    )
+
         return dist_matrix
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
