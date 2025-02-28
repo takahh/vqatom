@@ -102,7 +102,34 @@ class WeightedThreeHopGCN(nn.Module):
         h3 = self.conv3(batched_graph, h, edge_weight=edge_weight)
         h = h1 + h2 + h3  # Merge results
 
-        return h
+        # Compute VQ layer
+        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
+         spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h,
+                                                                                                                   init_feat,
+                                                                                                                   logger)
+
+        # Reduce memory usage in loss list
+        losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
+                    h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
+                    pair_loss.item(), sil_loss.item()]
+
+        # Optimize adjacency matrix storage
+        with torch.no_grad():
+            sample_adj = batched_graph.adjacency_matrix().to_dense()
+            if batched_graph_base:
+                sample_adj_base = batched_graph_base.adjacency_matrix().to_dense()
+
+        src, dst = batched_graph.all_edges()
+        src, dst = src.to(torch.int64), dst.to(torch.int64)
+
+        if batched_graph_base:
+            sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst, sample_adj_base]
+        else:
+            sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
+
+        return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
+
 
 
 class MLP(nn.Module):
