@@ -1023,6 +1023,9 @@ class VectorQuantize(nn.Module):
         # embed_ind = increase_non_empty_clusters(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
         embed_ind.data.copy_(embed_ind)
         # Compute pairwise distances for all points
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
         pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
         inter_cluster_distances = []
         # Iterate over clusters
