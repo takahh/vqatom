@@ -451,9 +451,12 @@ def batched_embedding(indices, embeds):
 import torch
 import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=512):
+import torch
+import torch.nn.functional as F
+
+def contaminated_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=512):
     """
-    Loss that exaggerates contamination in latent vector groups, fully differentiable.
+    Memory-efficient loss that exaggerates contamination in latent vector groups.
 
     Args:
         z (torch.Tensor): Latent vectors of shape (N, D)
@@ -461,22 +464,20 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom
         margin (float): Margin for contrastive loss (default: 10.0)
         threshold (float): Similarity threshold for same-type detection (default: 0.9)
         num_atom_types (int): Number of unique atom types
-        chunk_size (int): Batch size for processing
+        chunk_size (int): Chunk size for processing to reduce memory usage
 
     Returns:
-        torch.Tensor: Contamination-sensitive contrastive loss (fully differentiable)
+        torch.Tensor: Contamination-sensitive contrastive loss (memory-optimized)
     """
-    # Move tensors to GPU
-    z = z.to("cuda", non_blocking=True)
-    atom_types = atom_types.to("cuda", non_blocking=True)
+    device = z.device
 
-    # One-hot encode atom types
-    atom_types_onehot = F.one_hot(atom_types.long(), num_atom_types).float()
+    # Move atom_types to one-hot representation
+    atom_types_onehot = F.one_hot(atom_types.long(), num_atom_types).float().to(device)
     atom_types_onehot = atom_types_onehot / (atom_types_onehot.norm(dim=1, keepdim=True) + 1e-8)
 
     num_samples = z.shape[0]
-    total_loss = 0.0
-    total_count = 0
+    total_loss = torch.tensor(0.0, device=device)
+    total_count = torch.tensor(0, device=device)
 
     for i in range(0, num_samples, chunk_size):
         end_i = min(i + chunk_size, num_samples)
@@ -485,31 +486,34 @@ def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom
             # Select chunk of latent vectors
             z_chunk = z[i:end_i]
 
-            # Compute pairwise squared Euclidean distances
+            # Compute pairwise squared Euclidean distances (chunked for memory efficiency)
             pairwise_distances_sq = torch.cdist(z_chunk, z, p=2) ** 2
             pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))
 
-            # Compute pairwise cosine similarity
+            # Compute pairwise cosine similarity using matrix multiplication (faster & lower memory)
             atom_types_chunk = atom_types_onehot[i:end_i]
-            pairwise_similarities = torch.einsum("bd,nd->bn", atom_types_chunk, atom_types_onehot)
+            pairwise_similarities = torch.mm(atom_types_chunk, atom_types_onehot.T)  # Uses `mm()` instead of `einsum()`
 
-            # 🔥 **Smooth Sigmoid for Differentiability**
-            same_type_mask = torch.sigmoid((pairwise_similarities - threshold) * 100)  # Soft approximation of >=
+            # **Low-memory thresholding with Sigmoid**
+            same_type_mask = torch.sigmoid((pairwise_similarities - threshold) * 100)
 
-            # Compute contamination (differentiable)
-            group_contamination = same_type_mask.sum(dim=-1)  # Counts different atom types in the group
+            # Reduce memory for contamination calculation
+            group_contamination = same_type_mask.sum(dim=-1, keepdim=True)  # Keepdim=True to avoid large reshaping
 
-            # Compute base contrastive loss
+            # Compute contrastive loss efficiently
             negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
 
-            # **Exaggerate contamination penalty** (fully differentiable)
-            contamination_penalty = torch.exp(group_contamination)  # Higher penalty for contaminated groups
-            exaggerated_loss = contamination_penalty * negative_loss  # Scale loss by contamination
+            # **Memory-efficient contamination penalty (log instead of exp)**
+            contamination_penalty = torch.log1p(group_contamination)  # `log1p(x) = log(1 + x)`, more stable than `exp()`
+            exaggerated_loss = contamination_penalty * negative_loss  # Element-wise multiplication
 
-            # Sum up loss
-            loss = exaggerated_loss.sum()
-            total_loss += loss
+            # Reduce memory accumulation
+            total_loss += exaggerated_loss.sum()
             total_count += pairwise_distances.numel()
+
+            # Free unused memory (helps with large datasets)
+            del z_chunk, pairwise_distances_sq, pairwise_distances, pairwise_similarities, same_type_mask, negative_loss, contamination_penalty, exaggerated_loss
+            torch.cuda.empty_cache()  # Force garbage collection
 
     return total_loss / (total_count * 10000)  # Normalize loss
 
