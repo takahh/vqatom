@@ -279,36 +279,93 @@ def run_inductive(
     # ----------------------------
     # define train and test list
     # ----------------------------
+    import torch
+    import dgl
+    from torch.utils.data import DataLoader
+    from your_module import MoleculeGraphDataset, collate_fn, convert_to_dgl, train_sage
+
+    # Fix GradScaler deprecation
+    scaler = torch.amp.GradScaler('cuda')
+
     # Initialize dataset and dataloader
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    dataloader = DataLoader(
+        dataset, batch_size=16, shuffle=False, collate_fn=collate_fn, num_workers=0, persistent_workers=False
+    )
+
+    # Track memory before training
+    print(f"Initial Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+
     for epoch in range(1, conf["max_epoch"] + 1):
-        loss_list_list_train = [[]] * 11
-        loss_list_list_test = [[]] * 11
+        loss_list_list_train = [[] for _ in range(11)]
+        loss_list_list_test = [[] for _ in range(11)]
         loss_list = []
         print(f"epoch {epoch} ------------------------------")
-        # --------------------------------
-        # Train
-        # --------------------------------
+
         if conf["train_or_infer"] == "train":
-            # Iterate through batches
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                if idx == 5:
+                print(
+                    f"Allocated Memory Before Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+
+                if idx == 5:  # Early exit for debugging
                     break
-                # print(f"idx {idx}")
-                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-                chunk_size = conf["chunk_size"]  # in 10,000 molecules
+
+                # Convert to DGL graphs
+                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
+                chunk_size = conf["chunk_size"]
+
                 for i in range(0, len(glist), chunk_size):
-                    chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
+                    chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
-                    # Ensure node features are correctly extracted
+
+                    # Extract node features safely
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-                    # batched_feats = batched_graph.ndata["feat"]
+
+                    # Compute loss
                     loss, loss_list_train, latent_train, latents = train_sage(
-                        model, batched_graph, batched_feats, optimizer, epoch, logger)
-                    # model.reset_kmeans()
+                        model, batched_graph, batched_feats, optimizer, epoch, logger
+                    )
+
+                    # Detach latent variables to free memory
+                    latent_train = latent_train.detach()
+                    latents = latents.detach()
+
+                    # Delete unnecessary objects
+                    del batched_graph, batched_feats, chunk
+                    torch.cuda.empty_cache()
+
+    #
+    # # Initialize dataset and dataloader
+    # dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
+    # dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    # for epoch in range(1, conf["max_epoch"] + 1):
+    #     loss_list_list_train = [[]] * 11
+    #     loss_list_list_test = [[]] * 11
+    #     loss_list = []
+    #     print(f"epoch {epoch} ------------------------------")
+    #     # --------------------------------
+    #     # Train
+    #     # --------------------------------
+    #     if conf["train_or_infer"] == "train":
+    #         # Iterate through batches
+    #         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+    #             print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+    #             if idx == 5:
+    #                 break
+    #             # print(f"idx {idx}")
+    #             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+    #             chunk_size = conf["chunk_size"]  # in 10,000 molecules
+    #             for i in range(0, len(glist), chunk_size):
+    #                 chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
+    #                 batched_graph = dgl.batch(chunk)
+    #                 # Ensure node features are correctly extracted
+    #                 with torch.no_grad():
+    #                     batched_feats = batched_graph.ndata["feat"]
+    #                 # batched_feats = batched_graph.ndata["feat"]
+    #                 loss, loss_list_train, latent_train, latents = train_sage(
+    #                     model, batched_graph, batched_feats, optimizer, epoch, logger)
+    #                 # model.reset_kmeans()
 
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
@@ -324,6 +381,11 @@ def run_inductive(
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
 
+                print(
+                    f"Allocated Memory After Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+
+            # Print detailed memory summary
+            print(torch.cuda.memory_summary())
         # --------------------------------
         # Save model
         # --------------------------------
