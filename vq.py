@@ -355,7 +355,7 @@ def kmeans(
 def mini_batch_kmeans(
         samples,
         num_clusters,
-        batch_size=512,
+        batch_size=256,
         num_iters=100,
         logger=None,
         use_cosine_sim=False,
