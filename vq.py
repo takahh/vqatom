@@ -454,68 +454,51 @@ import torch.nn.functional as F
 import torch
 import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=256):
+def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
     """
-    Memory-efficient loss that exaggerates contamination in latent vector groups.
-
-    Args:
-        z (torch.Tensor): Latent vectors of shape (N, D)
-        atom_types (torch.Tensor): Atom type labels of shape (N,)
-        margin (float): Margin for contrastive loss (default: 10.0)
-        threshold (float): Similarity threshold for same-type detection (default: 0.9)
-        num_atom_types (int): Number of unique atom types
-        chunk_size (int): Chunk size for processing to reduce memory usage
-
-    Returns:
-        torch.Tensor: Contamination-sensitive contrastive loss (memory-optimized)
+    Contrastive loss to separate different atom types using embeddings.
     """
-    device = z.device
+    # One-hot encode atom types
+    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
+    # print(f"🚨 atom_types: {atom_types}")
+    # print(f"🚨 num_atom_types: {num_atom_types}")
+    z = z.to("cuda")
+    atom_types = atom_types.to("cuda")
 
-    # Move atom_types to one-hot representation
-    atom_types_onehot = F.one_hot(atom_types.long(), num_atom_types).float().to(device)
-    atom_types_onehot = atom_types_onehot / (atom_types_onehot.norm(dim=1, keepdim=True) + 1e-8)
+    try:
+        # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
+        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
+    except Exception as e:
+        print("Error in one_hot:", e)
+        print("Atom types values:", atom_types)
+        raise
 
-    num_samples = z.shape[0]
-    total_loss = torch.tensor(0.0, device=device)
-    total_count = torch.tensor(0, device=device)
+    # Compute pairwise distances for the z vectors
+    pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
 
-    for i in range(0, num_samples, chunk_size):
-        end_i = min(i + chunk_size, num_samples)
+    # Normalize the atom_types vectors
+    atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
 
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            # Select chunk of latent vectors
-            z_chunk = z[i:end_i]
+    # Compute pairwise similarity for the atom_types
+    pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
 
-            # Compute pairwise squared Euclidean distances (chunked for memory efficiency)
-            pairwise_distances_sq = torch.cdist(z_chunk, z, p=2) ** 2
-            pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))
+    # Create the mask for "same type" based on similarity threshold
+    same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
-            # Compute pairwise cosine similarity using matrix multiplication (faster & lower memory)
-            atom_types_chunk = atom_types_onehot[i:end_i]
-            pairwise_similarities = torch.mm(atom_types_chunk, atom_types_onehot.T)  # Uses `mm()` instead of `einsum()`
+    # Compute positive loss (pull same types together)
+    positive_loss = same_type_mask * pairwise_distances ** 2
 
-            # **Low-memory thresholding with Sigmoid**
-            same_type_mask = torch.sigmoid((pairwise_similarities - threshold) * 100)
+    # Compute negative loss (push different types apart)
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
+    # print("same_type_mask shape:", same_type_mask.shape)
+    # print("pairwise_distances shape:", pairwise_distances.shape)
+    # print("Min index in mask:",
+    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+    # print("Max index in mask:",
+    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
-            # Reduce memory for contamination calculation
-            group_contamination = same_type_mask.sum(dim=-1, keepdim=True)  # Keepdim=True to avoid large reshaping
-
-            # Compute contrastive loss efficiently
-            negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
-
-            # **Memory-efficient contamination penalty (log instead of exp)**
-            contamination_penalty = torch.log1p(group_contamination)  # `log1p(x) = log(1 + x)`, more stable than `exp()`
-            exaggerated_loss = contamination_penalty * negative_loss  # Element-wise multiplication
-
-            # Reduce memory accumulation
-            total_loss += exaggerated_loss.sum()
-            total_count += pairwise_distances.numel()
-
-            # Free unused memory (helps with large datasets)
-            del z_chunk, pairwise_distances_sq, pairwise_distances, pairwise_similarities, same_type_mask, negative_loss, contamination_penalty, exaggerated_loss
-            torch.cuda.empty_cache()  # Force garbage collection
-
-    return total_loss / (total_count * 10000)  # Normalize loss
+    # Combine and return mean loss
+    return (positive_loss + negative_loss).mean() / 10000
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
