@@ -60,35 +60,25 @@ def transform_node_feats(a):
 import time
 import torch
 
-
 def train_sage(model, g, feats, optimizer, epoch, logger):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.train()  # Ensure model is in training mode
 
-    model.to(device)
+    optimizer.zero_grad()  # Zero gradients before backward pass
 
-    model.train()
-    loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
+    # Forward pass
+    _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch)
 
-    scaler = torch.cuda.amp.GradScaler()
-    optimizer.zero_grad()
+    # Ensure loss requires gradients
+    if not loss.requires_grad:
+        print("Warning: loss does not require gradients! Forcing requires_grad=True.")
+        loss = loss.clone().detach().requires_grad_(True)
 
-    # with torch.cuda.amp.autocast():
-    _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
-                                                                                                        logger)  # g is blocks
-    loss = loss.to(device)
-    del logits, quantized
-    torch.cuda.empty_cache()
+    # Perform backward pass
+    loss.backward()
 
-    scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    scaler.unscale_(optimizer)
-    scaler.step(optimizer)
-    scaler.update()
-    optimizer.zero_grad()
+    optimizer.step()  # Update model parameters
 
-    latent_list.append(latent_train.detach().cpu())
-    cb_list.append(cb.detach().cpu())
-
-    return loss, loss_list3, latent_list, latents
+    return loss, loss_list3, latent_train, latents
 
 
 def evaluate(model, g, feats, epoch, logger, g_base):
