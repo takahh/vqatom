@@ -80,7 +80,7 @@ class WeightedThreeHopGCN(nn.Module):
         # Ensure bond_embedding and MLP are on the same device
         self.bond_weight = self.bond_weight.to(device)
         # self.edge_mlp = self.edge_mlp.to(device)
-
+        print(f"self.bond_weight {self.bond_weight}")
         # Compute bond feature embeddings
         mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).long().to(
             device)  # Keep as int for embedding lookup
@@ -128,9 +128,9 @@ class WeightedThreeHopGCN(nn.Module):
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
         if batched_graph_base:
-            sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst, sample_adj_base]
+            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst, sample_adj_base]
         else:
-            sample_list = [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
+            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst]
 
         return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
