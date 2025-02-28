@@ -70,7 +70,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     # Ensure loss requires gradients
     if not loss.requires_grad:
-        print("Warning: loss does not require gradients! Forcing requires_grad=True.")
+        # print("Warning: loss does not require gradients! Forcing requires_grad=True.")
         loss = loss.clone().detach().requires_grad_(True)
 
     # Perform backward pass
@@ -285,7 +285,7 @@ def run_inductive(
     dataloader = DataLoader(dataset, batch_size=8, shuffle=False, collate_fn=collate_fn, num_workers=0)
 
     # Track memory before training
-    print(f"Initial Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+    # print(f"Initial Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
 
     for epoch in range(1, conf["max_epoch"] + 1):
         loss_list_list_train = [[] for _ in range(11)]
@@ -295,8 +295,8 @@ def run_inductive(
 
         if conf["train_or_infer"] == "train":
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                print(
-                    f"Allocated Memory Before Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+                # print(
+                #     f"Allocated Memory Before Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
 
                 if idx == 5:  # Early exit for debugging
                     break
@@ -371,11 +371,11 @@ def run_inductive(
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
 
-                print(
-                    f"Allocated Memory After Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+                # print(
+                #     f"Allocated Memory After Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
 
             # Print detailed memory summary
-            print(torch.cuda.memory_summary())
+            # print(torch.cuda.memory_summary())
         # --------------------------------
         # Save model
         # --------------------------------

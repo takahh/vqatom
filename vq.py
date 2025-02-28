@@ -696,10 +696,6 @@ class EuclideanCodebook(nn.Module):
         self.init_embed_(flatten, logger)
         embed = self.embed.to(device)
         init_cb = self.embed.detach().clone().contiguous()
-        print("flatten.device")
-        print(flatten.device)
-        print("embed.device")
-        print(embed.device)
         dist = -torch.cdist(flatten, embed, p=2)
 
         # ----------------------------------------------------
