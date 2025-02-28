@@ -1017,6 +1017,16 @@ class VectorQuantize(nn.Module):
 
         return positive_loss  # Loss remains differentiable
 
+    def batched_cdist(self, x, chunk_size=1024):
+        n = x.shape[0]
+        dist_matrix = torch.zeros((n, n), device=x.device)
+        for i in range(0, n, chunk_size):
+            for j in range(0, n, chunk_size):
+                dist_matrix[i:i + chunk_size, j:j + chunk_size] = torch.cdist(
+                    x[i:i + chunk_size], x[j:j + chunk_size]
+                )
+        return dist_matrix
+
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
         # Preprocess clusters to ensure the desired number of non-empty clusters
         # print_non_empty_cluster_count(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
@@ -1025,8 +1035,9 @@ class VectorQuantize(nn.Module):
         # Compute pairwise distances for all points
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
+        pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)
 
-        pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
+        # pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
         inter_cluster_distances = []
         # Iterate over clusters
         for k in range(num_clusters):
