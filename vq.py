@@ -718,7 +718,8 @@ class EuclideanCodebook(nn.Module):
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
 
-        embed_ind = embed_ind.unsqueeze(0)
+        embed_ind = embed_ind.unsqueeze(0).to(device)
+
         quantize = batched_embedding(embed_ind, self.embed)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
