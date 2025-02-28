@@ -47,11 +47,7 @@ class WeightedThreeHopGCN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    import time
-    import torch
-
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
-
         """
         Forward pass of the model.
 
@@ -66,22 +62,34 @@ class WeightedThreeHopGCN(nn.Module):
             Tuple: Model outputs including loss, embeddings, and processed features.
         """
 
-        # Ensure tensors are on the same device
+        # Get the device from model parameters
         device = next(self.parameters()).device
+
+        # Move all tensors to the same device
         batched_graph = batched_graph.to(device)
         features = transform_node_feats(features).to(device)
 
         # Process edge weights
         edge_weight = batched_graph.edata["weight"].long().to(device)
-        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3)  # Ensure valid index range
-        edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        batched_graph.edata["_edge_weight"] = edge_weight  # Assign edge weights
+        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).to(device)
 
-        # Linear transformation of node features
+        # Ensure bond_weight is also on the same device
+        self.bond_weight = self.bond_weight.to(device)
+        bond_feats = self.bond_weight(mapped_indices)  # Convert bond type to learnable vector
+        bond_feats = bond_feats.to(device)
+
+        # Ensure edge_mlp parameters and inputs are on the same device
+        self.edge_mlp = self.edge_mlp.to(device)
+        edge_weight = self.edge_mlp(bond_feats).squeeze()
+
+        # Assign edge weights to the graph
+        batched_graph.edata["_edge_weight"] = edge_weight
+
+        # Proceed with the rest of the forward pass...
         h = self.linear_0(features)
         init_feat = features.detach()  # Avoid unnecessary computation history
 
-        # Parallelized GNN computation using CUDA stream
+        # Parallelized GNN computation
         with torch.cuda.stream(torch.cuda.Stream()):
             h1 = self.conv1(batched_graph, h, edge_weight=edge_weight)
             h2 = self.conv2(batched_graph, h, edge_weight=edge_weight)
@@ -92,7 +100,9 @@ class WeightedThreeHopGCN(nn.Module):
         # Compute Vector Quantization (VQ) Layer
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h, init_feat, logger)
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h,
+                                                                                                                   init_feat,
+                                                                                                                   logger)
 
         # Minimize memory usage in loss list
         loss_list = [sil_loss.item()]
@@ -114,6 +124,7 @@ class WeightedThreeHopGCN(nn.Module):
             sample_list.append(sample_adj_base)
 
         return [], h, loss, dist, codebook, loss_list, x, detached_quantize, latents, sample_list
+
 
 class MLP(nn.Module):
     def __init__(
