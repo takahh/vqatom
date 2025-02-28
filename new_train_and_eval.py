@@ -289,9 +289,10 @@ def run_inductive(
 
     # Initialize dataset and dataloader
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
-    dataloader = DataLoader(
-        dataset, batch_size=16, shuffle=False, collate_fn=collate_fn, num_workers=0, persistent_workers=False
-    )
+    # dataloader = DataLoader(
+    #     dataset, batch_size=16, shuffle=False, collate_fn=collate_fn, num_workers=0, persistent_workers=False
+    # )
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, collate_fn=collate_fn, num_workers=0)
 
     # Track memory before training
     print(f"Initial Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
