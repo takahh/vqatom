@@ -454,7 +454,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=512):
+def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=256):
     """
     Memory-efficient loss that exaggerates contamination in latent vector groups.
 
