@@ -49,66 +49,71 @@ class WeightedThreeHopGCN(nn.Module):
 
     import time
     import torch
+
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Move the entire batched graph to GPU before using it
+        """
+        Forward pass of the model.
+
+        Args:
+            batched_graph (DGLGraph): The input batched graph.
+            features (torch.Tensor): Node features.
+            epoch (int): Current training epoch.
+            logger (optional): Logger for debugging.
+            batched_graph_base (DGLGraph, optional): Additional base graph.
+
+        Returns:
+            Tuple: Model outputs including loss, embeddings, and processed features.
+        """
+
+        # Ensure tensors are on the same device
+        device = next(self.parameters()).device
         batched_graph = batched_graph.to(device)
-
-        # Move features and edge weights to the same device
         features = transform_node_feats(features).to(device)
+
+        # Process edge weights
         edge_weight = batched_graph.edata["weight"].long().to(device)
-
-        # Ensure edge weights are mapped correctly
-        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3)
+        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3)  # Ensure valid index range
         edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+        batched_graph.edata["_edge_weight"] = edge_weight  # Assign edge weights
 
-        # Now assign edge weights to the graph
-        batched_graph.edata["_edge_weight"] = edge_weight  # ✅ No error now!
-
-        # Proceed with the rest of the forward pass...
-        # Optimize feature processing
+        # Linear transformation of node features
         h = self.linear_0(features)
-        init_feat = features.detach()  # Use detach() instead of clone()
+        init_feat = features.detach()  # Avoid unnecessary computation history
 
-        # Use CUDA stream for parallel GNN computation
-        stream = torch.cuda.Stream()
-        with torch.cuda.stream(stream):
-            h1 = self.conv1(batched_graph["_E"], h, edge_weight=edge_weight)
-            h2 = self.conv2(batched_graph["_E"], h, edge_weight=edge_weight)
-            h3 = self.conv3(batched_graph["_E"], h, edge_weight=edge_weight)
-        h = h1 + h2 + h3  # Merge results
+        # Parallelized GNN computation using CUDA stream
+        with torch.cuda.stream(torch.cuda.Stream()):
+            h1 = self.conv1(batched_graph, h, edge_weight=edge_weight)
+            h2 = self.conv2(batched_graph, h, edge_weight=edge_weight)
+            h3 = self.conv3(batched_graph, h, edge_weight=edge_weight)
 
-        # Compute VQ layer
+        h = h1 + h2 + h3  # Combine results
+
+        # Compute Vector Quantization (VQ) Layer
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h,
-                                                                                                                   init_feat,
-                                                                                                                   logger)
+         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h, init_feat, logger)
 
-        # Reduce memory usage in loss list
-        # losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-        #             h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss.item(),
-        #             pair_loss.item(), sil_loss.item()]
-        losslist = [sil_loss.item()]
+        # Minimize memory usage in loss list
+        loss_list = [sil_loss.item()]
 
-        # Optimize adjacency matrix storage
+        # Compute adjacency matrices efficiently
         with torch.no_grad():
             sample_adj = batched_graph.adjacency_matrix().to_dense()
+            sample_adj_base = None
             if batched_graph_base:
                 sample_adj_base = batched_graph_base.adjacency_matrix().to_dense()
 
-        src, dst = batched_graph.all_edges()
+        # Collect edge information
+        src, dst = batched_graph.edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
+        # Construct sample list with optional base graph
+        sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst]
         if batched_graph_base:
-            src, dst = batched_graph_base.all_edges()
-            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst, sample_adj_base]
-        else:
-            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst]
+            sample_list.append(sample_adj_base)
 
-        return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
-
+        return [], h, loss, dist, codebook, loss_list, x, detached_quantize, latents, sample_list
 
 class MLP(nn.Module):
     def __init__(
