@@ -65,30 +65,37 @@ class WeightedThreeHopGCN(nn.Module):
         """
 
         # Ensure everything is on the same device
-        device = next(self.parameters()).device  # Get model's device
+        device = next(self.parameters()).device
 
-        # Move graph, features, and edge weights to the same device
+        # Move tensors to the same device
         batched_graph = batched_graph.to(device)
         features = features.to(device)
 
-        # Ensure bond embedding is on the same device
-        self.bond_weight = self.bond_weight.to(device)
+        # Process edge weights
+        edge_weight = batched_graph.edata["weight"].long().to(device)  # Ensure edge weight is on GPU
 
-        # Get edge weights and move to device
-        edge_weight = batched_graph.edata["weight"].long().to(device)
-        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).to(device)
+        # Ensure edge weight is converted to float32 (to match node features)
+        edge_weight = edge_weight.float()  # ✅ Fix data type mismatch
+
+        # Ensure bond_embedding and MLP are on the same device
+        self.bond_weight = self.bond_weight.to(device)
+        # self.edge_mlp = self.edge_mlp.to(device)
 
         # Compute bond feature embeddings
-        bond_feats = self.bond_weight(mapped_indices).to(device)  # Ensure bond_feats is on the same device
+        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).long().to(
+            device)  # Keep as int for embedding lookup
+        bond_feats = self.bond_weight(mapped_indices).to(device)
 
-        # Ensure edge_mlp is on the same device
-        # self.bond_weight.edge_mlp = self.bond_weight.edge_mlp.to(device)  # Move MLP to the correct device
-        # edge_weight = self.bond_weight.edge_mlp(bond_feats).squeeze().to(device)  # Ensure output is on the correct device
+        # Compute edge weights using edge_mlp
+        edge_weight = self.edge_mlp(bond_feats).squeeze().to(device)
+
+        # Ensure edge_weight is in `float32` (important for DGL)
+        edge_weight = edge_weight.float()  # ✅ Fix dtype mismatch
 
         # Assign edge weights to the graph
         batched_graph.edata["_edge_weight"] = edge_weight
 
-        # Proceed with the rest of the forward pass...
+        # Compute GNN layers
         h = self.linear_0(features)
         h1 = self.conv1(batched_graph, h, edge_weight=edge_weight)
         h2 = self.conv2(batched_graph, h, edge_weight=edge_weight)
