@@ -448,24 +448,29 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
-import torch
-import torch
 
-def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5, num_atom_types=100, chunk_size=512):
+def compute_contrastive_loss(z, atom_types, margin=10.0, threshold=0.9, num_atom_types=100, chunk_size=512):
     """
-    Optimized memory-efficient contrastive loss computation.
+    Loss that exaggerates contamination in latent vector groups.
+
+    Args:
+        z (torch.Tensor): Latent vectors of shape (N, D)
+        atom_types (torch.Tensor): Atom type labels of shape (N,)
+        margin (float): Margin for contrastive loss (default: 10.0)
+        threshold (float): Similarity threshold for same-type detection (default: 0.9)
+        num_atom_types (int): Number of unique atom types
+        chunk_size (int): Batch size for processing
+
+    Returns:
+        torch.Tensor: Contamination-sensitive contrastive loss
     """
+    # Move tensors to GPU
     z = z.to("cuda", non_blocking=True)
     atom_types = atom_types.to("cuda", non_blocking=True)
 
-    # One-hot encode atom types (avoiding unnecessary storage)
-    atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
-
-    # Normalize atom_types once to avoid redundant computation
-    atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
-
-    # Precompute norms for pairwise distance calculation
-    z_norm_sq = (z ** 2).sum(dim=-1, keepdim=True)
+    # One-hot encode atom types
+    atom_types_onehot = F.one_hot(atom_types.long(), num_atom_types).float()
+    atom_types_onehot = atom_types_onehot / (atom_types_onehot.norm(dim=1, keepdim=True) + 1e-8)
 
     num_samples = z.shape[0]
     total_loss = 0.0
@@ -474,37 +479,37 @@ def compute_contrastive_loss(z, atom_types, index=10, margin=10.0, threshold=0.5
     for i in range(0, num_samples, chunk_size):
         end_i = min(i + chunk_size, num_samples)
 
-        with torch.autocast(device_type="cuda", dtype=torch.float16):  # Mixed precision speeds up computation
-            # Select chunk of `z`
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # Select chunk of latent vectors
             z_chunk = z[i:end_i]
-            z_chunk_norm_sq = z_norm_sq[i:end_i]
 
-            # Compute pairwise squared Euclidean distance using vectorized operations
-            pairwise_distances_sq = torch.matmul(z_chunk.squeeze(0), z.squeeze(0).T)
-            if z.shape[0] == z_chunk.shape[0]:  # Ensure proper shape when using chunking
-                z = z.unsqueeze(0)  # Reshape if needed
-            pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))  # Ensure no NaNs
+            # Compute pairwise squared Euclidean distances
+            pairwise_distances_sq = torch.cdist(z_chunk, z, p=2) ** 2
+            pairwise_distances = torch.sqrt(torch.clamp(pairwise_distances_sq, min=1e-6))
 
-            # Compute pairwise cosine similarity (efficiently using einsum)
-            atom_types_chunk = atom_types[i:end_i]
-            pairwise_similarities = torch.einsum("bd,nd->bn", atom_types_chunk, atom_types)  # Faster than `mm`
+            # Compute pairwise cosine similarity
+            atom_types_chunk = atom_types_onehot[i:end_i]
+            pairwise_similarities = torch.einsum("bd,nd->bn", atom_types_chunk, atom_types_onehot)
 
             # Create same-type mask
             same_type_mask = (pairwise_similarities >= threshold).float()
 
-            # Compute contrastive loss
+            # Contamination detection: Count how many atom types are in each group
+            group_contamination = same_type_mask.sum(dim=-1)  # Higher values = more mixed types
+
+            # Compute base contrastive loss
             negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
 
-            if index == 0:
-                positive_loss = same_type_mask * pairwise_distances ** 2
-                loss = (positive_loss + negative_loss).sum()
-            else:
-                loss = negative_loss.sum()
+            # **Exaggerate contamination penalty**
+            contamination_penalty = torch.exp(group_contamination)  # Exponentially increase penalty for mixed groups
+            exaggerated_loss = contamination_penalty * negative_loss  # Amplify loss for contaminated groups
 
+            # Sum up loss
+            loss = exaggerated_loss.sum()
             total_loss += loss
             total_count += pairwise_distances.numel()
 
-    return total_loss / total_count / 10000  # Normalize loss
+    return total_loss / (total_count * 10000)  # Normalize loss
 
 
 
