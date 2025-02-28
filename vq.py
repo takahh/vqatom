@@ -1048,47 +1048,49 @@ class VectorQuantize(nn.Module):
         Computes a differentiable silhouette loss for clustering.
 
         Args:
-        - embeddings (torch.Tensor): Latent space embeddings (N, D).
-        - embed_ind (torch.Tensor): Cluster assignments (N,).
+        - embeddings (torch.Tensor): Latent space embeddings (N, D), should be on GPU.
+        - embed_ind (torch.Tensor): Cluster assignments (N,), should be on GPU.
         - num_clusters (int): Total number of clusters.
 
         Returns:
-        - embed_ind (torch.Tensor): Cluster assignments.
-        - loss (torch.Tensor): Silhouette loss (differentiable).
+        - embed_ind (torch.Tensor): Cluster assignments (stays on GPU).
+        - loss (torch.Tensor): Silhouette loss (differentiable, stays on GPU).
         """
 
+        device = embeddings.device  # Ensure all computations remain on the same device
+
         # Compute pairwise distances
-        pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)
+        pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)  # Ensure this function runs on GPU
 
         inter_cluster_distances = []
-        epsilon = 1e-6
+        epsilon = torch.tensor(1e-6, device=device)  # Ensure epsilon is on GPU
 
         for k in range(num_clusters):
-            cluster_mask = (embed_ind == k)
+            cluster_mask = (embed_ind == k).to(device)  # Ensure cluster_mask is on GPU
             cluster_indices = cluster_mask.nonzero(as_tuple=True)[0]
 
             if cluster_indices.numel() == 0:
                 continue  # Skip empty clusters
 
-            other_mask = ~cluster_mask
+            other_mask = (~cluster_mask).to(device)  # Ensure other_mask is on GPU
             if other_mask.any():  # Ensure there are other clusters
                 other_distances = pairwise_distances[cluster_indices][:, other_mask]
                 inter_cluster_distances.append(other_distances.mean())  # No torch.no_grad()
             else:
-                inter_cluster_distances.append(torch.full((1,), float('inf'), device=embeddings.device))
+                inter_cluster_distances.append(torch.full((1,), float('inf'), device=device))
 
         # Stack inter-cluster distances into a tensor
         if inter_cluster_distances:
-            b = torch.stack(inter_cluster_distances, dim=0)
+            b = torch.stack(inter_cluster_distances, dim=0).to(device)
         else:
-            b = torch.zeros(1, device=embeddings.device)
+            b = torch.zeros(1, device=device)
 
         # Compute silhouette-based loss
         if b.numel() > 0:
             b_normalized = b / (b.max() + epsilon)  # Normalize distances
             loss = -torch.mean(torch.log(b_normalized + epsilon))  # Log-based loss
         else:
-            loss = torch.tensor(0.0, device=embeddings.device, requires_grad=True)  # Ensure differentiability
+            loss = torch.tensor(0.0, device=device, requires_grad=True)  # Ensure differentiability
 
         return embed_ind, loss
 
