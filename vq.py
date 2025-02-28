@@ -1141,11 +1141,11 @@ class VectorQuantize(nn.Module):
         latents = latents / latents_norm
 
         # Pairwise distances
-        dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
+        # dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
 
         # Remove diagonal
-        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
 
         # Debug: Log distance statistics
         # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
@@ -1218,19 +1218,19 @@ class VectorQuantize(nn.Module):
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
-        if self.commitment_weight > 0:
-            detached_quantize = quantize.detach()
-
-            if exists(mask):
-                commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-                if is_multiheaded:
-                    mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-                                  h=commit_loss.shape[1] // mask.shape[0])
-                commit_loss = commit_loss[mask].mean()
-            else:
-                commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-
-            raw_commit_loss = commit_loss
+        # if self.commitment_weight > 0:
+        #     detached_quantize = quantize.detach()
+        #
+        #     if exists(mask):
+        #         commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        #         if is_multiheaded:
+        #             mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+        #                           h=commit_loss.shape[1] // mask.shape[0])
+        #         commit_loss = commit_loss[mask].mean()
+        #     else:
+        #         commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+        #
+        #     raw_commit_loss = commit_loss
 
         codebook = self._codebook.embed
 
