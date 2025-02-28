@@ -367,7 +367,7 @@ def run_inductive(
               # f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
               # f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
               # f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-              f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
+              f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f},"
               )
 
         print(
@@ -378,7 +378,7 @@ def run_inductive(
             #   f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 7f}, "
             #   f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
             #   f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
-              f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]): 7f}",
+              f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}",
               )
 
         # Log training losses
@@ -390,7 +390,7 @@ def run_inductive(
             # f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]):7f}, "
             # f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]):7f}, "
             # f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]):7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]):7f}, "
+            f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
         )
         # Log testing losses
         logger.info(
@@ -401,7 +401,7 @@ def run_inductive(
             # f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]):7f}, "
             # f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]):7f}, "
             # f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]):7f}, "
-            f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]):7f}, "
+            f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
         )
         #  [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
