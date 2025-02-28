@@ -80,7 +80,6 @@ class WeightedThreeHopGCN(nn.Module):
         # Ensure bond_embedding and MLP are on the same device
         self.bond_weight = self.bond_weight.to(device)
         # self.edge_mlp = self.edge_mlp.to(device)
-        print(f"self.bond_weight {self.bond_weight}")
         # Compute bond feature embeddings
         mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).long().to(
             device)  # Keep as int for embedding lookup
