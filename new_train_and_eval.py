@@ -293,6 +293,7 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             # Iterate through batches
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
                 if idx == 5:
                     break
                 # print(f"idx {idx}")
