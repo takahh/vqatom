@@ -87,7 +87,7 @@ class WeightedThreeHopGCN(nn.Module):
         bond_feats = self.bond_weight(mapped_indices).to(device)
 
         # Compute edge weights using edge_mlp
-        edge_weight = self.edge_mlp(bond_feats).squeeze().to(device)
+        # edge_weight = self.edge_mlp(bond_feats).squeeze().to(device)
 
         # Ensure edge_weight is in `float32` (important for DGL)
         edge_weight = edge_weight.float()  # ✅ Fix dtype mismatch
