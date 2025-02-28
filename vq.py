@@ -696,6 +696,8 @@ class EuclideanCodebook(nn.Module):
         self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
+        print(f"flatten device: {flatten.device}")  # Should be cuda or cpu
+        print(f"embed device: {embed.device}")  # Should match flatten.device
 
         dist = -torch.cdist(flatten, embed, p=2)
 
