@@ -69,7 +69,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Move tensors to the same device
         batched_graph = batched_graph.to(device)
-        features = features.to(device)
+        features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
         # Process edge weights
         edge_weight = batched_graph.edata["weight"].long().to(device)  # Ensure edge weight is on GPU
