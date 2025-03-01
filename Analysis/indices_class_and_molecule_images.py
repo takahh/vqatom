@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 1
+EPOCH = 2
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -76,13 +76,14 @@ def to_superscript(number):
     }
     return "".join(superscript_map.get(char, char) for char in str(number))
 
-def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order,
-                                              adj_matrix_base):
+def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
     from rdkit.Chem import AllChem, Draw
+    # from rdkit.Chem.Draw import rdMolDraw2D
     import rdkit.Chem.Draw.rdMolDraw2D as rdMolDraw2D
+
     from scipy.sparse.csgraph import connected_components
     from PIL import Image
     from io import BytesIO
@@ -93,136 +94,118 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
-    print(f"Number of molecular components detected: {n_components}")
+    print("n_components")
+    print(n_components)
 
     images = []
-    for i in range(n_components):
-        print(f"Processing molecule {i + 1}/{n_components}...")
-
+    for i in range(n_components - 1):
+        print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
+        # Extract subgraph features for this component
         mol_features = feature_matrix[component_indices]
 
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
-        mol_src, mol_dst, mol_bond = arr_src[mask], arr_dst[mask], arr_bond_order[mask]
+        mol_src = arr_src[mask]
+        mol_dst = arr_dst[mask]
+        mol_bond = arr_bond_order[mask]
+        print("mol_features:", mol_features)
+        print("mol_bond:", mol_bond)
+        print("mol_src:", mol_src)
+        print("mol_dst:", mol_dst)
+
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
-        atom_mapping, atom_labels = {}, {}
+        atom_mapping = {}  # Map original node index to RDKit atom index
+        atom_labels = {}   # For custom atom labels in the drawing
 
         # Add atoms and annotate with class labels
         for idx, features in zip(component_indices, mol_features):
-            atomic_num = int(features[0])  # Assume first feature is atomic number
+            atomic_num = int(features[0])  # Assume the first feature is the atomic number
             atom = Chem.Atom(atomic_num)
             atom_idx = mol.AddAtom(atom)
             atom_mapping[idx] = atom_idx
 
-            # Annotate atom with its class label
+            # Annotate atom with its class label if available
             class_label = node_to_class.get(idx, "Unknown")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
-            color = "black"
-            if element == "O":
-                color = "red"
-            elif element == "N":
-                color = "blue"
+            atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
 
-            atom_labels[atom_idx] = (f"{element}{class_label}", color)
+        # Define a bond type map
+        bond_type_map = {1: Chem.BondType.SINGLE,
+                         2: Chem.BondType.DOUBLE,
+                         3: Chem.BondType.TRIPLE,
+                         4: Chem.BondType.AROMATIC}
 
-        # Define bond type map
-        bond_type_map = {1: Chem.BondType.SINGLE, 2: Chem.BondType.DOUBLE,
-                         3: Chem.BondType.TRIPLE, 4: Chem.BondType.AROMATIC}
-
-        # Build a dictionary for unique bonds
+        # Build a dictionary for unique bonds.
         unique_bonds = {}
         for src, dst, bond_order in zip(mol_src, mol_dst, mol_bond):
             src, dst, bond_order = int(src), int(dst), int(bond_order)
+            # Ensure both atoms exist in the mapping.
             if src not in atom_mapping or dst not in atom_mapping:
                 continue
             src_mol, dst_mol = atom_mapping[src], atom_mapping[dst]
+            # Avoid self-bonds.
             if src_mol == dst_mol:
-                continue  # Avoid self-bonds
+                continue
+            # Use a sorted tuple so bond direction doesn't matter.
             key = tuple(sorted([src_mol, dst_mol]))
-            unique_bonds[key] = max(unique_bonds.get(key, 0), bond_order)  # Keep the highest bond order
+            # If the same bond appears multiple times, use the maximum bond order.
+            unique_bonds[key] = max(unique_bonds.get(key, 0), bond_order)
 
-        # Add unique bonds to molecule
+        # Now add each unique bond to the molecule.
         for (src_mol, dst_mol), bond_order in unique_bonds.items():
             bond_type = bond_type_map.get(bond_order, Chem.BondType.SINGLE)
-            print(f"{src_mol}-{dst_mol} {bond_type}")
             mol.AddBond(src_mol, dst_mol, bond_type)
-            if bond_order == 4:  # If aromatic, update flags
+            # If the bond should be aromatic, update the aromatic flags.
+            if bond_order == 4:
                 mol.GetAtomWithIdx(src_mol).SetIsAromatic(True)
                 mol.GetAtomWithIdx(dst_mol).SetIsAromatic(True)
+                bond = mol.GetBondBetweenAtoms(src_mol, dst_mol)
+                if bond is not None:
+                    bond.SetIsAromatic(True)
 
-        # # Sanitize and validate molecule
-        # try:
-        #     Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-        # except Exception as e:
-        #     print(f"Sanitization warning: {e}")
-        #     continue  # Skip molecule if sanitization fails
-        #
-        # # **Fix invalid nitrogen valences**
-        # for atom in mol.GetAtoms():
-        #     if atom.GetSymbol() == "N" and atom.GetTotalValence() > 3:
-        #         print(f"Fixing nitrogen at index {atom.GetIdx()}")
-        #         for bond in atom.GetBonds():
-        #             if bond.GetBondType() == Chem.BondType.SINGLE:
-        #                 mol.RemoveBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-        #                 break  # Remove only one bond to correct valence
-
-        # Update molecule properties before further processing
-        mol.UpdatePropertyCache(strict=False)
-
-        # **Generate 2D coordinates with uniform bond lengths**
+        # Compute 2D coordinates for drawing.
         AllChem.Compute2DCoords(mol)
 
-        # **Ensure consistent bond lengths and molecule structure**
+        # Sanitize the molecule without kekulization to preserve aromatic flags.
         try:
-            ref_mol = Chem.Mol(mol)  # Create a reference molecule
-            AllChem.GenerateDepictionMatching2DStructure(mol, ref_mol)
-        except:
-            print("Depiction matching failed, using default 2D coordinates.")
+            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL & ~Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+        except Exception as e:
+            print(f"Sanitization warning: {e}")
 
-        # Prepare the molecule for drawing
+        # Prepare the molecule for drawing with kekulization disabled.
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
-        # Create a drawing canvas (Increased Resolution for Clarity)
-        drawer = Draw.MolDraw2DCairo(2000, 1500)  # High resolution
+        # Create a drawing canvas.
+        drawer = Draw.MolDraw2DCairo(1500, 1000)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 12  # Bigger font for better readability
-        options.bondLineWidth = 3  # Thicker bonds
+        options.atomLabelFontSize = 4  # Increase font size for readability
 
-        # Create lists for highlighting atoms with **semi-transparent colors**
-        highlight_atoms = []
-        highlight_colors = {}
+        # Assign custom labels.
+        for idx, label in atom_labels.items():
+            options.atomLabels[idx] = label
 
-        for idx, (label, color) in atom_labels.items():
-            options.atomLabels[idx] = label  # Assign label
+        # Draw the molecule.
+        drawer.DrawMolecule(mol_for_drawing)
+        drawer.FinishDrawing()
 
-            # Assign transparent colors using RGBA (last value controls transparency)
-            if color == "red":  # Oxygen (O)
-                highlight_atoms.append(idx)
-                highlight_colors[idx] = (1.0, 0.0, 0.0, 0.4)  # Red with 40% transparency
-            elif color == "blue":  # Nitrogen (N)
-                highlight_atoms.append(idx)
-                highlight_colors[idx] = (0.0, 0.0, 1.0, 0.4)  # Blue with 40% transparency
-
-        # **Fix: Draw molecule with transparent highlights**
-        drawer.DrawMolecule(mol_for_drawing, highlightAtoms=highlight_atoms, highlightAtomColors=highlight_colors)
-
-        drawer.FinishDrawing()  # Now finish the drawing process
+        # Convert the drawing to an image.
         img_data = drawer.GetDrawingText()
         img = Image.open(BytesIO(img_data))
         images.append(img)
 
-    # Display images
+    # Display all images.
     for i, img in enumerate(images):
-        plt.figure(figsize=(10, 7))  # Bigger figure size
+        plt.figure(dpi=250)
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
 
     plt.tight_layout()
     plt.show()
+
 
 
 import torch
@@ -303,26 +286,45 @@ def main():
     src_file = f"{path}sample_src_{EPOCH}.npz"
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
 
-    # load data
     arr_indices = getdata(indices_file)   # indices of the input
     arr_adj = getdata(adj_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
+    arr_feat = restore_node_feats(arr_feat)
+    node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
     arr_bond_order = getdata(bond_order_file)
 
-    arr_feat = restore_node_feats(arr_feat)
-    node_indices = [int(x) for x in arr_indices.tolist()]
-    arr_bond_order += 1
+    # -------------------------------------
+    # rebuild attr matrix
+    # -------------------------------------
+    # attr_data = arr_input["attr_data"]
+    # attr_indices = arr_input["attr_indices"]
+    # attr_indptr = arr_input["attr_indptr"]
+    # attr_shape = arr_input["attr_shape"]
+    # attr_matrix = csr_matrix((attr_data, attr_indices, attr_indptr), shape=attr_shape)
+    # ic(node_indices[0])
+    # subset_attr_matrix = attr_matrix[node_indices[0]:node_indices[0] + 200, :].toarray()
+    # subset_attr_matrix = attr_matrix.toarray()
 
+    # -------------------------------------
+    # rebuild adj matrix
+    # -------------------------------------
+    # Assuming you have these arrays from your input
+    # adj_data = arr_input["adj_data"]
+    # adj_indices = arr_input["adj_indices"]
+    # adj_indptr = arr_input["adj_indptr"]
+    # adj_shape = arr_input["adj_shape"]
+    # Reconstruct the sparse adjacency matrix
+    # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
     limit_num = 200
     arr_adj = arr_adj[0:limit_num, 0:limit_num]
     subset_adj_matrix = arr_adj[0:limit_num, 0:limit_num]
     subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
     subset_attr_matrix = arr_feat[:limit_num]
-    print(f"arr_adj {arr_adj}")
-    print(f"subset_adj_base_matrix {subset_adj_base_matrix}")
+    print(f"arr_adj {arr_adj.shape}")
+    print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
