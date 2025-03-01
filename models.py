@@ -72,20 +72,7 @@ class WeightedThreeHopGCN(nn.Module):
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
         edge_type = "_E"  # Batched heterogeneous graph edge type
-        # Process edge weights
-        edge_weight = batched_graph.edata["weight"].long().to(device)  # Ensure edge weight is on GPU
-
-        # Ensure edge weight is converted to float32 (to match node features)
-        edge_weight = edge_weight.float()  # ✅ Fix data type mismatch
-
-        # Ensure bond_embedding and MLP are on the same device
         self.bond_weight = self.bond_weight.to(device)
-        # self.edge_mlp = self.edge_mlp.to(device)
-        # Compute bond feature embeddings
-        mapped_indices = torch.clamp(edge_weight - 1, min=0, max=3).long().to(
-            device)  # Keep as int for embedding lookup
-        bond_feats = self.bond_weight(mapped_indices).to(device)
-
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
 
         # Map edge weights to embedding indices (default 0 for unknown weights)
@@ -93,9 +80,9 @@ class WeightedThreeHopGCN(nn.Module):
                                      torch.zeros_like(edge_weight))
 
         # Get transformed edge weights
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        edge_weight = transformed_edge_weight
-
+        edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+        print("edge_weight")
+        print(edge_weight)
         # Compute GNN layers
         h = self.linear_0(features)
         init_feat = features.detach()  # Use detach() instead of clone()
