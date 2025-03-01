@@ -383,7 +383,7 @@ def mini_batch_kmeans(
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
         means[:, k] = samples[:, next_centroid_idx.squeeze(-1)].clone().detach()  # Fix: Prevent view error
 
-    return means
+    return means, num_clusters
 
 
 
