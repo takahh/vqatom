@@ -12,6 +12,7 @@ import dgl
 import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
+
 DATAPATH = "data/both_mono"
 
 
@@ -56,9 +57,11 @@ def transform_node_feats(a):
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
     return transformed
 
+
 #            # model, batched_graph, batched_feats, optimizer, epoch, logger)
 import time
 import torch
+
 
 def train_sage(model, g, feats, optimizer, epoch, logger):
     model.train()  # Ensure model is in training mode
@@ -89,7 +92,11 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
     with torch.no_grad():
-        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
+        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g,
+                                                                                                                      feats,
+                                                                                                                      epoch,
+                                                                                                                      logger,
+                                                                                                                      g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
@@ -111,11 +118,11 @@ class MoleculeGraphDataset(Dataset):
         adj_matrix = torch.tensor(np.load(self.adj_files[idx]))  # Load adjacency matrix
 
         attr_matrix = torch.tensor(np.load(self.attr_files[idx]))  # Load atom features
-    #     # print(f"attr_matrix.shape {attr_matrix.shape}")
-    #     # pad_size = 100 - attr_matrix.shape[0]
-    #     attr.append(attr_matrix)  # Pad rows only
-    #     # print(f"padded_attr.shape {padded_attr.shape}")
-    #
+        #     # print(f"attr_matrix.shape {attr_matrix.shape}")
+        #     # pad_size = 100 - attr_matrix.shape[0]
+        #     attr.append(attr_matrix)  # Pad rows only
+        #     # print(f"padded_attr.shape {padded_attr.shape}")
+        #
         return torch.tensor(adj_matrix, dtype=torch.float32), torch.tensor(attr_matrix, dtype=torch.float32)
 
 
@@ -151,6 +158,7 @@ import torch
 
 import torch
 import dgl
+
 
 def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
     """
@@ -247,11 +255,15 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
 
 from torch.utils.data import Dataset
 import dgl
+
+
 class GraphDataset(Dataset):
     def __init__(self, graphs):
         self.graphs = graphs  # List of DGLGraphs
+
     def __len__(self):
         return len(self.graphs)
+
     def __getitem__(self, idx):
         return self.graphs[idx]
 
@@ -328,37 +340,37 @@ def run_inductive(
                     del batched_graph, batched_feats, chunk
                     torch.cuda.empty_cache()
 
-    #
-    # # Initialize dataset and dataloader
-    # dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
-    # dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-    # for epoch in range(1, conf["max_epoch"] + 1):
-    #     loss_list_list_train = [[]] * 11
-    #     loss_list_list_test = [[]] * 11
-    #     loss_list = []
-    #     print(f"epoch {epoch} ------------------------------")
-    #     # --------------------------------
-    #     # Train
-    #     # --------------------------------
-    #     if conf["train_or_infer"] == "train":
-    #         # Iterate through batches
-    #         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-    #             print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-    #             if idx == 5:
-    #                 break
-    #             # print(f"idx {idx}")
-    #             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-    #             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-    #             for i in range(0, len(glist), chunk_size):
-    #                 chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
-    #                 batched_graph = dgl.batch(chunk)
-    #                 # Ensure node features are correctly extracted
-    #                 with torch.no_grad():
-    #                     batched_feats = batched_graph.ndata["feat"]
-    #                 # batched_feats = batched_graph.ndata["feat"]
-    #                 loss, loss_list_train, latent_train, latents = train_sage(
-    #                     model, batched_graph, batched_feats, optimizer, epoch, logger)
-    #                 # model.reset_kmeans()
+                    #
+                    # # Initialize dataset and dataloader
+                    # dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
+                    # dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+                    # for epoch in range(1, conf["max_epoch"] + 1):
+                    #     loss_list_list_train = [[]] * 11
+                    #     loss_list_list_test = [[]] * 11
+                    #     loss_list = []
+                    #     print(f"epoch {epoch} ------------------------------")
+                    #     # --------------------------------
+                    #     # Train
+                    #     # --------------------------------
+                    #     if conf["train_or_infer"] == "train":
+                    #         # Iterate through batches
+                    #         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                    #             print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+                    #             if idx == 5:
+                    #                 break
+                    #             # print(f"idx {idx}")
+                    #             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+                    #             chunk_size = conf["chunk_size"]  # in 10,000 molecules
+                    #             for i in range(0, len(glist), chunk_size):
+                    #                 chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
+                    #                 batched_graph = dgl.batch(chunk)
+                    #                 # Ensure node features are correctly extracted
+                    #                 with torch.no_grad():
+                    #                     batched_feats = batched_graph.ndata["feat"]
+                    #                 # batched_feats = batched_graph.ndata["feat"]
+                    #                 loss, loss_list_train, latent_train, latents = train_sage(
+                    #                     model, batched_graph, batched_feats, optimizer, epoch, logger)
+                    #                 # model.reset_kmeans()
 
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
@@ -395,7 +407,7 @@ def run_inductive(
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
                 chunk = glist[i:i + chunk_size]
-                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+                chunk_base = glist_base[i:i + chunk_size]  # only 1-hop
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
                 # Ensure node features are correctly extracted
@@ -412,18 +424,20 @@ def run_inductive(
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
 
-        print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
-        logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
+        print(
+            f"epoch {epoch}: loss {sum(loss_list) / len(loss_list):.7f}, test_loss {sum(test_loss_list) / len(test_loss_list):.7f}")
+        logger.info(
+            f"epoch {epoch}: loss {sum(loss_list) / len(loss_list):.7f}, test_loss {sum(test_loss_list) / len(test_loss_list):.7f}")
         print(
             # f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-              # f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-              # f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
-              # f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
-              # f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
-              # f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
-              # f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-              f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f},"
-              )
+            # f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+            # f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
+            # f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
+            # f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
+            # f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
+            # f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
+            f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f},"
+        )
 
         print(
             # f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
@@ -433,8 +447,8 @@ def run_inductive(
             #   f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 7f}, "
             #   f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
             #   f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
-              f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}",
-              )
+            f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}",
+        )
 
         # Log training losses
         logger.info(
