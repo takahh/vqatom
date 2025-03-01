@@ -106,14 +106,12 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
         # Compute VQ layer
-        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
-         spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss) = self.vq(h,
-                                                                                                                   init_feat,
-                                                                                                                   logger)
+        # (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb, equiv_atom_loss)
+        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, detached_quantize, x, init_cb, equiv_Atom_loss)\
+            = self.vq(h, init_feat, logger)
 
         # Reduce memory usage in loss list
-        losslist = [sil_loss.item()]
+        losslist = [equiv_Atom_loss.item()]
 
         # --------------------------------
         # collect data for molecule images

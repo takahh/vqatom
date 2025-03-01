@@ -1159,10 +1159,10 @@ class VectorQuantize(nn.Module):
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        # equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+        equivalent_group_list = self.fast_find_equivalence_groups(latents_for_sil)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)loss
-        embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_group_list, logger)
+        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
@@ -1173,8 +1173,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (None, None, None, None, None, None,
-                None, None, sil_loss, embed_ind, None, None)
+        return (embed_ind, equivalent_atom_loss)
         # return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
         #         ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss)
 
@@ -1239,8 +1238,9 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss) = \
+        # (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+        #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss) = \
+        (embed_ind, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
@@ -1254,7 +1254,7 @@ class VectorQuantize(nn.Module):
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
         #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
         #         )
-        loss = silh_loss * self.lamb_sil
+        loss = equiv_atom_loss * self.lamb_equiv_atom
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
@@ -1278,6 +1278,8 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
-                pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss)
+        # return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
+        #         pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
+        #         ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss)
+        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb,
+                equiv_atom_loss)
