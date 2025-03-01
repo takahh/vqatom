@@ -351,66 +351,40 @@ def kmeans(
 
     return means, bins
 
+
 def mini_batch_kmeans(
         samples,
         num_clusters,
         batch_size=256,
         num_iters=100,
-        temperature=0.1,  # Soft assignment temperature
         logger=None,
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
     import time
-    from torch.nn.functional import softmax
 
-
-    # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
 
     samples = samples.to('cuda')
     dtype, device = samples.dtype, samples.device
 
-    # Initialize cluster centers with K-Means++ (unchanged)
-    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype, requires_grad=True)
+    # Ensure means is a leaf tensor (not requiring gradients)
+    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype, requires_grad=False)
+
+    # K-Means++ initialization
     first_idx = torch.randint(0, num_samples, (1,), device=device)
-    means[:, 0] = samples[:, first_idx].squeeze(1)
+    means[:, 0] = samples[:, first_idx].squeeze(1).clone().detach()  # Fix: Prevent view error
+
     for k in range(1, num_clusters):
         dists = torch.cdist(samples, means[:, :k], p=2) ** 2
         min_dists, _ = torch.min(dists, dim=-1)
         min_dists = min_dists + 1e-10
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
-        means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
+        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)].clone().detach()  # Fix: Prevent view error
 
-    # Iterative optimization with mini-batches
-    means_squared = (means ** 2).sum(dim=-1, keepdim=True)
+    return means
 
-    for _ in range(num_iters):
-        batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
-        batch = samples[:, batch_indices]
-        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)
-
-        if use_cosine_sim:
-            dists = batch @ rearrange(means, 'h n d -> h d n')
-        else:
-            dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
-
-        # **Soft cluster assignments**
-        soft_assignments = softmax(-dists / temperature, dim=-1)  # Apply temperature to smooth assignments
-
-        # **Differentiable centroid update**
-        batch_sums = torch.einsum('hbd,hbn->hnd', batch, soft_assignments)
-        batch_counts = soft_assignments.sum(dim=1, keepdim=True)
-
-        means = batch_sums / (batch_counts + 1e-10)  # Prevent division by zero
-
-        all_reduce_fn(means)
-
-        if use_cosine_sim:
-            means = l2norm(means)
-
-    return means, num_clusters
 
 
 def batched_embedding(indices, embeds):
