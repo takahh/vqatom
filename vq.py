@@ -604,7 +604,9 @@ class EuclideanCodebook(nn.Module):
         # )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
-        self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
+        # self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
+        self.cluster_size = torch.zeros(cluster_size, device=self.device)  # Ensure correct device
+
         self.cluster_size.data.copy_(cluster_size)
 
         return embed
