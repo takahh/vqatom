@@ -82,7 +82,7 @@ class WeightedThreeHopGCN(nn.Module):
         # Get transformed edge weights
         edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         print("edge_weight")
-        print(edge_weight)
+        print(edge_weight[:20])
         # Compute GNN layers
         h = self.linear_0(features)
         init_feat = features.detach()  # Use detach() instead of clone()
