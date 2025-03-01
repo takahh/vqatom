@@ -49,7 +49,7 @@ class WeightedThreeHopGCN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-　    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
+    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         """
         Forward pass of the model.
 
