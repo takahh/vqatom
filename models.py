@@ -71,6 +71,7 @@ class WeightedThreeHopGCN(nn.Module):
         batched_graph = batched_graph.to(device)
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
+        edge_type = "_E"  # Batched heterogeneous graph edge type
         # Process edge weights
         edge_weight = batched_graph.edata["weight"].long().to(device)  # Ensure edge weight is on GPU
 
