@@ -106,9 +106,6 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src, mol_dst, mol_bond = arr_src[mask], arr_dst[mask], arr_bond_order[mask]
-        print(f"mol_src {mol_src}")
-        print(f"mol_dst {mol_dst}")
-        print(f"mol_bond {mol_bond}")
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
         atom_mapping, atom_labels = {}, {}
@@ -150,26 +147,27 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         # Add unique bonds to molecule
         for (src_mol, dst_mol), bond_order in unique_bonds.items():
             bond_type = bond_type_map.get(bond_order, Chem.BondType.SINGLE)
+            print(f"{src_mol}-{dst_mol} {bond_type}")
             mol.AddBond(src_mol, dst_mol, bond_type)
             if bond_order == 4:  # If aromatic, update flags
                 mol.GetAtomWithIdx(src_mol).SetIsAromatic(True)
                 mol.GetAtomWithIdx(dst_mol).SetIsAromatic(True)
 
-        # Sanitize and validate molecule
-        try:
-            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
-        except Exception as e:
-            print(f"Sanitization warning: {e}")
-            continue  # Skip molecule if sanitization fails
-
-        # **Fix invalid nitrogen valences**
-        for atom in mol.GetAtoms():
-            if atom.GetSymbol() == "N" and atom.GetTotalValence() > 3:
-                print(f"Fixing nitrogen at index {atom.GetIdx()}")
-                for bond in atom.GetBonds():
-                    if bond.GetBondType() == Chem.BondType.SINGLE:
-                        mol.RemoveBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-                        break  # Remove only one bond to correct valence
+        # # Sanitize and validate molecule
+        # try:
+        #     Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_KEKULIZE)
+        # except Exception as e:
+        #     print(f"Sanitization warning: {e}")
+        #     continue  # Skip molecule if sanitization fails
+        #
+        # # **Fix invalid nitrogen valences**
+        # for atom in mol.GetAtoms():
+        #     if atom.GetSymbol() == "N" and atom.GetTotalValence() > 3:
+        #         print(f"Fixing nitrogen at index {atom.GetIdx()}")
+        #         for bond in atom.GetBonds():
+        #             if bond.GetBondType() == Chem.BondType.SINGLE:
+        #                 mol.RemoveBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
+        #                 break  # Remove only one bond to correct valence
 
         # Update molecule properties before further processing
         mol.UpdatePropertyCache(strict=False)
@@ -305,46 +303,26 @@ def main():
     src_file = f"{path}sample_src_{EPOCH}.npz"
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
 
+    # load data
     arr_indices = getdata(indices_file)   # indices of the input
     arr_adj = getdata(adj_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
-    arr_feat = restore_node_feats(arr_feat)
-    node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
     arr_bond_order = getdata(bond_order_file)
+
+    arr_feat = restore_node_feats(arr_feat)
+    node_indices = [int(x) for x in arr_indices.tolist()]
     arr_bond_order += 1
 
-    # -------------------------------------
-    # rebuild attr matrix
-    # -------------------------------------
-    # attr_data = arr_input["attr_data"]
-    # attr_indices = arr_input["attr_indices"]
-    # attr_indptr = arr_input["attr_indptr"]
-    # attr_shape = arr_input["attr_shape"]
-    # attr_matrix = csr_matrix((attr_data, attr_indices, attr_indptr), shape=attr_shape)
-    # ic(node_indices[0])
-    # subset_attr_matrix = attr_matrix[node_indices[0]:node_indices[0] + 200, :].toarray()
-    # subset_attr_matrix = attr_matrix.toarray()
-
-    # -------------------------------------
-    # rebuild adj matrix
-    # -------------------------------------
-    # Assuming you have these arrays from your input
-    # adj_data = arr_input["adj_data"]
-    # adj_indices = arr_input["adj_indices"]
-    # adj_indptr = arr_input["adj_indptr"]
-    # adj_shape = arr_input["adj_shape"]
-    # Reconstruct the sparse adjacency matrix
-    # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
     limit_num = 200
     arr_adj = arr_adj[0:limit_num, 0:limit_num]
     subset_adj_matrix = arr_adj[0:limit_num, 0:limit_num]
     subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
     subset_attr_matrix = arr_feat[:limit_num]
-    print(f"arr_adj {arr_adj.shape}")
-    print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
+    print(f"arr_adj {arr_adj}")
+    print(f"subset_adj_base_matrix {subset_adj_base_matrix}")
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------

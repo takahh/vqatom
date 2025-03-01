@@ -49,7 +49,7 @@ class WeightedThreeHopGCN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
+　    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         """
         Forward pass of the model.
 
@@ -127,9 +127,11 @@ class WeightedThreeHopGCN(nn.Module):
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
         if batched_graph_base:
-            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst, sample_adj_base]
+            sample_bond_info = batched_graph_base.edata["weight"]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
         else:
-            sample_list = [emb_ind, features, sample_adj, mapped_indices, src, dst]
+            sample_bond_info = batched_graph.edata["weight"]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst]
 
         return ([], h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
