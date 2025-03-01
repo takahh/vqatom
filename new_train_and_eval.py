@@ -273,6 +273,8 @@ def run_inductive(
     import dgl
     from torch.utils.data import DataLoader
     # from your_module import MoleculeGraphDataset, collate_fn, convert_to_dgl, train_sage
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
     # Fix GradScaler deprecation
     scaler = torch.amp.GradScaler('cuda')
