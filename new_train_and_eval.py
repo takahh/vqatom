@@ -319,10 +319,6 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger
                     )
-                    for name, param in model.named_parameters():
-                        print(f"{name} is on {param.device}")
-
-                    print(f"Loss is on {loss.device}")
 
                     # Detach latent variables to free memory
                     latent_train = latent_train.detach()
