@@ -69,31 +69,6 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Move tensors to the same device
         batched_graph = batched_graph.to(device)
-
-        import dgl
-        # ------------------------------------
-        # check equivalent atoms before GNN
-        # ------------------------------------
-        import networkx as nx
-        from dgl import to_networkx
-
-        # Move the graph to CPU before converting to NetworkX
-        # cpu_graph = batched_graph[:200].cpu()  # Ensure the graph is on CPU
-        cpu_graph = dgl.node_subgraph(batched_graph.cpu(), list(range(200)))
-
-        # Convert to NetworkX with node attributes
-        nx_graph = dgl.to_networkx(cpu_graph, node_attrs=["feat"])
-        print("Converted to NetworkX successfully!")
-
-        # Find automorphisms (equivalent nodes)
-        from networkx.algorithms.isomorphism import GraphMatcher
-
-        matcher = GraphMatcher(nx_graph, nx_graph)
-        automorphisms = list(matcher.isomorphisms_iter())
-        for mapping in automorphisms:
-            if set(mapping.keys()) != set(mapping.values()):  # Ignore trivial maps
-                print("Non-trivial automorphism:", mapping)
-
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
         edge_type = "_E"  # Batched heterogeneous graph edge type
