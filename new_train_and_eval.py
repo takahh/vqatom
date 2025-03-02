@@ -207,6 +207,9 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
             base_g.ndata["feat"] = filtered_attr_matrix
             base_g.edata["weight"] = edge_weights.float()
+
+            print("edge_weights[:50]")
+            print(edge_weights[:50])
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int, device=device)
             base_graphs.append(base_g)
 
