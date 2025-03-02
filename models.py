@@ -81,8 +81,7 @@ class WeightedThreeHopGCN(nn.Module):
         cpu_graph = batched_graph.cpu()  # Ensure the graph is on CPU
 
         # Convert to NetworkX with node attributes
-        nx_graph = dgl.to_networkx(cpu_graph, node_attrs=["feature"])
-
+        nx_graph = dgl.to_networkx(cpu_graph, node_attrs=["feat"])
         print("Converted to NetworkX successfully!")
 
         # Find automorphisms (equivalent nodes)
