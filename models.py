@@ -78,7 +78,8 @@ class WeightedThreeHopGCN(nn.Module):
         from dgl import to_networkx
 
         # Move the graph to CPU before converting to NetworkX
-        cpu_graph = batched_graph[:200].cpu()  # Ensure the graph is on CPU
+        # cpu_graph = batched_graph[:200].cpu()  # Ensure the graph is on CPU
+        cpu_graph = dgl.node_subgraph(batched_graph.cpu(), list(range(200)))
 
         # Convert to NetworkX with node attributes
         nx_graph = dgl.to_networkx(cpu_graph, node_attrs=["feat"])
