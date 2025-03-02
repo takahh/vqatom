@@ -363,40 +363,87 @@ def mini_batch_kmeans(
 ):
     import time
 
+
+    # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
 
     samples = samples.to('cuda')
     dtype, device = samples.dtype, samples.device
 
-    # Ensure means is a leaf tensor (not requiring gradients)
-    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype, requires_grad=False)
-
     # K-Means++ initialization
+    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
     first_idx = torch.randint(0, num_samples, (1,), device=device)
-    means[:, 0] = samples[:, first_idx].squeeze(1).clone().detach()  # Fix: Prevent view error
-
+    means[:, 0] = samples[:, first_idx].squeeze(1)
     for k in range(1, num_clusters):
-        dists = torch.cdist(samples, means[:, :k], p=2) ** 2
+        if use_cosine_sim:
+            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+        else:
+            dists = torch.cdist(samples, means[:, :k], p=2) ** 2  # ** Use squared Euclidean distance **
+
+        # More efficient way to compute min distances without calling .values
         min_dists, _ = torch.min(dists, dim=-1)
-        min_dists = min_dists + 1e-10
+
+        # Normalize to avoid overflow issues in probabilities
+        min_dists = min_dists + 1e-10  # Small epsilon to prevent division errors
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
+
+        # Faster centroid selection
         next_centroid_idx = torch.multinomial(probs, 1, replacement=False)
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)].clone().detach()  # Fix: Prevent view error
 
-    return means, num_clusters
+        means[:, k] = samples[torch.arange(num_codebooks, device=device), next_centroid_idx.squeeze(-1)]
 
+    # Initialize counts to track the number of points assigned to each centroid
+    counts = torch.zeros((num_codebooks, num_clusters), device=device, dtype=torch.int64)
+
+    # Iterative optimization with mini-batches
+    means_squared = (means ** 2).sum(dim=-1, keepdim=True)  # Precompute squared means for fast distance calculations
+
+    for _ in range(num_iters):
+        # Precompute squared batch for fast distance computation
+        batch_indices = torch.randint(0, num_samples, (batch_size,), device=device)
+        batch = samples[:, batch_indices]
+        batch_squared = (batch ** 2).sum(dim=-1, keepdim=True)  # Precompute squared batch
+
+        if use_cosine_sim:
+            dists = batch @ rearrange(means, 'h n d -> h d n')
+        else:
+            dists = -2 * torch.matmul(batch, means.transpose(1, 2)) + means_squared.transpose(1, 2) + batch_squared
+
+        assignments = torch.argmax(dists, dim=-1)  # Assign clusters
+
+        batch_sums = torch.zeros_like(means)
+        batch_sums.scatter_add_(1, repeat(assignments, 'h b -> h b d', d=dim), batch)
+        batch_counts = batched_bincount(assignments, minlength=num_clusters)
+
+        old_counts = counts.clone().to(dtype)
+        counts = counts + batch_counts
+
+        counts_float = counts.to(dtype)
+        update_mask = (batch_counts > 0).unsqueeze(-1)
+
+        if update_mask.any():
+            new_means = (rearrange(old_counts, 'h n -> h n 1') * means + batch_sums) / rearrange(counts_float,
+                                                                                                 'h n -> h n 1')
+            means = torch.where(update_mask, new_means, means)
+
+        all_reduce_fn(counts)
+        all_reduce_fn(means)
+
+        if use_cosine_sim:
+            means = l2norm(means)
+
+    return means, counts
 
 
 def batched_embedding(indices, embeds):
-    device = embeds.device
-    indices = indices.long().to(device)
+    indices = indices.long()
     batch, dim = indices.shape[1], embeds.shape[-1]
     indices = repeat(indices, 'h b n -> h b n d', d=dim)
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, margin=0.001, threshold=0.999, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
@@ -426,8 +473,10 @@ def compute_contrastive_loss(z, atom_types, margin=0.001, threshold=0.999, num_a
 
     # Create the mask for "same type" based on similarity threshold
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
+
     # Compute positive loss (pull same types together)
     positive_loss = same_type_mask * pairwise_distances ** 2
+
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
     # print("same_type_mask shape:", same_type_mask.shape)
@@ -436,8 +485,10 @@ def compute_contrastive_loss(z, atom_types, margin=0.001, threshold=0.999, num_a
     #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
     # print("Max index in mask:",
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
+
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
 
@@ -600,10 +651,7 @@ class EuclideanCodebook(nn.Module):
         # )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
-        # self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
-        device = embed.device  # Ensure the tensor is on the correct device
-        self.cluster_size = torch.zeros(cluster_size, device=device)
-
+        self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
         self.cluster_size.data.copy_(cluster_size)
 
         return embed
@@ -632,21 +680,23 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        device = x.device
+        import time
+
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-        flatten = rearrange(x, 'h ... d -> h (...) d').to(device)
+        flatten = rearrange(x, 'h ... d -> h (...) d')
 
         # ----------------------------------------------------
         # set the initial codebook vectors by k-means
         # ----------------------------------------------------
         self.init_embed_(flatten, logger)
-        embed = self.embed.to(device)
+        embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
+
         dist = -torch.cdist(flatten, embed, p=2)
 
         # ----------------------------------------------------
@@ -666,8 +716,7 @@ class EuclideanCodebook(nn.Module):
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
 
-        embed_ind = embed_ind.unsqueeze(0).to(device)
-
+        embed_ind = embed_ind.unsqueeze(0)
         quantize = batched_embedding(embed_ind, self.embed)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
@@ -947,103 +996,62 @@ class VectorQuantize(nn.Module):
         return codes
 
     import torch
-    #
-    # def compute_contrastive_loss(quantized, atom_types):
-    #     """
-    #     Compute contrastive loss efficiently while keeping gradients for backpropagation.
-    #     """
-    #     # Compute pairwise distances (keeps requires_grad)
-    #     pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
-    #
-    #     # Enable memory efficiency using automatic mixed precision
-    #     with torch.autocast(device_type="cuda", dtype=torch.float16):
-    #         # Create mask for positive pairs (same atom type)
-    #         same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
-    #
-    #         # Ensure only positive pairs contribute to loss
-    #         num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
-    #
-    #         # Compute loss while preserving gradients
-    #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
-    #
-    #     return positive_loss  # Loss remains differentiable
 
-    def batched_cdist(self, x, chunk_size=512):
+    def compute_contrastive_loss(quantized, atom_types):
         """
-        Computes pairwise distances in batches to reduce memory usage.
-
-        Args:
-            x (torch.Tensor): Input tensor of shape (N, D).
-            chunk_size (int): Number of rows/columns to process at a time.
-
-        Returns:
-            torch.Tensor: Pairwise distance matrix (N, N).
+        Compute contrastive loss efficiently while keeping gradients for backpropagation.
         """
-        n = x.shape[0]
-        device = x.device
+        # Compute pairwise distances (keeps requires_grad)
+        pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
 
-        # Avoid preallocating full (N, N) matrix
-        dist_matrix = torch.empty((n, n), device=device)
+        # Enable memory efficiency using automatic mixed precision
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            # Create mask for positive pairs (same atom type)
+            same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
 
-        for i in range(0, n, chunk_size):
-            for j in range(0, n, chunk_size):
-                with torch.no_grad():  # Reduce memory usage
-                    dist_matrix[i:i + chunk_size, j:j + chunk_size] = torch.cdist(
-                        x[i:i + chunk_size], x[j:j + chunk_size]
-                    )
+            # Ensure only positive pairs contribute to loss
+            num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
 
-        return dist_matrix
+            # Compute loss while preserving gradients
+            positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
+
+        return positive_loss  # Loss remains differentiable
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
-        """
-        Computes a differentiable silhouette loss for clustering.
-
-        Args:
-        - embeddings (torch.Tensor): Latent space embeddings (N, D), should be on GPU.
-        - embed_ind (torch.Tensor): Cluster assignments (N,), should be on GPU.
-        - num_clusters (int): Total number of clusters.
-
-        Returns:
-        - embed_ind (torch.Tensor): Cluster assignments (stays on GPU).
-        - loss (torch.Tensor): Silhouette loss (differentiable, stays on GPU).
-        """
-
-        device = embeddings.device  # Ensure all computations remain on the same device
-
-        # Compute pairwise distances
-        pairwise_distances = self.batched_cdist(embeddings, chunk_size=1024)  # Ensure this function runs on GPU
-
+        # Preprocess clusters to ensure the desired number of non-empty clusters
+        # print_non_empty_cluster_count(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
+        # embed_ind = increase_non_empty_clusters(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
+        embed_ind.data.copy_(embed_ind)
+        # Compute pairwise distances for all points
+        pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
         inter_cluster_distances = []
-        epsilon = torch.tensor(1e-6, device=device)  # Ensure epsilon is on GPU
-
+        # Iterate over clusters
         for k in range(num_clusters):
-            cluster_mask = (embed_ind == k).to(device)  # Ensure cluster_mask is on GPU
+            cluster_mask = (embed_ind == k)
             cluster_indices = cluster_mask.nonzero(as_tuple=True)[0]
 
             if cluster_indices.numel() == 0:
                 continue  # Skip empty clusters
-
-            other_mask = (~cluster_mask).to(device)  # Ensure other_mask is on GPU
-            if other_mask.any():  # Ensure there are other clusters
+            # Compute inter-cluster distances
+            other_mask = ~cluster_mask
+            if other_mask.sum() > 0:
                 other_distances = pairwise_distances[cluster_indices][:, other_mask]
-                inter_cluster_distances.append(other_distances.mean())  # No torch.no_grad()
+                inter_cluster_distances.append(other_distances.mean())
             else:
-                inter_cluster_distances.append(torch.full((1,), float('inf'), device=device))
+                inter_cluster_distances.append(torch.tensor(float('inf'), device=embeddings.device))
 
         # Stack inter-cluster distances into a tensor
-        if inter_cluster_distances:
-            b = torch.stack(inter_cluster_distances, dim=0).to(device)
-        else:
-            b = torch.zeros(1, device=device)
+        b = torch.stack(inter_cluster_distances, dim=0) if inter_cluster_distances else torch.tensor([],
+                                                                                                     device=embeddings.device)
 
-        # Compute silhouette-based loss
-        if b.numel() > 0:
-            b_normalized = b / (b.max() + epsilon)  # Normalize distances
-            loss = -torch.mean(torch.log(b_normalized + epsilon))  # Log-based loss
-        else:
-            loss = torch.tensor(0.0, device=device, requires_grad=True)  # Ensure differentiability
+        # Compute inter-cluster loss
+        epsilon = 1e-6  # Small value to avoid division by zero
+        b_normalized = b / (b.max() + epsilon)  # Normalize distances
+        loss = -torch.mean(torch.log(b_normalized + epsilon))  # Maximize inter-cluster distances
 
         return embed_ind, loss
+
+
 
     def fast_find_equivalence_groups(self, latents):
 
@@ -1133,32 +1141,33 @@ class VectorQuantize(nn.Module):
         latents = latents / latents_norm
 
         # Pairwise distances
-        # dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
+        dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
 
         # Remove diagonal
-        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
 
         # Debug: Log distance statistics
         # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
 
         # Margin loss: Encourage distances >= min_distance
-        # smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
-        # margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
+        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
+        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
 
         # Spread loss: Encourage diversity
-        # spread_loss = torch.var(t)
+        spread_loss = torch.var(t)
 
         # Pair distance loss: Regularize distances
-        # pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
+        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        equivalent_group_list = self.fast_find_equivalence_groups(latents_for_sil)
+        equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_group_list, logger)
-        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+
+        embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
@@ -1169,9 +1178,8 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        # return (embed_ind, equivalent_atom_loss)
-        return (atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
+        return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
 
     def forward(self, x, init_feat, logger, mask=None):
@@ -1199,7 +1207,7 @@ class VectorQuantize(nn.Module):
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         quantize = quantize.squeeze(0)
-        x_tmp = x.squeeze(1).unsqueeze(0).to(quantize.device)
+        x_tmp = x.squeeze(1).unsqueeze(0)
 
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
@@ -1209,19 +1217,19 @@ class VectorQuantize(nn.Module):
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
-        # if self.commitment_weight > 0:
-        #     detached_quantize = quantize.detach()
-        #
-        #     if exists(mask):
-        #         commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-        #         if is_multiheaded:
-        #             mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-        #                           h=commit_loss.shape[1] // mask.shape[0])
-        #         commit_loss = commit_loss[mask].mean()
-        #     else:
-        #         commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-        #
-        #     raw_commit_loss = commit_loss
+        if self.commitment_weight > 0:
+            detached_quantize = quantize.detach()
+
+            if exists(mask):
+                commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+                if is_multiheaded:
+                    mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+                                  h=commit_loss.shape[1] // mask.shape[0])
+                commit_loss = commit_loss[mask].mean()
+            else:
+                commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+
+            raw_commit_loss = commit_loss
 
         codebook = self._codebook.embed
 
@@ -1234,8 +1242,8 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        (div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-         h_num_div_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
+        (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
@@ -1245,11 +1253,10 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
-                + self.lamb_div_bonds * bond_num_div_loss
+                + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
-                + self.lamb_equiv_atom * equiv_atom_loss
-                )
+                + self.lamb_equiv_atom * equiv_atom_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
@@ -1273,6 +1280,6 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb,
-                div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss,
-                charge_div_loss, elec_state_div_loss, equiv_atom_loss)
+        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
+                pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
+                ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss, equiv_atom_loss)

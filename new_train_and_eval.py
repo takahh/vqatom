@@ -12,7 +12,6 @@ import dgl
 import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
-
 DATAPATH = "data/both_mono"
 
 
@@ -57,31 +56,39 @@ def transform_node_feats(a):
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
     return transformed
 
-
 #            # model, batched_graph, batched_feats, optimizer, epoch, logger)
 import time
 import torch
 
 
 def train_sage(model, g, feats, optimizer, epoch, logger):
-    model.train()  # Ensure model is in training mode
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    optimizer.zero_grad()  # Zero gradients before backward pass
+    model.to(device)
 
-    # Forward pass
-    _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch)
+    model.train()
+    loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
 
-    # Ensure loss requires gradients
-    if not loss.requires_grad:
-        # print("Warning: loss does not require gradients! Forcing requires_grad=True.")
-        loss = loss.clone().detach().requires_grad_(True)
+    scaler = torch.cuda.amp.GradScaler()
+    optimizer.zero_grad()
 
-    # Perform backward pass
-    loss.backward()
+    with torch.cuda.amp.autocast():
+        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
+                                                                                                        logger)  # g is blocks
+    loss = loss.to(device)
+    del logits, quantized
+    torch.cuda.empty_cache()
 
-    optimizer.step()  # Update model parameters
+    scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
+    scaler.unscale_(optimizer)
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad()
 
-    return loss, loss_list3, latent_train, latents
+    latent_list.append(latent_train.detach().cpu())
+    cb_list.append(cb.detach().cpu())
+
+    return loss, loss_list3, latent_list, latents
 
 
 def evaluate(model, g, feats, epoch, logger, g_base):
@@ -92,11 +99,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
     with torch.no_grad():
-        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g,
-                                                                                                                      feats,
-                                                                                                                      epoch,
-                                                                                                                      logger,
-                                                                                                                      g_base)  # g is blocks
+        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
@@ -118,11 +121,11 @@ class MoleculeGraphDataset(Dataset):
         adj_matrix = torch.tensor(np.load(self.adj_files[idx]))  # Load adjacency matrix
 
         attr_matrix = torch.tensor(np.load(self.attr_files[idx]))  # Load atom features
-        #     # print(f"attr_matrix.shape {attr_matrix.shape}")
-        #     # pad_size = 100 - attr_matrix.shape[0]
-        #     attr.append(attr_matrix)  # Pad rows only
-        #     # print(f"padded_attr.shape {padded_attr.shape}")
-        #
+    #     # print(f"attr_matrix.shape {attr_matrix.shape}")
+    #     # pad_size = 100 - attr_matrix.shape[0]
+    #     attr.append(attr_matrix)  # Pad rows only
+    #     # print(f"padded_attr.shape {padded_attr.shape}")
+    #
         return torch.tensor(adj_matrix, dtype=torch.float32), torch.tensor(attr_matrix, dtype=torch.float32)
 
 
@@ -156,29 +159,22 @@ def collate_fn(batch):
 import dgl
 import torch
 
-import torch
-import dgl
 
-
-def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
+def convert_to_dgl(adj_batch, attr_batch):
     """
-    Converts a batch of adjacency matrices and attributes to two lists of DGLGraphs, optimized for GPU execution.
+    Converts a batch of adjacency matrices and attributes to two lists of DGLGraphs.
+
+    This version includes optimizations such as vectorized edge-type assignment,
+    and avoids unnecessary copies where possible.
     """
-
-    # Ensure input is a tensor
-    if isinstance(adj_batch, tuple):
-        adj_batch = torch.stack(adj_batch)  # Convert tuple to tensor if necessary
-    if isinstance(attr_batch, tuple):
-        attr_batch = torch.stack(attr_batch)  # Convert tuple to tensor if necessary
-
-    # Move to GPU
-    adj_batch = adj_batch.to(device)
-    attr_batch = attr_batch.to(device)
-
     base_graphs = []
     extended_graphs = []
 
     for i in range(len(adj_batch)):  # Loop over each molecule set
+        # if i == 1:
+        #     break
+        # print(f"{i} - {adj_batch[i].shape}")
+        # Reshape the current batch
         adj_matrices = adj_batch[i].view(1000, 100, 100)
         attr_matrices = attr_batch[i].view(1000, 100, 7)
 
@@ -189,7 +185,7 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
-            nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0).to(device)
+            nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
             num_total_nodes = nonzero_mask.sum().item()
             filtered_attr_matrix = attr_matrix[nonzero_mask]
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
@@ -198,73 +194,84 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             # Create the base graph (only 1-hop edges)
             # ------------------------------------------
             src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
-            mask = src > dst  # Avoid duplicate edges
-            src, dst = src[mask], dst[mask]
-            edge_weights = filtered_adj_matrix[src, dst].to(device)
+            # Only consider one direction to avoid duplicate edges
+            mask = src > dst
+            src = src[mask]
+            dst = dst[mask]
+            edge_weights = filtered_adj_matrix[src, dst]  # Extract weights for 1-hop edges
 
-            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
+            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             base_g.ndata["feat"] = filtered_attr_matrix
             base_g.edata["weight"] = edge_weights.float()
-            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int, device=device)
-            base_g = dgl.add_self_loop(base_g)
-            base_graphs.append(base_g)
-            #
-            # # ------------------------------------------
-            # # Generate 2-hop and 3-hop adjacency matrices
-            # # ------------------------------------------
-            # adj_2hop = dgl.khop_adj(base_g, 2).to(device)
-            # adj_3hop = dgl.khop_adj(base_g, 3).to(device)
-            #
-            # # ------------------------------------------
-            # # Combine adjacency matrices efficiently
-            # # ------------------------------------------
-            # full_adj_matrix = filtered_adj_matrix.clone()
-            # full_adj_matrix += adj_2hop * 0.5
-            # full_adj_matrix += adj_3hop * 0.3
-            # torch.diagonal(full_adj_matrix).fill_(1.0)  # Self-connections
-            #
-            # # ------------------------------------------
-            # # Create the extended graph from the full adjacency matrix
-            # # ------------------------------------------
-            # src_full, dst_full = full_adj_matrix.nonzero(as_tuple=True)
-            # extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes, device=device)
-            # new_src, new_dst = extended_g.edges()
-            #
-            # # Assign edge weights from the full adjacency matrix
-            # edge_weights = full_adj_matrix[new_src, new_dst].to(device)
-            # extended_g.edata["weight"] = edge_weights.float()
+            # You can optionally customize edge types for the base graph; here we assign all 1-hop edges.
+            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
 
-            # # ------------------------------------------
+            base_graphs.append(base_g)
+
+            # ------------------------------------------
+            # Generate 2-hop and 3-hop adjacency matrices
+            # ------------------------------------------
+            adj_2hop = dgl.khop_adj(base_g, 2)
+            adj_3hop = dgl.khop_adj(base_g, 3)
+
+            # ------------------------------------------
+            # Combine adjacency matrices into one
+            # ------------------------------------------
+            full_adj_matrix = filtered_adj_matrix.clone()
+            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+
+            # Ensure diagonal values are set to 1.0 (self-connections)
+            torch.diagonal(full_adj_matrix).fill_(1.0)
+
+            # ------------------------------------------
+            # Create the extended graph from the full adjacency matrix
+            # ------------------------------------------
+            src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
+            extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
+            new_src, new_dst = extended_g.edges()
+
+            # Assign edge weights from the full adjacency matrix
+            edge_weights = filtered_adj_matrix[new_src, new_dst]
+            extended_g.edata["weight"] = edge_weights.float()
+
+            # ------------------------------------------
             # Vectorized assignment of edge types
             # ------------------------------------------
-            # one_hop = (filtered_adj_matrix[new_src, new_dst] > 0)
-            # two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
-            # three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
-            # edge_types = torch.zeros_like(new_src, dtype=torch.int, device=device)
-            # edge_types[one_hop] = 1
-            # edge_types[two_hop] = 2
-            # edge_types[three_hop] = 3
-            #
-            # extended_g.edata["edge_type"] = edge_types
-            # extended_g.ndata["feat"] = filtered_attr_matrix
-            # extended_g = dgl.add_self_loop(extended_g)
-            #
-            # extended_graphs.append(extended_g)
+            one_hop = filtered_adj_matrix[new_src, new_dst] > 0
+            two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
+            three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
+            edge_types = torch.zeros_like(new_src, dtype=torch.int)
+            edge_types[one_hop] = 1
+            edge_types[two_hop] = 2
+            edge_types[three_hop] = 3
 
-    return base_graphs, base_graphs
+            extended_g.edata["edge_type"] = edge_types
+
+            # ------------------------------------------
+            # Assign node features to the extended graph
+            # ------------------------------------------
+            extended_g.ndata["feat"] = filtered_attr_matrix
+            extended_g = dgl.add_self_loop(extended_g)
+            # ------------------------------------------
+            # Validate that remaining features are zero (if applicable)
+            # ------------------------------------------
+            remaining_features = attr_matrix[base_g.num_nodes():]
+            if not torch.all(remaining_features == 0):
+                print("⚠️ WARNING: Non-zero values found in remaining features!")
+
+            extended_graphs.append(extended_g)
+
+    return base_graphs, extended_graphs
 
 
 from torch.utils.data import Dataset
 import dgl
-
-
 class GraphDataset(Dataset):
     def __init__(self, graphs):
         self.graphs = graphs  # List of DGLGraphs
-
     def __len__(self):
         return len(self.graphs)
-
     def __getitem__(self, idx):
         return self.graphs[idx]
 
@@ -282,99 +289,39 @@ def run_inductive(
     # ----------------------------
     # define train and test list
     # ----------------------------
-    import torch
-    import dgl
-    from torch.utils.data import DataLoader
-    # from your_module import MoleculeGraphDataset, collate_fn, convert_to_dgl, train_sage
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    # Fix GradScaler deprecation
-    scaler = torch.amp.GradScaler('cuda')
-
     # Initialize dataset and dataloader
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
-    # dataloader = DataLoader(
-    #     dataset, batch_size=16, shuffle=False, collate_fn=collate_fn, num_workers=0, persistent_workers=False
-    # )
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=False, collate_fn=collate_fn, num_workers=0)
-
-    # Track memory before training
-    # print(f"Initial Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     for epoch in range(1, conf["max_epoch"] + 1):
-        loss_list_list_train = [[] for _ in range(11)]
-        loss_list_list_test = [[] for _ in range(11)]
+        loss_list_list_train = [[]] * 11
+        loss_list_list_test = [[]] * 11
         loss_list = []
         print(f"epoch {epoch} ------------------------------")
-
+        # --------------------------------
+        # Train
+        # --------------------------------
         if conf["train_or_infer"] == "train":
+            # Iterate through batches
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                # print(
-                #     f"Allocated Memory Before Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-
-                if idx == 5:  # Early exit for debugging
+                if idx == 5:
                     break
-
-                # Convert to DGL graphs
-                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
-                chunk_size = conf["chunk_size"]
-
+                # print(f"idx {idx}")
+                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+                chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    chunk = glist[i:i + chunk_size]
+                    chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
-
-                    # Extract node features safely
+                    # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-
-                    # Compute loss
+                    # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
-                        model, batched_graph, batched_feats, optimizer, epoch, logger
-                    )
-
-                    # Detach latent variables to free memory
-                    latent_train = latent_train.detach()
-                    latents = latents.detach()
-
-                    # Delete unnecessary objects
-                    del batched_graph, batched_feats, chunk
-                    torch.cuda.empty_cache()
-
-                    #
-                    # # Initialize dataset and dataloader
-                    # dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
-                    # dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-                    # for epoch in range(1, conf["max_epoch"] + 1):
-                    #     loss_list_list_train = [[]] * 11
-                    #     loss_list_list_test = [[]] * 11
-                    #     loss_list = []
-                    #     print(f"epoch {epoch} ------------------------------")
-                    #     # --------------------------------
-                    #     # Train
-                    #     # --------------------------------
-                    #     if conf["train_or_infer"] == "train":
-                    #         # Iterate through batches
-                    #         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                    #             print(f"Allocated Memory: {idx}:{torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    #             if idx == 5:
-                    #                 break
-                    #             # print(f"idx {idx}")
-                    #             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-                    #             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-                    #             for i in range(0, len(glist), chunk_size):
-                    #                 chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
-                    #                 batched_graph = dgl.batch(chunk)
-                    #                 # Ensure node features are correctly extracted
-                    #                 with torch.no_grad():
-                    #                     batched_feats = batched_graph.ndata["feat"]
-                    #                 # batched_feats = batched_graph.ndata["feat"]
-                    #                 loss, loss_list_train, latent_train, latents = train_sage(
-                    #                     model, batched_graph, batched_feats, optimizer, epoch, logger)
-                    #                 # model.reset_kmeans()
+                        model, batched_graph, batched_feats, optimizer, epoch, logger)
+                    # model.reset_kmeans()
 
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
+                    del batched_graph, batched_feats, chunk
                     gc.collect()
                     torch.cuda.empty_cache()
                     args = get_args()
@@ -386,11 +333,6 @@ def run_inductive(
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
 
-                # print(
-                #     f"Allocated Memory After Processing Batch {idx}: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-
-            # Print detailed memory summary
-            # print(torch.cuda.memory_summary())
         # --------------------------------
         # Save model
         # --------------------------------
@@ -408,7 +350,7 @@ def run_inductive(
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
                 chunk = glist[i:i + chunk_size]
-                chunk_base = glist_base[i:i + chunk_size]  # only 1-hop
+                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
                 # Ensure node features are correctly extracted
@@ -425,57 +367,55 @@ def run_inductive(
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
 
-        print(
-            f"epoch {epoch}: loss {sum(loss_list) / len(loss_list):.7f}, test_loss {sum(test_loss_list) / len(test_loss_list):.7f}")
-        logger.info(
-            f"epoch {epoch}: loss {sum(loss_list) / len(loss_list):.7f}, test_loss {sum(test_loss_list) / len(test_loss_list):.7f}")
-        # losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-        #             h_num_div_loss.item(), elec_state_div_loss.item()]
-        print(
-            f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-            f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-            f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
-            f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
-            f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
-            f"train - elec_state_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-            f"train - charge_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
-            f"train - equiv_atom_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]): 7f}, "
-        )
+        print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
+        logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
+        print(f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+              f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+              f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
+              f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
+              f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
+              f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
+              f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
+              f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
+              f"train - equiv_atom_loss: {sum(loss_list_list_train[10]) / len(loss_list_list_train[10]): 7f},"
+              )
 
-        print(
-            f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
+        print(f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
               f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
               f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f}, "
               f"test - ringy_div_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 7f}, "
               f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 7f}, "
-              f"test - elec_state_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
-              f"test - charge_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
-              f"test - equiv_atom_loss: {sum(loss_list_list_test[7]) / len(loss_list_list_test[7]): 7f}, "
-        )
+              f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
+              f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
+              f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]): 7f}",
+              f"test - equiv_atom_loss: {sum(loss_list_list_test[10]) / len(loss_list_list_test[10]): 7f}",
+              )
 
         # Log training losses
         logger.info(
-            # f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
-            # f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]):7f}, "
-            # f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]):7f}, "
-            # f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]):7f}, "
-            # f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]):7f}, "
-            # f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]):7f}, "
-            # f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]):7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
+            f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
+            f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]):7f}, "
+            f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]):7f}, "
+            f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]):7f}, "
+            f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]):7f}, "
+            f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]):7f}, "
+            f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]):7f}, "
+            f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]):7f}, "
+            f"train - equiv_atom_loss: {sum(loss_list_list_train[10]) / len(loss_list_list_train[10]):7f}, "
         )
+
         # Log testing losses
         logger.info(
-            # f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
-            # f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]):7f}, "
-            # f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]):7f}, "
-            # f"test - ringy_div_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]):7f}, "
-            # f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]):7f}, "
-            # f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]):7f}, "
-            # f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]):7f}, "
-            f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
+            f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
+            f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]):7f}, "
+            f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]):7f}, "
+            f"test - ringy_div_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]):7f}, "
+            f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]):7f}, "
+            f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]):7f}, "
+            f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]):7f}, "
+            f"test - sil_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]):7f}, "
+            f"test - equiv_atom_loss: {sum(loss_list_list_test[10]) / len(loss_list_list_test[10]):7f}, "
         )
-        #  [emb_ind, features, sample_adj, batched_graph.edata["weight"], src, dst]
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
         np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
         np.savez(f"./sample_adj_{epoch}", sample_list_test[2].cpu()[:500, :500])
@@ -483,5 +423,5 @@ def run_inductive(
         np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:500])
         np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:500])
         # np.savez(f"./sample_hop_type_{epoch}", None)
-        np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:500])
+        np.savez(f"./sample_adj_base_{epoch}", sample_list_test[7].cpu()[:500])
 
