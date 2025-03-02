@@ -431,7 +431,7 @@ def compute_contrastive_loss(z, atom_types, margin=0.001, threshold=0.999, num_a
 
     # Compute negative loss (push different types apart)
     print("(1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0)")
-    print((1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0))
+    print((1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0).mean())
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
     # print("same_type_mask shape:", same_type_mask.shape)
     # print("pairwise_distances shape:", pairwise_distances.shape)
