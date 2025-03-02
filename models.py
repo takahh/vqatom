@@ -80,8 +80,7 @@ class WeightedThreeHopGCN(nn.Module):
                                      torch.zeros_like(original_edge_weight))
 
         # Get transformed edge weights
-        # edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
-        edge_weight = original_edge_weight
+        edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
         edge_weight = edge_weight.to(torch.float32)
 
         # Compute GNN layers
@@ -94,12 +93,16 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
         # Compute VQ layer
-        # (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb, equiv_atom_loss)
-        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, detached_quantize, x, init_cb, equiv_Atom_loss)\
-            = self.vq(h, init_feat, logger)
+        # (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb,
+        #                 div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss,
+        #                 charge_div_loss, elec_state_div_loss)
+        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, detached_quantize, x, init_cb,
+         div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss,
+         charge_div_loss, elec_state_div_loss) = self.vq(h, init_feat, logger)
 
         # Reduce memory usage in loss list
-        losslist = [equiv_Atom_loss.item()]
+        losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
+                    h_num_div_loss.item(), elec_state_div_loss.item(), charge_div_loss.item()]
 
         # --------------------------------
         # collect data for molecule images

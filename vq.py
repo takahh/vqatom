@@ -428,7 +428,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
     # Compute positive loss (pull same types together)
-    positive_loss = same_type_mask * pairwise_distances ** 2
+    # positive_loss = same_type_mask * pairwise_distances ** 2
 
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
@@ -440,7 +440,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
     # Combine and return mean loss
-    return (positive_loss + negative_loss).mean() / 10000
+    return (negative_loss).mean() / 10000
+    # return (positive_loss + negative_loss).mean() / 10000
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
@@ -1159,23 +1160,23 @@ class VectorQuantize(nn.Module):
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        equivalent_group_list = self.fast_find_equivalence_groups(latents_for_sil)
+        # equivalent_group_list = self.fast_find_equivalence_groups(latents_for_sil)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_group_list, logger)
+        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_group_list, logger)
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (embed_ind, equivalent_atom_loss)
-        # return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-        #         ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss)
+        # return (embed_ind, equivalent_atom_loss)
+        return (atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+                ringy_div_loss, h_num_div_loss, embed_ind, charge_div_loss, elec_state_div_loss)
 
 
     def forward(self, x, init_feat, logger, mask=None):
@@ -1238,9 +1239,8 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        # (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-        #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss) = \
-        (embed_ind, equiv_atom_loss) = \
+        (div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+         h_num_div_loss, embed_ind, charge_div_loss, elec_state_div_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
@@ -1249,12 +1249,11 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
-        #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
-        #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-        #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
-        #         )
-        loss = equiv_atom_loss * self.lamb_equiv_atom
+        loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
+                + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
+                + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
+                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+                )
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
@@ -1278,8 +1277,6 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        # return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
-        #         pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
-        #         ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss)
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, detached_quantize, x, init_cb,
-                equiv_atom_loss)
+                div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss,
+                charge_div_loss, elec_state_div_loss)
