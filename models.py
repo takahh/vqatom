@@ -71,7 +71,9 @@ class WeightedThreeHopGCN(nn.Module):
         batched_graph = batched_graph.to(device)
 
         import dgl
-
+        # ------------------------------------
+        # check equivalent atoms before GNN
+        # ------------------------------------
         # Get graph adjacency matrix
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
 
