@@ -73,7 +73,7 @@ class WeightedThreeHopGCN(nn.Module):
         import dgl
 
         # Get graph adjacency matrix
-        adj_matrix = batched_graph.adjacency_matrix(scipy_fmt="coo").toarray()
+        adj_matrix = batched_graph.adjacency_matrix().to_dense()
 
         # Check for equivalent rows (indicating symmetric nodes)
         for i in range(adj_matrix.shape[0]):
