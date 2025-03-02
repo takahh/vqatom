@@ -208,21 +208,21 @@ def convert_to_dgl(adj_batch, attr_batch):
             base_g = dgl.add_self_loop(base_g)
             base_graphs.append(base_g)
 
-            # ------------------------------------------
-            # Generate 2-hop and 3-hop adjacency matrices
-            # ------------------------------------------
-            adj_2hop = dgl.khop_adj(base_g, 2)
-            adj_3hop = dgl.khop_adj(base_g, 3)
-            # ------------------------------------------
-            # Combine adjacency matrices into one
-            # ------------------------------------------
-            full_adj_matrix = filtered_adj_matrix.clone()
-
-            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
-            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
-
-            # Ensure diagonal values are set to 1.0 (self-connections)
-            torch.diagonal(full_adj_matrix).fill_(1.0)
+            # # ------------------------------------------
+            # # Generate 2-hop and 3-hop adjacency matrices
+            # # ------------------------------------------
+            # adj_2hop = dgl.khop_adj(base_g, 2)
+            # adj_3hop = dgl.khop_adj(base_g, 3)
+            # # ------------------------------------------
+            # # Combine adjacency matrices into one
+            # # ------------------------------------------
+            # full_adj_matrix = filtered_adj_matrix.clone()
+            #
+            # full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            # full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+            #
+            # # Ensure diagonal values are set to 1.0 (self-connections)
+            # torch.diagonal(full_adj_matrix).fill_(1.0)
 
             # ------------------------------------------
             # Create the extended graph from the full adjacency matrix
