@@ -396,7 +396,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, margin=0.1, threshold=0.95, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, margin=0.01, threshold=0.99, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
