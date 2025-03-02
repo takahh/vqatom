@@ -77,8 +77,13 @@ class WeightedThreeHopGCN(nn.Module):
         import networkx as nx
         from dgl import to_networkx
 
-        # Convert DGL graph to NetworkX
-        nx_graph = to_networkx(batched_graph, node_attrs=["feature"])
+        # Move the graph to CPU before converting to NetworkX
+        cpu_graph = batched_graph.cpu()  # Ensure the graph is on CPU
+
+        # Convert to NetworkX with node attributes
+        nx_graph = dgl.to_networkx(cpu_graph, node_attrs=["feature"])
+
+        print("Converted to NetworkX successfully!")
 
         # Find automorphisms (equivalent nodes)
         from networkx.algorithms.isomorphism import GraphMatcher
