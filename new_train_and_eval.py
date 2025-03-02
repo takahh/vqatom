@@ -217,12 +217,13 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Combine adjacency matrices into one
             # ------------------------------------------
             full_adj_matrix = filtered_adj_matrix.clone()
-            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
-            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
 
             print("----------")
             print("full_adj_matrix")
             print(full_adj_matrix)
+            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+
             print("adj_2hop")
             print(adj_2hop)
             print("adj_3hop")
