@@ -213,6 +213,13 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             adj_2hop = dgl.khop_adj(base_g, 2)
             adj_3hop = dgl.khop_adj(base_g, 3)
+            # ------------------------------------------
+            # Combine adjacency matrices into one
+            # ------------------------------------------
+            full_adj_matrix = filtered_adj_matrix.clone()
+            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+
             print("----------")
             print("full_adj_matrix")
             print(full_adj_matrix)
@@ -220,12 +227,6 @@ def convert_to_dgl(adj_batch, attr_batch):
             print(adj_2hop)
             print("adj_3hop")
             print(adj_3hop)
-            # ------------------------------------------
-            # Combine adjacency matrices into one
-            # ------------------------------------------
-            full_adj_matrix = filtered_adj_matrix.clone()
-            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
-            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
             print("full_adj_matrix")
             print(full_adj_matrix)
             # Ensure diagonal values are set to 1.0 (self-connections)
