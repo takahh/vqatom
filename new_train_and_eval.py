@@ -232,7 +232,7 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             # # Assign edge weights from the full adjacency matrix
             # edge_weights = full_adj_matrix[new_src, new_dst].to(device)
             # extended_g.edata["weight"] = edge_weights.float()
-            #
+
             # # ------------------------------------------
             # Vectorized assignment of edge types
             # ------------------------------------------
