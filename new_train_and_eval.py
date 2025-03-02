@@ -193,6 +193,8 @@ def convert_to_dgl(adj_batch, attr_batch, device="cuda"):
             num_total_nodes = nonzero_mask.sum().item()
             filtered_attr_matrix = attr_matrix[nonzero_mask]
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
+            print("filtered_adj_matrix[:50]")
+            print(filtered_adj_matrix[:50])
 
             # ------------------------------------------
             # Create the base graph (only 1-hop edges)
