@@ -73,16 +73,17 @@ class WeightedThreeHopGCN(nn.Module):
 
         edge_type = "_E"  # Batched heterogeneous graph edge type
         self.bond_weight = self.bond_weight.to(device)
-        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
+        original_edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
 
         # Map edge weights to embedding indices (default 0 for unknown weights)
-        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
-                                     torch.zeros_like(edge_weight))
+        mapped_edge_weight = torch.where((original_edge_weight >= 1) & (original_edge_weight <= 4), original_edge_weight - 1,
+                                     torch.zeros_like(original_edge_weight))
 
-        print("mapped_indices")
-        print(mapped_indices[:20])
+        print("mapped_edge_weight")
+        print(mapped_edge_weight[:20])
         # Get transformed edge weights
-        edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+        # edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
+        edge_weight = original_edge_weight
         print("edge_weight")
         print(edge_weight[:20])
         # Compute GNN layers
