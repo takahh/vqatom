@@ -84,6 +84,8 @@ class WeightedThreeHopGCN(nn.Module):
         # Get transformed edge weights
         # edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
         edge_weight = original_edge_weight
+        edge_weight = edge_weight.to(torch.float32)
+
         print("edge_weight")
         print(edge_weight[:20])
         # Compute GNN layers
