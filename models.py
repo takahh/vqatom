@@ -69,6 +69,18 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Move tensors to the same device
         batched_graph = batched_graph.to(device)
+
+        import dgl
+
+        # Get graph adjacency matrix
+        adj_matrix = batched_graph.adjacency_matrix(scipy_fmt="coo").toarray()
+
+        # Check for equivalent rows (indicating symmetric nodes)
+        for i in range(adj_matrix.shape[0]):
+            for j in range(i + 1, adj_matrix.shape[0]):
+                if (adj_matrix[i] == adj_matrix[j]).all():
+                    print(f"Atoms {i} and {j} have identical neighborhoods (potentially equivalent).")
+
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
         edge_type = "_E"  # Batched heterogeneous graph edge type
