@@ -74,14 +74,22 @@ class WeightedThreeHopGCN(nn.Module):
         # ------------------------------------
         # check equivalent atoms before GNN
         # ------------------------------------
-        # Get graph adjacency matrix
-        adj_matrix = batched_graph.adjacency_matrix().to_dense()
+        import networkx as nx
+        from dgl import to_networkx
 
-        # Check for equivalent rows (indicating symmetric nodes)
-        for i in range(adj_matrix.shape[0]):
-            for j in range(i + 1, adj_matrix.shape[0]):
-                if (adj_matrix[i] == adj_matrix[j]).all():
-                    print(f"Atoms {i} and {j} have identical neighborhoods (potentially equivalent).")
+        # Convert DGL graph to NetworkX
+        nx_graph = to_networkx(batched_graph, node_attrs=["feature"])
+
+        # Find automorphisms (equivalent nodes)
+        from networkx.algorithms.isomorphism import GraphMatcher
+
+        matcher = GraphMatcher(nx_graph, nx_graph)
+        automorphisms = list(matcher.isomorphisms_iter())
+
+        if automorphisms:
+            print("Found equivalent nodes (automorphisms):", automorphisms)
+        else:
+            print("No equivalent nodes detected.")
 
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
