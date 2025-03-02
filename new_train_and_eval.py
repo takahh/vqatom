@@ -439,7 +439,7 @@ def run_inductive(
             f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
             f"train - elec_state_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
             f"train - charge_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
-            # f"train - sil_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f},"
+            f"train - equiv_atom_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]): 7f}, "
         )
 
         print(
@@ -450,7 +450,7 @@ def run_inductive(
               f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 7f}, "
               f"test - elec_state_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
               f"test - charge_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
-            # f"test - sil_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}",
+              f"test - equiv_atom_loss: {sum(loss_list_list_test[7]) / len(loss_list_list_test[7]): 7f}, "
         )
 
         # Log training losses

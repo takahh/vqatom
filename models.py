@@ -98,11 +98,11 @@ class WeightedThreeHopGCN(nn.Module):
         #                 charge_div_loss, elec_state_div_loss)
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, detached_quantize, x, init_cb,
          div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss,
-         charge_div_loss, elec_state_div_loss) = self.vq(h, init_feat, logger)
+         charge_div_loss, elec_state_div_loss, equiv_atom_loss) = self.vq(h, init_feat, logger)
 
         # Reduce memory usage in loss list
         losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                    h_num_div_loss.item(), elec_state_div_loss.item(), charge_div_loss.item()]
+                    h_num_div_loss.item(), elec_state_div_loss.item(), charge_div_loss.item(), equiv_atom_loss.item()]
 
         # --------------------------------
         # collect data for molecule images
