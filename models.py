@@ -90,11 +90,9 @@ class WeightedThreeHopGCN(nn.Module):
 
         matcher = GraphMatcher(nx_graph, nx_graph)
         automorphisms = list(matcher.isomorphisms_iter())
-
-        if automorphisms:
-            print("Found equivalent nodes (automorphisms):", automorphisms)
-        else:
-            print("No equivalent nodes detected.")
+        for mapping in automorphisms:
+            if set(mapping.keys()) != set(mapping.values()):  # Ignore trivial maps
+                print("Non-trivial automorphism:", mapping)
 
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
 
