@@ -69,8 +69,6 @@ class WeightedThreeHopGCN(nn.Module):
         self.bond_weight = self.bond_weight.to(device)
 
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-        print("edge_weight")
-        print(edge_weight)
         # Map edge weights to embedding indices (default 0 for unknown weights)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
