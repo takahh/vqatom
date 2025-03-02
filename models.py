@@ -80,10 +80,10 @@ class WeightedThreeHopGCN(nn.Module):
                                      torch.zeros_like(original_edge_weight))
 
         # Get transformed edge weights
-        edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
+        # edge_weight = self.bond_weight(mapped_edge_weight).squeeze(-1)
+        edge_weight = original_edge_weight
         edge_weight = edge_weight.to(torch.float32)
 
-        src, dst = batched_graph[edge_type].all_edges()
         # Compute GNN layers
         h = self.linear_0(features)
         init_feat = features.detach()  # Use detach() instead of clone()
