@@ -464,6 +464,7 @@ def cluster_penalty_loss(features, cluster_assignments):
         penalty_loss: A scalar tensor with the computed penalty.
     """
     batch_size = features.shape[0]
+    print(f"feature.shape {features.shape}, cluster_assignments.shape {cluster_assignments.shape}")
     penalty_loss = 0.0
     count = 0  # To normalize the loss
 
