@@ -490,6 +490,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_
 
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
+    print("pairwise_distances type:", type(pairwise_distances))
+    print("pairwise_distances value:", pairwise_distances)
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
