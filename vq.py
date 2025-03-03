@@ -472,9 +472,7 @@ def cluster_penalty_loss(features, cluster_assignments):
     return penalty_loss
 
 
-
-def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_dist_nega=5, threshold_nega=0.99,
-                             num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
@@ -500,29 +498,22 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
 
     # Create the mask for "same type" based on similarity threshold
-    same_type_mask_nega = (pairwise_similarities >= threshold_nega).float()  # 1 if similarity >= threshold, else 0
-    same_type_mask_posi = (pairwise_similarities >= threshold_posi).float()  # 1 if similarity >= threshold, else 0
+    same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
-    # --------------------------------------------------
-    # POSI
-    # --------------------------------------------------
-    positive_loss = same_type_mask_posi * pairwise_distances ** 2 / 1000
+    # Compute positive loss (pull same types together)
+    positive_loss = same_type_mask * pairwise_distances ** 2
 
-    # --------------------------------------------------
-    # NEGA
-    # --------------------------------------------------
-    # Mask for negative pairs that are too far (do not contribute to loss)
-    far_pair_mask = (pairwise_distances > max_dist_nega).float()
-    close_negative_weight = torch.exp(-pairwise_distances)  # Higher weight for small distances
-
-    # Compute negative loss (ignores far pairs)
-    negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * close_negative_weight
-    # negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances
-
-    # print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
+    # Compute negative loss (push different types apart)
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
+    # print("same_type_mask shape:", same_type_mask.shape)
+    # print("pairwise_distances shape:", pairwise_distances.shape)
+    # print("Min index in mask:",
+    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+    # print("Max index in mask:",
+    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
     # Combine and return mean loss
-    return (positive_loss + negative_loss).mean()
+    return (positive_loss + negative_loss).mean() / 10000
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
@@ -936,7 +927,7 @@ class VectorQuantize(nn.Module):
             margin_weight=0.8,
             spread_weight=0.2,
             pair_weight=0.01,
-            lamb_div_ele=10,
+            lamb_div_ele=1,
             lamb_div_bonds=1,
             lamb_div_aroma=1,
             lamb_div_ringy=1,
@@ -1186,14 +1177,14 @@ class VectorQuantize(nn.Module):
         # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
 
         # Margin loss: Encourage distances >= min_distance
-        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
-        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
-
-        # Spread loss: Encourage diversity
-        spread_loss = torch.var(t)
-
-        # Pair distance loss: Regularize distances
-        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
+        # smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
+        # margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
+        #
+        # # Spread loss: Encourage diversity
+        # spread_loss = torch.var(t)
+        #
+        # # Pair distance loss: Regularize distances
+        # pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
@@ -1202,7 +1193,8 @@ class VectorQuantize(nn.Module):
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
-        embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        sil_loss = None
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1], "bond")
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2], "charge")
@@ -1210,10 +1202,9 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-
         atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
 
-        return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+        return (None, None, None, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
 
@@ -1252,19 +1243,19 @@ class VectorQuantize(nn.Module):
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
-        if self.commitment_weight > 0:
-            detached_quantize = quantize.detach()
-
-            if exists(mask):
-                commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-                if is_multiheaded:
-                    mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-                                  h=commit_loss.shape[1] // mask.shape[0])
-                commit_loss = commit_loss[mask].mean()
-            else:
-                commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-
-            raw_commit_loss = commit_loss
+        # if self.commitment_weight > 0:
+        #     detached_quantize = quantize.detach()
+        #
+        #     if exists(mask):
+        #         commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        #         if is_multiheaded:
+        #             mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+        #                           h=commit_loss.shape[1] // mask.shape[0])
+        #         commit_loss = commit_loss[mask].mean()
+        #     else:
+        #         commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+        #
+        #     raw_commit_loss = commit_loss
 
         codebook = self._codebook.embed
 
