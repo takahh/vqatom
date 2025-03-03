@@ -482,7 +482,7 @@ def compute_contrastive_loss(z, atom_types, margin_posi=1.0, threshold_posi=0.5,
     # --------------------------------------------------
     # NEGA
     # --------------------------------------------------
-    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin_nega - pairwise_distances, min=0.0) * 10000000
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin_nega - pairwise_distances, min=0.0) * 1000000
     print("negative loss")
     print(negative_loss.mean())
 
