@@ -467,7 +467,8 @@ def cluster_penalty_loss(features, cluster_assignments):
     penalty_loss = 0.0
     count = 0  # To normalize the loss
 
-    for i in range(batch_size):
+    # for i in range(batch_size):
+    for i in range(1):
         for j in range(i + 1, batch_size):
             h_dist = hamming_distance(features[i], features[j])
 
