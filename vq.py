@@ -443,24 +443,14 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, margin_posi=1.0, threshold_posi=0.5, margin_nega=0.1, threshold_nega=0.95,
+                             num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
     # One-hot encode atom types
-    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
-    # print(f"🚨 atom_types: {atom_types}")
-    # print(f"🚨 num_atom_types: {num_atom_types}")
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
-
-    try:
-        # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
-        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
-    except Exception as e:
-        print("Error in one_hot:", e)
-        print("Atom types values:", atom_types)
-        raise
 
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
@@ -472,19 +462,17 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
 
     # Create the mask for "same type" based on similarity threshold
-    same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
+    same_type_mask = (pairwise_similarities >= threshold_nega).float()  # 1 if similarity >= threshold, else 0
 
-    # Compute positive loss (pull same types together)
+    # --------------------------------------------------
+    # POSI
+    # --------------------------------------------------
     positive_loss = same_type_mask * pairwise_distances ** 2
 
-    # Compute negative loss (push different types apart)
-    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
-    # print("same_type_mask shape:", same_type_mask.shape)
-    # print("pairwise_distances shape:", pairwise_distances.shape)
-    # print("Min index in mask:",
-    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
-    # print("Max index in mask:",
-    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+    # --------------------------------------------------
+    # NEGA
+    # --------------------------------------------------
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin_nega - pairwise_distances, min=0.0) ** 2
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
