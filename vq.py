@@ -443,7 +443,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margin_nega=0.1, threshold_nega=0.95,
+def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margin_nega=0.1, threshold_nega=0.99,
                              num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
@@ -465,6 +465,8 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margi
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
+    print("atom_types")
+    print(atom_types)
 
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
