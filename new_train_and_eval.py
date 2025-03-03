@@ -87,7 +87,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
-    print(f"loss_list {loss_list}")
+    print(f"loss_list {loss_list3}")
     return loss, loss_list3, latent_list, latents
 
 
