@@ -476,11 +476,13 @@ def cluster_penalty_loss(features, cluster_assignments):
             if cluster_assignments[i] == cluster_assignments[j] and h_dist == 1:
                 penalty_loss += 1.0  # You can scale this penalty
                 count += 1
+                print(count)
 
     # Normalize loss to avoid dependence on batch size
     if count > 0:
         penalty_loss /= count
-
+    print("penalty_loss")
+    print(penalty_loss)
     return penalty_loss
 
 
