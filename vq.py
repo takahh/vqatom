@@ -491,13 +491,14 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margi
     # NEGA
     # --------------------------------------------------
     a = (1.0 - same_type_mask_nega) * torch.clamp(margin_nega - pairwise_distances, min=0.0)
+    b = (1.0 - same_type_mask_nega) * torch.clamp(pairwise_distances, min=0.0)
     if feat_type == 'atom':
-        print("a.min()")
-        print(a.min())
-        print("a.max()")
-        print(a.max())
-        print("a.mean()")
-        print(a.mean())
+        print("b.min()")
+        print(b.min())
+        print("b.max()")
+        print(b.max())
+        print("b.mean()")
+        print(b.mean())
     negative_loss = a ** 2 * 100000
 
     # Combine and return mean loss
