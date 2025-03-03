@@ -489,7 +489,7 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * close_negative_weight
     # negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances
 
-    # print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
+    print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean()
