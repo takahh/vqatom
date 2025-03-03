@@ -1222,6 +1222,8 @@ class VectorQuantize(nn.Module):
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
 
         atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
+        print(f"atom_type_div_loss {atom_type_div_loss}")
+        print(f"bond_num_div_loss {bond_num_div_loss}")
 
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
