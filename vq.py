@@ -469,18 +469,9 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
 
-
     # Create the mask for "same type" based on similarity threshold
     same_type_mask_nega = (pairwise_similarities >= threshold_nega).float()  # 1 if similarity >= threshold, else 0
     same_type_mask_posi = (pairwise_similarities >= threshold_posi).float()  # 1 if similarity >= threshold, else 0
-
-    if feat_type == 'atom':
-        print("atom_types")
-        print(atom_types[:5, :30])
-        print("pairwise_similarities")
-        print(pairwise_similarities[:5, :30])
-        print("same_type_mask_nega")
-        print(same_type_mask_nega[:5, :30])
 
     # --------------------------------------------------
     # POSI
@@ -498,7 +489,7 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * close_negative_weight
     # negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances
 
-    print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
+    # print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean()
