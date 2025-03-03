@@ -494,6 +494,10 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margi
     if feat_type == 'atom':
         print("a.min()")
         print(a.min())
+        print("a.max()")
+        print(a.max())
+        print("a.mean()")
+        print(a.mean())
     negative_loss = a ** 2 * 100000
 
     # Combine and return mean loss
