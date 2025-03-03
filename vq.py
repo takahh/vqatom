@@ -444,7 +444,7 @@ def batched_embedding(indices, embeds):
 
 
 
-def differentiable_cluster_penalty_loss(features, cluster_assignments):
+def cluster_penalty_loss(features, cluster_assignments):
     """
     Penalizes assigning the same cluster ID to nodes that are only slightly different
     using a differentiable formulation.
