@@ -476,14 +476,11 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margi
 
     if feat_type == 'atom':
         print("atom_types")
-        print(atom_types.shape)
-        print(atom_types)
+        print(atom_types[:5, :30])
         print("pairwise_similarities")
-        print(pairwise_similarities.shape)
-        print(pairwise_similarities)
+        print(pairwise_similarities[:5, :30])
         print("same_type_mask_nega")
-        print(same_type_mask_nega.shape)
-        print(same_type_mask_nega)
+        print(same_type_mask_nega[:5, :30])
 
     # --------------------------------------------------
     # POSI
