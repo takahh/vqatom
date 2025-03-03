@@ -443,48 +443,34 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-import torch
-import torch.nn.functional as F
 
-
-def hamming_distance(x, y):
-    """Compute the Hamming distance between two binary vectors."""
-    return torch.sum(x != y, dim=-1).float()
-
-
-def cluster_penalty_loss(features, cluster_assignments):
+def differentiable_cluster_penalty_loss(features, cluster_assignments):
     """
-    Penalizes assigning the same cluster ID to nodes that are only one bit different.
+    Penalizes assigning the same cluster ID to nodes that are only slightly different
+    using a differentiable formulation.
 
     Args:
         features: Tensor of shape (batch_size, 7), binary node features (0 or 1).
         cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
 
     Returns:
-        penalty_loss: A scalar tensor with the computed penalty.
+        penalty_loss: A scalar tensor that is differentiable.
     """
-    batch_size = features.shape[0]
-    print(f"feature.shape {features.shape}, cluster_assignments.shape {cluster_assignments.shape}")
-    penalty_loss = 0.0
-    count = 0  # To normalize the loss
 
-    # for i in range(batch_size):
-    for i in range(1):
-        for j in range(i + 1, batch_size):
-            h_dist = hamming_distance(features[i], features[j])
+    # Compute pairwise L1 distances (approximating Hamming distance in a differentiable way)
+    hamming_dists = torch.cdist(features.float(), features.float(), p=1)
 
-            # If assigned to the same cluster but have one differing element, apply penalty
-            if cluster_assignments[i] == cluster_assignments[j] and h_dist == 1:
-                penalty_loss += 1.0  # You can scale this penalty
-                count += 1
-                print(count)
+    # Smooth approximation: Apply a differentiable function to penalize small distances
+    hamming_penalty = torch.exp(-hamming_dists)  # Closer pairs (small distance) get higher penalty
 
-    # Normalize loss to avoid dependence on batch size
-    if count > 0:
-        penalty_loss /= count
-    print("penalty_loss")
-    print(penalty_loss)
+    # Cluster similarity mask
+    cluster_mask = (cluster_assignments.unsqueeze(0) == cluster_assignments.unsqueeze(1)).float()
+
+    # Compute weighted penalty
+    penalty_loss = (hamming_penalty * cluster_mask).sum() / (cluster_mask.sum() + 1e-6)
+
     return penalty_loss
+
 
 
 def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_dist_nega=5, threshold_nega=0.99,
