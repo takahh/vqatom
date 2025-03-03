@@ -492,11 +492,13 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     # --------------------------------------------------
     # Mask for negative pairs that are too far (do not contribute to loss)
     far_pair_mask = (pairwise_distances > max_dist_nega).float()
+    close_negative_weight = torch.exp(-pairwise_distances)  # Higher weight for small distances
 
     # Compute negative loss (ignores far pairs)
-    negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances ** 2 * 100000
+    negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * close_negative_weight
+    # negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances
 
-    print("positive_loss", positive_loss, "negative_loss", negative_loss)
+    print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
