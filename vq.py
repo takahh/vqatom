@@ -443,7 +443,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, margin_posi=1.0, threshold_posi=0.5, margin_nega=0.1, threshold_nega=0.95,
+def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margin_nega=0.1, threshold_nega=0.95,
                              num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
@@ -470,17 +470,18 @@ def compute_contrastive_loss(z, atom_types, margin_posi=1.0, threshold_posi=0.5,
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
 
     # Create the mask for "same type" based on similarity threshold
-    same_type_mask = (pairwise_similarities >= threshold_nega).float()  # 1 if similarity >= threshold, else 0
+    same_type_mask_nega = (pairwise_similarities >= threshold_nega).float()  # 1 if similarity >= threshold, else 0
+    same_type_mask_posi = (pairwise_similarities >= threshold_posi).float()  # 1 if similarity >= threshold, else 0
 
     # --------------------------------------------------
     # POSI
     # --------------------------------------------------
-    positive_loss = same_type_mask * pairwise_distances ** 2 / 1000
+    positive_loss = same_type_mask_posi * pairwise_distances ** 2 / 1000
 
     # --------------------------------------------------
     # NEGA
     # --------------------------------------------------
-    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin_nega - pairwise_distances, min=0.0) ** 2 * 100000
+    negative_loss = (1.0 - same_type_mask_nega) * torch.clamp(margin_nega - pairwise_distances, min=0.0) ** 2 * 100000
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
@@ -897,7 +898,7 @@ class VectorQuantize(nn.Module):
             margin_weight=0.8,
             spread_weight=0.2,
             pair_weight=0.01,
-            lamb_div_ele=2,
+            lamb_div_ele=10,
             lamb_div_bonds=1,
             lamb_div_aroma=1,
             lamb_div_ringy=1,
@@ -1164,13 +1165,13 @@ class VectorQuantize(nn.Module):
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
+        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1], "bond")
+        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2], "charge")
+        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3], "elec")
+        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
+        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
+        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
