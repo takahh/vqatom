@@ -501,7 +501,7 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
 
     # Combine and return mean loss
-    return (positive_loss + negative_loss).mean() / 10000
+    return (positive_loss + negative_loss).mean()
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
