@@ -443,6 +443,46 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
+import torch
+import torch.nn.functional as F
+
+
+def hamming_distance(x, y):
+    """Compute the Hamming distance between two binary vectors."""
+    return torch.sum(x != y, dim=-1).float()
+
+
+def cluster_penalty_loss(features, cluster_assignments):
+    """
+    Penalizes assigning the same cluster ID to nodes that are only one bit different.
+
+    Args:
+        features: Tensor of shape (batch_size, 7), binary node features (0 or 1).
+        cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
+
+    Returns:
+        penalty_loss: A scalar tensor with the computed penalty.
+    """
+    batch_size = features.shape[0]
+    penalty_loss = 0.0
+    count = 0  # To normalize the loss
+
+    for i in range(batch_size):
+        for j in range(i + 1, batch_size):
+            h_dist = hamming_distance(features[i], features[j])
+
+            # If assigned to the same cluster but have one differing element, apply penalty
+            if cluster_assignments[i] == cluster_assignments[j] and h_dist == 1:
+                penalty_loss += 1.0  # You can scale this penalty
+                count += 1
+
+    # Normalize loss to avoid dependence on batch size
+    if count > 0:
+        penalty_loss /= count
+
+    return penalty_loss
+
+
 def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_dist_nega=5, threshold_nega=0.99,
                              num_atom_types=100):
     """
@@ -489,7 +529,7 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_d
     negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * close_negative_weight
     # negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances
 
-    print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
+    # print("positive_loss", positive_loss.mean(), "negative_loss", negative_loss.mean())
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean()
@@ -1173,16 +1213,16 @@ class VectorQuantize(nn.Module):
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1], "bond")
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2], "charge")
         elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3], "elec")
         aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-        # print(f"sil_loss {sil_loss}")
-        # print(f"equivalent_atom_loss {equivalent_atom_loss}")
-        # print(f"atom_type_div_loss {atom_type_div_loss}")
+
+        atom_type_div_loss = hamming_distance(init_feat, quantized)
+
         return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
