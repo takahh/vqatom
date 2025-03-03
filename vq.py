@@ -443,7 +443,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margin_nega=0, threshold_nega=0.99,
+def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, max_dist_nega=5, threshold_nega=0.99,
                              num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
@@ -490,16 +490,13 @@ def compute_contrastive_loss(z, atom_types, feat_type, threshold_posi=0.5, margi
     # --------------------------------------------------
     # NEGA
     # --------------------------------------------------
-    a = (1.0 - same_type_mask_nega) * torch.clamp(margin_nega - pairwise_distances, min=0.0)
-    b = (1.0 - same_type_mask_nega) * torch.clamp(pairwise_distances, min=0.0)
-    if feat_type == 'atom':
-        print("b.min()")
-        print(b.min())
-        print("b.max()")
-        print(b.max())
-        print("b.mean()")
-        print(b.mean())
-    negative_loss = a ** 2 * 100000
+    # Mask for negative pairs that are too far (do not contribute to loss)
+    far_pair_mask = (pairwise_distances > max_dist_nega).float()
+
+    # Compute negative loss (ignores far pairs)
+    negative_loss = (1.0 - same_type_mask_nega) * (1 - far_pair_mask) * pairwise_distances ** 2 * 100000
+
+    print("positive_loss", positive_loss, "negative_loss", negative_loss)
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
