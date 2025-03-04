@@ -482,7 +482,8 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # make a distance matrix for different ID pairs and close enough
     # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
-    dist_matrix = torch.cdist(features.float(), features.float(), p=1)
+    dist_matrix = torch.cdist(features.float(), features.float(), p=2)
+    # dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
     # Apply threshold: Only consider distances < distance_threshold
     max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
     min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
