@@ -480,7 +480,7 @@ def cluster_penalty_loss(quantized, cluster_assignments, feats):
     # Gaussian-based penalty function (or alternative)
     penalty = dist_matrix * diff_feat_mask * same_id_matrix
     print("penalty")
-    print(penalty)
+    print(penalty.mean())
     # hamming_penalty = torch.exp(-(target_hamming_dists)/20)
     # penalty_loss = (hamming_penalty * same_id_matrix).sum() / (same_id_matrix.sum() + 1e-6)
 
