@@ -467,6 +467,8 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
     diff_feat_mask = diff_feat_mask.float()
 
+    print("diff_feat_mask")
+    print(diff_feat_mask)
     # --------------------------------------------------------------
     # Calculate penalty
     # --------------------------------------------------------------
