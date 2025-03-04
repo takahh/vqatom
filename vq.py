@@ -463,7 +463,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     print("cluster_assignments")
     print(cluster_assignments.shape)
     num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
-    cluster_embedding = torch.nn.functional.one_hot(cluster_assignments, num_classes).float()
+    cluster_embedding = torch.nn.functional.one_hot(cluster_assignments.squeeze(), num_classes).float()
     print("cluster_embedding.shape")
     print(cluster_embedding.shape)
     same_id_matrix = torch.mm(cluster_embedding, cluster_embedding.T)
