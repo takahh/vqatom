@@ -445,6 +445,9 @@ def batched_embedding(indices, embeds):
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
     print(feats.requires_grad, quantized.requires_grad, cluster_assignments.requires_grad)
+    print("quantized grad info")
+    print(quantized.requires_grad)  # Must be True
+    print(quantized.grad_fn)  # Must not be None
 
     # --------------------------------------------------------------
     # distance matrix
