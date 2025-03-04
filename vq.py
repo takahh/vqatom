@@ -458,13 +458,11 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     Returns:
         penalty_loss: A scalar tensor that is differentiable.
     """
+    print("features")
+    print(features)
+    print("cluster_assignments")
+    print(cluster_assignments)
     features = features.float().requires_grad_(True)
-    print("features.requires_grad")  # Should be True
-    print(features.requires_grad)  # Should be True
-    print("cluster_assignments.requires_grad")  # Should be True if it's an output of the model
-    print(cluster_assignments.requires_grad)  # Should be True if it's an output of the model
-    print("cluster_assignments.grad_fn")  # Should NOT be None
-    print(cluster_assignments.grad_fn)  # Should NOT be None
 
     # ------------------------------------
     # make a matrix for different ID pairs
@@ -482,13 +480,9 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # make a distance matrix for different ID pairs and close enough
     # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
-    # dist_matrix = torch.cdist(features.float(), features.float(), p=1)
-    print(f"cluster_assignments {cluster_assignments}")
-    dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
-    print(f"dist_matrix min {dist_matrix.min()}")
-    print(f"dist_matrix mean {dist_matrix.mean()}")
-    print(f"dist_matrix max {dist_matrix.max()}")
-    print(f"dist_matrix {dist_matrix}")
+    dist_matrix = torch.cdist(features.float(), features.float(), p=1)
+    # dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
+    # dist_matrix は、IDが同じ場合０、違う場合は 1.414
     # Apply threshold: Only consider distances < distance_threshold
     max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
     min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
