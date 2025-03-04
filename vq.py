@@ -443,8 +443,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
-    #                    init_feat, embed_ind_for_sil
+def cluster_penalty_loss(quantized, cluster_assignments, distance_threshold=10):
     """        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
 
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
@@ -458,40 +457,36 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     Returns:
         penalty_loss: A scalar tensor that is differentiable.
     """
-    print("features")
-    print(features)
-    print("cluster_assignments")
-    print(cluster_assignments)
-    features = features.float().requires_grad_(True)
-
     # ------------------------------------
     # make a matrix for different ID pairs
     # ------------------------------------
+    # Ensure cluster_assignments is an integer tensor
+    cluster_assignments = cluster_assignments.to(torch.int64)
+    num_classes = int(cluster_assignments.max().item()) + 1
     # Convert cluster assignments to one-hot encoding
-    feat_dist = torch.cdist(features.float(), features.float(), p=1)
-    same_feat_mask = (feat_dist == 0).float()  # 1 for valid, 0 for ignored pairs
+    cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
     # Compute cluster similarity matrix
-    diff_feat_mask = 1 - same_feat_mask
+    cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
+    cluster_sim_not = 1 - cluster_sim
 
     # --------------------------------------------------------------
     # make a distance matrix for different ID pairs and close enough
     # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
-    # id_dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
-    id_dist_matrix = torch.cdist(cluster_assignments.float().unsqueeze(1), cluster_assignments.float().unsqueeze(1),
-                                 p=2)
+    dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=1)
+    print(f"dist_matrix min {dist_matrix.min()}, max {dist_matrix.max()}, mean {dist_matrix.mean()}")
+    # Apply threshold: Only consider distances < distance_threshold
+    max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
+    min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
+    # dist_matrix torch.Size([15648, 15648]), cluster_sim_not torch.Size([15648, 15648]), close_mask torch.Size([15648, 15648])
+    # close, and different ID two vector distances
+    target_hamming_dists = dist_matrix * max_mask * min_mask
 
-    # dist_matrix は、IDが同じ場合０、違う場合は 1.414
-
-    target_hamming_dists = id_dist_matrix * diff_feat_mask
-    print(f"target_hamming_dists {target_hamming_dists}")
-    print(f"id_dist_matrix {id_dist_matrix}")
-    print(f"diff_feat_mask {diff_feat_mask}")
     # Gaussian-based penalty function (or alternative)
-    # hamming_penalty = torch.exp(-(target_hamming_dists)/20)
+    hamming_penalty = torch.exp(-(target_hamming_dists)/20)
 
     # Compute cluster penalty loss (only over valid distances)
-    penalty_loss = target_hamming_dists.sum()
+    penalty_loss = (hamming_penalty * cluster_sim_not).sum() / (cluster_sim_not.sum() + 1e-6)
 
     return penalty_loss
 
@@ -1227,7 +1222,7 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
+        atom_type_div_loss = cluster_penalty_loss(init_feat, quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
