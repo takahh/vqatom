@@ -442,15 +442,24 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
-def cluster_penalty_loss(features, cluster_assignments):
+
+def cluster_penalty_loss(features, cluster_assignments, distance_threshold=30):
     """
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
+    Applies penalty only for distances < distance_threshold.
+
+    Args:
+        features: Tensor of shape (batch_size, feature_dim), binary node features (0 or 1).
+        cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
+        distance_threshold: Maximum distance at which penalty is applied.
+
+    Returns:
+        penalty_loss: A scalar tensor that is differentiable.
     """
+
     # Ensure cluster_assignments is an integer tensor
     cluster_assignments = cluster_assignments.to(torch.int64)
-
-    # Compute num_classes as an integer
-    num_classes = int(cluster_assignments.max().item()) + 1  # Ensure it's an int
+    num_classes = int(cluster_assignments.max().item()) + 1
 
     # Convert cluster assignments to one-hot encoding
     cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
@@ -458,21 +467,21 @@ def cluster_penalty_loss(features, cluster_assignments):
     # Compute pairwise L1 distances (approximating Hamming distance)
     hamming_dists = torch.cdist(features.float(), features.float(), p=1)
 
-    # Soft cluster similarity matrix
+    # Apply threshold: Only consider distances < distance_threshold
+    mask = (hamming_dists < distance_threshold).float()  # 1 for valid, 0 for ignored pairs
+
+    # Gaussian-based penalty function (or alternative)
+    sigma = 10.0  # Adjust for scaling
+    hamming_penalty = torch.exp(- (hamming_dists ** 2) / (2 * sigma ** 2)) * mask
+
+    # Compute cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
 
-    tmp_hamming_dists = hamming_dists * cluster_sim
-    print(f"hamming_dist mean {hamming_dists.mean()}")
-    print(f"hamming_dist min {hamming_dists.min()}")
-    print(f"hamming_dist max {hamming_dists.max()}")
-    # Apply margin to control penalty strength
-    margin = 2.0
-    hamming_penalty = torch.exp(-torch.clamp(hamming_dists - margin, min=0))
-
-    # Compute cluster penalty loss
+    # Compute cluster penalty loss (only over valid distances)
     penalty_loss = (hamming_penalty * cluster_sim).sum() / (cluster_sim.sum() + 1e-6)
 
     return penalty_loss
+
 
 
 def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num_atom_types=100):
