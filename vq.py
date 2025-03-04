@@ -466,7 +466,8 @@ def cluster_penalty_loss(quantized, cluster_assignments, distance_threshold=10):
     # Convert cluster assignments to one-hot encoding
     cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
     # Compute cluster similarity matrix
-    cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
+    cluster_sim = torch.mm(cluster_assignments.unsqueeze(1), cluster_assignments.unsqueeze(1).T)
+    # cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
     cluster_sim_not = 1 - cluster_sim
 
     # --------------------------------------------------------------
