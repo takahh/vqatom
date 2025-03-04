@@ -460,6 +460,8 @@ def cluster_penalty_loss(features, cluster_assignments):
 
     # Soft cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
+
+    tmp_hamming_dists = hamming_dists * cluster_sim
     print(f"hamming_dist mean {hamming_dists.mean()}")
     print(f"hamming_dist min {hamming_dists.min()}")
     print(f"hamming_dist max {hamming_dists.max()}")
