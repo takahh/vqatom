@@ -450,6 +450,8 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # distance matrix
     # --------------------------------------------------------------
     # dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
+    print("quantized.shape")
+    print(quantized.shape)
     dist_matrix = torch.norm(quantized.unsqueeze(1) - quantized.unsqueeze(0), dim=-1)
 
     # ------------------------------------
