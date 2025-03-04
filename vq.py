@@ -468,29 +468,19 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # distance matrix
     # --------------------------------------------------------------
     dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
-    print("feats")
-    print(feats[-30:, -30:])
-    print("quantized")
-    print(quantized)
-    print("cluster_assignments")
-    print(cluster_assignments)
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
     feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
     diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
-    print("dist_matrix")
-    print(dist_matrix)
-    print("diff_feat_mask")
-    print(diff_feat_mask)
-    print("same_id_mask")
-    print(same_id_mask)
     # Gaussian-based penalty function (or alternative)
-    target_dist = dist_matrix * diff_feat_mask * same_id_mask
-    print(f"target_dist min {target_dist.min()}, max {target_dist.max()}, mean {target_dist.mean()}")
-    penalty = torch.exp(-(target_dist)/20)
+    diff_feat_same_cluster_dist_all = dist_matrix * diff_feat_mask * same_id_mask
+    greater_than_zero_mask = (diff_feat_same_cluster_dist_all > 0).float()
+    diff_feat_same_cluster_dist = diff_feat_mask * greater_than_zero_mask * greater_than_zero_mask
+    print(f"target_dist min {diff_feat_same_cluster_dist.min()}, max {diff_feat_same_cluster_dist.max()}, mean {diff_feat_same_cluster_dist.mean()}")
+    penalty = torch.exp(-diff_feat_same_cluster_dist).mean()
     print("penalty")
-    print(penalty.mean())
+    print(penalty)
     # penalty_loss = (hamming_penalty * same_id_matrix).sum() / (same_id_matrix.sum() + 1e-6)
 
     return penalty
