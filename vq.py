@@ -444,19 +444,6 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
-    """        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
-
-    Penalizes assigning the same cluster ID to nodes that are only slightly different.
-    Applies penalty only for distances < distance_threshold.
-
-    Args:
-        features: Tensor of shape (batch_size, feature_dim), binary node features (0 or 1).
-        cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
-        distance_threshold: Maximum distance at which penalty is applied.
-
-    Returns:
-        penalty_loss: A scalar tensor that is differentiable.
-    """
     # ------------------------------------
     # same ID mask
     # ------------------------------------
@@ -467,7 +454,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # --------------------------------------------------------------
     # distance matrix
     # --------------------------------------------------------------
-    dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
+    # dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
+    dist_matrix = torch.norm(quantized.unsqueeze(1) - quantized.unsqueeze(0), dim=-1)
+
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
@@ -475,11 +464,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
     # Gaussian-based penalty function (or alternative)
     diff_feat_same_cluster_dist = dist_matrix * diff_feat_mask * same_id_mask
-    print(f"target_dist min {diff_feat_same_cluster_dist.min()}, max {diff_feat_same_cluster_dist.max()}, mean {diff_feat_same_cluster_dist.mean()}")
     penalty = torch.exp(-diff_feat_same_cluster_dist).mean()
-    print("penalty")
-    print(penalty)
-    # penalty_loss = (hamming_penalty * same_id_matrix).sum() / (same_id_matrix.sum() + 1e-6)
 
     return penalty
 
