@@ -473,7 +473,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # Gaussian-based penalty function (or alternative)
     diff_feat_same_cluster_dist = dist_matrix * diff_feat_mask * same_id_mask
     print("diff_feat_same_cluster_dist")
-    print(diff_feat_same_cluster_dist)
+    print(diff_feat_same_cluster_dist.sum())
     non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
     print("non_zero_values")
     print(non_zero_values)
