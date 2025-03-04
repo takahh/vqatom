@@ -484,6 +484,8 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
     # dist_matrix は、IDが同じ場合０、違う場合は 1.414
     # Apply threshold: Only consider distances < distance_threshold
+    print("dist_matrix")
+    print(dist_matrix)
     max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
     min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
     # dist_matrix torch.Size([15648, 15648]), cluster_sim_not torch.Size([15648, 15648]), close_mask torch.Size([15648, 15648])
