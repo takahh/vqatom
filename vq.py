@@ -465,18 +465,20 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # Convert cluster assignments to one-hot encoding
     cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
 
-    # Compute pairwise L1 distances (approximating Hamming distance)
-    hamming_dists = torch.cdist(features.float(), features.float(), p=1)
-
-    # Apply threshold: Only consider distances < distance_threshold
-    mask = (hamming_dists < 1).float()  # 1 for valid, 0 for ignored pairs
-
     # Compute cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
     cluster_sim_not = 1 - cluster_sim
 
+    # Compute pairwise L1 distances (approximating Hamming distance)
+    dist_matrix = torch.cdist(features.float(), features.float(), p=1)
+
+    # Apply threshold: Only consider distances < distance_threshold
+    close_mask = (dist_matrix < 1).float()  # 1 for valid, 0 for ignored pairs
+
+    print(f"dist_matrix {dist_matrix.shape}, cluster_sim_not {cluster_sim_not.shape}, close_mask {close_mask.shape}")
+
     # close, and different ID two vector distances
-    target_hamming_dists = hamming_dists * mask * cluster_sim_not
+    target_hamming_dists = dist_matrix * close_mask * cluster_sim_not
 
     print(f"target_hamming_dists mean: {target_hamming_dists.mean()}")
     print(f"target_hamming_dists min: {target_hamming_dists.min()}")
@@ -484,7 +486,6 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
 
     # Gaussian-based penalty function (or alternative)
     hamming_penalty = torch.exp(- (target_hamming_dists))
-
 
     # Compute cluster penalty loss (only over valid distances)
     penalty_loss = (hamming_penalty * cluster_sim_not).sum() / (cluster_sim_not.sum() + 1e-6)
