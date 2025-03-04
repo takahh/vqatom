@@ -446,24 +446,30 @@ def batched_embedding(indices, embeds):
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
     print(feats.requires_grad, quantized.requires_grad, cluster_assignments.requires_grad)
 
-    # ------------------------------------
-    # same ID mask
-    # ------------------------------------
-    num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
-    cluster_embedding = torch.nn.functional.one_hot(cluster_assignments.long().squeeze(), num_classes).float()
-    same_id_mask = torch.mm(cluster_embedding, cluster_embedding.T)
-
     # --------------------------------------------------------------
     # distance matrix
     # --------------------------------------------------------------
     # dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
     dist_matrix = torch.norm(quantized.unsqueeze(1) - quantized.unsqueeze(0), dim=-1)
 
+    # ------------------------------------
+    # same ID mask
+    # ------------------------------------
+    num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
+    cluster_embedding = torch.nn.functional.one_hot(cluster_assignments.long().squeeze(), num_classes).float()
+    same_id_mask = torch.mm(cluster_embedding, cluster_embedding.T)
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
-    feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
-    diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
+    # feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
+    # diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
+
+    diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
+    diff_feat_mask = diff_feat_mask.float()
+
+    # --------------------------------------------------------------
+    # Calculate penalty
+    # --------------------------------------------------------------
     # Gaussian-based penalty function (or alternative)
     diff_feat_same_cluster_dist = dist_matrix * diff_feat_mask * same_id_mask
     penalty = torch.exp(-diff_feat_same_cluster_dist).mean()
