@@ -444,33 +444,33 @@ def batched_embedding(indices, embeds):
 
 
 import torch
+import torch
 
-def cluster_penalty_loss(features, cluster_assignments, temperature=1.0):
+def cluster_penalty_loss(features, cluster_assignments):
     """
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
-
-    Args:
-        features: Tensor of shape (batch_size, feature_dim), binary node features (0 or 1).
-        cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
-        temperature: A scaling factor for controlling the impact of penalties.
-
-    Returns:
-        penalty_loss: A scalar tensor that is differentiable.
     """
 
-    # Compute pairwise L1 distances (approximating Hamming distance)
+    # Compute pairwise distances (L1 or cosine)
     hamming_dists = torch.cdist(features.float(), features.float(), p=1)
 
-    # Smooth penalty function: Adjust temperature for better training dynamics
-    hamming_penalty = torch.exp(-hamming_dists / temperature)  # Higher temp makes the penalty smoother
+    # Soft cluster similarity
+    cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=cluster_assignments.max() + 1).float()
+    cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
 
-    # Cluster similarity mask
-    cluster_mask = (cluster_assignments.unsqueeze(0) == cluster_assignments.unsqueeze(1)).float()
+    # Apply margin to control penalty strength
+    margin = 2.0
+    hamming_penalty = torch.exp(-torch.clamp(hamming_dists - margin, min=0))
 
-    # Normalize penalty by number of cluster pairs
-    penalty_loss = (hamming_penalty * cluster_mask).sum() / (cluster_mask.sum() + 1e-6)
+    # Compute cluster penalty loss
+    penalty_loss = (hamming_penalty * cluster_sim).sum() / (cluster_sim.sum() + 1e-6)
+
+    # Add contrastive loss for separation
+    contrastive_loss = (1 - cluster_sim) * torch.exp(-hamming_dists)
+    penalty_loss += contrastive_loss.sum() / ((1 - cluster_sim).sum() + 1e-6)
 
     return penalty_loss
+
 
 
 def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num_atom_types=100):
