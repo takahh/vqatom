@@ -71,6 +71,9 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     scaler = torch.cuda.amp.GradScaler()
     optimizer.zero_grad()
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            print(f"Warning: No gradient for {name}")
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
