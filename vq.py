@@ -483,6 +483,7 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
     # dist_matrix = torch.cdist(features.float(), features.float(), p=1)
+    print(f"cluster_assignments {cluster_assignments}")
     dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
     print(f"dist_matrix min {dist_matrix.min()}")
     print(f"dist_matrix mean {dist_matrix.mean()}")
