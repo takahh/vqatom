@@ -443,30 +443,31 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
+import torch
 
-def cluster_penalty_loss(features, cluster_assignments):
+def cluster_penalty_loss(features, cluster_assignments, temperature=1.0):
     """
-    Penalizes assigning the same cluster ID to nodes that are only slightly different
-    using a differentiable formulation.
+    Penalizes assigning the same cluster ID to nodes that are only slightly different.
 
     Args:
-        features: Tensor of shape (batch_size, 7), binary node features (0 or 1).
+        features: Tensor of shape (batch_size, feature_dim), binary node features (0 or 1).
         cluster_assignments: Tensor of shape (batch_size,), assigned cluster indices.
+        temperature: A scaling factor for controlling the impact of penalties.
 
     Returns:
         penalty_loss: A scalar tensor that is differentiable.
     """
 
-    # Compute pairwise L1 distances (approximating Hamming distance in a differentiable way)
+    # Compute pairwise L1 distances (approximating Hamming distance)
     hamming_dists = torch.cdist(features.float(), features.float(), p=1)
 
-    # Smooth approximation: Apply a differentiable function to penalize small distances
-    hamming_penalty = torch.exp(-hamming_dists)  # Closer pairs (small distance) get higher penalty
+    # Smooth penalty function: Adjust temperature for better training dynamics
+    hamming_penalty = torch.exp(-hamming_dists / temperature)  # Higher temp makes the penalty smoother
 
     # Cluster similarity mask
     cluster_mask = (cluster_assignments.unsqueeze(0) == cluster_assignments.unsqueeze(1)).float()
 
-    # Compute weighted penalty
+    # Normalize penalty by number of cluster pairs
     penalty_loss = (hamming_penalty * cluster_mask).sum() / (cluster_mask.sum() + 1e-6)
 
     return penalty_loss

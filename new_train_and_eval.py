@@ -317,13 +317,6 @@ def run_inductive(
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
-                    print(
-                        f"train - div_element_loss: {(loss_list_train[0]): 7f}, "
-                        f"train - bond_num_div_loss: {(loss_list_train[1]): 7f}, "
-                        f"train - aroma_div_loss: {(loss_list_train[2]): 7f}, "
-                        f"train - ringy_div_loss: {(loss_list_train[3]): 7f}, "
-                        f"train - h_num_div_loss: {(loss_list_train[4]): 7f}, "
-                    )
                     # model.reset_kmeans()
 
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
