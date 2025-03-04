@@ -468,7 +468,12 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # distance matrix
     # --------------------------------------------------------------
     dist_matrix = torch.cdist(quantized.float(), quantized.float(), p=2)
-
+    print("feats")
+    print(feats)
+    print("quantized")
+    print(quantized)
+    print("cluster_assignments")
+    print(cluster_assignments)
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
