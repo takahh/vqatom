@@ -444,7 +444,8 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(features, cluster_assignments, distance_threshold=30):
-    """
+    """        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
+
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
     Applies penalty only for distances < distance_threshold.
 
@@ -476,9 +477,10 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=30):
 
     # Compute cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
+    cluster_sim_not = 1 - cluster_sim
 
     # Compute cluster penalty loss (only over valid distances)
-    penalty_loss = (hamming_penalty * cluster_sim).sum() / (cluster_sim.sum() + 1e-6)
+    penalty_loss = (hamming_penalty * cluster_sim_not).sum() / (cluster_sim_not.sum() + 1e-6)
 
     return penalty_loss
 
