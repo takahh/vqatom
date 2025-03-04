@@ -457,29 +457,31 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     Returns:
         penalty_loss: A scalar tensor that is differentiable.
     """
-
+    # ------------------------------------
+    # make a matrix for different ID pairs
+    # ------------------------------------
     # Ensure cluster_assignments is an integer tensor
     cluster_assignments = cluster_assignments.to(torch.int64)
     num_classes = int(cluster_assignments.max().item()) + 1
-
     # Convert cluster assignments to one-hot encoding
     cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
-
     # Compute cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
     cluster_sim_not = 1 - cluster_sim
 
+    # --------------------------------------------------------------
+    # make a distance matrix for different ID pairs and close enough
+    # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
     dist_matrix = torch.cdist(features.float(), features.float(), p=1)
-
     # Apply threshold: Only consider distances < distance_threshold
     close_mask = (dist_matrix < 1).float()  # 1 for valid, 0 for ignored pairs
-
-    print(f"dist_matrix {dist_matrix.shape}, cluster_sim_not {cluster_sim_not.shape}, close_mask {close_mask.shape}")
-
+    print(f"dist_matrix {dist_matrix}, cluster_sim_not {cluster_sim_not}, close_mask {close_mask}")
+    # dist_matrix torch.Size([15648, 15648]), cluster_sim_not torch.Size([15648, 15648]), close_mask torch.Size([15648, 15648])
     # close, and different ID two vector distances
     target_hamming_dists = dist_matrix * close_mask * cluster_sim_not
 
+    print(f"target_hamming_dists: {target_hamming_dists}")
     print(f"target_hamming_dists mean: {target_hamming_dists.mean()}")
     print(f"target_hamming_dists min: {target_hamming_dists.min()}")
     print(f"target_hamming_dists max: {target_hamming_dists.max()}")
