@@ -484,6 +484,8 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     print("non_zero_values")
     print(non_zero_values)
     penalty = torch.exp(-non_zero_values).mean()
+    print("penalty")
+    print(penalty)
 
     return penalty
 
