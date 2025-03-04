@@ -89,6 +89,12 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler.update()
     optimizer.zero_grad()
 
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            print(f"Still no gradient for {name} after loss.backward()")
+        else:
+            print(f"Gradient for {name}: {param.grad.norm()}")
+
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     # print(f"loss_list {loss_list3}")
