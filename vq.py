@@ -443,7 +443,7 @@ def batched_embedding(indices, embeds):
     return embeds.gather(2, indices)
 
 
-def cluster_penalty_loss(features, cluster_assignments, distance_threshold=30):
+def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     """        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
 
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
