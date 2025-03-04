@@ -474,7 +474,12 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # --------------------------------------------------------------
     feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
     diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
-
+    print("dist_matrix")
+    print(dist_matrix)
+    print("diff_feat_mask")
+    print(diff_feat_mask)
+    print("same_id_matrix")
+    print(same_id_matrix)
     # Gaussian-based penalty function (or alternative)
     target_dist = dist_matrix * diff_feat_mask * same_id_matrix
     print(f"target_dist min {target_dist.min()}, max {target_dist.max()}, mean {target_dist.mean()}")
