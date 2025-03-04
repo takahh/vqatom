@@ -475,11 +475,11 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # Compute pairwise L1 distances (approximating Hamming distance)
     dist_matrix = torch.cdist(features.float(), features.float(), p=1)
     # Apply threshold: Only consider distances < distance_threshold
-    close_mask = (dist_matrix < 20 and dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
-    print(f"dist_matrix {dist_matrix}, cluster_sim_not {cluster_sim_not}, close_mask {close_mask}")
+    max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
+    min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
     # dist_matrix torch.Size([15648, 15648]), cluster_sim_not torch.Size([15648, 15648]), close_mask torch.Size([15648, 15648])
     # close, and different ID two vector distances
-    target_hamming_dists = dist_matrix * close_mask * cluster_sim_not
+    target_hamming_dists = dist_matrix * max_mask * min_mask * cluster_sim_not
 
     print(f"target_hamming_dists: {target_hamming_dists}")
     print(f"target_hamming_dists mean: {target_hamming_dists.mean()}")
