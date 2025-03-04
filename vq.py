@@ -444,6 +444,7 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
+    #                    init_feat, embed_ind_for_sil
     """        atom_type_div_loss = cluster_penalty_loss(init_feat, embed_ind_for_sil)
 
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
@@ -462,6 +463,8 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     print(features.requires_grad)  # Should be True
     print("cluster_assignments.requires_grad")  # Should be True if it's an output of the model
     print(cluster_assignments.requires_grad)  # Should be True if it's an output of the model
+    print("cluster_assignments.grad_fn")  # Should NOT be None
+    print(cluster_assignments.grad_fn)  # Should NOT be None
 
     # ------------------------------------
     # make a matrix for different ID pairs
