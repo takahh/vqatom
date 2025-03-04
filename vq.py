@@ -487,6 +487,7 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     print(f"dist_matrix min {dist_matrix.min()}")
     print(f"dist_matrix mean {dist_matrix.mean()}")
     print(f"dist_matrix max {dist_matrix.max()}")
+    print(f"dist_matrix {dist_matrix}")
     # Apply threshold: Only consider distances < distance_threshold
     max_mask = (dist_matrix < 20 ).float()  # 1 for valid, 0 for ignored pairs
     min_mask = (dist_matrix > 1).float()  # 1 for valid, 0 for ignored pairs
