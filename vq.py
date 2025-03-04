@@ -442,20 +442,23 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
-
-import torch
-import torch
-
 def cluster_penalty_loss(features, cluster_assignments):
     """
     Penalizes assigning the same cluster ID to nodes that are only slightly different.
     """
+    # Ensure cluster_assignments is an integer tensor
+    cluster_assignments = cluster_assignments.to(torch.int64)
 
-    # Compute pairwise distances (L1 or cosine)
+    # Compute num_classes as an integer
+    num_classes = int(cluster_assignments.max().item()) + 1  # Ensure it's an int
+
+    # Convert cluster assignments to one-hot encoding
+    cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=num_classes).float()
+
+    # Compute pairwise L1 distances (approximating Hamming distance)
     hamming_dists = torch.cdist(features.float(), features.float(), p=1)
 
-    # Soft cluster similarity
-    cluster_assignments = torch.nn.functional.one_hot(cluster_assignments, num_classes=cluster_assignments.max() + 1).float()
+    # Soft cluster similarity matrix
     cluster_sim = torch.mm(cluster_assignments, cluster_assignments.T)
 
     # Apply margin to control penalty strength
@@ -465,12 +468,7 @@ def cluster_penalty_loss(features, cluster_assignments):
     # Compute cluster penalty loss
     penalty_loss = (hamming_penalty * cluster_sim).sum() / (cluster_sim.sum() + 1e-6)
 
-    # Add contrastive loss for separation
-    contrastive_loss = (1 - cluster_sim) * torch.exp(-hamming_dists)
-    penalty_loss += contrastive_loss.sum() / ((1 - cluster_sim).sum() + 1e-6)
-
     return penalty_loss
-
 
 
 def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num_atom_types=100):
