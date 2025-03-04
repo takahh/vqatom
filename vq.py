@@ -444,6 +444,8 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
+    print(feats.requires_grad, quantized.requires_grad, cluster_assignments.requires_grad)
+
     # ------------------------------------
     # same ID mask
     # ------------------------------------
@@ -1157,7 +1159,7 @@ class VectorQuantize(nn.Module):
         t.to("cuda")
         init_feat.to("cuda")
         latents.to("cuda")
-        quantized.to("cuda")
+        # quantized.to("cuda")
         t_norm = torch.norm(t, dim=1, keepdim=True) + 1e-6
         t = t / t_norm
 
