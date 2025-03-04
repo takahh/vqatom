@@ -464,6 +464,8 @@ def cluster_penalty_loss(quantized, cluster_assignments, feats):
     embedding_dim = 64  # Set the embedding dimension
     cluster_embedding = torch.nn.Embedding(num_classes, embedding_dim).to(cluster_assignments.device)
     cluster_assignments_embedded = cluster_embedding(cluster_assignments.long())  # Shape: (batch_size, embedding_dim)
+    print("cluster_assignments_embedded.shape")
+    print(cluster_assignments_embedded.shape)
     same_id_matrix = torch.mm(cluster_assignments_embedded, cluster_assignments_embedded.T)
 
     # --------------------------------------------------------------
