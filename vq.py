@@ -457,6 +457,11 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     Returns:
         penalty_loss: A scalar tensor that is differentiable.
     """
+    print("features.requires_grad")  # Should be True
+    print(features.requires_grad)  # Should be True
+    print("cluster_assignments.requires_grad")  # Should be True if it's an output of the model
+    print(cluster_assignments.requires_grad)  # Should be True if it's an output of the model
+
     # ------------------------------------
     # make a matrix for different ID pairs
     # ------------------------------------
