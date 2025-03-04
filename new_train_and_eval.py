@@ -78,8 +78,9 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
-
+    print(f"Loss: {loss.item()}")
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
+    print("Backward pass completed")
     scaler.unscale_(optimizer)
     scaler.step(optimizer)
     scaler.update()
