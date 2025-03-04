@@ -461,12 +461,10 @@ def cluster_penalty_loss(quantized, cluster_assignments, feats):
     # same ID mask
     # ------------------------------------
     num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
-    embedding_dim = 64  # Set the embedding dimension
-    cluster_embedding = torch.nn.Embedding(num_classes, embedding_dim).to(cluster_assignments.device)
-    cluster_assignments_embedded = cluster_embedding(cluster_assignments.long())  # Shape: (batch_size, embedding_dim)
-    print("cluster_assignments_embedded.shape")
-    print(cluster_assignments_embedded.shape)
-    same_id_matrix = torch.mm(cluster_assignments_embedded, cluster_assignments_embedded.T)
+    cluster_embedding = torch.nn.functional.one_hot(num_classes).float()
+    print("cluster_embedding.shape")
+    print(cluster_embedding.shape)
+    same_id_matrix = torch.mm(cluster_embedding, cluster_embedding.T)
 
     # --------------------------------------------------------------
     # distance matrix
