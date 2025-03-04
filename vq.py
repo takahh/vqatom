@@ -477,7 +477,10 @@ def cluster_penalty_loss(features, cluster_assignments, distance_threshold=10):
     # make a distance matrix for different ID pairs and close enough
     # --------------------------------------------------------------
     # Compute pairwise L1 distances (approximating Hamming distance)
-    id_dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
+    # id_dist_matrix = torch.cdist(cluster_assignments.float(), cluster_assignments.float(), p=2)
+    id_dist_matrix = torch.cdist(cluster_assignments.float().unsqueeze(1), cluster_assignments.float().unsqueeze(1),
+                                 p=2)
+
     # dist_matrix は、IDが同じ場合０、違う場合は 1.414
 
     target_hamming_dists = id_dist_matrix * diff_feat_mask
