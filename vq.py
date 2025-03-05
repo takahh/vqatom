@@ -1254,10 +1254,11 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
-        # if self.training:
-        #     quantize = x_tmp + (quantize - x_tmp)
+        if self.training:
+            quantize = x_tmp + (quantize - x_tmp)
 
-        loss = torch.zeros(1, device=device, requires_grad=True)
+        # loss = torch.zeros(1, device=device, requires_grad=True)
+        loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
 
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
@@ -1282,7 +1283,7 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        loss = self.lamb_div_ele * div_ele_loss
+        loss = loss + self.lamb_div_ele * div_ele_loss
         # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
