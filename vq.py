@@ -346,7 +346,7 @@ def kmeans(
         flat_samples = samples.view(-1, dim)  # Flatten samples to match bucket index
 
         # Use index_add_ on the first dimension (cluster assignment)
-        new_means.index_add_(1, flat_buckets.unsqueeze(-1), flat_samples)
+        new_means.index_add_(1, flat_buckets, flat_samples)
 
         # new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
 
