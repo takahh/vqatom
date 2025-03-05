@@ -100,6 +100,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
             print(f"after zero grad for {name}: {param.grad}")  # Mean absolute activation
         else:
             print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
+    print(f"@@@@@@@@@  Loss grad_fn: {loss.grad_fn}")  # Should NOT be None
 
     loss.backward()
 
