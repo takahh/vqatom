@@ -1267,9 +1267,8 @@ class VectorQuantize(nn.Module):
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
-            # unique_code_ids = torch.unique(embed_ind)
-            # codebook = torch.squeeze(codebook)[unique_code_ids]
-
+            unique_code_ids = torch.unique(embed_ind)
+            codebook = torch.squeeze(codebook)[unique_code_ids]
 
         num_codes = codebook.shape[0]
         if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
