@@ -486,6 +486,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
     print("non_zero_values")
     print(non_zero_values)
+    print("non_zero_values grad info")
+    print(non_zero_values.requires_grad)  # Must be True
+    print(non_zero_values.grad_fn)  # Must not be None
     penalty = torch.exp(-diff_feat_same_cluster_dist).mean()
 
     print("penalty")
