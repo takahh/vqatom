@@ -115,7 +115,7 @@ class WeightedThreeHopGCN(nn.Module):
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
         # print("return losses from Weighted model")
-        return (h_list, h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
+        return (h_list, h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 
 
 class MLP(nn.Module):
