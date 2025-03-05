@@ -1183,8 +1183,8 @@ class VectorQuantize(nn.Module):
 
     def simple_loss_function(self, quantized):
         quantized = quantized.squeeze(0)  # Remove batch dim if needed
-        dist_matrix = torch.cdist(quantized, quantized, p=2)  # Pairwise Euclidean distance
-        loss = dist_matrix.mean()  # Simple mean distance loss
+        # dist_matrix = torch.cdist(quantized, quantized, p=2)  # Pairwise Euclidean distance
+        loss = quantized.mean()  # Simple mean distance loss
         return loss
 
 
