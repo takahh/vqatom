@@ -83,7 +83,7 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
         h_list = []
-        print(f"$$$$$$$$$$$ Model output requires_grad: {h.requires_grad}")  # Should be True
+        print(f"Output before backward: {h.mean().item()}, std: {h.std().item()}")
 
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
@@ -114,15 +114,6 @@ class WeightedThreeHopGCN(nn.Module):
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
         # print("return losses from Weighted model")
-
-        # ----------------------------------------
-        # check gradient
-        # ----------------------------------------
-        for name, param in self.named_parameters():
-            if param.grad is None:
-                print(f"forward end Warning: No gradient for {name}")
-            else:
-                print(f"forward end Gradient exists for {name} before model.forward")
 
         return (h_list, h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 

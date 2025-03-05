@@ -79,66 +79,18 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
                                                                                                         logger)  # g is blocks
 
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after model forward {name}: {param.grad}")  # Mean absolute activation
-        else:
-            print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
-
     # del logits, quantized
     torch.cuda.empty_cache()
-
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after empty_cache {name}: {param.grad}")  # Mean absolute activation
-        else:
-            print(f"after empty_cache {name}: param.grad is None")  # Mean absolute activation
 
     # optimizer.zero_grad()
     optimizer.zero_grad(set_to_none=False)  # Ensure it resets to zero instead of None
 
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after zero grad for {name}: {param.grad}")  # Mean absolute activation
-        else:
-            print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
-    print(f"@@@@@@@@@  Loss grad_fn: {loss.grad_fn}")  # Should NOT be None
-
     loss.backward()
-    found_gradients = False
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            found_gradients = True
-            print(f"🟢 {name} has gradients!")
-    if not found_gradients:
-        print("🔴 No gradients found! The model is disconnected from loss.")
-
-    # scaler.scale(loss).backward()  # Ensure this is False unless needed
-    # scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    # scaler.unscale_(optimizer)
-    # scaler.step(optimizer)
-    # scaler.update()
     optimizer.step()
-
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after opt step for {name}: {param.grad}")  # Mean absolute activation
-        else:
-            print(f"after opt step {name}: param.grad is None")  # Mean absolute activation
-
 
     latent_list.append(latent_train)
     cb_list.append(cb)
     # print(f"loss_list {loss_list3}")
-
-    # ----------------------------------------
-    # check gradient
-    # ----------------------------------------
-    for name, param in model.named_parameters():
-        if param.grad is None:
-            print(f"train sage last Warning: No gradient for {name}")
-        else:
-            print(f"train sage last Gradient exists for {name} before model.forward")
 
     return loss, loss_list3, latent_list, latents
 
@@ -384,15 +336,6 @@ def run_inductive(
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
-
-                    # ----------------------------------------
-                    # check gradient
-                    # ----------------------------------------
-                    for name, param in model.named_parameters():
-                        if param.grad is None:
-                            print(f"loop end Warning: No gradient for {name}")
-                        else:
-                            print(f"loop end Gradient exists for {name} before model.forward")
 
         # --------------------------------
         # Save model
