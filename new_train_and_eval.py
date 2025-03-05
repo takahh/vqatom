@@ -101,8 +101,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
         else:
             print(f"Gradient for {name}: {param.grad.norm()}")
 
-    latent_list.append(latent_train.detach().cpu())
-    cb_list.append(cb.detach().cpu())
+    latent_list.append(latent_train)
+    cb_list.append(cb)
     # print(f"loss_list {loss_list3}")
     return loss, loss_list3, latent_list, latents
 
