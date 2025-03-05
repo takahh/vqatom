@@ -78,10 +78,15 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     with torch.cuda.amp.autocast(dtype=torch.float16):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
                                                                                                         logger)  # g is blocks
-    # loss = loss.to(device)
+    print("Loss requires grad:", loss.requires_grad)
+    print("Loss grad_fn:", loss.grad_fn)
+    print("Quantized requires grad:", quantized.requires_grad)
+    print("Quantized grad_fn:", quantized.grad_fn)
+    for name, param in model.named_parameters():
+        print(f"{name}: requires_grad={param.requires_grad}")
+
     del logits, quantized
     torch.cuda.empty_cache()
-    print(f"Loss: {loss.item()}")
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     print("Backward pass completed")
     scaler.unscale_(optimizer)
