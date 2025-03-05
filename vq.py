@@ -444,10 +444,6 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
-    print(feats.requires_grad, quantized.requires_grad, cluster_assignments.requires_grad)
-    print("quantized grad info")
-    print(quantized.requires_grad)  # Must be True
-    print(quantized.grad_fn)  # Must not be None
 
     # --------------------------------------------------------------
     # distance matrix
@@ -470,33 +466,14 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
     diff_feat_mask = diff_feat_mask.float()
 
-    print("dist_matrix")
-    print(dist_matrix)
-    print("same_id_mask")
-    print(same_id_mask)
-    print("diff_feat_mask")
-    print(diff_feat_mask)
     # --------------------------------------------------------------
     # Calculate penalty
     # --------------------------------------------------------------
     # Gaussian-based penalty function (or alternative)
     diff_feat_same_cluster_dist = dist_matrix * (diff_feat_mask * same_id_mask).detach()
-    print("diff_feat_same_cluster_dist")
-    print(diff_feat_same_cluster_dist.sum())
     non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
-    print("non_zero_values")
-    print(non_zero_values)
-    print("non_zero_values grad info")
-    print(non_zero_values.requires_grad)  # Must be True
-    print(non_zero_values.grad_fn)  # Must not be None
     penalty = torch.logsumexp(-diff_feat_same_cluster_dist, dim=-1).mean()
 
-    print("penalty")
-    print(penalty)
-
-    print("penalty grad info")
-    print(penalty.requires_grad)  # Must be True
-    print(penalty.grad_fn)  # Must not be None
     return penalty
 
 
