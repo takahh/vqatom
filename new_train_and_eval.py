@@ -64,8 +64,9 @@ import torch
 def train_sage(model, g, feats, optimizer, epoch, logger):
 
     device = torch.device("cuda")
-    feats.to(device)
-    g.to(device)
+    feats = feats.to(device)
+    g = g.to(device)
+    model = model.to(device)
 
     print(f"feats device: {feats.device}, Model device: {next(model.parameters()).device}")
     print(f"g device: {g.device}")
