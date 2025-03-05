@@ -735,9 +735,6 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        import time
-
-
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
@@ -750,7 +747,7 @@ class EuclideanCodebook(nn.Module):
         # ----------------------------------------------------
         self.init_embed_(flatten, logger)
         embed = self.embed
-        init_cb = self.embed.detach().clone().contiguous()
+        # init_cb = self.embed.detach().clone().contiguous()
 
         dist = -torch.cdist(flatten, self.embed, p=2)
         print(f"flatten {flatten}")
@@ -782,8 +779,9 @@ class EuclideanCodebook(nn.Module):
         print(f"embed_ind {embed_ind}")
         quantize = batched_embedding(embed_ind, self.embed)
         print(f"quantize {quantize}")
+        flatten.retain_grad()
 
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb
+        return quantize, embed_ind, dist, self.embed, flatten, embed
 
 
 class CosineSimCodebook(nn.Module):

@@ -85,8 +85,9 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     for name, param in model.named_parameters():
         print(f"{name}: requires_grad={param.requires_grad}")
 
-    del logits, quantized
+    # del logits, quantized
     torch.cuda.empty_cache()
+    optimizer.zero_grad()
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     print("Backward pass completed")
 
@@ -98,7 +99,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler.unscale_(optimizer)
     scaler.step(optimizer)
     scaler.update()
-    optimizer.zero_grad()
 
 
     latent_list.append(latent_train)
@@ -309,8 +309,8 @@ def run_inductive(
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     for epoch in range(1, conf["max_epoch"] + 1):
-        loss_list_list_train = [[]] * 11
-        loss_list_list_test = [[]] * 11
+        loss_list_list_train = [[] for _ in range(11)]
+        loss_list_list_test = [[] for _ in range(11)]
         loss_list = []
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
