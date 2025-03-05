@@ -67,9 +67,9 @@ class WeightedThreeHopGCN(nn.Module):
         # ----------------------------------------
         for name, param in self.named_parameters():
             if param.grad is None:
-                print(f"Warning: No gradient for {name}")
+                print(f"Weight forward Warning: No gradient for {name}")
             else:
-                print(f"Gradient exists for {name} before model.forward")
+                print(f"Weight forward Gradient exists for {name} before model.forward")
 
 
         if edge_type not in batched_graph.etypes:
