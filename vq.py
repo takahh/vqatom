@@ -1233,7 +1233,7 @@ class VectorQuantize(nn.Module):
         sil_loss = None
         print("quantized.shape")
         print(quantized.shape)
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
         bond_num_div_loss = torch.tensor(1)
         charge_div_loss = torch.tensor(1)
         elec_state_div_loss = torch.tensor(1)
@@ -1247,7 +1247,7 @@ class VectorQuantize(nn.Module):
         # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
         # atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
-        atom_type_div_loss = self.simple_loss_function(quantized)
+        # atom_type_div_loss = self.simple_loss_function(quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, 1)
