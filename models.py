@@ -77,15 +77,6 @@ class WeightedThreeHopGCN(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight
 
-        # ----------------------------------------
-        # check gradient
-        # ----------------------------------------
-        for name, param in self.named_parameters():
-            if param.grad is None:
-                print(f"before conv Warning: No gradient for {name}")
-            else:
-                print(f"before conv Gradient exists for {name} before model.forward")
-
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
 
@@ -93,15 +84,6 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-
-        # ----------------------------------------
-        # check gradient
-        # ----------------------------------------
-        for name, param in self.named_parameters():
-            if param.grad is None:
-                print(f"after conv Warning: No gradient for {name}")
-            else:
-                print(f"after conv Gradient exists for {name} before model.forward")
 
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
@@ -111,15 +93,6 @@ class WeightedThreeHopGCN(nn.Module):
         losslist = [div_ele_loss, bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
                  pair_loss, sil_loss, equivalent_atom_loss]
-
-        # ----------------------------------------
-        # check gradient
-        # ----------------------------------------
-        for name, param in self.named_parameters():
-            if param.grad is None:
-                print(f"after vq Warning: No gradient for {name}")
-            else:
-                print(f"after vq Gradient exists for {name} before model.forward")
 
         # --------------------------------
         # collect data for molecule images
@@ -142,6 +115,16 @@ class WeightedThreeHopGCN(nn.Module):
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
         # print("return losses from Weighted model")
+
+        # ----------------------------------------
+        # check gradient
+        # ----------------------------------------
+        for name, param in self.named_parameters():
+            if param.grad is None:
+                print(f"forward end Warning: No gradient for {name}")
+            else:
+                print(f"forward end Gradient exists for {name} before model.forward")
+
         return (h_list, h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 
 

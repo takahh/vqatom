@@ -106,6 +106,16 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     latent_list.append(latent_train)
     cb_list.append(cb)
     # print(f"loss_list {loss_list3}")
+
+    # ----------------------------------------
+    # check gradient
+    # ----------------------------------------
+    for name, param in model.named_parameters():
+        if param.grad is None:
+            print(f"train sage last Warning: No gradient for {name}")
+        else:
+            print(f"train sage last Gradient exists for {name} before model.forward")
+
     return loss, loss_list3, latent_list, latents
 
 
@@ -350,6 +360,15 @@ def run_inductive(
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
+
+                    # ----------------------------------------
+                    # check gradient
+                    # ----------------------------------------
+                    for name, param in model.named_parameters():
+                        if param.grad is None:
+                            print(f"loop end Warning: No gradient for {name}")
+                        else:
+                            print(f"loop end Gradient exists for {name} before model.forward")
 
         # --------------------------------
         # Save model
