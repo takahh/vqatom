@@ -63,7 +63,7 @@ import torch
 
 def train_sage(model, g, feats, optimizer, epoch, logger):
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda")
     feats.to(device)
     g.to(device)
 
