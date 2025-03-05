@@ -313,7 +313,8 @@ def kmeans(
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
-            dists = torch.cdist(samples, means[:, :k], p=2)
+            dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+            # dists = torch.cdist(samples, means[:, :k], p=2)
 
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
