@@ -1181,6 +1181,13 @@ class VectorQuantize(nn.Module):
 
         return loss
 
+    def simple_loss_function(self, quantized):
+        quantized = quantized.squeeze(0)  # Remove batch dim if needed
+        dist_matrix = torch.cdist(quantized, quantized, p=2)  # Pairwise Euclidean distance
+        loss = dist_matrix.mean()  # Simple mean distance loss
+        return loss
+
+
         # embed_ind, codebook, init_feat, latents, quantize, logger
     def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
         # Normalize embeddings (optional: remove if not necessary)
@@ -1234,6 +1241,7 @@ class VectorQuantize(nn.Module):
         ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
         # atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
+        atom_type_div_loss = self.simple_loss_function(quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, 1)
