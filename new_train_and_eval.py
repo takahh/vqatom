@@ -74,12 +74,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     model.train()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
 
-    for name, param in model.named_parameters():
-        if param.grad is None:
-            print(f"Warning: No gradient for {name}")
-        else:
-            print(f"Gradient exists for {name} before model.forward")
-
     with torch.cuda.amp.autocast(dtype=torch.float16):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
                                                                                                         logger)  # g is blocks
