@@ -84,15 +84,21 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
         else:
             print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
 
-
     # del logits, quantized
     torch.cuda.empty_cache()
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"after empty_cache {name}: {param.data.abs().mean()}")  # Mean absolute activation
+        else:
+            print(f"after empty_cache {name}: param.grad is None")  # Mean absolute activation
+
     optimizer.zero_grad()
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"Activation for {name}: {param.data.abs().mean()}")  # Mean absolute activation
+            print(f"after zero grad for {name}: {param.data.abs().mean()}")  # Mean absolute activation
         else:
-            print(f"before backward {name}: param.grad is None")  # Mean absolute activation
+            print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
 
 
     loss.backward()
