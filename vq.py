@@ -289,68 +289,68 @@ def gmm(
 import torch
 from einops import rearrange, repeat
 
+import torch
+from einops import rearrange, repeat
+
 
 def kmeans(
         samples,
         num_clusters,
         num_iters=100,
         use_cosine_sim=False,
-        all_reduce_fn=noop
+        all_reduce_fn=lambda x: x
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     num_iters = 20
-    print("samples")  # Check input magnitude
-    print(samples)  # Check input magnitude
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
-    # Randomly select the first centroid
-    means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
-    samples = samples.to("cuda")
-    means = means.to("cuda")
+    # Randomly select the first centroid (ensure differentiation)
+    rand_idx = torch.randint(0, samples.shape[1], (1,), device=device)
+    means[:, 0] = samples[:, rand_idx]
+
+    samples = samples.to(device)  # Ensure samples are on the same device
+    means = means.to(device)
 
     for k in range(1, num_clusters):
-
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
-            dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
-            # dists = torch.cdist(samples, means[:, :k], p=2)
+            dists = torch.sum((samples.unsqueeze(2) - means[:, :k].unsqueeze(1)) ** 2, dim=-1)
 
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+        probs = min_dists / (min_dists.sum(dim=-1, keepdim=True) + 1e-8)  # Avoid division by zero
+
+        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid
+        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]  # Ensure differentiability
 
     # Iterative optimization
     for _ in range(num_iters):
         if use_cosine_sim:
             dists = samples @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -torch.cdist(samples, means, p=2)
+            dists = -torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)  # Differentiable
 
         buckets = torch.argmax(dists, dim=-1)
-        bins = batched_bincount(buckets, minlength=num_clusters)
+        bins = torch.bincount(buckets.view(-1), minlength=num_clusters).view(num_codebooks, num_clusters)
         all_reduce_fn(bins)
 
         zero_mask = bins == 0
-        bins_min_clamped = bins.masked_fill(zero_mask, 1)
+        bins_min_clamped = bins.masked_fill(zero_mask, 1)  # Avoid division by zero
 
-        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
+        # Differentiable centroid update (using index_add_ instead of scatter_add_)
+        new_means = torch.zeros_like(means)
+        new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
 
-        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
+        new_means = new_means / bins_min_clamped.unsqueeze(-1)  # Normalize by cluster sizes
         all_reduce_fn(new_means)
 
         if use_cosine_sim:
-            new_means = l2norm(new_means)
+            new_means = new_means / (new_means.norm(dim=-1, keepdim=True) + 1e-8)  # Normalize for cosine similarity
 
-        means = torch.where(
-            rearrange(zero_mask, '... -> ... 1'),
-            means,
-            new_means
-        )
+        # Soft update instead of torch.where() to allow gradient flow
+        means = zero_mask.unsqueeze(-1) * means + (1 - zero_mask.unsqueeze(-1)) * new_means
 
     return means, bins
 
