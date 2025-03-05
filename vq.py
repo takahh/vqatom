@@ -299,8 +299,8 @@ def kmeans(
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     num_iters = 20
-    print("samples.abs().mean()")  # Check input magnitude
-    print(samples.abs().mean())  # Check input magnitude
+    print("samples")  # Check input magnitude
+    print(samples)  # Check input magnitude
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
