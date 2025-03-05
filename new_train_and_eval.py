@@ -90,14 +90,14 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after empty_cache {name}: {param.data.grad}")  # Mean absolute activation
+            print(f"after empty_cache {name}: {param.grad}")  # Mean absolute activation
         else:
             print(f"after empty_cache {name}: param.grad is None")  # Mean absolute activation
 
     optimizer.zero_grad()
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after zero grad for {name}: {param.data.grad}")  # Mean absolute activation
+            print(f"after zero grad for {name}: {param.grad}")  # Mean absolute activation
         else:
             print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
 
@@ -118,7 +118,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after opt step for {name}: {param.data.grad}")  # Mean absolute activation
+            print(f"after opt step for {name}: {param.grad}")  # Mean absolute activation
         else:
             print(f"after opt step {name}: param.grad is None")  # Mean absolute activation
 
