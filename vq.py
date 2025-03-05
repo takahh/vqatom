@@ -1254,8 +1254,8 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
-        if self.training:
-            quantize = x_tmp + (quantize - x_tmp)
+        # if self.training:
+        #     quantize = x_tmp + (quantize - x_tmp)
 
         loss = torch.zeros(1, device=device, requires_grad=True)
 
