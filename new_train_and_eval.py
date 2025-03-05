@@ -88,7 +88,9 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # del logits, quantized
     torch.cuda.empty_cache()
     optimizer.zero_grad()
-    scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
+    loss.backward()
+    # scaler.scale(loss).backward()  # Ensure this is False unless needed
+    # scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     print("Backward pass completed")
 
     for name, param in model.named_parameters():
