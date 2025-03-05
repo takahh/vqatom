@@ -72,9 +72,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     #     if not in_optimizer:
     #         print(f"{name} is missing from optimizer!")
 
-    print(f"feats device: {feats.device}, Model device: {next(model.parameters()).device}")
-    print(f"g device: {g.device}")
-
     model.train()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
 
@@ -114,17 +111,16 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     # scaler.scale(loss).backward()  # Ensure this is False unless needed
     # scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    print("Backward pass completed")
-
-    for name, param in model.named_parameters():
-        if param.grad is None:
-            print(f"Still no gradient for {name} after loss.backward()")
-        else:
-            print(f"Gradient for {name}: {param.grad}")
     # scaler.unscale_(optimizer)
     # scaler.step(optimizer)
     # scaler.update()
     optimizer.step()
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"after opt step for {name}: {param.data.grad}")  # Mean absolute activation
+        else:
+            print(f"after opt step {name}: param.grad is None")  # Mean absolute activation
 
 
     latent_list.append(latent_train)
