@@ -270,7 +270,7 @@ def run(args):
     # logger.info(f"conf: {conf}")
     """ Model init """
     from models import WeightedThreeHopGCN
-    model = WeightedThreeHopGCN(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim)
+    model = WeightedThreeHopGCN(in_feats=7, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim)
     # model = Model(conf)
 
     if conf["train_or_infer"] == "infer":
