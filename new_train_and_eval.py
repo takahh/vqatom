@@ -98,9 +98,10 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
             print(f"Still no gradient for {name} after loss.backward()")
         else:
             print(f"Gradient for {name}: {param.grad.norm()}")
-    scaler.unscale_(optimizer)
-    scaler.step(optimizer)
-    scaler.update()
+    # scaler.unscale_(optimizer)
+    # scaler.step(optimizer)
+    # scaler.update()
+    optimizer.step()
 
 
     latent_list.append(latent_train)
