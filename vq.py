@@ -491,6 +491,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     print("penalty")
     print(penalty)
 
+    print("penalty grad info")
+    print(penalty.requires_grad)  # Must be True
+    print(penalty.grad_fn)  # Must not be None
     return penalty
 
 
