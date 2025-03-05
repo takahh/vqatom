@@ -752,18 +752,23 @@ class EuclideanCodebook(nn.Module):
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
 
-        dist = -torch.cdist(flatten, embed, p=2)
+        dist = -torch.cdist(flatten, self.embed, p=2)
+        print(f"flatten {flatten}")
+        print(f"dist {dist}")
 
         # ----------------------------------------------------
         # get codebook ID assigned
         # ----------------------------------------------------
         embed_ind = get_ind(dist)
+
+        print(f"embed_ind 1 {embed_ind}")
         indices = torch.argmax(embed_ind, dim=-1, keepdim=True)  # Non-differentiable forward pass
         embed_ind = indices + (embed_ind - embed_ind.detach())  # Straight-through trick
         indices = embed_ind[:, :, 0]  # Keep the float tensor
         proxy_indices = indices.long()  # Convert to integer for forward pass
         embed_ind = proxy_indices + (indices - indices.detach())
 
+        print(f"embed_ind 2 {embed_ind}")
         # Validate values
         if embed_ind.min() < 0:
             raise ValueError("embed_ind contains negative values.")
