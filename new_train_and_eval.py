@@ -62,11 +62,14 @@ import torch
 
 
 def train_sage(model, g, feats, optimizer, epoch, logger):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    feats.to(device)
+    g.to(device)
+
     print(f"feats device: {feats.device}, Model device: {next(model.parameters()).device}")
     print(f"g device: {g.device}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
     model.train()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
 
