@@ -100,8 +100,14 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
         else:
             print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
 
-
     loss.backward()
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"after loss back for {name}: {param.data.abs().mean()}")  # Mean absolute activation
+        else:
+            print(f"after loss back {name}: param.grad is None")  # Mean absolute activation
+
     # scaler.scale(loss).backward()  # Ensure this is False unless needed
     # scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     print("Backward pass completed")
