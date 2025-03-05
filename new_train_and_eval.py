@@ -86,6 +86,12 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad(set_to_none=False)  # Ensure it resets to zero instead of None
 
     loss.backward()
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"after model forward {name}: {param.grad}")  # Mean absolute activation
+        else:
+            print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
     optimizer.step()
 
     latent_list.append(latent_train)
