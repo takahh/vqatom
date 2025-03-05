@@ -90,16 +90,16 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     print("Backward pass completed")
 
-    scaler.unscale_(optimizer)
-    scaler.step(optimizer)
-    scaler.update()
-    optimizer.zero_grad()
-
     for name, param in model.named_parameters():
         if param.grad is None:
             print(f"Still no gradient for {name} after loss.backward()")
         else:
             print(f"Gradient for {name}: {param.grad.norm()}")
+    scaler.unscale_(optimizer)
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad()
+
 
     latent_list.append(latent_train)
     cb_list.append(cb)
