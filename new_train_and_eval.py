@@ -67,6 +67,10 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     feats = feats.to(device)
     g = g.to(device)
     model = model.to(device)
+    for name, param in model.named_parameters():
+        in_optimizer = any(param in group["params"] for group in optimizer.param_groups)
+        if not in_optimizer:
+            print(f"{name} is missing from optimizer!")
 
     print(f"feats device: {feats.device}, Model device: {next(model.parameters()).device}")
     print(f"g device: {g.device}")
@@ -80,7 +84,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after model forward {name}: {param.data.abs().mean()}")  # Mean absolute activation
+            print(f"after model forward {name}: {param.grad}")  # Mean absolute activation
         else:
             print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
 
@@ -89,14 +93,14 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after empty_cache {name}: {param.data.abs().mean()}")  # Mean absolute activation
+            print(f"after empty_cache {name}: {param.data.grad}")  # Mean absolute activation
         else:
             print(f"after empty_cache {name}: param.grad is None")  # Mean absolute activation
 
     optimizer.zero_grad()
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after zero grad for {name}: {param.data.abs().mean()}")  # Mean absolute activation
+            print(f"after zero grad for {name}: {param.data.grad}")  # Mean absolute activation
         else:
             print(f"after zero grad {name}: param.grad is None")  # Mean absolute activation
 
@@ -104,7 +108,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after loss back for {name}: {param.data.abs().mean()}")  # Mean absolute activation
+            print(f"after loss back for {name}: {param.data.grad}")  # Mean absolute activation
         else:
             print(f"after loss back {name}: param.grad is None")  # Mean absolute activation
 
@@ -116,7 +120,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
         if param.grad is None:
             print(f"Still no gradient for {name} after loss.backward()")
         else:
-            print(f"Gradient for {name}: {param.grad.norm()}")
+            print(f"Gradient for {name}: {param.grad}")
     # scaler.unscale_(optimizer)
     # scaler.step(optimizer)
     # scaler.update()
