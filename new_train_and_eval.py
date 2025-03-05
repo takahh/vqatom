@@ -105,12 +105,13 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     print(f"@@@@@@@@@  Loss grad_fn: {loss.grad_fn}")  # Should NOT be None
 
     loss.backward()
-
+    found_gradients = False
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after loss back for {name}: {param.data.grad}")  # Mean absolute activation
-        else:
-            print(f"after loss back {name}: param.grad is None")  # Mean absolute activation
+            found_gradients = True
+            print(f"🟢 {name} has gradients!")
+    if not found_gradients:
+        print("🔴 No gradients found! The model is disconnected from loss.")
 
     # scaler.scale(loss).backward()  # Ensure this is False unless needed
     # scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
