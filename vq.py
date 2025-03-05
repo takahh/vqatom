@@ -663,24 +663,24 @@ class EuclideanCodebook(nn.Module):
         # batch_size=256,
         # num_iters=100,
         # logger=None,
-        embed, cluster_size = mini_batch_kmeans(
-            data,
-            self.codebook_size,
-            256,
-            self.kmeans_iters,
-            logger
-            # use_cosine_sim=True,
-            # sample_fn=self.sample_fn,
-            # all_reduce_fn=self.kmeans_all_reduce_fn
-        )
-
-        # embed, cluster_size = kmeans(
+        # embed, cluster_size = mini_batch_kmeans(
         #     data,
         #     self.codebook_size,
+        #     256,
         #     self.kmeans_iters,
-        #     False,
+        #     logger
+        #     # use_cosine_sim=True,
+        #     # sample_fn=self.sample_fn,
         #     # all_reduce_fn=self.kmeans_all_reduce_fn
         # )
+
+        embed, cluster_size = kmeans(
+            data,
+            self.codebook_size,
+            self.kmeans_iters,
+            False,
+            # all_reduce_fn=self.kmeans_all_reduce_fn
+        )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
         self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
@@ -1254,19 +1254,22 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
+        print(f"quantize requires_grad: {quantize.requires_grad}, x_tmp requires_grad: {x_tmp.requires_grad}")
+
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
 
         # loss = torch.zeros(1, device=device, requires_grad=True)
         loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
+        raw_commit_loss = torch.zeros(1, device=device)  # ✅ Ensure it’s part of computation
+        detached_quantize = torch.zeros(1, device=device)  # ✅ Track gradients properly
 
-        raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
-        detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
-            unique_code_ids = torch.unique(embed_ind)
-            codebook = torch.squeeze(codebook)[unique_code_ids]
+            # unique_code_ids = torch.unique(embed_ind)
+            # codebook = torch.squeeze(codebook)[unique_code_ids]
+
 
         num_codes = codebook.shape[0]
         if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
@@ -1283,7 +1286,7 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        loss = loss + self.lamb_div_ele * div_ele_loss
+        loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
         # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
