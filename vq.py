@@ -1207,7 +1207,7 @@ class VectorQuantize(nn.Module):
 
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         sil_loss = None
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
         bond_num_div_loss = torch.tensor(1)
         charge_div_loss = torch.tensor(1)
         elec_state_div_loss = torch.tensor(1)
@@ -1220,7 +1220,7 @@ class VectorQuantize(nn.Module):
         # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-        # atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
+        atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
         # atom_type_div_loss = self.simple_loss_function(quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
@@ -1261,21 +1261,6 @@ class VectorQuantize(nn.Module):
 
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
-
-        # if self.commitment_weight > 0:
-        #     detached_quantize = quantize.detach()
-        #
-        #     if exists(mask):
-        #         commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-        #         if is_multiheaded:
-        #             mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-        #                           h=commit_loss.shape[1] // mask.shape[0])
-        #         commit_loss = commit_loss[mask].mean()
-        #     else:
-        #         commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-        #
-        #     raw_commit_loss = commit_loss
-
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
@@ -1297,7 +1282,7 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        loss = (loss + self.lamb_div_ele * div_ele_loss)
+        loss = self.lamb_div_ele * div_ele_loss
         # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
