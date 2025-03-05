@@ -67,10 +67,10 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     feats = feats.to(device)
     g = g.to(device)
     model = model.to(device)
-    for name, param in model.named_parameters():
-        in_optimizer = any(param in group["params"] for group in optimizer.param_groups)
-        if not in_optimizer:
-            print(f"{name} is missing from optimizer!")
+    # for name, param in model.named_parameters():
+    #     in_optimizer = any(param in group["params"] for group in optimizer.param_groups)
+    #     if not in_optimizer:
+    #         print(f"{name} is missing from optimizer!")
 
     print(f"feats device: {feats.device}, Model device: {next(model.parameters()).device}")
     print(f"g device: {g.device}")
