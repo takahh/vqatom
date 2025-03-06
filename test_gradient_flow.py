@@ -1,25 +1,27 @@
 import torch
-from vq import soft_kmeans
+from vq import EuclideanCodebook
 
-def check_gradient_flow():
+def check_gradient_flow_euclidean():
     num_codebooks = 1
     num_samples = 10000
     dim = 64
     num_clusters = 100
     batch_size = 256
-    num_iters = 10
 
-    # Create synthetic data with gradients enabled
-    samples = torch.randn(num_codebooks, num_samples, dim, device="cuda", requires_grad=True)
+    # Create input tensor with gradients enabled
+    x = torch.randn(num_codebooks, num_samples, dim, device="cuda", requires_grad=True)
 
-    # Run mini-batch soft K-Means
-    means, cluster_sizes = soft_kmeans(samples, num_clusters, batch_size, num_iters)
+    # Initialize EuclideanCodebook
+    model = EuclideanCodebook(dim, num_clusters, num_codebooks=num_codebooks).cuda()
 
-    # Create a dummy loss (sum of means) to force gradient propagation
-    loss = means.sum()
+    # Run forward pass
+    quantize, embed_ind, dist, embed, flatten, embed_final = model(x)
+
+    # Compute a dummy loss to force gradient propagation
+    loss = quantize.sum()
     loss.backward()
 
-    # Check gradient flow
-    print(f"Gradient mean of samples: {samples.grad.abs().mean().item()}")
+    # Check if x retains gradients
+    print(f"Gradient mean of x: {x.grad.abs().mean().item()}")
 
-check_gradient_flow()
+check_gradient_flow_euclidean()
