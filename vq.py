@@ -720,7 +720,7 @@ class EuclideanCodebook(nn.Module):
 
 
     @torch.jit.ignore
-    def init_embed_(self, data, logger):
+    def init_embed_(self, data, logger=None):
         #
         # samples,
         # num_clusters,
