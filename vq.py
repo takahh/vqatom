@@ -771,7 +771,7 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
 
-    @autocast(enabled=False)
+    @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x):
         needs_codebook_dim = x.ndim < 4
         x = x.float()
