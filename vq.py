@@ -307,7 +307,7 @@ def soft_kmeans(
 ):
     args = get_args()
     num_clusters = args.codebook_size
-    num_iters = 10,
+    num_iters = 10
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
 
