@@ -297,21 +297,24 @@ from einops import rearrange
 import torch
 
 
-def soft_kmeans(samples, num_clusters, batch_size=256, num_iters=100):
+def soft_kmeans(samples, num_clusters, batch_size=1000, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
 
     # Initialize centroids
-    means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
+    means = torch.randn(num_codebooks, num_samples, dim, device=device, requires_grad=True)
     print(f"^^^^^^^^^^^^^ samples {samples.shape}")
     print(f"^^^^^^^^^^^^^ means {means.shape}")
+    # ^^^^^^^^^^^^^ samples torch.Size([1, 10000, 64])
+    # ^^^^^^^^^^^^^ means torch.Size([1, 100, 64])
+    # ^^^^^^^^^^^^^ means to return torch.Size([1, 100, 64])
     for _ in range(num_iters):
         # Initialize accumulators for batch-wise mean updates
         accumulate_means = torch.zeros_like(means, device=device)  # Accumulate new centroids
         cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)  # Track cluster sizes
 
         # Process data in mini-batches
-        for i in range(0, num_samples, batch_size):
+        for i in range(0, num_samples, batch_size):  # (0, 10000, 1000)  1000 ずつ 10 回
             batch_samples = samples[:, i:i+batch_size]  # Get a batch of samples
 
             # Compute squared Euclidean distances
