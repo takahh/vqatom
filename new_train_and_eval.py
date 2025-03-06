@@ -347,7 +347,7 @@ def run_inductive(
                         gc.collect()
                         torch.cuda.empty_cache()
 
-                    loss_list_list_train = [x + [y.detach().cpu().item()] for x, y in
+                    loss_list_list_train = [x + [y] for x, y in
                                             zip(loss_list_list_train, loss_list_train)]
                     del loss_list_train  # Explicitly delete it
 
