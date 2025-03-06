@@ -297,10 +297,7 @@ from einops import rearrange
 import torch
 
 
-def soft_kmeans(samples, batch_size=1000, num_iters=100):
-    batch_size = int(torch.squeeze(samples).shape[0]/10)
-    print("batch_size")
-    print(batch_size)
+def soft_kmeans(samples, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
@@ -316,23 +313,19 @@ def soft_kmeans(samples, batch_size=1000, num_iters=100):
         accumulate_means = torch.zeros_like(means, device=device)  # Accumulate new centroids
         cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)  # Track cluster sizes
 
-        # Process data in mini-batches
-        for i in range(0, num_samples, batch_size):  # (0, 10000, 1000)  1000 ずつ 10 回
-            batch_samples = samples[:, i:i+batch_size]  # Get a batch of samples
+        # Compute squared Euclidean distances
+        dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
 
-            # Compute squared Euclidean distances
-            dists = torch.sum((batch_samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+        # Soft assignment using Softmax
+        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
 
-            # Soft assignment using Softmax
-            cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
+        # Compute weighted sum for new centroids
+        batch_means = cluster_assignments.transpose(-1, -2) @ batch_samples  # [num_codebooks, num_clusters, dim]
+        accumulate_means += batch_means.detach()  # Detach to prevent graph growth
+        cluster_sizes += cluster_assignments.sum(dim=1).detach()
 
-            # Compute weighted sum for new centroids
-            batch_means = cluster_assignments.transpose(-1, -2) @ batch_samples  # [num_codebooks, num_clusters, dim]
-            accumulate_means += batch_means.detach()  # Detach to prevent graph growth
-            cluster_sizes += cluster_assignments.sum(dim=1).detach()
-
-            del dists, cluster_assignments, batch_means
-            torch.cuda.empty_cache()  # Free GPU memory
+        del dists, cluster_assignments, batch_means
+        torch.cuda.empty_cache()  # Free GPU memory
 
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
@@ -807,7 +800,9 @@ class EuclideanCodebook(nn.Module):
         if embed_ind.max() >= self.codebook_size:
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
-
+        # embed_ind は, サンプルの所属するクラスタID、embed は kmeans からの centroid vectors
+        # embed_ind torch.Size([1, 2977, 1000]) embed torch.Size([1, 1000, 64])
+        #
         embed_ind = embed_ind.unsqueeze(0)
         quantize = batched_embedding(embed_ind, self.embed)
         # quantize = embed_ind @ self.embed  # Weighted sum of embeddings
