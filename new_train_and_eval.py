@@ -286,6 +286,20 @@ class GraphDataset(Dataset):
         return self.graphs[idx]
 
 
+def print_large_tensors(threshold=10):  # Only print tensors larger than 10MB
+    count = 0
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                size_MB = obj.numel() * obj.element_size() / 1024 ** 2  # Convert to MB
+                if size_MB > threshold:  # Print only large tensors
+                    print(f"Tensor {count}: Shape={obj.shape}, Size={size_MB:.2f}MB, Requires Grad={obj.requires_grad}")
+                    count += 1
+        except:
+            pass
+    print(f"Total Large Tensors (> {threshold}MB): {count}")
+
+
 def run_inductive(
         conf,
         model,
@@ -329,22 +343,6 @@ def run_inductive(
                     print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
                     import gc
                     import torch
-
-                    def print_large_tensors(threshold=10):  # Only print tensors larger than 10MB
-                        count = 0
-                        for obj in gc.get_objects():
-                            try:
-                                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                                    size_MB = obj.numel() * obj.element_size() / 1024**2  # Convert to MB
-                                    if size_MB > threshold:  # Print only large tensors
-                                        print(f"Tensor {count}: Shape={obj.shape}, Size={size_MB:.2f}MB, Requires Grad={obj.requires_grad}")
-                                        count += 1
-                            except:
-                                pass
-                        print(f"Total Large Tensors (> {threshold}MB): {count}")
-
-                    # Run training step...
-
 
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
