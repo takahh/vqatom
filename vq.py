@@ -515,7 +515,10 @@ def batched_embedding(indices, embeds):
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
-
+    # init_feat torch.Size([132, 7]), quantized torch.Size([132, 64]), embed_ind torch.Size([132, 1000])
+    print("cluster_assignments")
+    print(cluster_assignments.shape)
+    print(cluster_assignments)
     # --------------------------------------------------------------
     # distance matrix
     # --------------------------------------------------------------
