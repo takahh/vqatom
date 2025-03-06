@@ -86,6 +86,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad(set_to_none=False)  # Ensure it resets to zero instead of None
 
     loss.backward()
+    loss = loss.detach()
 
     for name, param in model.named_parameters():
         if param.grad is not None:
@@ -354,8 +355,8 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
-                    latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
-                                                                                    list) else latent_train.detach()
+                    # latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
+                    #                                                                 list) else latent_train.detach()
                     loss_list.append(loss.detach().cpu().item())  # Ensure loss is detached
                     torch.cuda.synchronize()
                     args = get_args()
