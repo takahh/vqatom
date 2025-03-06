@@ -1437,7 +1437,7 @@ class VectorQuantize(nn.Module):
         print(f"@@@@@@@@@ embed_ind.shape {embed_ind.shape}")
 
         if only_one:
-            quantize = rearrange(quantize, '1 b d -> b d')
+            quantize = rearrange(quantize, 'b 1 d -> b d')  # Keep batch dimension dynamic
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
