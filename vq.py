@@ -346,6 +346,7 @@ def kmeans(
 
         # Ensure samples matches expected shape
         flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
+        print(f"new_means.shape {new_means.shape}")
         print(f"flat_buckets.shape = {flat_buckets.shape}, flat_samples.shape = {flat_samples.shape}")
         # flat_buckets.shape = torch.Size([9362]), flat_samples.shape = torch.Size([9362, 64])
         # add vectors in flat_samples according to index (flat_buckets)
