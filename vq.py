@@ -779,7 +779,7 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        print(f"x.requires_grad: {x.requires_grad}")
+        print(f"############### x.requires_grad: {x.requires_grad}")
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
