@@ -326,8 +326,8 @@ def run_inductive(
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
-                    # with torch.no_grad():
-                    batched_feats = batched_graph.ndata["feat"]
+                    with torch.no_grad():
+                        batched_feats = batched_graph.ndata["feat"]
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
