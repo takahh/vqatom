@@ -342,13 +342,13 @@ def soft_kmeans(samples, batch_size=200, num_iters=100):
             # cluster_assignments torch.Size([1, 100, 10000])
             # Accumulate batch-wise cluster sum
             accumulate_means += batch_means
-            cluster_sizes += cluster_assignments.sum(dim=1)  # Sum of assignments per cluster
+            # cluster_sizes += cluster_assignments.sum(dim=1)  # Sum of assignments per cluster
 
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
 
     print(f"^^^^^^^^^^^^^ means to return {means.shape}")
-    return means, cluster_sizes
+    return means, None
 
 
 
