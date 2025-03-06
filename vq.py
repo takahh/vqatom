@@ -310,7 +310,7 @@ def soft_kmeans(samples, num_clusters, num_iters=100):
 
         # Compute new centroids using weighted sum
         new_means = cluster_assignments.transpose(-1, -2) @ samples
-        new_means = new_means / (cluster_assignments.sum(dim=1, keepdim=True) + 1e-8)
+        new_means = new_means / (cluster_assignments.sum(dim=1, keepdim=True).transpose(-1, -2) + 1e-8)
 
         means = new_means
 
