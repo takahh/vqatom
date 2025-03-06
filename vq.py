@@ -297,7 +297,7 @@ from einops import rearrange
 import torch
 
 
-def soft_kmeans(samples, batch_size=100, num_iters=100):
+def soft_kmeans(samples, batch_size=1000, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
@@ -328,8 +328,6 @@ def soft_kmeans(samples, batch_size=100, num_iters=100):
             accumulate_means += batch_means.detach()  # Detach to prevent graph growth
             cluster_sizes += cluster_assignments.sum(dim=1).detach()
 
-            print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
             del dists, cluster_assignments, batch_means
             torch.cuda.empty_cache()  # Free GPU memory
 
