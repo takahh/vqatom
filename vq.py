@@ -292,6 +292,30 @@ from einops import rearrange, repeat
 import torch
 from einops import rearrange, repeat
 
+import torch
+from einops import rearrange
+
+def soft_kmeans(samples, num_clusters, num_iters=100):
+    num_codebooks, dim, device = samples.shape[0], samples.shape[-1], samples.device
+
+    # Initialize means randomly
+    means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
+
+    for _ in range(num_iters):
+        # Compute distances
+        dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+
+        # Soft assignment using Softmax
+        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)
+
+        # Compute new centroids using weighted sum
+        new_means = cluster_assignments.transpose(-1, -2) @ samples
+        new_means = new_means / (cluster_assignments.sum(dim=1, keepdim=True) + 1e-8)
+
+        means = new_means
+
+    return means, cluster_assignments.sum(dim=1)
+
 
 def kmeans(
         samples,  # latent vectors
@@ -681,12 +705,10 @@ class EuclideanCodebook(nn.Module):
         #     # all_reduce_fn=self.kmeans_all_reduce_fn
         # )
 
-        embed, cluster_size = kmeans(
+        embed, cluster_size = soft_kmeans(
             data,
             self.codebook_size,
-            self.kmeans_iters,
-            False,
-            # all_reduce_fn=self.kmeans_all_reduce_fn
+            self.kmeans_iters
         )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
