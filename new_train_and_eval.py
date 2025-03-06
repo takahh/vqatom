@@ -59,48 +59,91 @@ def transform_node_feats(a):
 #            # model, batched_graph, batched_feats, optimizer, epoch, logger)
 import time
 import torch
-
-
 def train_sage(model, g, feats, optimizer, epoch, logger):
-
     device = torch.device("cuda")
-    feats = feats.to(device)
-    g = g.to(device)
-    model = model.to(device)
-    # for name, param in model.named_parameters():
-    #     in_optimizer = any(param in group["params"] for group in optimizer.param_groups)
-    #     if not in_optimizer:
-    #         print(f"{name} is missing from optimizer!")
+    feats = feats.to(device, non_blocking=True)
+    g = g.to(device, non_blocking=True)
+    model = model.to(device, non_blocking=True)
 
     model.train()
-    loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
+    loss_list, latent_list, cb_list = [], [], []
+
+    # ✅ Use AMP with Gradient Scaler to reduce memory usage
+    scaler = torch.cuda.amp.GradScaler()
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
-                                                                                                        logger)  # g is blocks
+        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch, logger)
 
-    # del logits, quantized
+    # ✅ Detach unused tensors to avoid holding references
+    del logits, quantized, sample_list_train
     torch.cuda.empty_cache()
 
-    # optimizer.zero_grad()
-    optimizer.zero_grad(set_to_none=False)  # Ensure it resets to zero instead of None
+    # ✅ Zero out gradients (set_to_none=True is more memory-efficient)
+    optimizer.zero_grad(set_to_none=True)
 
-    loss.backward()
-    loss = loss.detach()
+    # ✅ Scale loss before backward to avoid overflow issues
+    scaler.scale(loss).backward()
 
     for name, param in model.named_parameters():
         if param.grad is not None:
-            print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
+            print(f"after model forward {name}: {param.grad.abs().mean()}")
         else:
-            print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
-    optimizer.step()
+            print(f"after model forward {name}: param.grad is None")
 
-    latent_list.append(latent_train)
-    cb_list.append(cb)
-    # print(f"loss_list {loss_list3}")
+    # ✅ Step optimizer with scaler and update gradients
+    scaler.step(optimizer)
+    scaler.update()
 
-    return loss, loss_list3, latent_list, latents
+    # ✅ Detach loss after backprop to avoid holding graph
+    loss = loss.detach()
 
+    # ✅ Append latents with detach() to avoid accumulating history
+    latent_list.append(latent_train.detach())
+    cb_list.append(cb.detach())
+
+    return loss, loss_list3, latent_list, latents.detach()
+#
+#
+# def train_sage(model, g, feats, optimizer, epoch, logger):
+#
+#     device = torch.device("cuda")
+#     feats = feats.to(device)
+#     g = g.to(device)
+#     model = model.to(device)
+#     # for name, param in model.named_parameters():
+#     #     in_optimizer = any(param in group["params"] for group in optimizer.param_groups)
+#     #     if not in_optimizer:
+#     #         print(f"{name} is missing from optimizer!")
+#
+#     model.train()
+#     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
+#
+#     with torch.cuda.amp.autocast(dtype=torch.float16):
+#         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
+#                                                                                                         logger)  # g is blocks
+#
+#     # del logits, quantized
+#     torch.cuda.empty_cache()
+#
+#     # optimizer.zero_grad()
+#     optimizer.zero_grad(set_to_none=False)  # Ensure it resets to zero instead of None
+#
+#     loss.backward()
+#     loss = loss.detach()
+#
+#     for name, param in model.named_parameters():
+#         if param.grad is not None:
+#             print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
+#         else:
+#             print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
+#     optimizer.step()
+#
+#     latent_list.append(latent_train)
+#     cb_list.append(cb)
+#     # print(f"loss_list {loss_list3}")
+#
+#     return loss, loss_list3, latent_list, latents
+#
 
 def evaluate(model, g, feats, epoch, logger, g_base):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
