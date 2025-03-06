@@ -516,11 +516,6 @@ def batched_embedding(indices, embeds):
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
     # init_feat torch.Size([132, 7]), quantized torch.Size([132, 64]), embed_ind torch.Size([132, 1000])
-    print("cluster_assignments")
-    print(cluster_assignments.shape)
-    print(cluster_assignments)
-    cluster_assignments = cluster_assignments.argmax(dim=-1)  # Ensure integer labels
-
     # --------------------------------------------------------------
     # distance matrix
     # --------------------------------------------------------------
@@ -836,6 +831,8 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
         # print(quantize.shape)
+        embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
+
         return quantize, embed_ind, dist, self.embed, flatten, embed
 
     @torch.amp.autocast('cuda', enabled=False)
