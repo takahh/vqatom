@@ -332,7 +332,7 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
-
+                    latent_train = [x.detach() for x in latent_train]
                     loss_list.append(loss.detach().cpu().item())  # Ensure loss is detached
                     torch.cuda.synchronize()
                     args = get_args()
