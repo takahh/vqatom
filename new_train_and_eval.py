@@ -326,15 +326,15 @@ def run_inductive(
                     import gc
                     import torch
 
-                    def print_active_tensors():
-                        for obj in gc.get_objects():
-                            try:
-                                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                                    print(
-                                        f"Tensor: {type(obj)}, Shape: {obj.shape}, Requires Grad: {obj.requires_grad}")
-                            except Exception as e:
-                                pass
-                    print_active_tensors()
+                    # def print_active_tensors():
+                    #     for obj in gc.get_objects():
+                    #         try:
+                    #             if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                    #                 print(
+                    #                     f"Tensor: {type(obj)}, Shape: {obj.shape}, Requires Grad: {obj.requires_grad}")
+                    #         except Exception as e:
+                    #             pass
+                    # print_active_tensors()
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
