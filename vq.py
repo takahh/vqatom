@@ -483,12 +483,17 @@ def mini_batch_kmeans(
     return means, counts
 
 
+# def batched_embedding(indices, embeds):
+#     indices = indices.long()
+#     batch, dim = indices.shape[1], embeds.shape[-1]
+#     indices = repeat(indices, 'h b n -> h b n d', d=dim)
+#     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
+#     return embeds.gather(2, indices)
+
+
 def batched_embedding(indices, embeds):
-    indices = indices.long()
-    batch, dim = indices.shape[1], embeds.shape[-1]
-    indices = repeat(indices, 'h b n -> h b n d', d=dim)
-    embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
-    return embeds.gather(2, indices)
+    indices = torch.nn.functional.softmax(indices, dim=-1)  # Convert indices to soft assignments
+    return indices @ embeds  # Weighted sum instead of discrete lookup
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
@@ -792,8 +797,8 @@ class EuclideanCodebook(nn.Module):
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
 
         embed_ind = embed_ind.unsqueeze(0)
-        # quantize = batched_embedding(embed_ind, self.embed)
-        quantize = embed_ind @ self.embed  # Weighted sum of embeddings
+        quantize = batched_embedding(embed_ind, self.embed)
+        # quantize = embed_ind @ self.embed  # Weighted sum of embeddings
 
         flatten.retain_grad()
 
