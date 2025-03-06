@@ -320,6 +320,7 @@ def soft_kmeans(samples, num_clusters, batch_size=200, num_iters=100):
         for i in range(0, num_samples, batch_size):  # (0, 10000, 1000)  1000 ずつ 10 回
             batch_samples = samples[:, i:i+batch_size]  # Get a batch of samples
 
+            print(f"batch_samples {batch_samples.shape}")
             # Compute squared Euclidean distances
             dists = torch.sum((batch_samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
             print(f"dists {dists.shape}")
