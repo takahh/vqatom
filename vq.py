@@ -302,6 +302,8 @@ def soft_kmeans(samples, num_clusters, batch_size=1000, num_iters=100):
     device = samples.device
     args = get_args()
     num_clusters = args.codebook_size
+
+    print(f"^^^^^^^^^^^^^ num_clusters {num_clusters}")
     # Initialize centroids
     means = torch.randn(num_codebooks, num_samples, dim, device=device, requires_grad=True)
     print(f"^^^^^^^^^^^^^ samples {samples.shape}")
