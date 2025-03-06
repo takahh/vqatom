@@ -354,7 +354,8 @@ def soft_kmeans(
             means,
             new_means
         )
-
+    print("means.shape")
+    print(means.shape)
     return means, bins
 
 
