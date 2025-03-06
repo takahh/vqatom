@@ -72,7 +72,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler = torch.cuda.amp.GradScaler()
 
     with torch.cuda.amp.autocast(dtype=torch.float16):
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch, logger)
+        logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch, logger)
 
     # ✅ Detach unused tensors to avoid holding references
     del logits, quantized, sample_list_train
