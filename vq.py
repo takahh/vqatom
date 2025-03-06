@@ -824,7 +824,7 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
         # print(quantize.shape)
-        return quantize, embed_ind, dist, self.embed
+        return quantize, embed_ind, dist, self.embed, flatten, embed
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward_old(self, x, logger=None):
@@ -1368,7 +1368,7 @@ class VectorQuantize(nn.Module):
         if is_multiheaded:
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
-
+         # quantize, embed_ind, dist, self.embed = self._codebook(x, logger)
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
