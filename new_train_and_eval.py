@@ -319,22 +319,22 @@ def run_inductive(
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    print(torch.cuda.memory_summary())
+                    # print(torch.cuda.memory_summary())
 
                     print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
                     print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
                     import gc
                     import torch
 
-                    # def print_active_tensors():
-                    #     for obj in gc.get_objects():
-                    #         try:
-                    #             if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                    #                 print(
-                    #                     f"Tensor: {type(obj)}, Shape: {obj.shape}, Requires Grad: {obj.requires_grad}")
-                    #         except Exception as e:
-                    #             pass
-                    # print_active_tensors()
+                    def print_active_tensors():
+                        for obj in gc.get_objects():
+                            try:
+                                if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+                                    print(
+                                        f"Tensor: {type(obj)}, Shape: {obj.shape}, Requires Grad: {obj.requires_grad}")
+                            except Exception as e:
+                                pass
+                    print_active_tensors()
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
