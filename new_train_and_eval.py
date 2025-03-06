@@ -337,10 +337,6 @@ def run_inductive(
                 for i in range(0, len(glist), chunk_size):
                     # print(torch.cuda.memory_summary())
 
-                    # Call this before & after the training step
-                    print("Before training step:")
-                    print_large_tensors()
-
                     print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
                     print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
                     import gc
@@ -379,8 +375,6 @@ def run_inductive(
                     gc.collect()
                     torch.cuda.empty_cache()
 
-                    print("After training step:")
-                    print_large_tensors()
         # --------------------------------
         # Save model
         # --------------------------------
