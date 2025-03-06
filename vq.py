@@ -300,42 +300,62 @@ import torch
 from einops import rearrange, repeat
 
 
+
+def sample_vectors(samples, num):
+    num_samples, device = samples.shape[0], samples.device
+    if num_samples >= num:
+        indices = torch.randperm(num_samples, device=device)[:num]
+    else:
+        indices = torch.randint(0, num_samples, (num,), device=device)
+
+    return samples[indices]
+
+
+def batched_sample_vectors(samples, num):
+    return torch.stack([sample_vectors(sample, num) for sample in samples.unbind(dim=0)], dim=0)
+
+
 def soft_kmeans(
         samples,
+        num_clusters,
+        num_iters=10,
         use_cosine_sim=False,
-        sample_fn=None,
+        sample_fn=batched_sample_vectors,
+        all_reduce_fn=noop
 ):
-    args = get_args()
-    num_clusters = args.codebook_size
-    num_iters = 10
-    num_codebooks, num_samples, dim = samples.shape
-    device = samples.device
+    num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
 
-    # Initialize means for each codebook using a sampling function or random initialization
     means = sample_fn(samples, num_clusters)
 
     for _ in range(num_iters):
-        # Compute distances (Cosine similarity or Squared Euclidean)
         if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h n d -> h d n')  # Cosine similarity
+            dists = samples @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)  # Squared Euclidean distance
+            dists = -torch.cdist(samples, means, p=2)
 
-        # Compute soft cluster assignments
-        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # Shape: [num_codebooks, num_samples, num_clusters]
+        buckets = torch.argmax(dists, dim=-1)
+        bins = batched_bincount(buckets, minlength=num_clusters)
+        all_reduce_fn(bins)
 
-        # Compute weighted sum for centroids
-        new_means = cluster_assignments.transpose(-1, -2) @ samples  # Shape: [num_codebooks, num_clusters, dim]
+        zero_mask = bins == 0
+        bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        # Normalize by cluster sizes
-        cluster_sizes = cluster_assignments.sum(dim=1, keepdim=True)  # Shape: [num_codebooks, 1, num_clusters]
-        new_means = new_means / (cluster_sizes.transpose(-1, -2) + 1e-8)  # Prevent division by zero
+        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
 
-        # Update means
-        means = new_means
-    print("means.shape")
-    print(means.shape)
-    return means, cluster_sizes.squeeze(1)  # Squeeze to return shape [num_codebooks, num_clusters]
+        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
+        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
+        all_reduce_fn(new_means)
+
+        if use_cosine_sim:
+            new_means = l2norm(new_means)
+
+        means = torch.where(
+            rearrange(zero_mask, '... -> ... 1'),
+            means,
+            new_means
+        )
+
+    return means, bins
 
 
 def soft_kmeans_old(samples, num_iters=100):
@@ -774,9 +794,10 @@ class EuclideanCodebook(nn.Module):
         #     # sample_fn=self.sample_fn,
         #     # all_reduce_fn=self.kmeans_all_reduce_fn
         # )
-
+        args = get_args()
         embed, cluster_size = soft_kmeans(
-            data
+            data,
+            args.codebook_size
         )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
