@@ -1397,7 +1397,6 @@ class VectorQuantize(nn.Module):
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
-        print(f"@@@@@@@@@ embed_ind.shape {embed_ind.shape}")
         # embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
@@ -1427,6 +1426,9 @@ class VectorQuantize(nn.Module):
         if self.accept_image_fmap:
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
+
+        print(f"@@@@@@@@@ quantize.shape {quantize.shape}")
+        print(f"@@@@@@@@@ embed_ind.shape {embed_ind.shape}")
 
         if only_one:
             quantize = rearrange(quantize, '1 b d -> b d')
