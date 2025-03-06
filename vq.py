@@ -346,13 +346,8 @@ def kmeans(
 
         # Ensure samples matches expected shape
         flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
-        print(f"new_means.shape {new_means.shape}")
-        print(f"flat_buckets.shape = {flat_buckets.shape}, flat_samples.shape = {flat_samples.shape}")
-        # flat_buckets.shape = torch.Size([9362]), flat_samples.shape = torch.Size([9362, 64])
         # add vectors in flat_samples according to index (flat_buckets)
         new_means.index_add_(0, flat_buckets, flat_samples)
-
-        # new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
 
         new_means = new_means / bins_min_clamped.unsqueeze(-1)  # Normalize by cluster sizes
         all_reduce_fn(new_means)
@@ -361,7 +356,8 @@ def kmeans(
             new_means = new_means / (new_means.norm(dim=-1, keepdim=True) + 1e-8)  # Normalize for cosine similarity
 
         # Soft update instead of torch.where() to allow gradient flow
-        means = zero_mask.unsqueeze(-1) * means + (1 - zero_mask.unsqueeze(-1)) * new_means
+        # means = zero_mask.unsqueeze(-1) * means + (1 - zero_mask.unsqueeze(-1)) * new_means
+        means = zero_mask.unsqueeze(-1) * means + (~zero_mask).unsqueeze(-1) * new_means
 
     return means, bins
 
