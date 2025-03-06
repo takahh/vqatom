@@ -296,8 +296,49 @@ import torch
 from einops import rearrange
 import torch
 
+import torch
+from einops import rearrange, repeat
 
-def soft_kmeans(samples, num_iters=100):
+
+def soft_kmeans(
+        samples,
+        use_cosine_sim=False,
+        sample_fn=None,
+):
+    args = get_args()
+    num_clusters = args.codebook_size
+    num_iters = 10,
+    num_codebooks, num_samples, dim = samples.shape
+    device = samples.device
+
+    # Initialize means for each codebook using a sampling function or random initialization
+    means = sample_fn(samples, num_clusters) if sample_fn else torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
+
+    for _ in range(num_iters):
+        # Compute distances (Cosine similarity or Squared Euclidean)
+        if use_cosine_sim:
+            dists = samples @ rearrange(means, 'h n d -> h d n')  # Cosine similarity
+        else:
+            dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)  # Squared Euclidean distance
+
+        # Compute soft cluster assignments
+        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # Shape: [num_codebooks, num_samples, num_clusters]
+
+        # Compute weighted sum for centroids
+        new_means = cluster_assignments.transpose(-1, -2) @ samples  # Shape: [num_codebooks, num_clusters, dim]
+
+        # Normalize by cluster sizes
+        cluster_sizes = cluster_assignments.sum(dim=1, keepdim=True)  # Shape: [num_codebooks, 1, num_clusters]
+        new_means = new_means / (cluster_sizes.transpose(-1, -2) + 1e-8)  # Prevent division by zero
+
+        # Update means
+        means = new_means
+    print("means.shape")
+    print(means.shape)
+    return means, cluster_sizes.squeeze(1)  # Squeeze to return shape [num_codebooks, num_clusters]
+
+
+def soft_kmeans_old(samples, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
