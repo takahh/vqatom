@@ -779,14 +779,13 @@ class EuclideanCodebook(nn.Module):
         self.init_embed_(flatten, logger)
         embed = self.embed
         # init_cb = self.embed.detach().clone().contiguous()
-
         dist = -torch.cdist(flatten, self.embed, p=2)
 
         # ----------------------------------------------------
         # get codebook ID assigned
         # ----------------------------------------------------
         embed_ind = get_ind(dist)
-
+        print(f"embed {embed.shape}, embed_ind {embed_ind.shape}")
         indices = torch.argmax(embed_ind, dim=-1, keepdim=True)  # Non-differentiable forward pass
         embed_ind = indices + (embed_ind - embed_ind.detach())  # Straight-through trick
         indices = embed_ind[:, :, 0]  # Keep the float tensor
