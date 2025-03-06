@@ -1373,13 +1373,10 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
-        print(f"@@@@@@@@@ 4 quantize.shape {quantize.shape}")
-        print(f"quantize requires_grad: {quantize.requires_grad}, x_tmp requires_grad: {x_tmp.requires_grad}")
         #
         # if self.training:
         #     quantize = x_tmp + (quantize - x_tmp)
 
-        print(f"@@@@@@@@@ 3.6 quantize.shape {quantize.shape}")
         # loss = torch.zeros(1, device=device, requires_grad=True)
         loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
         raw_commit_loss = torch.zeros(1, device=device)  # ✅ Ensure it’s part of computation
@@ -1412,7 +1409,6 @@ class VectorQuantize(nn.Module):
         #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
         #         + self.lamb_equiv_atom * equiv_atom_loss)
 
-        print(f"@@@@@@@@@ 3.5 quantize.shape {quantize.shape}")
         if is_multiheaded:
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
@@ -1421,20 +1417,13 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
-        print(f"@@@@@@@@@ 3 quantize.shape {quantize.shape}")
         quantize = self.project_out(quantize)
-
-        print(f"@@@@@@@@@ 2 quantize.shape {quantize.shape}")
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
 
-        print(f"@@@@@@@@@ 1 quantize.shape {quantize.shape}")
         if self.accept_image_fmap:
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
-
-        print(f"@@@@@@@@@ 0 quantize.shape {quantize.shape}")
-        print(f"@@@@@@@@@ embed_ind.shape {embed_ind.shape}")
 
         if only_one:
             quantize = rearrange(quantize, 'b 1 d -> b d')  # Keep batch dimension dynamic
