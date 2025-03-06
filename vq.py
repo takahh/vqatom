@@ -297,7 +297,7 @@ from einops import rearrange
 import torch
 
 
-def soft_kmeans(samples, num_clusters, batch_size=1000, num_iters=100):
+def soft_kmeans(samples, num_clusters, batch_size=200, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
@@ -322,15 +322,22 @@ def soft_kmeans(samples, num_clusters, batch_size=1000, num_iters=100):
 
             # Compute squared Euclidean distances
             dists = torch.sum((batch_samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+            print(f"dists {dists.shape}")
 
             # Soft assignment using Softmax
-            cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [num_codebooks, batch_size, num_clusters]
+            cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
 
             # Compute weighted sum for new centroids
             batch_means = cluster_assignments.transpose(-1, -2) @ batch_samples  # [num_codebooks, num_clusters, dim]
             print(f"cluster_assignments {cluster_assignments.shape}")
             print(f"cluster_assignments.sum(dim=1) {cluster_assignments.sum(dim=1).shape}")
             print(f"cluster_sizes {cluster_sizes.shape}")
+            # ^^^^^^^^^^^^^ num_clusters 1000
+            # ^^^^^^^^^^^^^ samples torch.Size([1, 10000, 64])
+            # ^^^^^^^^^^^^^ means torch.Size([1, 10000, 64])
+            # cluster_assignments torch.Size([1, 100, 10000])
+            # cluster_assignments.sum(dim=1) torch.Size([1, 10000])
+            # cluster_sizes torch.Size([1, 1000])
             # cluster_assignments torch.Size([1, 100, 10000])
             # Accumulate batch-wise cluster sum
             accumulate_means += batch_means
