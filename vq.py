@@ -294,7 +294,7 @@ from einops import rearrange, repeat
 
 
 def kmeans(
-        samples,
+        samples,  # latent vectors
         num_clusters,
         num_iters=100,
         use_cosine_sim=False,
@@ -313,6 +313,7 @@ def kmeans(
     samples = samples.to(device)  # Ensure samples are on the same device
     means = means.to(device)
 
+    # select the rest of centroids
     for k in range(1, num_clusters):
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
@@ -332,23 +333,22 @@ def kmeans(
         else:
             dists = -torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)  # Differentiable
 
-        buckets = torch.argmax(dists, dim=-1)
-        bins = torch.bincount(buckets.view(-1), minlength=num_clusters).view(num_codebooks, num_clusters)
-        all_reduce_fn(bins)
+        buckets = torch.argmax(dists, dim=-1)  # indices of lowest centroid
+        bins = torch.bincount(buckets.view(-1), minlength=num_clusters).view(num_codebooks, num_clusters) # counts per cluster
 
         zero_mask = bins == 0
         bins_min_clamped = bins.masked_fill(zero_mask, 1)  # Avoid division by zero
 
         # Differentiable centroid update (using index_add_ instead of scatter_add_)
         new_means = torch.zeros_like(means)
-        # Flatten buckets and samples to match index_add_() requirements
         # Ensure buckets is a 1D tensor indexing into num_clusters
-        flat_buckets = buckets.reshape(-1)  # [9362]
+        flat_buckets = buckets.reshape(-1)  # indices of lowest centroid for each latent vec
 
         # Ensure samples matches expected shape
         flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
+        print(f"flat_buckets.shape = {flat_buckets.shape}, flat_samples.shape = {flat_samples.shape}")
 
-        # Use index_add_() on `dim=1` (clusters), NOT `dim=0` (num_codebooks)
+        # add vectors in flat_samples according to index (flat_buckets)
         new_means.index_add_(0, flat_buckets, flat_samples)
 
         # new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
