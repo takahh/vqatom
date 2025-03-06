@@ -792,7 +792,9 @@ class EuclideanCodebook(nn.Module):
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
 
         embed_ind = embed_ind.unsqueeze(0)
-        quantize = batched_embedding(embed_ind, self.embed)
+        # quantize = batched_embedding(embed_ind, self.embed)
+        quantize = embed_ind @ self.embed  # Weighted sum of embeddings
+
         flatten.retain_grad()
 
         return quantize, embed_ind, dist, self.embed, flatten, embed
