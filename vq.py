@@ -328,6 +328,9 @@ def soft_kmeans(samples, batch_size=100, num_iters=100):
             accumulate_means += batch_means
             cluster_sizes += cluster_assignments.sum(dim=1)  # Sum of assignments per cluster
 
+            print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
 
