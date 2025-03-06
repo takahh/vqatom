@@ -1379,6 +1379,7 @@ class VectorQuantize(nn.Module):
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
 
+        print(f"@@@@@@@@@ 3.6 quantize.shape {quantize.shape}")
         # loss = torch.zeros(1, device=device, requires_grad=True)
         loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
         raw_commit_loss = torch.zeros(1, device=device)  # ✅ Ensure it’s part of computation
@@ -1411,6 +1412,7 @@ class VectorQuantize(nn.Module):
         #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
         #         + self.lamb_equiv_atom * equiv_atom_loss)
 
+        print(f"@@@@@@@@@ 3.5 quantize.shape {quantize.shape}")
         if is_multiheaded:
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
@@ -1419,6 +1421,7 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
+        print(f"@@@@@@@@@ 3 quantize.shape {quantize.shape}")
         quantize = self.project_out(quantize)
 
         print(f"@@@@@@@@@ 2 quantize.shape {quantize.shape}")
