@@ -493,6 +493,10 @@ def mini_batch_kmeans(
 
 def batched_embedding(indices, embeds):
     indices = torch.nn.functional.softmax(indices, dim=-1)  # Convert indices to soft assignments
+    print("indices.shape")
+    print(indices.shape)
+    print("embeds.shape")
+    print(embeds.shape)
     return indices @ embeds  # Weighted sum instead of discrete lookup
 
 
