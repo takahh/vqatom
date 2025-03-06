@@ -326,7 +326,8 @@ def run_inductive(
                     print_large_tensors()
 
                     print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")import gc
+                    print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+                    import gc
                     import torch
 
                     def print_large_tensors(threshold=10):  # Only print tensors larger than 10MB
