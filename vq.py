@@ -499,13 +499,19 @@ def mini_batch_kmeans(
 #     return embeds.gather(2, indices)
 
 
-def batched_embedding(indices, embeds):
+def batched_embedding_old(indices, embeds):
     indices = torch.nn.functional.softmax(indices, dim=-1)  # Convert indices to soft assignments
     print("indices.shape")
     print(indices.shape)
     print("embeds.shape")
     print(embeds.shape)
     return indices @ embeds  # Weighted sum instead of discrete lookup
+
+def batched_embedding(indices, embeds):
+    batch, dim = indices.shape[1], embeds.shape[-1]
+    indices = repeat(indices, 'h b n -> h b n d', d=dim)
+    embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
+    return embeds.gather(2, indices)
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
