@@ -303,7 +303,7 @@ def soft_kmeans(samples, num_clusters, batch_size=256, num_iters=100):
 
     # Initialize centroids
     means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
-
+    print(f"^^^^^^^^^^^^^ means {means.shape}")
     for _ in range(num_iters):
         # Initialize accumulators for batch-wise mean updates
         accumulate_means = torch.zeros_like(means, device=device)  # Accumulate new centroids
@@ -329,6 +329,7 @@ def soft_kmeans(samples, num_clusters, batch_size=256, num_iters=100):
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
 
+    print(f"^^^^^^^^^^^^^ means to return {means.shape}")
     return means, cluster_sizes
 
 
