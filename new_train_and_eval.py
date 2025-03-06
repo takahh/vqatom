@@ -335,9 +335,6 @@ def run_inductive(
 
                     loss_list.append(loss.detach().cpu().item())  # Ensure loss is detached
                     torch.cuda.synchronize()
-                    del batched_graph, batched_feats, chunk
-                    gc.collect()
-                    torch.cuda.empty_cache()
                     args = get_args()
                     if args.get_umap_data:
                         cb_new = model.vq._codebook.init_embed_(latents, logger)
@@ -347,6 +344,9 @@ def run_inductive(
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
                     latents.detach()
+                    del batched_graph, batched_feats, chunk, latent_train, latents
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
         # --------------------------------
         # Save model
