@@ -1375,9 +1375,9 @@ class VectorQuantize(nn.Module):
 
         print(f"@@@@@@@@@ 4 quantize.shape {quantize.shape}")
         print(f"quantize requires_grad: {quantize.requires_grad}, x_tmp requires_grad: {x_tmp.requires_grad}")
-
-        if self.training:
-            quantize = x_tmp + (quantize - x_tmp)
+        #
+        # if self.training:
+        #     quantize = x_tmp + (quantize - x_tmp)
 
         print(f"@@@@@@@@@ 3.6 quantize.shape {quantize.shape}")
         # loss = torch.zeros(1, device=device, requires_grad=True)
