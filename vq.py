@@ -328,6 +328,7 @@ def soft_kmeans(samples, num_clusters, batch_size=1000, num_iters=100):
 
             # Compute weighted sum for new centroids
             batch_means = cluster_assignments.transpose(-1, -2) @ batch_samples  # [num_codebooks, num_clusters, dim]
+            print(f"cluster_assignments {cluster_assignments.shape}")
             print(f"cluster_assignments.sum(dim=1) {cluster_assignments.sum(dim=1).shape}")
             print(f"cluster_sizes {cluster_sizes.shape}")
             # cluster_assignments torch.Size([1, 100, 10000])
