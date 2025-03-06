@@ -1420,14 +1420,16 @@ class VectorQuantize(nn.Module):
 
         quantize = self.project_out(quantize)
 
+        print(f"@@@@@@@@@ 2 quantize.shape {quantize.shape}")
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
 
+        print(f"@@@@@@@@@ 1 quantize.shape {quantize.shape}")
         if self.accept_image_fmap:
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
-        print(f"@@@@@@@@@ quantize.shape {quantize.shape}")
+        print(f"@@@@@@@@@ 0 quantize.shape {quantize.shape}")
         print(f"@@@@@@@@@ embed_ind.shape {embed_ind.shape}")
 
         if only_one:
