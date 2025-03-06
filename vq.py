@@ -312,7 +312,7 @@ def soft_kmeans(
     device = samples.device
 
     # Initialize means for each codebook using a sampling function or random initialization
-    means = sample_fn(samples, num_clusters) if sample_fn else torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
+    means = sample_fn(samples, num_clusters)
 
     for _ in range(num_iters):
         # Compute distances (Cosine similarity or Squared Euclidean)
