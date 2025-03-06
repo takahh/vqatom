@@ -342,14 +342,14 @@ def kmeans(
         # Differentiable centroid update (using index_add_ instead of scatter_add_)
         new_means = torch.zeros_like(means)
         # Flatten buckets and samples to match index_add_() requirements
-        # Ensure `buckets` is a 1D tensor (mapping each sample to a cluster index)
-        flat_buckets = buckets.reshape(-1)  # Ensure it's 1D
+        # Ensure buckets is a 1D tensor indexing into num_clusters
+        flat_buckets = buckets.reshape(-1)  # [9362]
 
-        # Ensure `samples` is correctly shaped
-        flat_samples = samples.view(flat_buckets.shape[0], dim)  # Make sure it matches the number of indices
+        # Ensure samples matches expected shape
+        flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
 
-        # Use index_add_() on `dim=0`, not dim=1
-        new_means.index_add_(0, flat_buckets, flat_samples)
+        # Use index_add_() on `dim=1` (clusters), NOT `dim=0` (num_codebooks)
+        new_means.index_add_(1, flat_buckets, flat_samples)
 
         # new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
 
