@@ -305,7 +305,7 @@ def soft_kmeans(samples, batch_size=200, num_iters=100):
 
     print(f"^^^^^^^^^^^^^ num_clusters {num_clusters}")
     # Initialize centroids
-    means = torch.randn(num_codebooks, num_samples, dim, device=device, requires_grad=True)
+    means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
     print(f"^^^^^^^^^^^^^ samples {samples.shape}")
     print(f"^^^^^^^^^^^^^ means {means.shape}")
     # ^^^^^^^^^^^^^ samples torch.Size([1, 10000, 64])
@@ -323,7 +323,7 @@ def soft_kmeans(samples, batch_size=200, num_iters=100):
             print(f"batch_samples {batch_samples.shape}")
             # Compute squared Euclidean distances
             dists = torch.sum((batch_samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
-            print(f"dists {dists.shape}")
+            print(f"dists {dists.shape}") # dists torch.Size([1, 200, 10000])
 
             # Soft assignment using Softmax
             cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
@@ -342,13 +342,13 @@ def soft_kmeans(samples, batch_size=200, num_iters=100):
             # cluster_assignments torch.Size([1, 100, 10000])
             # Accumulate batch-wise cluster sum
             accumulate_means += batch_means
-            # cluster_sizes += cluster_assignments.sum(dim=1)  # Sum of assignments per cluster
+            cluster_sizes += cluster_assignments.sum(dim=1)  # Sum of assignments per cluster
 
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
 
     print(f"^^^^^^^^^^^^^ means to return {means.shape}")
-    return means, None
+    return means, cluster_sizes
 
 
 
