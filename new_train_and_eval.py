@@ -332,7 +332,8 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
-                    latent_train = [x.detach() for x in latent_train]
+                    latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
+                                                                                    list) else latent_train.detach()
                     loss_list.append(loss.detach().cpu().item())  # Ensure loss is detached
                     torch.cuda.synchronize()
                     args = get_args()
@@ -342,7 +343,14 @@ def run_inductive(
 
                         latents = latents.detach().cpu().numpy()  # Detach before saving
                         np.savez(f"./latents_{epoch}", latents)
-                    loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
+                        del cb_new, latents  # Explicitly delete tensors
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                    loss_list_list_train = [x + [y.detach().cpu().item()] for x, y in
+                                            zip(loss_list_list_train, loss_list_train)]
+                    del loss_list_train  # Explicitly delete it
+
                     latents.detach()
                     del batched_graph, batched_feats, chunk, latent_train, latents
                     gc.collect()
