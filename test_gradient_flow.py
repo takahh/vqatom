@@ -9,6 +9,8 @@ x = torch.randn(1, 1000, 64, device="cuda", requires_grad=True)
 
 # Forward pass
 quantize, embed_ind, loss, *_ = vq(x)
+print(f"quantize.requires_grad: {quantize.requires_grad}")
+print(f"quantize.grad_fn: {quantize.grad_fn}")
 
 # Compute a fake loss
 fake_loss = quantize.mean()  # Simple loss function to test gradients
