@@ -806,7 +806,10 @@ class EuclideanCodebook(nn.Module):
         # print(embed_onehot.shape)
         embed_ind = embed_ind.view(*shape[:-1])
         # print(embed_ind.shape)
-        quantize = embed_ind @ self.embed  # Keeps gradients
+        embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
+        quantize = embed_ind @ self.embed
+
+        # quantize = embed_ind @ self.embed  # Keeps gradients
         # quantize = batched_embedding(embed_ind, self.embed)
         # print(embed_onehot.shape)
         if self.training:
