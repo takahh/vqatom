@@ -806,7 +806,8 @@ class EuclideanCodebook(nn.Module):
         # print(embed_onehot.shape)
         embed_ind = embed_ind.view(*shape[:-1])
         # print(embed_ind.shape)
-        quantize = batched_embedding(embed_ind, self.embed)
+        quantize = embed_ind @ self.embed  # Keeps gradients
+        # quantize = batched_embedding(embed_ind, self.embed)
         # print(embed_onehot.shape)
         if self.training:
             cluster_size = embed_onehot.sum(dim=1)
