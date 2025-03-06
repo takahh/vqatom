@@ -297,7 +297,7 @@ from einops import rearrange
 import torch
 
 
-def soft_kmeans(samples, num_clusters, batch_size=200, num_iters=100):
+def soft_kmeans(samples, batch_size=200, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
@@ -750,9 +750,7 @@ class EuclideanCodebook(nn.Module):
         # )
 
         embed, cluster_size = soft_kmeans(
-            data,
-            self.codebook_size,
-            self.kmeans_iters
+            data
         )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
