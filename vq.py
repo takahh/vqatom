@@ -349,7 +349,7 @@ def kmeans(
         flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
 
         # Use index_add_() on `dim=1` (clusters), NOT `dim=0` (num_codebooks)
-        new_means.index_add_(1, flat_buckets, flat_samples)
+        new_means.index_add_(0, flat_buckets, flat_samples)
 
         # new_means.index_add_(1, buckets.unsqueeze(-1).expand(-1, -1, dim), samples)
 
