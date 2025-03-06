@@ -337,11 +337,11 @@ def run_inductive(
                     torch.cuda.synchronize()
                     args = get_args()
                     if args.get_umap_data:
-                        cb_new = model.vq._codebook.init_embed_(latents, logger)
-                        np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-                        latents = torch.squeeze(latents)
-                        # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
-                        np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
+                        cb_new = model.vq._codebook.init_embed_(latents.detach(), logger)
+                        np.savez(f"./init_codebook_{epoch}", cb_new.cpu().numpy())  # Already detached
+
+                        latents = latents.detach().cpu().numpy()  # Detach before saving
+                        np.savez(f"./latents_{epoch}", latents)
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
                     latents.detach()
                     del batched_graph, batched_feats, chunk, latent_train, latents
