@@ -1373,6 +1373,7 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
+        print(f"@@@@@@@@@ 4 quantize.shape {quantize.shape}")
         print(f"quantize requires_grad: {quantize.requires_grad}, x_tmp requires_grad: {x_tmp.requires_grad}")
 
         if self.training:
