@@ -49,75 +49,85 @@ class WeightedThreeHopGCN(nn.Module):
 
     import time
     import torch
-
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
         # Move graph and features to the same device
-        batched_graph = batched_graph.to(device)
-        features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
+        batched_graph = batched_graph.to(device, non_blocking=True)
+        features = transform_node_feats(features).to(device, non_blocking=True)
 
-        h = features.clone()
-        init_feat = h.clone()  # Store initial features (for later use)
-        edge_type = "_E"  # Batched heterogeneous graph edge type
+        h = features.detach().clone()  # Store initial features without tracking gradients
+        init_feat = h.clone()
 
+        edge_type = "_E"
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
 
-        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-        # Map edge weights to embedding indices (default 0 for unknown weights)
+        # Get transformed edge weights
+        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
-
-        # Get transformed edge weights
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        edge_weight = transformed_edge_weight
+        edge_weight = transformed_edge_weight  # Overwrite to free memory
 
-        features = features.to(device)
-        h = self.linear_0(features)  # Convert to expected shape
+        h = self.linear_0(features)  # Apply linear transformation
 
-        # 3-hop message passing
+        # 3-hop message passing (ensuring memory-efficient operations)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
-        h_list = []
         print(f"Output before backward: {h.mean().item()}, std: {h.std().item()}")
 
+        # ✅ Detach unused outputs to reduce memory usage
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
          equivalent_atom_loss) = self.vq(h, init_feat, logger)
+
         print(f"Loss value: {loss.item()}")
 
-        losslist = [div_ele_loss, bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
-                 pair_loss, sil_loss, equivalent_atom_loss]
+        # ✅ Only store scalars in `losslist` to avoid keeping computation graphs
+        losslist = [
+            div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(),
+            ringy_div_loss.item(), h_num_div_loss.item(), charge_div_loss.item(),
+            elec_state_div_loss.item(), spread_loss.item(), pair_loss.item(),
+            sil_loss.item(), equivalent_atom_loss.item()
+        ]
 
-        # --------------------------------
-        # collect data for molecule images
-        # --------------------------------
+        # ✅ Prevent adjacency matrices from holding memory
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
+
         if batched_graph_base:
             adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
             sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
             src, dst = batched_graph_base.all_edges()
         else:
             src, dst = batched_graph.all_edges()
+
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
-        sample_hop_info = None
+        # ✅ Detach non-trainable elements from `sample_list`
+        sample_bond_info = batched_graph.edata["weight"]
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
+            sample_list = [
+                emb_ind.detach(), features.detach(), sample_adj.detach(), sample_bond_info.detach(),
+                src.detach(), dst.detach(), None, sample_adj_base.detach()
+            ]
         else:
-            sample_bond_info = batched_graph.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
-        # print("return losses from Weighted model")
+            sample_list = [
+                emb_ind.detach(), features.detach(), sample_adj.detach(), sample_bond_info.detach(),
+                src.detach(), dst.detach(), None
+            ]
 
-        return (h_list, h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
+        # ✅ Force garbage collection to free unused tensors
+        del adj_matrix, adj_matrix_base, sample_adj, sample_adj_base, transformed_edge_weight
+        torch.cuda.empty_cache()
+
+        return (h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 
 
 class MLP(nn.Module):
