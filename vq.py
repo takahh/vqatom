@@ -298,7 +298,7 @@ import torch
 
 
 def soft_kmeans(samples, batch_size=1000, num_iters=100):
-    batch_size = torch.squeeze(samples).shape[0]/10
+    batch_size = int(torch.squeeze(samples).shape[0]/10)
     print("batch_size")
     print(batch_size)
     num_codebooks, num_samples, dim = samples.shape
