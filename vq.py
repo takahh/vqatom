@@ -779,7 +779,6 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        print(f"############### x.requires_grad: {x.requires_grad}")
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
@@ -792,7 +791,9 @@ class EuclideanCodebook(nn.Module):
         # print(flatten.shape)
         self.init_embed_(flatten)
 
-        embed = self.embed if not self.learnable_codebook else self.embed.detach()
+        # embed = self.embed if not self.learnable_codebook else self.embed.detach()
+        embed = self.embed  # Keep gradients
+
         # print(embed)
         # print(flatten.shape, embed.shape)
         # flatten: 2110 * 3703 embed: 8192*3703
