@@ -1346,6 +1346,7 @@ class VectorQuantize(nn.Module):
         # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
+        print(f"init_feat {init_feat.shape}, quantized {quantized.shape}, embed_ind {embed_ind.shape}")
         atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
         # atom_type_div_loss = self.simple_loss_function(quantized)
 
