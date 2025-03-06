@@ -315,51 +315,7 @@ def batched_sample_vectors(samples, num):
     return torch.stack([sample_vectors(sample, num) for sample in samples.unbind(dim=0)], dim=0)
 
 
-def soft_kmeans(
-        samples,
-        num_clusters,
-        num_iters=10,
-        use_cosine_sim=False,
-        sample_fn=batched_sample_vectors,
-        all_reduce_fn=noop
-):
-    num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-
-    means = sample_fn(samples, num_clusters)
-
-    for _ in range(num_iters):
-        if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h n d -> h d n')
-        else:
-            dists = -torch.cdist(samples, means, p=2)
-
-        buckets = torch.argmax(dists, dim=-1)
-        bins = batched_bincount(buckets, minlength=num_clusters)
-        all_reduce_fn(bins)
-
-        zero_mask = bins == 0
-        bins_min_clamped = bins.masked_fill(zero_mask, 1)
-
-        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
-
-        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
-        all_reduce_fn(new_means)
-
-        if use_cosine_sim:
-            new_means = l2norm(new_means)
-
-        means = torch.where(
-            rearrange(zero_mask, '... -> ... 1'),
-            means,
-            new_means
-        )
-    print("means.shape")
-    print(means.shape)
-    return means, bins
-
-
-def soft_kmeans_old(samples, num_iters=100):
+def soft_kmeans(samples, num_iters=100):
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
@@ -400,72 +356,58 @@ def soft_kmeans_old(samples, num_iters=100):
 
 
 def kmeans(
-        samples,  # latent vectors
+        samples,
         num_clusters,
-        num_iters=100,
+        num_iters=10,
         use_cosine_sim=False,
-        all_reduce_fn=lambda x: x
+        sample_fn=batched_sample_vectors,
+        all_reduce_fn=noop
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-    num_iters = 20
 
-    # K-Means++ initialization
-    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
+    means = sample_fn(samples, num_clusters)
 
-    # Randomly select the first centroid (ensure differentiation)
-    rand_idx = torch.randint(0, samples.shape[1], (1,), device=device)
-    means[:, 0] = samples[:, rand_idx]
-
-    samples = samples.to(device)  # Ensure samples are on the same device
-    means = means.to(device)
-
-    # select the rest of centroids
-    for k in range(1, num_clusters):
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-        else:
-            dists = torch.sum((samples.unsqueeze(2) - means[:, :k].unsqueeze(1)) ** 2, dim=-1)
-
-        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        probs = min_dists / (min_dists.sum(dim=-1, keepdim=True) + 1e-8)  # Avoid division by zero
-
-        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]  # Ensure differentiability
-
-    # Iterative optimization
     for _ in range(num_iters):
         if use_cosine_sim:
             dists = samples @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)  # Differentiable
+            dists = -torch.cdist(samples, means, p=2)
 
-        buckets = torch.argmax(dists, dim=-1)  # indices of lowest centroid
-        bins = torch.bincount(buckets.view(-1), minlength=num_clusters).view(num_codebooks, num_clusters) # counts per cluster
+        buckets = torch.argmax(dists, dim=-1)
+        bins = batched_bincount(buckets, minlength=num_clusters)
+        all_reduce_fn(bins)
 
         zero_mask = bins == 0
-        bins_min_clamped = bins.masked_fill(zero_mask, 1)  # Avoid division by zero
+        bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        # Differentiable centroid update (using index_add_ instead of scatter_add_)
-        new_means = torch.zeros(num_clusters, dim, device=device, dtype=dtype)
-        # Ensure buckets is a 1D tensor indexing into num_clusters
-        flat_buckets = buckets.reshape(-1)  # indices of lowest centroid for each latent vec
+        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
 
-        # Ensure samples matches expected shape
-        flat_samples = samples.view(flat_buckets.shape[0], dim)  # [9362, 64]
-        # add vectors in flat_samples according to index (flat_buckets)
-        new_means.index_add_(0, flat_buckets, flat_samples)
-
-        new_means = new_means / bins_min_clamped.unsqueeze(-1)  # Normalize by cluster sizes
+        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
+        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
         all_reduce_fn(new_means)
 
         if use_cosine_sim:
-            new_means = new_means / (new_means.norm(dim=-1, keepdim=True) + 1e-8)  # Normalize for cosine similarity
+            new_means = l2norm(new_means)
 
-        # Soft update instead of torch.where() to allow gradient flow
-        # means = zero_mask.unsqueeze(-1) * means + (1 - zero_mask.unsqueeze(-1)) * new_means
-        means = zero_mask.unsqueeze(-1) * means + (~zero_mask).unsqueeze(-1) * new_means
+        means = torch.where(
+            rearrange(zero_mask, '... -> ... 1'),
+            means,
+            new_means
+        )
 
     return means, bins
+
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+
+def gumbel_sample(t, temperature=1., dim=-1):
+    if temperature == 0:
+        return t.argmax(dim=dim)
+
+    return ((t / temperature) + gumbel_noise(t)).argmax(dim=dim)
 
 
 def mini_batch_kmeans(
@@ -829,8 +771,57 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
 
+    @autocast(enabled=False)
+    def forward(self, x):
+        needs_codebook_dim = x.ndim < 4
+        x = x.float()
+
+        if needs_codebook_dim:
+            x = rearrange(x, '... -> 1 ...')
+
+        shape, dtype = x.shape, x.dtype
+        flatten = rearrange(x, 'h ... d -> h (...) d')
+        # print(flatten.shape)
+        self.init_embed_(flatten)
+
+        embed = self.embed if not self.learnable_codebook else self.embed.detach()
+        # print(embed)
+        # print(flatten.shape, embed.shape)
+        # flatten: 2110 * 3703 embed: 8192*3703
+        # print(f"flatten: {flatten}")
+        dist = -torch.cdist(flatten, embed, p=2)
+        # print(dist.shape)
+        embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
+        # print(embed_ind.shape)
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
+        # print(embed_onehot.shape)
+        embed_ind = embed_ind.view(*shape[:-1])
+        # print(embed_ind.shape)
+        quantize = batched_embedding(embed_ind, self.embed)
+        # print(embed_onehot.shape)
+        if self.training:
+            cluster_size = embed_onehot.sum(dim=1)
+            # print(cluster_size.shape)
+            self.all_reduce_fn(cluster_size)
+            self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
+
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            self.all_reduce_fn(embed_sum.contiguous())
+            self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
+
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+            # print(cluster_size.shape)
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            self.embed.data.copy_(embed_normalized)
+            self.expire_codes_(x)
+
+        if needs_codebook_dim:
+            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
+        # print(quantize.shape)
+        return quantize, embed_ind, dist, self.embed
+
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None):
+    def forward_old(self, x, logger=None):
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
