@@ -519,6 +519,8 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     print("cluster_assignments")
     print(cluster_assignments.shape)
     print(cluster_assignments)
+    cluster_assignments = cluster_assignments.argmax(dim=-1)  # Ensure integer labels
+
     # --------------------------------------------------------------
     # distance matrix
     # --------------------------------------------------------------
