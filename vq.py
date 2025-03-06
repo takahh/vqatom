@@ -320,7 +320,7 @@ def soft_kmeans(samples, num_iters=100):
         cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
 
         # Compute weighted sum for new centroids
-        batch_means = cluster_assignments.transpose(-1, -2) @ batch_samples  # [num_codebooks, num_clusters, dim]
+        batch_means = cluster_assignments.transpose(-1, -2) @ samples  # [num_codebooks, num_clusters, dim]
         accumulate_means += batch_means.detach()  # Detach to prevent graph growth
         cluster_sizes += cluster_assignments.sum(dim=1).detach()
 
