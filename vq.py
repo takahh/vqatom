@@ -543,7 +543,8 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # Gaussian-based penalty function (or alternative)
     diff_feat_same_cluster_dist = dist_matrix * (diff_feat_mask * same_id_mask).detach()
     non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
-    penalty = torch.logsumexp(-diff_feat_same_cluster_dist, dim=-1).mean()*100000000000000
+    penalty = torch.logsumexp(-diff_feat_same_cluster_dist, dim=-1).mean()
+    print(f"penalty {penalty}")
     return penalty
 
 
