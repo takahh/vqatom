@@ -772,7 +772,7 @@ class EuclideanCodebook(nn.Module):
 
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x):
+    def forward(self, x, logger=None):
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
