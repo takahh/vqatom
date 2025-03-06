@@ -340,7 +340,7 @@ def kmeans(
         bins_min_clamped = bins.masked_fill(zero_mask, 1)  # Avoid division by zero
 
         # Differentiable centroid update (using index_add_ instead of scatter_add_)
-        new_means = torch.zeros_like(means)
+        new_means = torch.zeros(num_clusters, dim, device=device, dtype=dtype)
         # Ensure buckets is a 1D tensor indexing into num_clusters
         flat_buckets = buckets.reshape(-1)  # indices of lowest centroid for each latent vec
 
