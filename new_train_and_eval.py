@@ -288,6 +288,7 @@ class GraphDataset(Dataset):
 
 def print_large_tensors(threshold=10):  # Only print tensors larger than 10MB
     count = 0
+    import gc
     for obj in gc.get_objects():
         try:
             if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
