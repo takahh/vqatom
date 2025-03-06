@@ -336,7 +336,10 @@ def soft_kmeans(samples, batch_size=1000, num_iters=100):
 
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
-
+    print("means.shape")
+    print(means.shape)
+    print("cluster_sizes.shape")
+    print(cluster_sizes.shape)
     return means, cluster_sizes
 
 
