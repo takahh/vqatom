@@ -572,9 +572,9 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
         print("Error in one_hot:", e)
         print("Atom types values:", atom_types)
         raise
-    print(f"pairwise_distances.max() {pairwise_distances.max()}")
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
+    print(f"pairwise_distances.max() {pairwise_distances.max()}")
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
 
     # Normalize the atom_types vectors
