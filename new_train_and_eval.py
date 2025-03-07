@@ -81,6 +81,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     quantized = quantized.float()
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
+    print("model.vq._codebook.embed.requires_grad")  # Must be True
+    print(model.vq._codebook.embed.requires_grad)  # Must be True
 
     for name, param in model.named_parameters():
         if param.grad is not None:
