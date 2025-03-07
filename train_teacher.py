@@ -275,14 +275,13 @@ def run(args):
 
     if conf["train_or_infer"] == "infer":
         model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
+    main_params = [p for p in model.parameters() if p not in set(model.bond_weight.edge_mlp.parameters())]
 
+    # Create optimizer with different learning rates
     optimizer = torch.optim.Adam([
-        {'params': model.parameters(), 'lr': 0.005},  # Default LR
+        {'params': main_params, 'lr': 0.005},  # Default LR for everything except edge_mlp
         {'params': model.bond_weight.edge_mlp.parameters(), 'lr': 0.001}  # Lower LR for edge_mlp
-        ],
-        lr=conf["learning_rate"],
-        weight_decay=conf["weight_decay"]
-    )
+    ])
 
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
     criterion = torch.nn.NLLLoss()
