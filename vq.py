@@ -518,6 +518,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # --------------------------------------------------------------
     quantized = quantized.squeeze(0)  # Remove batch dim
     dist_matrix = torch.norm(quantized[:, None, :] - quantized[None, :, :], dim=-1)
+    dist_matrix = dist_matrix / (dist_matrix.max() + 1e-6)  # Normalize distances
 
     # ------------------------------------
     # same ID mask
