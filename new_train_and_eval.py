@@ -83,12 +83,12 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
-
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after model forward {name}: {param.grad.abs().mean()}")
-        else:
-            print(f"after model forward {name}: param.grad is None")
+    #
+    # for name, param in model.named_parameters():
+    #     if param.grad is not None:
+    #         print(f"after model forward {name}: {param.grad.abs().mean()}")
+    #     else:
+    #         print(f"after model forward {name}: param.grad is None")
 
     # ✅ Step optimizer with scaler and update gradients
     scaler.step(optimizer)
@@ -380,8 +380,8 @@ def run_inductive(
                 for i in range(0, len(glist), chunk_size):
                     # print(torch.cuda.memory_summary())
 
-                    print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+                    # print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+                    # print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
                     import gc
                     import torch
 

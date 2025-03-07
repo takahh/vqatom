@@ -78,15 +78,11 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
-        print(f"Output before backward: {h.mean().item()}, std: {h.std().item()}")
-
         # ✅ Detach unused outputs to reduce memory usage
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
          equivalent_atom_loss) = self.vq(h, init_feat, logger)
-
-        print(f"Loss value: {loss.item()}")
 
         # ✅ Only store scalars in `losslist` to avoid keeping computation graphs
         losslist = [
