@@ -532,9 +532,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
+
     # feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
     # diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
-
     # diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
     # diff_feat_mask = diff_feat_mask.float()
     diff_feat_mask = torch.norm(feats.unsqueeze(1) - feats.unsqueeze(0), p=2, dim=-1) > 1e-3
@@ -587,12 +587,6 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
 
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
-    # print("same_type_mask shape:", same_type_mask.shape)
-    # print("pairwise_distances shape:", pairwise_distances.shape)
-    # print("Min index in mask:",
-    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
-    # print("Max index in mask:",
-    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
 
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
@@ -1419,7 +1413,7 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-
+        print(f"div_ele_loss {div_ele_loss}")
         loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
         # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss

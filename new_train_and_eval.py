@@ -91,7 +91,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     #         print(f"after model forward {name}: {param.grad.abs().mean()}")
     #     else:
     #         print(f"after model forward {name}: param.grad is None")
-
+    print(loss)
     # ✅ Step optimizer with scaler and update gradients
     scaler.step(optimizer)
     scaler.update()
