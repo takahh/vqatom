@@ -510,33 +510,51 @@ def batched_embedding(indices, embeds):
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
-def cluster_penalty_loss(feats, quantized, cluster_assignments):
+
+def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
+    # init_feat torch.Size([132, 7]), quantized torch.Size([132, 64]), embed_ind torch.Size([132, 1000])
+    # --------------------------------------------------------------
+    # distance matrix
+    # --------------------------------------------------------------
     quantized = quantized.squeeze(0)  # Remove batch dim
-    quantized = (quantized - quantized.detach()).detach() + quantized  # STE
+    quantized = (quantized - quantized.detach()).detach() + quantized
 
     dist_matrix = torch.norm(quantized[:, None, :] - quantized[None, :, :], dim=-1)
+    dist_matrix = dist_matrix / (dist_matrix.max() + 1e-6)  # Normalize distances
 
-    # Compute same cluster mask
-    num_classes = int(cluster_assignments.max().item()) + 1
+    # ------------------------------------
+    # same ID mask
+    # ------------------------------------
+    num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
     cluster_embedding = torch.nn.functional.one_hot(cluster_assignments.long().squeeze(), num_classes).float()
     same_id_mask = torch.mm(cluster_embedding, cluster_embedding.T)
     same_id_mask = same_id_mask - torch.eye(same_id_mask.shape[0], device=same_id_mask.device)
-    same_id_mask = same_id_mask.clamp(min=0)
+    same_id_mask = same_id_mask.clamp(min=0)  # Remove negative values
 
-    # Compute different feature mask
+    # --------------------------------------------------------------
+    # different feat mask
+    # --------------------------------------------------------------
+
+    # feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
+    # diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
+    # diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
+    # diff_feat_mask = diff_feat_mask.float()
     diff_feat_mask = torch.norm(feats.unsqueeze(1) - feats.unsqueeze(0), p=2, dim=-1) > 1e-3
     diff_feat_mask = diff_feat_mask.float()
 
-    # Compute penalty with margin
-    margin = 1.0
-    diff_feat_same_cluster_dist = dist_matrix * (diff_feat_mask * same_id_mask)
-    diff_feat_same_cluster_dist = torch.clamp(diff_feat_same_cluster_dist - margin, min=0.0)
+    # --------------------------------------------------------------
+    # Calculate penalty
+    # --------------------------------------------------------------
+    # Gaussian-based penalty function (or alternative)
+    diff_feat_same_cluster_dist = dist_matrix * (diff_feat_mask * same_id_mask).detach()
+    # non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
+    # penalty = torch.logsumexp(-diff_feat_same_cluster_dist, dim=-1).mean()/100
+    # penalty = (diff_feat_same_cluster_dist + 1e-6).log().mean()/10000
+    # penalty = 10 * torch.logsumexp(-diff_feat_same_cluster_dist / 10, dim=-1).mean()
+    penalty = (diff_feat_same_cluster_dist + 1e-6).log().mean()/10000
 
-    # Use squared loss instead of log
-    penalty = (diff_feat_same_cluster_dist ** 2).mean() / 10000
-
+    # print(f"penalty {penalty}")
     return penalty
-
 
 
 
@@ -573,7 +591,8 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
 
     # Compute negative loss (push different types apart)
     negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
-
+    if name == 'atom':
+        print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
 
@@ -1335,8 +1354,8 @@ class VectorQuantize(nn.Module):
         # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
 
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
-        atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
+        # atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
         # atom_type_div_loss = self.simple_loss_function(quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
