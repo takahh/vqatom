@@ -831,6 +831,7 @@ class EuclideanCodebook(nn.Module):
         # print(quantize.shape)
         embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
 
+        print(f"vq quantized {quantize}")
         return quantize, embed_ind, dist, self.embed, flatten, embed
 
     @torch.amp.autocast('cuda', enabled=False)

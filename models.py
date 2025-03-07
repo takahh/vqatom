@@ -122,7 +122,7 @@ class WeightedThreeHopGCN(nn.Module):
         # ✅ Force garbage collection to free unused tensors
         del adj_matrix, sample_adj, transformed_edge_weight
         torch.cuda.empty_cache()
-
+        print(f"model quantized {quantized}")
         return (h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 
 
