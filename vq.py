@@ -347,10 +347,7 @@ def soft_kmeans(samples, num_iters=100):
 
         # Normalize centroids using accumulated counts
         means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
-    print("means.shape")
-    print(means.shape)
-    print("cluster_sizes.shape")
-    print(cluster_sizes.shape)
+
     return means, cluster_sizes
 
 
@@ -544,7 +541,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     diff_feat_same_cluster_dist = dist_matrix * (diff_feat_mask * same_id_mask).detach()
     # non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
     penalty = torch.logsumexp(-diff_feat_same_cluster_dist, dim=-1).mean()
-    print(f"penalty {penalty}")
+    # print(f"penalty {penalty}")
     return penalty
 
 
@@ -1349,7 +1346,6 @@ class VectorQuantize(nn.Module):
         # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
         # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
         # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-        print(f"init_feat {init_feat.shape}, quantized {quantized.shape}, embed_ind {embed_ind.shape}")
         atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
         # atom_type_div_loss = self.simple_loss_function(quantized)
 
