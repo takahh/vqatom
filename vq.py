@@ -526,6 +526,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     num_classes = int(cluster_assignments.max().item()) + 1  # Number of unique clusters
     cluster_embedding = torch.nn.functional.one_hot(cluster_assignments.long().squeeze(), num_classes).float()
     same_id_mask = torch.mm(cluster_embedding, cluster_embedding.T)
+    same_id_mask = same_id_mask - torch.eye(same_id_mask.shape[0], device=same_id_mask.device)
+    same_id_mask = same_id_mask.clamp(min=0)  # Remove negative values
+
     # --------------------------------------------------------------
     # different feat mask
     # --------------------------------------------------------------
