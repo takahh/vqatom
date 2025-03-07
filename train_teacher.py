@@ -275,7 +275,8 @@ def run(args):
 
     if conf["train_or_infer"] == "infer":
         model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
-    main_params = [p for p in model.parameters() if p not in set(model.bond_weight.edge_mlp.parameters(), model.vq._codebook.parameters())]
+    excluded_params = set(model.bond_weight.edge_mlp.parameters()).union(set(model.vq._codebook.parameters()))
+    main_params = [p for p in model.parameters() if p not in excluded_params]
 
     # Create optimizer with different learning rates
     optimizer = torch.optim.Adam([
