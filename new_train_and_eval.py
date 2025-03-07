@@ -82,6 +82,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler.scale(loss).backward()
     print("quantized.grad")  # Should be nonzero
     print(quantized.grad)  # Should be nonzero
+    print("quantized.requires_grad")  # Should be True
+    print(quantized.requires_grad)  # Should be True
 
     # for name, param in model.named_parameters():
     #     if param.grad is not None:
