@@ -78,6 +78,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad(set_to_none=True)
 
     print(f"train_sage quantized {quantized}")
+    quantized = quantized.float()
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
     print("quantized.grad")  # Should be nonzero
