@@ -22,8 +22,8 @@ class BondWeightLayer(nn.Module):
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            nn.Tanh()  # Output weight in range (0,1)
-            # nn.Sigmoid()  # Output weight in range (0,1)
+            # nn.Tanh()  # Output weight in range (0,1)
+            nn.Sigmoid()  # Output weight in range (0,1)
         )
         self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
