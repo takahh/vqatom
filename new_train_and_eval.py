@@ -378,21 +378,16 @@ def run_inductive(
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    # print(torch.cuda.memory_summary())
-
-                    # print(f"Allocated Memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    # print(f"Reserved Memory: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
                     import gc
                     import torch
 
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
-                    # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-                    # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
+                    print(loss)
                     # model.reset_kmeans()
                     # latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
                     #                                                                 list) else latent_train.detach()
@@ -403,6 +398,9 @@ def run_inductive(
                         cb_new = model.vq._codebook.init_embed_(latents.detach(), logger)
                         np.savez(f"./init_codebook_{epoch}", cb_new.cpu().numpy())  # Already detached
 
+                        # ------------------
+                        # memory release
+                        # ------------------
                         latents = latents.detach().cpu().numpy()  # Detach before saving
                         np.savez(f"./latents_{epoch}", latents)
                         del cb_new, latents  # Explicitly delete tensors
@@ -411,8 +409,10 @@ def run_inductive(
 
                     loss_list_list_train = [x + [y] for x, y in
                                             zip(loss_list_list_train, loss_list_train)]
+                    # ------------------
+                    # memory release
+                    # ------------------
                     del loss_list_train  # Explicitly delete it
-
                     latents.detach()
                     del batched_graph, batched_feats, chunk, latent_train, latents
                     gc.collect()
@@ -447,10 +447,19 @@ def run_inductive(
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
                 torch.cuda.synchronize()
-                del batched_graph, batched_feats, chunk
+                # ----------------
+                # memory release
+                # ----------------
+                loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
+
+                # ------------------
+                # memory release
+                # ------------------
+                del loss_list_train  # Explicitly delete it
+                latents.detach()
+                del batched_graph, batched_feats, chunk, latent_train, latents
                 gc.collect()
                 torch.cuda.empty_cache()
-                loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
 
         print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
