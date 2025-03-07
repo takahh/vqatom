@@ -74,10 +74,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     with torch.cuda.amp.autocast(dtype=torch.float16):
         logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch, logger)
 
-    # ✅ Detach unused tensors to avoid holding references
-    del logits, quantized, sample_list_train
-    torch.cuda.empty_cache()
-
     # ✅ Zero out gradients (set_to_none=True is more memory-efficient)
     optimizer.zero_grad(set_to_none=True)
 
@@ -86,7 +82,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     scaler.scale(loss).backward()
     print(quantized.grad.abs().mean().item())  # Should be nonzero
 
-    #
     # for name, param in model.named_parameters():
     #     if param.grad is not None:
     #         print(f"after model forward {name}: {param.grad.abs().mean()}")
@@ -103,6 +98,10 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # ✅ Append latents with detach() to avoid accumulating history
     latent_list.append(latent_train.detach())
     cb_list.append(cb.detach())
+
+    # ✅ Detach unused tensors to avoid holding references
+    del logits, quantized, sample_list_train
+    torch.cuda.empty_cache()
 
     return loss, loss_list3, latent_list, latents.detach()
 #
