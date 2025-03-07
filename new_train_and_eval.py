@@ -77,7 +77,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # ✅ Zero out gradients (set_to_none=True is more memory-efficient)
     optimizer.zero_grad(set_to_none=True)
 
-    print(f"train_sage quantized {quantized}")
+    # print(f"train_sage quantized {quantized}")
     quantized = quantized.float()
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
