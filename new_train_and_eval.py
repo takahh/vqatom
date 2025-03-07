@@ -83,6 +83,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
 
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
+    print(quantized.grad.abs().mean().item())  # Should be nonzero
+
     #
     # for name, param in model.named_parameters():
     #     if param.grad is not None:
