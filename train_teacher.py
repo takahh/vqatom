@@ -276,9 +276,14 @@ def run(args):
     if conf["train_or_infer"] == "infer":
         model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
 
-    optimizer = optim.Adam(
-        model.parameters(), lr=conf["learning_rate"], weight_decay=conf["weight_decay"]
+    optimizer = torch.optim.Adam([
+        {'params': model.parameters(), 'lr': 0.005},  # Default LR
+        {'params': model.bond_weight.edge_mlp.parameters(), 'lr': 0.001}  # Lower LR for edge_mlp
+        ],
+        lr=conf["learning_rate"],
+        weight_decay=conf["weight_decay"]
     )
+
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
     criterion = torch.nn.NLLLoss()
     evaluator = get_evaluator(conf["dataset"])
