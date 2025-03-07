@@ -558,15 +558,13 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
 
 
 
-def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num_atom_types=20):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
     # One-hot encode atom types
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
-    print("atom_types")
-    print(atom_types)
     try:
         # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
         atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
@@ -576,19 +574,24 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
         raise
 
     # Compute pairwise distances for the z vectors
-    pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
-    print(f"pairwise_distances.mean() {pairwise_distances.mean()}")
-    print(f"pairwise_distances.min() {pairwise_distances.min()}")
-    print(f"pairwise_distances.max() {pairwise_distances.max()}")
+    pairwise_distances = torch.cdist(z, z, p=2)
+    pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
 
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
-    print(f"pairwise_similarities.mean() {pairwise_similarities.mean()}")
-    print(f"pairwise_similarities.min() {pairwise_similarities.min()}")
-
+    """
+    atom_types
+    tensor([ 1., 20.,  1.,  ...,  1., 10.,  1.], device='cuda:0')
+    pairwise_distances.mean() 0.0001491462899139151
+    pairwise_distances.min() 0.0
+    pairwise_distances.max() 0.00027295752079226077
+    pairwise_similarities.mean() 0.58056640625
+    pairwise_similarities.min() 0.0
+    negative 0.4193979799747467, positive 1.426142492988447e-08
+"""
     # Create the mask for "same type" based on similarity threshold
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
