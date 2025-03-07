@@ -126,7 +126,7 @@ def get_args():
     )
 
     """SAGE Specific"""
-    parser.add_argument("--batch_size", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=100)
     parser.add_argument(
         "--fan_out",
         type=str,
