@@ -567,7 +567,7 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
     atom_types = atom_types.to("cuda")
     try:
         # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
-        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
+        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
     except Exception as e:
         print("Error in one_hot:", e)
         print("Atom types values:", atom_types)
