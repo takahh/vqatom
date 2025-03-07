@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 import dgl.nn as dglnn
 
-
 class BondWeightLayer(nn.Module):
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
@@ -22,15 +21,24 @@ class BondWeightLayer(nn.Module):
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            # nn.Tanh()  # Output weight in range (0,1)
-            nn.Sigmoid()  # Output weight in range (0,1)
-        )
-        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
+            nn.Tanh()  # More stable activation
+        ).to(device)
+
+        # Initialize weights properly
+        self.edge_mlp.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_normal_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
     def forward(self, edge_types):
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True) + 1e-6)  # Normalize
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
+
 
 
 class WeightedThreeHopGCN(nn.Module):
