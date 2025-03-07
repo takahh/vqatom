@@ -77,6 +77,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # ✅ Zero out gradients (set_to_none=True is more memory-efficient)
     optimizer.zero_grad(set_to_none=True)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+    loss = loss.double()  # Converts loss to float64
 
     # print(f"train_sage quantized {quantized}")
     # ✅ Scale loss before backward to avoid overflow issues
