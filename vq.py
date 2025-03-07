@@ -535,7 +535,9 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     # feat_dist_matrix = torch.cdist(feats.float(), feats.float(), p=1)
     # diff_feat_mask = 1 - (feat_dist_matrix == 0).float()
 
-    diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
+    # diff_feat_mask = (feats.unsqueeze(1) - feats.unsqueeze(0)).abs().sum(dim=-1) > 0
+    # diff_feat_mask = diff_feat_mask.float()
+    diff_feat_mask = torch.norm(feats.unsqueeze(1) - feats.unsqueeze(0), p=2, dim=-1) > 1e-3
     diff_feat_mask = diff_feat_mask.float()
 
     # --------------------------------------------------------------
