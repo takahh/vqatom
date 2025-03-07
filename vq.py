@@ -565,7 +565,8 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
     # One-hot encode atom types
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
-
+    print("atom_types")
+    print(atom_types)
     try:
         # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
         atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
@@ -576,12 +577,17 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
 
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
+    print(f"pairwise_distances.mean() {pairwise_distances.mean()}")
+    print(f"pairwise_distances.min() {pairwise_distances.min()}")
+    print(f"pairwise_distances.max() {pairwise_distances.max()}")
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
 
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
+    print(f"pairwise_similarities.mean() {pairwise_similarities.mean()}")
+    print(f"pairwise_similarities.min() {pairwise_similarities.min()}")
 
     # Create the mask for "same type" based on similarity threshold
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
@@ -590,7 +596,7 @@ def compute_contrastive_loss(z, atom_types, name, margin=1.0, threshold=0.5, num
     positive_loss = same_type_mask * pairwise_distances ** 2
 
     # Compute negative loss (push different types apart)
-    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0)
     if name == 'atom':
         print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
     # Combine and return mean loss
@@ -1163,25 +1169,25 @@ class VectorQuantize(nn.Module):
 
     import torch
 
-    def compute_contrastive_loss(quantized, atom_types):
-        """
-        Compute contrastive loss efficiently while keeping gradients for backpropagation.
-        """
-        # Compute pairwise distances (keeps requires_grad)
-        pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
-
-        # Enable memory efficiency using automatic mixed precision
-        with torch.autocast(device_type="cuda", dtype=torch.float16):
-            # Create mask for positive pairs (same atom type)
-            same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
-
-            # Ensure only positive pairs contribute to loss
-            num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
-
-            # Compute loss while preserving gradients
-            positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
-
-        return positive_loss  # Loss remains differentiable
+    # def compute_contrastive_loss(quantized, atom_types):
+    #     """
+    #     Compute contrastive loss efficiently while keeping gradients for backpropagation.
+    #     """
+    #     # Compute pairwise distances (keeps requires_grad)
+    #     pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
+    #
+    #     # Enable memory efficiency using automatic mixed precision
+    #     with torch.autocast(device_type="cuda", dtype=torch.float16):
+    #         # Create mask for positive pairs (same atom type)
+    #         same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
+    #
+    #         # Ensure only positive pairs contribute to loss
+    #         num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
+    #
+    #         # Compute loss while preserving gradients
+    #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
+    #
+    #     return positive_loss  # Loss remains differentiable
 
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
         # Preprocess clusters to ensure the desired number of non-empty clusters
