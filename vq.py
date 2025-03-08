@@ -617,11 +617,11 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
     # Compute negative loss (push different types apart)
     # negative_loss = (1.0 - same_type_mask) * torch.relu(margin - pairwise_distances) ** 2
     negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
-    if name == 'atom':
-        print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
+    # if name == 'atom':
+    #     print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
     # Combine and return mean loss
-    # return (positive_loss + negative_loss).mean() / 10000
-    return negative_loss.mean()
+    return (positive_loss + negative_loss).mean() / 10000
+    # return negative_loss.mean()
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
