@@ -329,76 +329,39 @@ def compute_squared_distances(samples, means):
     dists = samples_sq + means_sq - cross_term  # (num_codebooks, num_samples, num_clusters)
     return dists
 
-
 def soft_kmeans(samples, num_iters=100):
-    import time
-    start_total = time.time()  # Start total execution time tracking
-
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
     num_clusters = args.codebook_size
 
     # Initialize centroids
-    start_init = time.time()
     means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
-    torch.cuda.synchronize()
-    init_time = time.time() - start_init
-
-    for i in range(num_iters):
-        start_iter = time.time()
-
-        # Initialize accumulators
-        start_accum = time.time()
-        accumulate_means = torch.zeros_like(means, device=device)
-        cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)
-        torch.cuda.synchronize()
-        accum_time = time.time() - start_accum
+    # ^^^^^^^^^^^^^ samples torch.Size([1, 10000, 64])
+    # ^^^^^^^^^^^^^ means torch.Size([1, 100, 64])
+    # ^^^^^^^^^^^^^ means to return torch.Size([1, 100, 64])
+    for _ in range(num_iters):
+        # Initialize accumulators for batch-wise mean updates
+        accumulate_means = torch.zeros_like(means, device=device)  # Accumulate new centroids
+        cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)  # Track cluster sizes
 
         # Compute squared Euclidean distances
-        start_dists = time.time()
-        dists = compute_squared_distances(samples, means)
         # dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
-        torch.cuda.synchronize()
-        dists_time = time.time() - start_dists
+        dists = compute_squared_distances(samples, means)
 
         # Soft assignment using Softmax
-        start_softmax = time.time()
-        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)
-        torch.cuda.synchronize()
-        softmax_time = time.time() - start_softmax
+        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
 
         # Compute weighted sum for new centroids
-        start_update = time.time()
-        batch_means = cluster_assignments.transpose(-1, -2) @ samples
-        accumulate_means += batch_means.detach()
+        batch_means = cluster_assignments.transpose(-1, -2) @ samples  # [num_codebooks, num_clusters, dim]
+        accumulate_means += batch_means.detach()  # Detach to prevent graph growth
         cluster_sizes += cluster_assignments.sum(dim=1).detach()
-        torch.cuda.synchronize()
-        update_time = time.time() - start_update
 
-        # Cleanup
         del dists, cluster_assignments, batch_means
-        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()  # Free GPU memory
 
-        # Normalize centroids
-        start_norm = time.time()
-        means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)
-        torch.cuda.synchronize()
-        norm_time = time.time() - start_norm
-
-        iter_time = time.time() - start_iter
-        # print(f"Iteration {i+1}/{num_iters} time: {iter_time:.6f} sec")
-
-    total_time = time.time() - start_total
-
-    # Logging execution times
-    print(f"Initialization time: {init_time:.6f} sec")
-    print(f"Accumulator initialization time: {accum_time:.6f} sec")
-    print(f"Distance computation time: {dists_time:.6f} sec")
-    print(f"Softmax assignment time: {softmax_time:.6f} sec")
-    print(f"Centroid update time: {update_time:.6f} sec")
-    print(f"Normalization time: {norm_time:.6f} sec")
-    print(f"Total execution time: {total_time:.6f} sec")
+        # Normalize centroids using accumulated counts
+        means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
 
     return means, cluster_sizes
 
