@@ -293,13 +293,25 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Create the extended graph
             # ------------------------------------------
             start_extended_graph = time.time()
-            src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
+            # Efficiently extract all edges (including bidirectional)
+            src_full, dst_full = torch.triu_indices(num_total_nodes, num_total_nodes, offset=0,
+                                                    device=filtered_adj_matrix.device)
+
+            # Mask only edges that exist in the adjacency matrix
+            edge_mask = filtered_adj_matrix[src_full, dst_full] > 0
+            src_full, dst_full = src_full[edge_mask], dst_full[edge_mask]
+
+            # Directly fetch edge weights without redundant indexing
+            edge_weights = filtered_adj_matrix[src_full, dst_full]
+
+            # Create the DGL graph efficiently
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
-            new_src, new_dst = extended_g.edges()
-            edge_weights = filtered_adj_matrix[new_src, new_dst]
             extended_g.edata["weight"] = edge_weights.float()
             extended_g.ndata["feat"] = filtered_attr_matrix
+
+            # Efficient self-loop addition
             extended_g = dgl.add_self_loop(extended_g)
+
             extended_graph_time = time.time() - start_extended_graph
 
             # ------------------------------------------
