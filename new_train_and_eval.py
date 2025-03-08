@@ -389,18 +389,19 @@ def run_inductive(
             print("train ============")
             # Iterate through batches
 
-            start_run_inductive = time.time()
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                step_dataload_time = time.time() - start_run_inductive
-                print(f"step_dataload_time: {step_dataload_time:.6f} sec")
                 # if idx == 5:
                 #     break
                 if idx == 1:
                     break
                 # print(f"idx {idx}")
+
+                start_convert_to_dgl = time.time()
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
+                convert_to_dgl_time = time.time() - start_convert_to_dgl
+                print(f"mini_batch_iter_time: {convert_to_dgl_time:.6f} sec")
                 for i in range(0, len(glist), chunk_size):
                     import gc
                     import torch
