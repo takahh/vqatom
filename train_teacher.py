@@ -120,7 +120,7 @@ def get_args():
     parser.add_argument(
         "--hidden_dim", type=int, default=64, help="Model hidden layer dimensions"
     )
-    parser.add_argument("--dropout_ratio", type=float, default=0.1)
+    parser.add_argument("--dropout_ratio", type=float, default=0.3)
     parser.add_argument(
         "--norm_type", type=str, default="none", help="One of [none, batch, layer]"
     )
