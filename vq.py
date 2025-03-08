@@ -1344,27 +1344,26 @@ class VectorQuantize(nn.Module):
         # pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
-        # embed_ind_for_sil = torch.squeeze(embed_ind)
-        # latents_for_sil = torch.squeeze(latents)
+        embed_ind_for_sil = torch.squeeze(embed_ind)
+        latents_for_sil = torch.squeeze(latents)
         # equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         #                                                 # cluster_indices, embed_ind, equivalence_groups, logger
         # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
-        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        sil_loss = None
-        bond_num_div_loss = torch.tensor(1)
-        charge_div_loss = torch.tensor(1)
-        elec_state_div_loss = torch.tensor(1)
-        aroma_div_loss = torch.tensor(1)
-        ringy_div_loss = torch.tensor(1)
-        h_num_div_loss = torch.tensor(1)
-        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1], "bond")
-        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2], "charge")
-        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3], "elec")
-        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
-        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
-        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
-
+        embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        # sil_loss = None
+        # bond_num_div_loss = torch.tensor(1)
+        # charge_div_loss = torch.tensor(1)
+        # elec_state_div_loss = torch.tensor(1)
+        # aroma_div_loss = torch.tensor(1)
+        # ringy_div_loss = torch.tensor(1)
+        # h_num_div_loss = torch.tensor(1)
+        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1], "bond")
+        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2], "charge")
+        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3], "elec")
+        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4], "aroma")
+        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5], "ringy")
+        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6], "h_num")
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0], "atom")
         # atom_type_div_loss = cluster_penalty_loss(init_feat, quantized, embed_ind)
         # atom_type_div_loss = self.simple_loss_function(quantized)
@@ -1430,12 +1429,12 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
         # print(f"div_ele_loss {div_ele_loss}")
-        loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
-        # loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
-        #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
-        #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-        #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
-        #         + self.lamb_equiv_atom * equiv_atom_loss)
+        # loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
+        loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
+                + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
+                + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
+                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+                + self.lamb_sil * silh_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
