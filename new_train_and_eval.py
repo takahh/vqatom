@@ -83,11 +83,11 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # ✅ Scale loss before backward to avoid overflow issues
     scaler.scale(loss).backward()
 
-    for name, param in model.named_parameters():
-        if param.grad is not None:
-            print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
-        else:
-            print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
+    # for name, param in model.named_parameters():
+    #     if param.grad is not None:
+    #         print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
+    #     else:
+    #         print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
     # for name, param in model.named_parameters():
     #     if param.grad is not None:
     #         print(f"after model forward {name}: {param.grad.abs().mean()}")
@@ -381,10 +381,10 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             # Iterate through batches
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                # if idx == 5:
-                #     break
-                if idx == 1:
+                if idx == 5:
                     break
+                # if idx == 1:
+                #     break
                 # print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules

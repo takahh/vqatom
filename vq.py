@@ -574,7 +574,7 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
         raise
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
-    print(f"pairwise_distances.max() {pairwise_distances.max()}")
+    # print(f"pairwise_distances.max() {pairwise_distances.max()}")
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
 
     # Normalize the atom_types vectors
@@ -601,8 +601,8 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
     # Compute negative loss (push different types apart)
     # negative_loss = (1.0 - same_type_mask) * torch.relu(margin - pairwise_distances) ** 2
     negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
-    if name == 'atom':
-        print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
+    # if name == 'atom':
+    #     print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
     # Combine and return mean loss
     # return (positive_loss + negative_loss).mean() / 10000
     return negative_loss.mean()
