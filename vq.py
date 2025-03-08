@@ -1371,10 +1371,18 @@ class VectorQuantize(nn.Module):
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, 1)
 
+    import torch
+    import time
+    from einops import rearrange
 
     def forward(self, x, init_feat, logger, mask=None):
+        start_total = time.time()
+
         only_one = x.ndim == 2
+        start_device = time.time()
         x = x.to("cuda")
+        torch.cuda.synchronize()
+        device_time = time.time() - start_device
 
         if only_one:
             x = rearrange(x, 'b d -> b 1 d')
@@ -1383,32 +1391,56 @@ class VectorQuantize(nn.Module):
         need_transpose = not self.channel_last and not self.accept_image_fmap
 
         if self.accept_image_fmap:
+            start_image_fmap = time.time()
             height, width = x.shape[-2:]
             x = rearrange(x, 'b c h w -> b (h w) c')
+            torch.cuda.synchronize()
+            image_fmap_time = time.time() - start_image_fmap
+        else:
+            image_fmap_time = 0
 
         if need_transpose:
+            start_transpose = time.time()
             x = rearrange(x, 'b d n -> b n d')
+            torch.cuda.synchronize()
+            transpose_time = time.time() - start_transpose
+        else:
+            transpose_time = 0
 
+        start_project_in = time.time()
         x = self.project_in(x)
+        torch.cuda.synchronize()
+        project_in_time = time.time() - start_project_in
 
         if is_multiheaded:
+            start_rearrange = time.time()
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
-         # quantize, embed_ind, dist, self.embed = self._codebook(x, logger)
+            torch.cuda.synchronize()
+            rearrange_time = time.time() - start_rearrange
+        else:
+            rearrange_time = 0
+
+        start_codebook = time.time()
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
+        torch.cuda.synchronize()
+        codebook_time = time.time() - start_codebook
+
+        start_quant_adjust = time.time()
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = (quantize - quantize.detach()).detach() + quantize
+        torch.cuda.synchronize()
+        quant_adjust_time = time.time() - start_quant_adjust
 
-        #
-        # if self.training:
-        #     quantize = x_tmp + (quantize - x_tmp)
+        start_loss_init = time.time()
+        loss = torch.tensor(0., device=device)
+        raw_commit_loss = torch.zeros(1, device=device)
+        detached_quantize = torch.zeros(1, device=device)
+        torch.cuda.synchronize()
+        loss_init_time = time.time() - start_loss_init
 
-        # loss = torch.zeros(1, device=device, requires_grad=True)
-        loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
-        raw_commit_loss = torch.zeros(1, device=device)  # ✅ Ensure it’s part of computation
-        detached_quantize = torch.zeros(1, device=device)  # ✅ Track gradients properly
-
+        start_codebook_select = time.time()
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
@@ -1420,42 +1452,91 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
+        torch.cuda.synchronize()
+        codebook_select_time = time.time() - start_codebook_select
+
+        start_ortho_loss = time.time()
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
-        # embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
+        torch.cuda.synchronize()
+        ortho_loss_time = time.time() - start_ortho_loss
+
+        start_loss_calc = time.time()
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        # print(f"div_ele_loss {div_ele_loss}")
-        # loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
+
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
                 + self.lamb_sil * silh_loss)
+        torch.cuda.synchronize()
+        loss_calc_time = time.time() - start_loss_calc
 
         if is_multiheaded:
+            start_rearrange_back = time.time()
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
             else:
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
+            torch.cuda.synchronize()
+            rearrange_back_time = time.time() - start_rearrange_back
+        else:
+            rearrange_back_time = 0
 
+        start_project_out = time.time()
         quantize = self.project_out(quantize)
+        torch.cuda.synchronize()
+        project_out_time = time.time() - start_project_out
+
         if need_transpose:
+            start_transpose_back = time.time()
             quantize = rearrange(quantize, 'b n d -> b d n')
+            torch.cuda.synchronize()
+            transpose_back_time = time.time() - start_transpose_back
+        else:
+            transpose_back_time = 0
 
         if self.accept_image_fmap:
+            start_image_fmap_back = time.time()
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
+            torch.cuda.synchronize()
+            image_fmap_back_time = time.time() - start_image_fmap_back
+        else:
+            image_fmap_back_time = 0
+
         if only_one:
-            quantize = rearrange(quantize, 'b d -> b d')  # Keep batch dimension dynamic
+            quantize = rearrange(quantize, 'b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
+
+        total_time = time.time() - start_total
+
+        # **Print execution times**
+        print(f"Device transfer time: {device_time:.6f} sec")
+        print(f"Image fmap transformation time: {image_fmap_time:.6f} sec")
+        print(f"Transpose time: {transpose_time:.6f} sec")
+        print(f"Projection in time: {project_in_time:.6f} sec")
+        print(f"Rearrange for multihead time: {rearrange_time:.6f} sec")
+        print(f"Codebook lookup time: {codebook_time:.6f} sec")
+        print(f"Quantization adjustment time: {quant_adjust_time:.6f} sec")
+        print(f"Loss initialization time: {loss_init_time:.6f} sec")
+        print(f"Codebook selection time: {codebook_select_time:.6f} sec")
+        print(f"Orthogonal loss computation time: {ortho_loss_time:.6f} sec")
+        print(f"Loss calculation time: {loss_calc_time:.6f} sec")
+        print(f"Rearrange back time: {rearrange_back_time:.6f} sec")
+        print(f"Projection out time: {project_out_time:.6f} sec")
+        print(f"Transpose back time: {transpose_back_time:.6f} sec")
+        print(f"Image fmap transformation back time: {image_fmap_back_time:.6f} sec")
+        print(f"Total forward pass time: {total_time:.6f} sec")
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss, equiv_atom_loss)
+

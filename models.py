@@ -61,22 +61,13 @@ class WeightedThreeHopGCN(nn.Module):
     import time
     import torch
     import torch
-
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
-        import time
-        # Start timing
-        start_total = time.time()
-
-        # Move embedding to correct device
-        self.bond_weight = self.bond_weight.to(device)
-
-        # Move graph and features to device
-        start_move = time.time()
+        # Move graph and features to the same device
         batched_graph = batched_graph.to(device, non_blocking=True)
         features = transform_node_feats(features).to(device, non_blocking=True)
-        move_time = time.time() - start_move
 
         h = features.detach().clone()  # Store initial features without tracking gradients
         init_feat = h.clone()
@@ -85,23 +76,16 @@ class WeightedThreeHopGCN(nn.Module):
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
 
-        # Edge weight transformation
-        start_edge = time.time()
+        # Get transformed edge weights
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight  # Overwrite to free memory
-        edge_time = time.time() - start_edge
 
-        # First linear transformation
-        start_linear = time.time()
-        h = self.linear_0(features)
+        h = self.linear_0(features)  # Apply linear transformation
         h = self.dropout(h)
-        linear_time = time.time() - start_linear
-
-        # Message passing
-        start_mp = time.time()
+        # 3-hop message passing (ensuring memory-efficient operations)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.activation(h)
         h = self.dropout(h)
@@ -109,47 +93,35 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.activation(h)
         h = self.dropout(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-        message_passing_time = time.time() - start_mp
 
-        # VQ operation
-        start_vq = time.time()
+        # ✅ Detach unused outputs to reduce memory usage
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
          equivalent_atom_loss) = self.vq(h, init_feat, logger)
-        vq_time = time.time() - start_vq
 
-        # Loss storage
-        start_loss = time.time()
+        # ✅ Only store scalars in `losslist` to avoid keeping computation graphs
         losslist = [
             div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(),
             ringy_div_loss.item(), h_num_div_loss.item(), charge_div_loss.item(),
             elec_state_div_loss.item(), spread_loss, pair_loss,
             sil_loss, equivalent_atom_loss
         ]
-        loss_time = time.time() - start_loss
 
-        # Adjacency matrix operations
-        start_adj = time.time()
+        # ✅ Prevent adjacency matrices from holding memory
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
-        adj_time = time.time() - start_adj
 
         if batched_graph_base:
-            start_base_adj = time.time()
-            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()
-            sample_adj_base = adj_matrix_base.to_dense()
+            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
+            sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
             src, dst = batched_graph_base.all_edges()
-            base_adj_time = time.time() - start_base_adj
         else:
-            start_edges = time.time()
             src, dst = batched_graph.all_edges()
-            edge_list_time = time.time() - start_edges
-            base_adj_time = 0  # No base graph
 
         src, dst = src.to(torch.int64), dst.to(torch.int64)
 
-        start_sample = time.time()
+        # ✅ Detach non-trainable elements from `sample_list`
         sample_bond_info = batched_graph.edata["weight"]
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
@@ -162,27 +134,10 @@ class WeightedThreeHopGCN(nn.Module):
                 emb_ind.detach(), features.detach(), sample_adj.detach(), sample_bond_info.detach(),
                 src.detach(), dst.detach(), None
             ]
-        sample_time = time.time() - start_sample
 
-        # Force garbage collection
+        # ✅ Force garbage collection to free unused tensors
         del adj_matrix, sample_adj, transformed_edge_weight
         torch.cuda.empty_cache()
-
-        total_time = time.time() - start_total
-
-        # Logging time for each operation
-        print(f"Move to device time: {move_time:.6f} sec")
-        print(f"Edge transformation time: {edge_time:.6f} sec")
-        print(f"Linear transformation time: {linear_time:.6f} sec")
-        print(f"Message passing time: {message_passing_time:.6f} sec")
-        print(f"VQ processing time: {vq_time:.6f} sec")
-        print(f"Loss processing time: {loss_time:.6f} sec")
-        print(f"Adjacency matrix computation time: {adj_time:.6f} sec")
-        print(f"Base adjacency matrix time: {base_adj_time:.6f} sec")
-        print(f"Edge list extraction time: {edge_list_time:.6f} sec")
-        print(f"Sample list preparation time: {sample_time:.6f} sec")
-        print(f"Total forward pass time: {total_time:.6f} sec")
-
         return (h, loss, dist, codebook, losslist, x, quantized, latents, sample_list)
 
 
