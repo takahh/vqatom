@@ -240,36 +240,31 @@ def convert_to_dgl(adj_batch, attr_batch):
     extended_graphs = []
 
     for i in range(len(adj_batch)):  # Loop over each molecule set
-        start_molecule = time.time()
-
+        # if i == 1:
+        #     break
+        # print(f"{i} - {adj_batch[i].shape}")
         # Reshape the current batch
-        start_reshape = time.time()
         adj_matrices = adj_batch[i].view(1000, 100, 100)
         attr_matrices = attr_batch[i].view(1000, 100, 7)
-        reshape_time = time.time() - start_reshape
 
         for j in range(len(attr_matrices)):
-            start_inner = time.time()
-
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
 
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
-            start_mask = time.time()
             nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
             num_total_nodes = nonzero_mask.sum().item()
             filtered_attr_matrix = attr_matrix[nonzero_mask]
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
-            mask_time = time.time() - start_mask
 
             # ------------------------------------------
             # Create the base graph (only 1-hop edges)
             # ------------------------------------------
-            start_base_graph = time.time()
             src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
-            mask = src > dst  # Avoid duplicate edges
+            # Only consider one direction to avoid duplicate edges
+            mask = src > dst
             src = src[mask]
             dst = dst[mask]
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights for 1-hop edges
@@ -277,51 +272,64 @@ def convert_to_dgl(adj_batch, attr_batch):
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             base_g.ndata["feat"] = filtered_attr_matrix
             base_g.edata["weight"] = edge_weights.float()
+            # You can optionally customize edge types for the base graph; here we assign all 1-hop edges.
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
             base_g = dgl.add_self_loop(base_g)
-            base_graph_time = time.time() - start_base_graph
-
             base_graphs.append(base_g)
 
+            # # ------------------------------------------
+            # # Generate 2-hop and 3-hop adjacency matrices
+            # # ------------------------------------------
+            # adj_2hop = dgl.khop_adj(base_g, 2)
+            # adj_3hop = dgl.khop_adj(base_g, 3)
+            # # ------------------------------------------
+            # # Combine adjacency matrices into one
+            # # ------------------------------------------
+            # full_adj_matrix = filtered_adj_matrix.clone()
+            #
+            # full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            # full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+            #
+            # # Ensure diagonal values are set to 1.0 (self-connections)
+            # torch.diagonal(full_adj_matrix).fill_(1.0)
+
             # ------------------------------------------
-            # Create the extended graph
+            # Create the extended graph from the full adjacency matrix
             # ------------------------------------------
-            start_extended_graph = time.time()
             src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
             new_src, new_dst = extended_g.edges()
+
+            # Assign edge weights from the full adjacency matrix
             edge_weights = filtered_adj_matrix[new_src, new_dst]
             extended_g.edata["weight"] = edge_weights.float()
+
+            # ------------------------------------------
+            # Vectorized assignment of edge types
+            # ------------------------------------------
+            # one_hop = filtered_adj_matrix[new_src, new_dst] > 0
+            # two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
+            # three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
+            # edge_types = torch.zeros_like(new_src, dtype=torch.int)
+            # edge_types[one_hop] = 1
+            # edge_types[two_hop] = 2
+            # edge_types[three_hop] = 3
+
+            # extended_g.edata["edge_type"] = edge_types
+
+            # ------------------------------------------
+            # Assign node features to the extended graph
+            # ------------------------------------------
             extended_g.ndata["feat"] = filtered_attr_matrix
             extended_g = dgl.add_self_loop(extended_g)
-            extended_graph_time = time.time() - start_extended_graph
-
             # ------------------------------------------
             # Validate that remaining features are zero (if applicable)
             # ------------------------------------------
-            start_validation = time.time()
             remaining_features = attr_matrix[base_g.num_nodes():]
             if not torch.all(remaining_features == 0):
                 print("⚠️ WARNING: Non-zero values found in remaining features!")
-            validation_time = time.time() - start_validation
 
             extended_graphs.append(extended_g)
-
-            inner_loop_time = time.time() - start_inner
-            print(f"Inner loop {i}-{j} time: {inner_loop_time:.6f} sec")
-
-        molecule_time = time.time() - start_molecule
-        print(f"Processing molecule {i} time: {molecule_time:.6f} sec")
-
-    total_time = time.time() - start_total
-
-    # Logging execution times
-    print(f"Reshape time: {reshape_time:.6f} sec")
-    print(f"Masking time: {mask_time:.6f} sec")
-    print(f"Base graph creation time: {base_graph_time:.6f} sec")
-    print(f"Extended graph creation time: {extended_graph_time:.6f} sec")
-    print(f"Validation time: {validation_time:.6f} sec")
-    print(f"Total execution time: {total_time:.6f} sec")
 
     return base_graphs, extended_graphs
 
