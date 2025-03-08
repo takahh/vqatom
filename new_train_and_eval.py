@@ -268,23 +268,17 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Create the base graph (only 1-hop edges)
             # ------------------------------------------
             start_base_graph = time.time()
-            # Get the upper triangular part of the adjacency matrix (excluding diagonal)
-            src, dst = torch.triu_indices(num_total_nodes, num_total_nodes, offset=1, device=filtered_adj_matrix.device)
+            src, dst = filtered_adj_matrix.nonzero(as_tuple=True)
+            mask = src > dst  # Avoid duplicate edges
+            src = src[mask]
+            dst = dst[mask]
+            edge_weights = filtered_adj_matrix[src, dst]  # Extract weights for 1-hop edges
 
-            # Filter edges where there is a connection
-            edge_mask = filtered_adj_matrix[src, dst] > 0
-            src, dst = src[edge_mask], dst[edge_mask]
-            edge_weights = filtered_adj_matrix[src, dst]  # Efficiently get edge weights
-
-            # Create the DGL graph
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             base_g.ndata["feat"] = filtered_attr_matrix
             base_g.edata["weight"] = edge_weights.float()
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
-
-            # Add self-loops efficiently
             base_g = dgl.add_self_loop(base_g)
-
             base_graph_time = time.time() - start_base_graph
 
             base_graphs.append(base_g)
@@ -293,25 +287,13 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Create the extended graph
             # ------------------------------------------
             start_extended_graph = time.time()
-            # Efficiently extract all edges (including bidirectional)
-            src_full, dst_full = torch.triu_indices(num_total_nodes, num_total_nodes, offset=0,
-                                                    device=filtered_adj_matrix.device)
-
-            # Mask only edges that exist in the adjacency matrix
-            edge_mask = filtered_adj_matrix[src_full, dst_full] > 0
-            src_full, dst_full = src_full[edge_mask], dst_full[edge_mask]
-
-            # Directly fetch edge weights without redundant indexing
-            edge_weights = filtered_adj_matrix[src_full, dst_full]
-
-            # Create the DGL graph efficiently
+            src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
+            new_src, new_dst = extended_g.edges()
+            edge_weights = filtered_adj_matrix[new_src, new_dst]
             extended_g.edata["weight"] = edge_weights.float()
             extended_g.ndata["feat"] = filtered_attr_matrix
-
-            # Efficient self-loop addition
             extended_g = dgl.add_self_loop(extended_g)
-
             extended_graph_time = time.time() - start_extended_graph
 
             # ------------------------------------------
