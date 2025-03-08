@@ -400,7 +400,7 @@ def run_inductive(
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 convert_to_dgl_time = time.time() - start_convert_to_dgl
-                print(f"mini_batch_iter_time: {convert_to_dgl_time:.6f} sec")
+                print(f"convert_to_dgl_time: {convert_to_dgl_time:.6f} sec", flush=True)
                 for i in range(0, len(glist), chunk_size):
                     import gc
                     import torch
