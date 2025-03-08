@@ -388,7 +388,12 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             print("train ============")
             # Iterate through batches
+
+            start_run_inductive = time.time()
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+
+                step_dataload_time = time.time() - start_run_inductive
+                print(f"step_dataload_time: {step_dataload_time:.6f} sec")
                 # if idx == 5:
                 #     break
                 if idx == 1:

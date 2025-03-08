@@ -373,7 +373,7 @@ def soft_kmeans(samples, num_iters=100):
         norm_time = time.time() - start_norm
 
         iter_time = time.time() - start_iter
-        print(f"Iteration {i+1}/{num_iters} time: {iter_time:.6f} sec")
+        # print(f"Iteration {i+1}/{num_iters} time: {iter_time:.6f} sec")
 
     total_time = time.time() - start_total
 
