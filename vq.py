@@ -317,6 +317,19 @@ def batched_sample_vectors(samples, num):
 import torch
 import time
 
+def compute_squared_distances(samples, means):
+    """
+    Computes squared Euclidean distances efficiently.
+    """
+    # ||a - b||^2 = ||a||^2 + ||b||^2 - 2 * a.b
+    samples_sq = torch.sum(samples**2, dim=-1, keepdim=True)  # (num_codebooks, num_samples, 1)
+    means_sq = torch.sum(means**2, dim=-1, keepdim=True).transpose(-2, -1)  # (num_codebooks, 1, num_clusters)
+    cross_term = 2 * torch.matmul(samples, means.transpose(-2, -1))  # (num_codebooks, num_samples, num_clusters)
+
+    dists = samples_sq + means_sq - cross_term  # (num_codebooks, num_samples, num_clusters)
+    return dists
+
+
 def soft_kmeans(samples, num_iters=100):
     import time
     start_total = time.time()  # Start total execution time tracking
@@ -344,7 +357,8 @@ def soft_kmeans(samples, num_iters=100):
 
         # Compute squared Euclidean distances
         start_dists = time.time()
-        dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+        dists = compute_squared_distances(samples, means)
+        # dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
         torch.cuda.synchronize()
         dists_time = time.time() - start_dists
 
