@@ -392,7 +392,7 @@ def run_inductive(
                 for i in range(0, len(glist), chunk_size):
                     import gc
                     import torch
-                    if i == 3:
+                    if i == 1:
                         break
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
