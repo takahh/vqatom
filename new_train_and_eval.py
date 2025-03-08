@@ -468,7 +468,6 @@ def run_inductive(
                 # ------------------
                 # memory release
                 # ------------------
-                del loss_list_train  # Explicitly delete it
                 latents.detach()
                 del batched_graph, batched_feats, chunk, latent_train, latents
                 gc.collect()
