@@ -52,8 +52,8 @@ class WeightedThreeHopGCN(nn.Module):
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         # self.codebook_size = args.codebook_size
-        self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(p=args.dropout_ratio)
+        # self.activation = nn.ReLU()
+        # self.dropout = nn.Dropout(p=args.dropout_ratio)
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -84,14 +84,14 @@ class WeightedThreeHopGCN(nn.Module):
         edge_weight = transformed_edge_weight  # Overwrite to free memory
 
         h = self.linear_0(features)  # Apply linear transformation
-        h = self.dropout(h)
+        # h = self.dropout(h)
         # 3-hop message passing (ensuring memory-efficient operations)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.activation(h)
-        h = self.dropout(h)
+        # h = self.activation(h)
+        # h = self.dropout(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.activation(h)
-        h = self.dropout(h)
+        # h = self.activation(h)
+        # h = self.dropout(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
         # ✅ Detach unused outputs to reduce memory usage
