@@ -1376,6 +1376,7 @@ class VectorQuantize(nn.Module):
     from einops import rearrange
 
     def forward(self, x, init_feat, logger, mask=None):
+        import time
         start_total = time.time()
 
         only_one = x.ndim == 2
