@@ -367,7 +367,13 @@ def run_inductive(
     # ----------------------------
     # define train and test list
     # ----------------------------
+    import time
     # Initialize dataset and dataloader
+    start_dataload = time.time()
+    dataload_time = time.time() - start_dataload
+
+    print(f"dataload_time: {dataload_time:.6f} sec")
+
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     for epoch in range(1, conf["max_epoch"] + 1):

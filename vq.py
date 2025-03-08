@@ -314,41 +314,80 @@ def sample_vectors(samples, num):
 def batched_sample_vectors(samples, num):
     return torch.stack([sample_vectors(sample, num) for sample in samples.unbind(dim=0)], dim=0)
 
+import torch
+import time
 
 def soft_kmeans(samples, num_iters=100):
+    import time
+    start_total = time.time()  # Start total execution time tracking
+
     num_codebooks, num_samples, dim = samples.shape
     device = samples.device
     args = get_args()
     num_clusters = args.codebook_size
 
     # Initialize centroids
+    start_init = time.time()
     means = torch.randn(num_codebooks, num_clusters, dim, device=device, requires_grad=True)
-    # ^^^^^^^^^^^^^ samples torch.Size([1, 10000, 64])
-    # ^^^^^^^^^^^^^ means torch.Size([1, 100, 64])
-    # ^^^^^^^^^^^^^ means to return torch.Size([1, 100, 64])
-    for _ in range(num_iters):
-        # Initialize accumulators for batch-wise mean updates
-        accumulate_means = torch.zeros_like(means, device=device)  # Accumulate new centroids
-        cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)  # Track cluster sizes
+    torch.cuda.synchronize()
+    init_time = time.time() - start_init
+
+    for i in range(num_iters):
+        start_iter = time.time()
+
+        # Initialize accumulators
+        start_accum = time.time()
+        accumulate_means = torch.zeros_like(means, device=device)
+        cluster_sizes = torch.zeros(num_codebooks, num_clusters, device=device)
+        torch.cuda.synchronize()
+        accum_time = time.time() - start_accum
 
         # Compute squared Euclidean distances
+        start_dists = time.time()
         dists = torch.sum((samples.unsqueeze(2) - means.unsqueeze(1)) ** 2, dim=-1)
+        torch.cuda.synchronize()
+        dists_time = time.time() - start_dists
 
         # Soft assignment using Softmax
-        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)  # [1, 100, 10000]
+        start_softmax = time.time()
+        cluster_assignments = torch.nn.functional.softmax(-dists, dim=-1)
+        torch.cuda.synchronize()
+        softmax_time = time.time() - start_softmax
 
         # Compute weighted sum for new centroids
-        batch_means = cluster_assignments.transpose(-1, -2) @ samples  # [num_codebooks, num_clusters, dim]
-        accumulate_means += batch_means.detach()  # Detach to prevent graph growth
+        start_update = time.time()
+        batch_means = cluster_assignments.transpose(-1, -2) @ samples
+        accumulate_means += batch_means.detach()
         cluster_sizes += cluster_assignments.sum(dim=1).detach()
+        torch.cuda.synchronize()
+        update_time = time.time() - start_update
 
+        # Cleanup
         del dists, cluster_assignments, batch_means
-        torch.cuda.empty_cache()  # Free GPU memory
+        torch.cuda.empty_cache()
 
-        # Normalize centroids using accumulated counts
-        means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)  # Avoid division by zero
+        # Normalize centroids
+        start_norm = time.time()
+        means = accumulate_means / (cluster_sizes.unsqueeze(-1) + 1e-8)
+        torch.cuda.synchronize()
+        norm_time = time.time() - start_norm
+
+        iter_time = time.time() - start_iter
+        print(f"Iteration {i+1}/{num_iters} time: {iter_time:.6f} sec")
+
+    total_time = time.time() - start_total
+
+    # Logging execution times
+    print(f"Initialization time: {init_time:.6f} sec")
+    print(f"Accumulator initialization time: {accum_time:.6f} sec")
+    print(f"Distance computation time: {dists_time:.6f} sec")
+    print(f"Softmax assignment time: {softmax_time:.6f} sec")
+    print(f"Centroid update time: {update_time:.6f} sec")
+    print(f"Normalization time: {norm_time:.6f} sec")
+    print(f"Total execution time: {total_time:.6f} sec")
 
     return means, cluster_sizes
+
 
 
 
@@ -799,57 +838,42 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        import time
-        start_total = time.time()  # Total execution start time
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
         if needs_codebook_dim:
-            start_rearrange = time.time()
             x = rearrange(x, '... -> 1 ...')
-            rearrange_time = time.time() - start_rearrange
-        else:
-            rearrange_time = 0
 
         shape, dtype = x.shape, x.dtype
-
-        start_flatten = time.time()
         flatten = rearrange(x, 'h ... d -> h (...) d')
-        flatten_time = time.time() - start_flatten
-
-        start_init_embed = time.time()
+        # print(flatten.shape)
         self.init_embed_(flatten)
-        init_embed_time = time.time() - start_init_embed
 
+        # embed = self.embed if not self.learnable_codebook else self.embed.detach()
         embed = self.embed  # Keep gradients
 
-        start_cdist = time.time()
+        # print(embed)
+        # print(flatten.shape, embed.shape)
+        # flatten: 2110 * 3703 embed: 8192*3703
+        # print(f"flatten: {flatten}")
         dist = -torch.cdist(flatten, embed, p=2)
-        cdist_time = time.time() - start_cdist
-
-        start_gumbel_sample = time.time()
+        # print(dist.shape)
         embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
-        gumbel_sample_time = time.time() - start_gumbel_sample
-
-        start_onehot = time.time()
+        # print(embed_ind.shape)
         embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
-        onehot_time = time.time() - start_onehot
-
+        # print(embed_onehot.shape)
         embed_ind = embed_ind.view(*shape[:-1])
-
-        start_gumbel_softmax = time.time()
+        # print(embed_ind.shape)
         embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
-        gumbel_softmax_time = time.time() - start_gumbel_softmax
-
-        start_quantize = time.time()
         quantize = embed_ind @ self.embed
-        quantize_time = time.time() - start_quantize
 
+        # quantize = embed_ind @ self.embed  # Keeps gradients
+        # quantize = batched_embedding(embed_ind, self.embed)
+        # print(embed_onehot.shape)
         if self.training:
-            start_training_block = time.time()
-
             cluster_size = embed_onehot.sum(dim=1)
+            # print(cluster_size.shape)
             self.all_reduce_fn(cluster_size)
             self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
 
@@ -858,41 +882,17 @@ class EuclideanCodebook(nn.Module):
             self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
 
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+            # print(cluster_size.shape)
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
             self.embed.data.copy_(embed_normalized)
             self.expire_codes_(x)
 
-            training_block_time = time.time() - start_training_block
-        else:
-            training_block_time = 0
-
         if needs_codebook_dim:
-            start_rearrange_out = time.time()
             quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
-            rearrange_out_time = time.time() - start_rearrange_out
-        else:
-            rearrange_out_time = 0
-
-        start_argmax = time.time()
+        # print(quantize.shape)
         embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
-        argmax_time = time.time() - start_argmax
 
-        total_time = time.time() - start_total
-
-        # Logging execution times
-        print(f"Rearrange input time: {rearrange_time:.6f} sec")
-        print(f"Flatten time: {flatten_time:.6f} sec")
-        print(f"Init embed time: {init_embed_time:.6f} sec")
-        print(f"CDist computation time: {cdist_time:.6f} sec")
-        print(f"Gumbel sample time: {gumbel_sample_time:.6f} sec")
-        print(f"One-hot encoding time: {onehot_time:.6f} sec")
-        print(f"Gumbel softmax time: {gumbel_softmax_time:.6f} sec")
-        print(f"Quantization time: {quantize_time:.6f} sec")
-        print(f"Training block time: {training_block_time:.6f} sec")
-        print(f"Rearrange output time: {rearrange_out_time:.6f} sec")
-        print(f"Argmax time: {argmax_time:.6f} sec")
-        print(f"Total forward pass time: {total_time:.6f} sec")
-
+        # print(f"vq quantized {quantize}")
         return quantize, embed_ind, dist, self.embed, flatten, embed
 
     @torch.amp.autocast('cuda', enabled=False)
