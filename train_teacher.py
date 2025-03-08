@@ -138,7 +138,7 @@ def get_args():
     )
 
     parser.add_argument(
-        "--chunk_size", type=int, default=200
+        "--chunk_size", type=int, default=500
     )
 
     """Optimization"""
