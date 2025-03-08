@@ -799,6 +799,7 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
+        import time
         start_total = time.time()  # Total execution start time
 
         needs_codebook_dim = x.ndim < 4
