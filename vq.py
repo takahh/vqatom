@@ -792,45 +792,63 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
+    import torch
+    import time
+    import torch.nn.functional as F
+    from einops import rearrange, einsum
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
+        start_total = time.time()  # Total execution start time
 
         needs_codebook_dim = x.ndim < 4
         x = x.float()
 
         if needs_codebook_dim:
+            start_rearrange = time.time()
             x = rearrange(x, '... -> 1 ...')
+            rearrange_time = time.time() - start_rearrange
+        else:
+            rearrange_time = 0
 
         shape, dtype = x.shape, x.dtype
-        flatten = rearrange(x, 'h ... d -> h (...) d')
-        # print(flatten.shape)
-        self.init_embed_(flatten)
 
-        # embed = self.embed if not self.learnable_codebook else self.embed.detach()
+        start_flatten = time.time()
+        flatten = rearrange(x, 'h ... d -> h (...) d')
+        flatten_time = time.time() - start_flatten
+
+        start_init_embed = time.time()
+        self.init_embed_(flatten)
+        init_embed_time = time.time() - start_init_embed
+
         embed = self.embed  # Keep gradients
 
-        # print(embed)
-        # print(flatten.shape, embed.shape)
-        # flatten: 2110 * 3703 embed: 8192*3703
-        # print(f"flatten: {flatten}")
+        start_cdist = time.time()
         dist = -torch.cdist(flatten, embed, p=2)
-        # print(dist.shape)
-        embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
-        # print(embed_ind.shape)
-        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
-        # print(embed_onehot.shape)
-        embed_ind = embed_ind.view(*shape[:-1])
-        # print(embed_ind.shape)
-        embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
-        quantize = embed_ind @ self.embed
+        cdist_time = time.time() - start_cdist
 
-        # quantize = embed_ind @ self.embed  # Keeps gradients
-        # quantize = batched_embedding(embed_ind, self.embed)
-        # print(embed_onehot.shape)
+        start_gumbel_sample = time.time()
+        embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
+        gumbel_sample_time = time.time() - start_gumbel_sample
+
+        start_onehot = time.time()
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
+        onehot_time = time.time() - start_onehot
+
+        embed_ind = embed_ind.view(*shape[:-1])
+
+        start_gumbel_softmax = time.time()
+        embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
+        gumbel_softmax_time = time.time() - start_gumbel_softmax
+
+        start_quantize = time.time()
+        quantize = embed_ind @ self.embed
+        quantize_time = time.time() - start_quantize
+
         if self.training:
+            start_training_block = time.time()
+
             cluster_size = embed_onehot.sum(dim=1)
-            # print(cluster_size.shape)
             self.all_reduce_fn(cluster_size)
             self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
 
@@ -839,17 +857,41 @@ class EuclideanCodebook(nn.Module):
             self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
 
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-            # print(cluster_size.shape)
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
             self.embed.data.copy_(embed_normalized)
             self.expire_codes_(x)
 
-        if needs_codebook_dim:
-            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
-        # print(quantize.shape)
-        embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
+            training_block_time = time.time() - start_training_block
+        else:
+            training_block_time = 0
 
-        # print(f"vq quantized {quantize}")
+        if needs_codebook_dim:
+            start_rearrange_out = time.time()
+            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
+            rearrange_out_time = time.time() - start_rearrange_out
+        else:
+            rearrange_out_time = 0
+
+        start_argmax = time.time()
+        embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
+        argmax_time = time.time() - start_argmax
+
+        total_time = time.time() - start_total
+
+        # Logging execution times
+        print(f"Rearrange input time: {rearrange_time:.6f} sec")
+        print(f"Flatten time: {flatten_time:.6f} sec")
+        print(f"Init embed time: {init_embed_time:.6f} sec")
+        print(f"CDist computation time: {cdist_time:.6f} sec")
+        print(f"Gumbel sample time: {gumbel_sample_time:.6f} sec")
+        print(f"One-hot encoding time: {onehot_time:.6f} sec")
+        print(f"Gumbel softmax time: {gumbel_softmax_time:.6f} sec")
+        print(f"Quantization time: {quantize_time:.6f} sec")
+        print(f"Training block time: {training_block_time:.6f} sec")
+        print(f"Rearrange output time: {rearrange_out_time:.6f} sec")
+        print(f"Argmax time: {argmax_time:.6f} sec")
+        print(f"Total forward pass time: {total_time:.6f} sec")
+
         return quantize, embed_ind, dist, self.embed, flatten, embed
 
     @torch.amp.autocast('cuda', enabled=False)
@@ -1376,14 +1418,8 @@ class VectorQuantize(nn.Module):
     from einops import rearrange
 
     def forward(self, x, init_feat, logger, mask=None):
-        import time
-        start_total = time.time()
-
         only_one = x.ndim == 2
-        start_device = time.time()
         x = x.to("cuda")
-        torch.cuda.synchronize()
-        device_time = time.time() - start_device
 
         if only_one:
             x = rearrange(x, 'b d -> b 1 d')
@@ -1392,56 +1428,32 @@ class VectorQuantize(nn.Module):
         need_transpose = not self.channel_last and not self.accept_image_fmap
 
         if self.accept_image_fmap:
-            start_image_fmap = time.time()
             height, width = x.shape[-2:]
             x = rearrange(x, 'b c h w -> b (h w) c')
-            torch.cuda.synchronize()
-            image_fmap_time = time.time() - start_image_fmap
-        else:
-            image_fmap_time = 0
 
         if need_transpose:
-            start_transpose = time.time()
             x = rearrange(x, 'b d n -> b n d')
-            torch.cuda.synchronize()
-            transpose_time = time.time() - start_transpose
-        else:
-            transpose_time = 0
 
-        start_project_in = time.time()
         x = self.project_in(x)
-        torch.cuda.synchronize()
-        project_in_time = time.time() - start_project_in
 
         if is_multiheaded:
-            start_rearrange = time.time()
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
-            torch.cuda.synchronize()
-            rearrange_time = time.time() - start_rearrange
-        else:
-            rearrange_time = 0
-
-        start_codebook = time.time()
+         # quantize, embed_ind, dist, self.embed = self._codebook(x, logger)
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
-        torch.cuda.synchronize()
-        codebook_time = time.time() - start_codebook
-
-        start_quant_adjust = time.time()
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = (quantize - quantize.detach()).detach() + quantize
-        torch.cuda.synchronize()
-        quant_adjust_time = time.time() - start_quant_adjust
 
-        start_loss_init = time.time()
-        loss = torch.tensor(0., device=device)
-        raw_commit_loss = torch.zeros(1, device=device)
-        detached_quantize = torch.zeros(1, device=device)
-        torch.cuda.synchronize()
-        loss_init_time = time.time() - start_loss_init
+        #
+        # if self.training:
+        #     quantize = x_tmp + (quantize - x_tmp)
 
-        start_codebook_select = time.time()
+        # loss = torch.zeros(1, device=device, requires_grad=True)
+        loss = torch.tensor(0., device=device)  # ✅ Keeps loss in computation graph
+        raw_commit_loss = torch.zeros(1, device=device)  # ✅ Ensure it’s part of computation
+        detached_quantize = torch.zeros(1, device=device)  # ✅ Track gradients properly
+
         codebook = self._codebook.embed
 
         if self.orthogonal_reg_active_codes_only:
@@ -1453,89 +1465,41 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        torch.cuda.synchronize()
-        codebook_select_time = time.time() - start_codebook_select
-
-        start_ortho_loss = time.time()
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
-        torch.cuda.synchronize()
-        ortho_loss_time = time.time() - start_ortho_loss
-
-        start_loss_calc = time.time()
+        # embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-
+        # print(f"div_ele_loss {div_ele_loss}")
+        # loss += self.lamb_div_ele * div_ele_loss  # ✅ Keeps all loss contributions
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
                 + self.lamb_sil * silh_loss)
-        torch.cuda.synchronize()
-        loss_calc_time = time.time() - start_loss_calc
 
         if is_multiheaded:
-            start_rearrange_back = time.time()
             if self.separate_codebook_per_head:
                 quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
             else:
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
-            torch.cuda.synchronize()
-            rearrange_back_time = time.time() - start_rearrange_back
-        else:
-            rearrange_back_time = 0
 
-        start_project_out = time.time()
         quantize = self.project_out(quantize)
-        torch.cuda.synchronize()
-        project_out_time = time.time() - start_project_out
-
         if need_transpose:
-            start_transpose_back = time.time()
             quantize = rearrange(quantize, 'b n d -> b d n')
-            torch.cuda.synchronize()
-            transpose_back_time = time.time() - start_transpose_back
-        else:
-            transpose_back_time = 0
 
         if self.accept_image_fmap:
-            start_image_fmap_back = time.time()
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
-            torch.cuda.synchronize()
-            image_fmap_back_time = time.time() - start_image_fmap_back
-        else:
-            image_fmap_back_time = 0
-
         if only_one:
-            quantize = rearrange(quantize, 'b d -> b d')
+            quantize = rearrange(quantize, 'b d -> b d')  # Keep batch dimension dynamic
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
-
-        total_time = time.time() - start_total
-
-        # **Print execution times**
-        print(f"Device transfer time: {device_time:.6f} sec")
-        print(f"Image fmap transformation time: {image_fmap_time:.6f} sec")
-        print(f"Transpose time: {transpose_time:.6f} sec")
-        print(f"Projection in time: {project_in_time:.6f} sec")
-        print(f"Rearrange for multihead time: {rearrange_time:.6f} sec")
-        print(f"Codebook lookup time: {codebook_time:.6f} sec")
-        print(f"Quantization adjustment time: {quant_adjust_time:.6f} sec")
-        print(f"Loss initialization time: {loss_init_time:.6f} sec")
-        print(f"Codebook selection time: {codebook_select_time:.6f} sec")
-        print(f"Orthogonal loss computation time: {ortho_loss_time:.6f} sec")
-        print(f"Loss calculation time: {loss_calc_time:.6f} sec")
-        print(f"Rearrange back time: {rearrange_back_time:.6f} sec")
-        print(f"Projection out time: {project_out_time:.6f} sec")
-        print(f"Transpose back time: {transpose_back_time:.6f} sec")
-        print(f"Image fmap transformation back time: {image_fmap_back_time:.6f} sec")
-        print(f"Total forward pass time: {total_time:.6f} sec")
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
                 pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
