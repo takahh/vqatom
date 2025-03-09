@@ -94,6 +94,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     #     else:
     #         print(f"after model forward {name}: param.grad is None")
     # print(loss)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     # ✅ Step optimizer with scaler and update gradients
     scaler.step(optimizer)
     scaler.update()
