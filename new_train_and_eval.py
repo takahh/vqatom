@@ -297,7 +297,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             # Create the extended graph from the full adjacency matrix
             # ------------------------------------------
-            src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
+            src_full, dst_full = full_adj_matrix.nonzero(as_tuple=True)
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
             new_src, new_dst = extended_g.edges()
 
