@@ -1097,7 +1097,7 @@ class VectorQuantize(nn.Module):
             margin_weight=0.8,
             spread_weight=0.2,
             pair_weight=0.01,
-            lamb_div_ele=1,
+            lamb_div_ele=2,
             lamb_div_bonds=1,
             lamb_div_aroma=1,
             lamb_div_ringy=1,
@@ -1366,9 +1366,9 @@ class VectorQuantize(nn.Module):
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        # equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
-        #                                                 # cluster_indices, embed_ind, equivalence_groups, logger
-        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+        equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+                                                        # cluster_indices, embed_ind, equivalence_groups, logger
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         # sil_loss = None
@@ -1389,7 +1389,7 @@ class VectorQuantize(nn.Module):
         # atom_type_div_loss = self.simple_loss_function(quantized)
 
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, 1)
+                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
 
     import torch
     import time
@@ -1456,8 +1456,8 @@ class VectorQuantize(nn.Module):
         loss = (loss + self.lamb_div_ele * div_ele_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
-                # + self.lamb_sil * silh_loss)
+                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+                + self.lamb_equiv_atom * equiv_atom_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
