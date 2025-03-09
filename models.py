@@ -13,36 +13,43 @@ from scipy.sparse.csgraph import connected_components
 import torch
 import torch.nn as nn
 import dgl.nn as dglnn
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class BondWeightLayer(nn.Module):
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Learnable bond representation with LayerNorm for stability
-        self.bond_embedding = nn.Sequential(
-            nn.Embedding(bond_types, hidden_dim),
-            # nn.LayerNorm(hidden_dim)  # Prevent instability
-        ).to(device)
+        # Learnable bond representation
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim).to(device)
 
-        # Edge MLP with stable activation
+        # Edge MLP with Sigmoid for stability
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()  # Ensure values are in [0,1]
         ).to(device)
-    #
-    #     # Initialize weights properly
-    #     self.edge_mlp.apply(self.init_weights)
-    #
-    # def init_weights(self, m):
-    #     if isinstance(m, nn.Linear):
-    #         torch.nn.init.xavier_normal_(m.weight)
-    #         if m.bias is not None:
-    #             nn.init.zeros_(m.bias)
+
+        # Initialize weights properly
+        self.edge_mlp.apply(self.init_weights)
+
+    def init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
     def forward(self, edge_types):
-        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
-        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True) + 1e-6)  # Normalize
-        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        # Convert bond type to learnable vector
+        bond_feats = self.bond_embedding(edge_types)
+
+        # Normalize features safely
+        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True).clamp(min=1e-3))
+
+        # Compute edge weight
+        edge_weight = self.edge_mlp(bond_feats).squeeze()
+
         return edge_weight
 
 
