@@ -61,8 +61,8 @@ class WeightedThreeHopGCN(nn.Module):
         self.activation = nn.ReLU()
         # self.dropout = nn.Dropout(p=args.dropout_ratio)
 
-        self.norm1 = nn.LayerNorm(args.hidden_dim)
-        self.norm2 = nn.LayerNorm(args.hidden_dim)
+        # self.norm1 = nn.LayerNorm(args.hidden_dim)
+        # self.norm2 = nn.LayerNorm(args.hidden_dim)
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
@@ -96,10 +96,10 @@ class WeightedThreeHopGCN(nn.Module):
         # h = self.dropout(h)
         # 3-hop message passing (ensuring memory-efficient operations)
 
-        h = self.norm1(h)
+        # h = self.norm1(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.activation(h)
-        h = self.norm2(h)
+        # h = self.norm2(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.activation(h)
         # h = self.dropout(h)
