@@ -573,7 +573,7 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     return penalty
 
 # this is the function at 2.27 15:00
-def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
+def compute_contrastive_loss(z, atom_types, name="", margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
