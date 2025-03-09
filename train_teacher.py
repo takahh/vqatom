@@ -281,11 +281,10 @@ def run(args):
     # Create optimizer with different learning rates
     optimizer = torch.optim.Adam([
         {'params': main_params, 'lr': 0.001},  # Default LR for everything except edge_mlp
-        {'params': model.bond_weight.edge_mlp.parameters(), 'lr': 0.0001},  # Lower LR for edge_mlp
+        {'params': model.bond_weight.edge_mlp.parameters(), 'lr': 0.00001},  # Lower LR for edge_mlp
         {'params': model.vq._codebook.parameters(), 'lr': 0.0001}  # Reduce LR for VQ
     ])
-
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     criterion = torch.nn.NLLLoss()
     evaluator = get_evaluator(conf["dataset"])
 
