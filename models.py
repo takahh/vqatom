@@ -90,7 +90,7 @@ class WeightedThreeHopGCN(nn.Module):
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight  # Overwrite to free memory
-        edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
+        # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
@@ -98,10 +98,10 @@ class WeightedThreeHopGCN(nn.Module):
 
         # h = self.norm1(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.activation(h)
+        # h = self.activation(h)
         # h = self.norm2(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.activation(h)
+        # h = self.activation(h)
         # h = self.dropout(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
