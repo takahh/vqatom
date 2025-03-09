@@ -28,17 +28,16 @@ class BondWeightLayer(nn.Module):
         # Edge MLP with stable activation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            nn.ReLU()  # More stable than Tanh
         ).to(device)
-
-        # Initialize weights properly
-        self.edge_mlp.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_normal_(m.weight)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+    #
+    #     # Initialize weights properly
+    #     self.edge_mlp.apply(self.init_weights)
+    #
+    # def init_weights(self, m):
+    #     if isinstance(m, nn.Linear):
+    #         torch.nn.init.xavier_normal_(m.weight)
+    #         if m.bias is not None:
+    #             nn.init.zeros_(m.bias)
 
     def forward(self, edge_types):
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
