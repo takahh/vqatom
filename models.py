@@ -58,9 +58,11 @@ class WeightedThreeHopGCN(nn.Module):
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         # self.codebook_size = args.codebook_size
-        # self.activation = nn.ReLU()
+        self.activation = nn.ReLU()
         # self.dropout = nn.Dropout(p=args.dropout_ratio)
 
+        self.norm1 = nn.LayerNorm(args.hidden_dim)
+        self.norm2 = nn.LayerNorm(args.hidden_dim)
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
@@ -88,15 +90,18 @@ class WeightedThreeHopGCN(nn.Module):
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight  # Overwrite to free memory
+        edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
         # 3-hop message passing (ensuring memory-efficient operations)
+
+        h = self.norm1(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.activation(h)
-        # h = self.dropout(h)
+        h = self.activation(h)
+        h = self.norm2(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.activation(h)
+        h = self.activation(h)
         # h = self.dropout(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
 
