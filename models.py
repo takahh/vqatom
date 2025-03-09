@@ -48,7 +48,6 @@ class BondWeightLayer(nn.Module):
 
         # Compute edge weight
         edge_weight = self.edge_mlp(bond_feats).squeeze()
-
         return edge_weight
 
 
