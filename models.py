@@ -22,7 +22,7 @@ class BondWeightLayer(nn.Module):
         # Learnable bond representation with LayerNorm for stability
         self.bond_embedding = nn.Sequential(
             nn.Embedding(bond_types, hidden_dim),
-            nn.LayerNorm(hidden_dim)  # Prevent instability
+            # nn.LayerNorm(hidden_dim)  # Prevent instability
         ).to(device)
 
         # Edge MLP with stable activation
