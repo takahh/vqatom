@@ -13,15 +13,21 @@ from scipy.sparse.csgraph import connected_components
 import torch
 import torch.nn as nn
 import dgl.nn as dglnn
-
 class BondWeightLayer(nn.Module):
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+
+        # Learnable bond representation with LayerNorm for stability
+        self.bond_embedding = nn.Sequential(
+            nn.Embedding(bond_types, hidden_dim),
+            nn.LayerNorm(hidden_dim)  # Prevent instability
+        ).to(device)
+
+        # Edge MLP with stable activation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            nn.Tanh()  # More stable activation
+            nn.ReLU()  # More stable than Tanh
         ).to(device)
 
         # Initialize weights properly
@@ -29,14 +35,20 @@ class BondWeightLayer(nn.Module):
 
     def init_weights(self, m):
         if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_normal_(m.weight)
+            torch.nn.init.xavier_uniform_(m.weight)  # Better stability than normal
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
 
     def forward(self, edge_types):
-        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
-        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True) + 1e-6)  # Normalize
-        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        # Convert bond type to learnable vector
+        bond_feats = self.bond_embedding(edge_types)
+
+        # Normalize embeddings but avoid very small values
+        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True) + 1e-3)
+
+        # Compute edge weight
+        edge_weight = self.edge_mlp(bond_feats).squeeze()
+
         return edge_weight
 
 
