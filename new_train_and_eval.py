@@ -278,21 +278,21 @@ def convert_to_dgl(adj_batch, attr_batch):
             base_g = dgl.add_self_loop(base_g)
             base_graphs.append(base_g)
 
-            # # ------------------------------------------
-            # # Generate 2-hop and 3-hop adjacency matrices
-            # # ------------------------------------------
-            # adj_2hop = dgl.khop_adj(base_g, 2)
-            # adj_3hop = dgl.khop_adj(base_g, 3)
-            # # ------------------------------------------
-            # # Combine adjacency matrices into one
-            # # ------------------------------------------
-            # full_adj_matrix = filtered_adj_matrix.clone()
-            #
-            # full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
-            # full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
-            #
-            # # Ensure diagonal values are set to 1.0 (self-connections)
-            # torch.diagonal(full_adj_matrix).fill_(1.0)
+            # ------------------------------------------
+            # Generate 2-hop and 3-hop adjacency matrices
+            # ------------------------------------------
+            adj_2hop = dgl.khop_adj(base_g, 2)
+            adj_3hop = dgl.khop_adj(base_g, 3)
+
+            # ------------------------------------------
+            # Combine adjacency matrices into one
+            # ------------------------------------------
+            full_adj_matrix = filtered_adj_matrix.clone()
+            full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
+            full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
+
+            # Ensure diagonal values are set to 1.0 (self-connections)
+            torch.diagonal(full_adj_matrix).fill_(1.0)
 
             # ------------------------------------------
             # Create the extended graph from the full adjacency matrix
@@ -308,15 +308,15 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             # Vectorized assignment of edge types
             # ------------------------------------------
-            # one_hop = filtered_adj_matrix[new_src, new_dst] > 0
-            # two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
-            # three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
-            # edge_types = torch.zeros_like(new_src, dtype=torch.int)
-            # edge_types[one_hop] = 1
-            # edge_types[two_hop] = 2
-            # edge_types[three_hop] = 3
+            one_hop = filtered_adj_matrix[new_src, new_dst] > 0
+            two_hop = (adj_2hop[new_src, new_dst] > 0) & ~one_hop
+            three_hop = (adj_3hop[new_src, new_dst] > 0) & ~(one_hop | two_hop)
+            edge_types = torch.zeros_like(new_src, dtype=torch.int)
+            edge_types[one_hop] = 1
+            edge_types[two_hop] = 2
+            edge_types[three_hop] = 3
 
-            # extended_g.edata["edge_type"] = edge_types
+            extended_g.edata["edge_type"] = edge_types
 
             # ------------------------------------------
             # Assign node features to the extended graph
