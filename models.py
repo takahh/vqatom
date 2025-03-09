@@ -28,7 +28,7 @@ class BondWeightLayer(nn.Module):
         # Edge MLP with stable activation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            nn.Tanh()  # More stable activation
+            nn.ReLU()  # More stable than Tanh
         ).to(device)
 
         # Initialize weights properly
