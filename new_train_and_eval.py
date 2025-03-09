@@ -299,6 +299,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             src_full, dst_full = full_adj_matrix.nonzero(as_tuple=True)
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
+            extended_g = dgl.add_self_loop(extended_g)
             new_src, new_dst = extended_g.edges()
 
             # Assign edge weights from the full adjacency matrix
@@ -322,7 +323,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Assign node features to the extended graph
             # ------------------------------------------
             extended_g.ndata["feat"] = filtered_attr_matrix
-            extended_g = dgl.add_self_loop(extended_g)
+
             # ------------------------------------------
             # Validate that remaining features are zero (if applicable)
             # ------------------------------------------
