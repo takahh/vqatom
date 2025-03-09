@@ -120,7 +120,7 @@ def get_args():
     parser.add_argument(
         "--hidden_dim", type=int, default=64, help="Model hidden layer dimensions"
     )
-    parser.add_argument("--dropout_ratio", type=float, default=0.3)
+    parser.add_argument("--dropout_ratio", type=float, default=0)
     parser.add_argument(
         "--norm_type", type=str, default="none", help="One of [none, batch, layer]"
     )
@@ -143,7 +143,7 @@ def get_args():
 
     """Optimization"""
     parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
-    parser.add_argument("--learning_rate", type=float, default=0.005) # default=0.0001)
+    parser.add_argument("--learning_rate", type=float, default=0.0001) # default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=0.0005)
     parser.add_argument(
         "--max_epoch", type=int, default=5, help="Evaluate once per how many epochs"
