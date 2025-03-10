@@ -80,6 +80,13 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     torch.cuda.empty_cache()
 
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
+        else:
+            print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
+
     scaler.unscale_(optimizer)
     scaler.step(optimizer)
     scaler.update()
