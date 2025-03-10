@@ -17,40 +17,58 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# this is old and temporary
 class BondWeightLayer(nn.Module):
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Learnable bond representation
-        self.bond_embedding = nn.Embedding(bond_types, hidden_dim).to(device)
-
-        # Edge MLP with Sigmoid for stability
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            nn.Sigmoid()  # Ensure values are in [0,1]
-        ).to(device)
-
-        # Initialize weights properly
-        self.edge_mlp.apply(self.init_weights)
-
-    def init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            torch.nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+            nn.Sigmoid()  # Output weight in range (0,1)
+        )
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
 
     def forward(self, edge_types):
-        # Convert bond type to learnable vector
-        bond_feats = self.bond_embedding(edge_types)
-
-        # Normalize features safely
-        bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True).clamp(min=1e-3))
-
-        # Compute edge weight
-        edge_weight = self.edge_mlp(bond_feats).squeeze()
-
+        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
+
+# # this is the latest
+# class BondWeightLayer(nn.Module):
+#     def __init__(self, bond_types=4, hidden_dim=64):
+#         super().__init__()
+#         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#
+#         # Learnable bond representation
+#         self.bond_embedding = nn.Embedding(bond_types, hidden_dim).to(device)
+#
+#         # Edge MLP with Sigmoid for stability
+#         self.edge_mlp = nn.Sequential(
+#             nn.Linear(hidden_dim, 1),
+#             nn.Sigmoid()  # Ensure values are in [0,1]
+#         ).to(device)
+#
+#         # Initialize weights properly
+#         self.edge_mlp.apply(self.init_weights)
+#
+#     def init_weights(self, m):
+#         if isinstance(m, nn.Linear):
+#             torch.nn.init.xavier_uniform_(m.weight)
+#             if m.bias is not None:
+#                 nn.init.zeros_(m.bias)
+#
+#     def forward(self, edge_types):
+#         # Convert bond type to learnable vector
+#         bond_feats = self.bond_embedding(edge_types)
+#
+#         # Normalize features safely
+#         bond_feats = bond_feats / (bond_feats.norm(dim=-1, keepdim=True).clamp(min=1e-3))
+#
+#         # Compute edge weight
+#         edge_weight = self.edge_mlp(bond_feats).squeeze()
+#
+#         return edge_weight
 
 
 
