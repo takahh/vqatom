@@ -572,41 +572,35 @@ def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, qu
     print(f"penalty {penalty}")
     return penalty
 
-
-def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num_atom_types=20):
+# this is the old temporary snippet
+def compute_contrastive_loss(z, atom_types, name=None, margin=1.0, threshold=0.5, num_atom_types=100):
     """
     Contrastive loss to separate different atom types using embeddings.
     """
     # One-hot encode atom types
+    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
+    # print(f"🚨 atom_types: {atom_types}")
+    # print(f"🚨 num_atom_types: {num_atom_types}")
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
+
     try:
         # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
-        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
+        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types).float()
     except Exception as e:
         print("Error in one_hot:", e)
         print("Atom types values:", atom_types)
         raise
+
     # Compute pairwise distances for the z vectors
-    pairwise_distances = torch.cdist(z, z, p=2)
-    # print(f"pairwise_distances.max() {pairwise_distances.max()}")
-    pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
+    pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
 
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
-    """
-    atom_types
-    tensor([ 1., 20.,  1.,  ...,  1., 10.,  1.], device='cuda:0')
-    pairwise_distances.mean() 0.0001491462899139151
-    pairwise_distances.min() 0.0
-    pairwise_distances.max() 0.00027295752079226077
-    pairwise_similarities.mean() 0.58056640625
-    pairwise_similarities.min() 0.0
-    negative 0.4193979799747467, positive 1.426142492988447e-08
-"""
+
     # Create the mask for "same type" based on similarity threshold
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
@@ -614,13 +608,66 @@ def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num
     positive_loss = same_type_mask * pairwise_distances ** 2
 
     # Compute negative loss (push different types apart)
-    # negative_loss = (1.0 - same_type_mask) * torch.relu(margin - pairwise_distances) ** 2
-    negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
-    # if name == 'atom':
-    #     print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
+    negative_loss = (1.0 - same_type_mask) * torch.clamp(margin - pairwise_distances, min=0.0) ** 2
+    # print("same_type_mask shape:", same_type_mask.shape)
+    # print("pairwise_distances shape:", pairwise_distances.shape)
+    # print("Min index in mask:",
+    #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+    # print("Max index in mask:",
+    #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
+
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
-    # return negative_loss.mean()
+
+#
+# def compute_contrastive_loss(z, atom_types, name, margin=0.2, threshold=0.5, num_atom_types=20):
+#     """
+#     Contrastive loss to separate different atom types using embeddings.
+#     """
+#     # One-hot encode atom types
+#     z = z.to("cuda")
+#     atom_types = atom_types.to("cuda")
+#     try:
+#         # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
+#         atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
+#     except Exception as e:
+#         print("Error in one_hot:", e)
+#         print("Atom types values:", atom_types)
+#         raise
+#     # Compute pairwise distances for the z vectors
+#     pairwise_distances = torch.cdist(z, z, p=2)
+#     # print(f"pairwise_distances.max() {pairwise_distances.max()}")
+#     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
+#
+#     # Normalize the atom_types vectors
+#     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
+#
+#     # Compute pairwise similarity for the atom_types
+#     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
+#     """
+#     atom_types
+#     tensor([ 1., 20.,  1.,  ...,  1., 10.,  1.], device='cuda:0')
+#     pairwise_distances.mean() 0.0001491462899139151
+#     pairwise_distances.min() 0.0
+#     pairwise_distances.max() 0.00027295752079226077
+#     pairwise_similarities.mean() 0.58056640625
+#     pairwise_similarities.min() 0.0
+#     negative 0.4193979799747467, positive 1.426142492988447e-08
+# """
+#     # Create the mask for "same type" based on similarity threshold
+#     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
+#
+#     # Compute positive loss (pull same types together)
+#     positive_loss = same_type_mask * pairwise_distances ** 2
+#
+#     # Compute negative loss (push different types apart)
+#     # negative_loss = (1.0 - same_type_mask) * torch.relu(margin - pairwise_distances) ** 2
+#     negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
+#     # if name == 'atom':
+#     #     print(f"negative {negative_loss.mean()}, positive {positive_loss.mean()}")
+#     # Combine and return mean loss
+#     return (positive_loss + negative_loss).mean() / 10000
+#     # return negative_loss.mean()
 
 
 def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, temperature=0.02):
