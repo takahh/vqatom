@@ -135,6 +135,10 @@ class WeightedThreeHopGCN(nn.Module):
         ).to(device)  # Move adjacency matrix to device
         print("edge_weight")
         print(edge_weight)
+        print("src")
+        print(src)
+        print("dst")
+        print(dst)
 
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
