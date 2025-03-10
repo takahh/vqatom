@@ -80,7 +80,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
-
+        batched_graph = dgl.add_self_loop(batched_graph)
         # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
