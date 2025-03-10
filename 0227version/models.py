@@ -7,7 +7,7 @@ from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
 from train_teacher import get_args
 from vq import VectorQuantize
 import dgl
-from train_and_eval import transform_node_feats
+from new_train_and_eval import transform_node_feats
 from train_and_eval import filter_small_graphs_from_blocks
 from scipy.sparse.csgraph import connected_components
 import torch
