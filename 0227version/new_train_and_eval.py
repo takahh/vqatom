@@ -319,8 +319,6 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
-                    print("loss")
-                    print(loss)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
                     del batched_graph, batched_feats, chunk
