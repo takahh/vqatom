@@ -118,6 +118,9 @@ class WeightedThreeHopGCN(nn.Module):
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+
+        print("edge_weight learnable")
+        print(edge_weight)
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         h = self.linear_0(features)  # Apply linear transformation
