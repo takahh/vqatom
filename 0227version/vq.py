@@ -471,6 +471,11 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     print(atom_types)
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
+    top_values, top_indices = torch.topk(pairwise_similarities.flatten(), 10)
+
+    print("Top 10 Largest Values in pairwise_similarities:")
+    for i, value in enumerate(top_values):
+        print(f"{i + 1}: {value.item()}")
 
     print(f"pairwise_similarities mean {pairwise_similarities.mean()}")
     print(f"pairwise_similarities min {pairwise_similarities.min()}")
