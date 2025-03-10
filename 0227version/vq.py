@@ -468,21 +468,21 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     atom_types = F.normalize(atom_types, p=2, dim=1)  # L2 Normalization
 
     # atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
-    print(atom_types)
+    # print(atom_types)
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
-    top_values, top_indices = torch.topk(pairwise_similarities.flatten(), 100000)
 
-    print("Top 10 Largest Values in pairwise_similarities:")
-    for i, value in enumerate(top_values):
-        print(f"{i + 1}: {value.item()}")
+    # top_values, top_indices = torch.topk(pairwise_similarities.flatten(), 100000)
+    # print("Top 10 Largest Values in pairwise_similarities:")
+    # for i, value in enumerate(top_values):
+    #     print(f"{i + 1}: {value.item()}")
 
-    print(f"pairwise_similarities mean {pairwise_similarities.mean()}")
-    print(f"pairwise_similarities min {pairwise_similarities.min()}")
-    print(f"pairwise_similarities max {pairwise_similarities.max()}")
+    # print(f"pairwise_similarities mean {pairwise_similarities.mean()}")
+    # print(f"pairwise_similarities min {pairwise_similarities.min()}")
+    # print(f"pairwise_similarities max {pairwise_similarities.max()}")
 
     # Create the mask for "same type" based on similarity threshold
-    same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
+    same_type_mask = (pairwise_similarities >= 1).float()  # 1 if similarity >= threshold, else 0
 
     # Compute positive loss (pull same types together)
     positive_loss = same_type_mask * pairwise_distances ** 2
