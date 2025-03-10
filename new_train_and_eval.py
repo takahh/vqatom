@@ -284,7 +284,14 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             adj_2hop = dgl.khop_adj(base_g, 2)
             adj_3hop = dgl.khop_adj(base_g, 3)
+            print("adj_matrix")
+            print(adj_matrix[:8, :8])
 
+            print("adj_2hop")
+            print(adj_2hop[:8, :8])
+
+            print("adj_3hop")
+            print(adj_3hop[:8, :8])
             # ------------------------------------------
             # Combine adjacency matrices into one
             # ------------------------------------------
