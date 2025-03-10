@@ -322,8 +322,6 @@ def run_inductive(
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-                    print("batched_feats")
-                    print(batched_feats.shape)
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
