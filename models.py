@@ -116,11 +116,19 @@ class WeightedThreeHopGCN(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight  # Overwrite to free memory
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
-        adj_matrix = batched_graph[edge_type].adjacency_matrix(scipy_fmt="coo")
+
+        # FOR DEBUG !!!!!!!!!!!!!!
+        src, dst = batched_graph[edge_type].edges()
+        num_nodes = batched_graph.num_nodes()
+        # Create a sparse adjacency matrix with ones
+        adj_matrix = torch.sparse_coo_tensor(
+            torch.stack([src, dst]),  # Edge index pairs
+            torch.ones(len(src)),  # Set all edges to weight=1 (or use your custom edge weights)
+            (num_nodes, num_nodes)  # Shape of adjacency matrix
+        ).to(device)
         print("adj_matrix.shape")
         print(adj_matrix.shape)
 
-        print(adj_matrix[:20, :20])
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
         # 3-hop message passing (ensuring memory-efficient operations)
