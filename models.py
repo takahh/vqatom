@@ -95,6 +95,8 @@ class WeightedThreeHopGCN(nn.Module):
     import torch
     import torch
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
+
+        import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
 
@@ -118,7 +120,6 @@ class WeightedThreeHopGCN(nn.Module):
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         # FOR DEBUG !!!!!!!!!!!!!!
-        import torch
 
         # Ensure edge indices are on the same device
         src, dst = batched_graph[edge_type].edges()
