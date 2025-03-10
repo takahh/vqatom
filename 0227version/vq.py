@@ -1139,11 +1139,6 @@ class VectorQuantize(nn.Module):
         # Ensure correct shape to avoid unnecessary squeeze/unsqueeze calls
         embed_ind = embed_ind.view(-1)  # Flatten instead of squeeze()
 
-        # os.environ["CUDA_LAUNCH_BLOCKING"] = "1"  # Helps with debugging but may slow performance
-        #
-        # logger.info(f"Number of equivalence groups: {len(equivalence_groups)}")
-        # logger.info(f"embed_ind.shape: {embed_ind.shape}")
-
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if the group is too small
@@ -1214,13 +1209,20 @@ class VectorQuantize(nn.Module):
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        atom_type_div_loss = 1
+        bond_num_div_loss = 1
+        charge_div_loss = 1
+        elec_state_div_loss = 1
+        aroma_div_loss = 1
+        ringy_div_loss = 1
+        h_num_div_loss = 1
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
