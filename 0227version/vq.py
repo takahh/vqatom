@@ -464,6 +464,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # print(f"pairwise_distances.max() {pairwise_distances.max()}")
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
     close_pairwise_distances = torch.clamp(pairwise_distances, max=0.3)  # Ensure max value is 0.3
+    distant_pairwise_distances = torch.clamp(pairwise_distances, min=0.7)  # Ensure max value is 0.3
 
     # Normalize the atom_types vectors
     atom_types = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + 1e-8)
@@ -475,7 +476,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     same_type_mask = (pairwise_similarities >= threshold).float()  # 1 if similarity >= threshold, else 0
 
     # Compute positive loss (pull same types together)
-    positive_loss = same_type_mask * close_pairwise_distances ** 2
+    positive_loss = same_type_mask * distant_pairwise_distances ** 2
     print(f"pairwise_distances mean: {pairwise_distances.mean()}")
     print(f"pairwise_distances min: {pairwise_distances.min()}")
     print(f"pairwise_distances max: {pairwise_distances.max()}")
