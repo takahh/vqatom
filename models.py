@@ -120,17 +120,13 @@ class WeightedThreeHopGCN(nn.Module):
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         # FOR DEBUG !!!!!!!!!!!!!!
-
         # Ensure edge indices are on the same device
         src, dst = batched_graph[edge_type].edges()
         src, dst = src.to(device), dst.to(device)  # Move edge indices to device
-
         # Ensure edge weights are on the same device
         edge_weight = edge_weight.to(device)
-
         # Ensure num_nodes is properly defined
         num_nodes = batched_graph.num_nodes()
-
         # Create a sparse adjacency matrix with edge weights
         adj_matrix = torch.sparse_coo_tensor(
             torch.stack([src, dst]),  # Edge index pairs
@@ -138,8 +134,8 @@ class WeightedThreeHopGCN(nn.Module):
             (num_nodes, num_nodes)  # Shape of adjacency matrix
         ).to(device)  # Move adjacency matrix to device
 
-        print("adj_matrix.shape")
-        print(adj_matrix.shape)
+        print("adj_matrix")
+        print(adj_matrix[:20, :20])
 
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
