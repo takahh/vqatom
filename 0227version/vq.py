@@ -445,7 +445,7 @@ def batched_embedding(indices, embeds):
 
 
 # this is corrected new one, minus sign is correctly added
-def vectors_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
+def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     """
     atom_types : feature vectors
     z : latent vectors
