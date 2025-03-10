@@ -258,6 +258,9 @@ def convert_to_dgl(adj_batch, attr_batch):
             # ------------------------------------------
             # Assign node features to the extended graph
             # ------------------------------------------
+            print("filtered_attr_matrix")
+            print(filtered_attr_matrix.shape)
+            print(filtered_attr_matrix)
             extended_g.ndata["feat"] = filtered_attr_matrix
             extended_g = dgl.add_self_loop(extended_g)
             # ------------------------------------------
