@@ -116,7 +116,7 @@ class WeightedThreeHopGCN(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight  # Overwrite to free memory
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
-        adj_matrix = batched_graph[edge_type].adjacency_matrix(transpose=False, scipy_fmt="coo").to(device)
+        adj_matrix = batched_graph[edge_type].adjacency_matrix(scipy_fmt="coo")
         print("adj_matrix.shape")
         print(adj_matrix.shape)
 
