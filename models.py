@@ -115,8 +115,7 @@ class WeightedThreeHopGCN(nn.Module):
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        edge_weight = transformed_edge_weight  # Overwrite to free memory
+        edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         # edge_weight = edge_weight / (edge_weight.norm(dim=-1, keepdim=True) + 1e-3)
 
         h = self.linear_0(features)  # Apply linear transformation

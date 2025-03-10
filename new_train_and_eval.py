@@ -346,9 +346,9 @@ def convert_to_dgl(adj_batch, attr_batch):
 
             extended_graphs.append(extended_g)
 
-    return base_graphs, extended_graphs
+    # return base_graphs, extended_graphs
 
-    # return base_graphs, base_graphs
+    return base_graphs, base_graphs
 
 
 from torch.utils.data import Dataset
