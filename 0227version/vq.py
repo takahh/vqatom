@@ -1211,7 +1211,7 @@ class VectorQuantize(nn.Module):
         latents_for_sil = torch.squeeze(latents)
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
@@ -1224,7 +1224,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+        return (equivalent_atom_loss, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, 1, embed_ind, charge_div_loss, elec_state_div_loss, 1)
 
 
@@ -1288,8 +1288,8 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
+        (equiv_atom_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, dummy) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
         embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
@@ -1298,11 +1298,11 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        loss = (loss + self.lamb_div_ele * div_ele_loss
-                + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
-                + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
-                # + self.lamb_equiv_atom * equiv_atom_loss)
+        # loss = (loss + self.lamb_div_ele * div_ele_loss
+        #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
+        #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
+        #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
+        loss = (loss + self.lamb_equiv_atom * equiv_atom_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:

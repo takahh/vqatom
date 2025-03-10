@@ -86,7 +86,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
             print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
         else:
             print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
-
+    print(loss)
     scaler.unscale_(optimizer)
     scaler.step(optimizer)
     scaler.update()
