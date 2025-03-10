@@ -133,9 +133,8 @@ class WeightedThreeHopGCN(nn.Module):
             edge_weight.float(),  # Edge weights
             (num_nodes, num_nodes)  # Shape of adjacency matrix
         ).to(device)  # Move adjacency matrix to device
-
-        print("adj_matrix")
-        print(adj_matrix.to_dense()[:9, :9])  # Convert sparse tensor to dense before slicing
+        print("edge_weight")
+        print(edge_weight)
 
         h = self.linear_0(features)  # Apply linear transformation
         # h = self.dropout(h)
