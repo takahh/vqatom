@@ -1138,34 +1138,34 @@ class VectorQuantize(nn.Module):
         latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
         latents = latents / latents_norm
 
-        # Pairwise distances
-        dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
-
-        # Remove diagonal
-        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
-
-        # Debug: Log distance statistics
-        # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
-
-        # Margin loss: Encourage distances >= min_distance
-        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
-        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
-
-        # Spread loss: Encourage diversity
-        spread_loss = torch.var(t)
-
-        # Pair distance loss: Regularize distances
-        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
+        # # Pairwise distances
+        # dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
+        #
+        # # Remove diagonal
+        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        #
+        # # Debug: Log distance statistics
+        # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
+        #
+        # # Margin loss: Encourage distances >= min_distance
+        # smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
+        # margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
+        #
+        # # Spread loss: Encourage diversity
+        # spread_loss = torch.var(t)
+        #
+        # # Pair distance loss: Regularize distances
+        # pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
 
-        embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
@@ -1176,8 +1176,8 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (margin_loss, spread_loss, pair_distance_loss, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
+        return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+                ringy_div_loss, h_num_div_loss, 1, embed_ind, charge_div_loss, elec_state_div_loss, 1)
 
 
     def forward(self, x, init_feat, logger, mask=None):
