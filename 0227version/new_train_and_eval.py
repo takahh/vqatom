@@ -252,7 +252,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             # Assign node features to the extended graph
             # ------------------------------------------
             extended_g.ndata["feat"] = filtered_attr_matrix
-
+            extended_g = dgl.add_self_loop(extended_g)
             # ------------------------------------------
             # Validate that remaining features are zero (if applicable)
             # ------------------------------------------
@@ -262,8 +262,8 @@ def convert_to_dgl(adj_batch, attr_batch):
 
             extended_graphs.append(extended_g)
 
-    # return base_graphs, extended_graphs
-    return base_graphs, base_graphs
+    return base_graphs, extended_graphs
+    # return base_graphs, base_graphs
 
 
 from torch.utils.data import Dataset
