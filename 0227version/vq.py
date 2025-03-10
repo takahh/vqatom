@@ -453,13 +453,13 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # One-hot encode atom types
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
-    try:
-        # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
-        atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
-    except Exception as e:
-        print("Error in one_hot:", e)
-        print("Atom types values:", atom_types)
-        raise
+    # try:
+    #     # print(f"Min atom_types: {atom_types.min()}, Max atom_types: {atom_types.max()}")
+    #     atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
+    # except Exception as e:
+    #     print("Error in one_hot:", e)
+    #     print("Atom types values:", atom_types)
+    #     raise
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
     # print(f"pairwise_distances.max() {pairwise_distances.max()}")

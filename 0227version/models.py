@@ -56,12 +56,7 @@ class WeightedThreeHopGCN(nn.Module):
 
         # Move graph and features to the same device
         batched_graph = batched_graph.to(device)
-        print("features 0")
-        print(features.shape)
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
-
-        print("features 1")
-        print(features.shape)
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
         edge_type = "_E"  # Batched heterogeneous graph edge type
