@@ -12,7 +12,7 @@ import dgl
 import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
-DATAPATH = "data/both_mono"
+DATAPATH = "../data/both_mono"
 
 
 def transform_node_feats(a):
