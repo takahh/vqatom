@@ -753,8 +753,6 @@ class EuclideanCodebook(nn.Module):
         embed_ind = embed_ind.unsqueeze(0)
         quantize = batched_embedding(embed_ind, self.embed)
 
-        print("quantize.shape")
-        print(quantize.shape)
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 

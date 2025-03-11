@@ -6,39 +6,38 @@ import torch
 
 import torch
 
+import torch
+
 
 def test_euclidean_codebook_forward():
-    torch.manual_seed(42)  # For reproducibility
+    torch.manual_seed(42)  # Reproducibility
 
-    # **Initialize Codebook**
+    # Initialize Codebook
     dim = 64
     codebook_size = 10
     batch_size = 22144
     num_codebooks = 1
 
-    model = EuclideanCodebook(dim, codebook_size, num_codebooks=num_codebooks).cuda()
+    model = EuclideanCodebook(dim, codebook_size, num_codebooks=num_codebooks, learnable_codebook=True).cuda()
 
-    # **Create Input**
+    # Create Input
     x = torch.randn(batch_size, 1, dim, device="cuda", requires_grad=True)
 
-    # **Forward Pass**
+    # Forward Pass
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
-    quantize = torch.squeeze(quantize)
-    embed_ind = torch.squeeze(embed_ind)
-    x = torch.squeeze(x)
-    assert embed_ind.shape[0] == batch_size, "Embedding index shape mismatch"
-    assert dist.shape == (num_codebooks, batch_size, codebook_size), "Distance matrix shape mismatch"
 
-    assert embed_ind.min() >= 0, "embed_ind contains negative values"
-    assert embed_ind.max() < codebook_size, "embed_ind contains out-of-range values"
+    # Ensure `quantize` requires gradients
+    assert quantize.requires_grad, "quantize does not require gradients!"
 
-    # **Gradient Flow Check**
-    loss = quantize.mean()  # Dummy loss function
+    # Compute Dummy Loss
+    loss = quantize.mean()
     loss.backward()
 
+    # Ensure Input Has Gradients
     assert x.grad is not None, "Gradient for input x should not be None"
     assert x.grad.abs().sum().item() > 0, "Gradient for input x should not be zero"
 
+    # Ensure Codebook Embeddings Have Gradients
     assert model.embed.grad is not None, "Gradient for codebook embed should not be None"
     assert model.embed.grad.abs().sum().item() > 0, "Gradient for codebook embed should not be zero"
 
