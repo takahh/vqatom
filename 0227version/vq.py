@@ -745,44 +745,29 @@ class EuclideanCodebook(nn.Module):
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-
         flatten = rearrange(x, 'h ... d -> h (...) d')
-
         # Initialize codebook vectors
         self.init_embed_(flatten, logger)
-
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
-
         # **Normalize to Prevent Vanishing Gradients**
         flatten = F.normalize(flatten, p=2, dim=-1)
         embed = F.normalize(embed, p=2, dim=-1)
-
         dist = -torch.cdist(flatten, embed, p=2)
-
-        print(f"0 dist {dist.shape}")
-        print(f"dist {dist}")
         # **Ensure Correct Shape Before Applying Gumbel-Softmax**
         dist = dist.view(dist.shape[1], -1)  # Ensure 2D shape
 
         tau = 1.0
-        print(f"1 dist {dist.shape}")
-        print(f"dist {dist}")
-        tau = 1.0
         embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
         print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
         print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
-        embed_ind_int = torch.matmul(embed_ind_one_hot,
+        embed_ind = torch.matmul(embed_ind_one_hot,
                                      torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
                                                   dtype=torch.float32).unsqueeze(1))
 
-        print(f"1 embed_ind_int: {embed_ind_int.shape}")  # Debug print
-        print(f"embed_ind_int: {embed_ind_int}")  # Debug print
         # **Ensure `embed_ind_int` has the correct shape (22013, 1)**
-        embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
+        # embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
 
-        print(f"2 embed_ind: {embed_ind.shape}")  # Debug print
-        print(f"embed_ind: {embed_ind}")  # Debug print
         # **Extract integer indices while preserving gradients**
         # embed_ind = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
 
