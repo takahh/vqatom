@@ -748,47 +748,65 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        x = x.float()
+        x = x.float()  # Ensure floating point type
 
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
-            x = rearrange(x, '... -> 1 ...')
+            x = rearrange(x, '... -> 1 ...')  # Expand dimensions if necessary
 
-        flatten = rearrange(x, 'h ... d -> h (...) d').clone()
+        flatten = rearrange(x, 'h ... d -> h (...) d').clone()  # 🚀 Ensure `flatten` tracks `x`
+
+        # **Debug: Check Gradient Tracking**
+        print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
 
         # Initialize codebook vectors
         self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
 
-        # Normalize Without Breaking Gradient Flow
-        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
+        # **Fix Normalization to Preserve Gradients**
+        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)  # ✅ Does NOT detach
         embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
 
-        # Compute Distance
-        dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
-        dist = -dist  # Negative similarity
+        print(
+            f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
 
-        # Gumbel-Softmax for Soft Cluster Assignments
-        tau = 1.0
-        embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
+        # **Compute Squared Euclidean Distance Without `torch.cdist()`**
+        dist = (
+                flatten.unsqueeze(2) - embed.unsqueeze(1)
+        ).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
+        dist = -dist  # Negative for similarity measure
 
-        print(f"After Gumbel-Softmax: embed_ind_one_hot.shape: {embed_ind_one_hot.shape}")  # Debugging
+        print(f"After dist computation: dist.requires_grad: {dist.requires_grad}")
 
-        # ✅ Ensure Correct Shape Before Passing to batched_embedding()
-        embed_ind_one_hot = embed_ind_one_hot.view(dist.shape[0] * dist.shape[1], -1)  # Shape: (22013, 10)
+        # **Ensure Correct Shape Before Applying Gumbel-Softmax**
+        dist = dist.view(dist.shape[0] * dist.shape[1], -1)  # Reshape to (128, 10) for softmax
 
-        # **Pass `embed_ind_one_hot` Directly into `batched_embedding()`**
-        quantize = batched_embedding(embed_ind_one_hot, self.embed)  # 🔥 Soft quantization
+        tau = 1.0  # Temperature for softmax
+        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=False)  # Soft assignment (128, 10)
+
+        print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
+
+        # **Compute Soft Indices (Weighted Sum)**
+        embed_ind = torch.matmul(
+            embed_ind_one_hot,
+            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
+        )  # Shape: (128, 1)
+
+        print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
+
+        # **Fix Shape for `batched_embedding()`**
+        embed_ind = embed_ind.view(1, -1, 1)  # Reshape to (1, 128, 1)
+        quantize = batched_embedding(embed_ind, self.embed)  # (1, 128, 64)
 
         print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
-        # **Ensure Gradients Are Retained**
+        # **Retain Gradients for Debugging**
         quantize.retain_grad()
         x.retain_grad()
-        flatten.retain_grad()
+        flatten.retain_grad()  # Retain gradients for debugging
 
-        return quantize, embed_ind_one_hot, dist, self.embed, flatten, init_cb
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
