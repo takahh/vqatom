@@ -450,22 +450,14 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
+    print(f"indices shape {indices.shape}")
+    print(f"embed.shape {embed.shape}")
     embed = torch.squeeze(embed)
-    indices = indices.squeeze(1)  # Ensure correct shape
-    indices = indices.long()  # Convert to int64
-    print(f"indices {indices.shape}") # indices torch.Size([22013, 1000])
-    print(f"indices {indices}")
-    print(f"embed.shape {embed.shape}")  # torch.Size([1000, 64])
+    indices = indices.squeeze(1)
+    indices = indices.long()
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
-    print(f"one_hot {one_hot.shape}")  # one_hot torch.Size([22013000, 1])
-    print(f"one_hot {one_hot}")
-    print(f"embed {embed.shape}")  #
-    print(f"embed {embed}")
-    # Use matmul for soft assignment of embeddings (keeps gradients)
     quantized = torch.matmul(one_hot, embed)  # (batch, embedding_dim)
-
-    print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
 
     return quantized
 
