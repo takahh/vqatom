@@ -23,7 +23,8 @@ def test_euclidean_codebook_forward():
 
     # **Forward Pass**
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
-    print(f"quantize: {quantize.shape}, x {x.shape}")
+    quantize = torch.squeeze(quantize)
+    x = torch.squeeze(x)
     # **Fix Output Shape Check**
     expected_shape = (1, *x.shape)
     assert quantize.shape == expected_shape, f"Quantized output shape mismatch: expected {expected_shape}, got {quantize.shape}"
