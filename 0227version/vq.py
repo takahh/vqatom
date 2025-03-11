@@ -472,6 +472,8 @@ def batched_embedding(indices, embed):
 
     # **Replace One-Hot with Soft Assignment**
     soft_weights = torch.softmax(indices, dim=-1)  # Convert indices into soft probabilities
+
+    print(f"soft_weights shape after reshape: {soft_weights.shape}")  # Should be (128,)
     quantized = torch.matmul(soft_weights.unsqueeze(1), embed)  # (128, 64)
 
     print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
