@@ -460,35 +460,30 @@ def mini_batch_kmeans(
 #     quantized = torch.matmul(one_hot, embed)  # (batch, embedding_dim)
 #
 #     return quantized
-
 def batched_embedding(indices, embed):
     print(f"indices shape {indices.shape}")  # Debugging
-    print(f"indices shape {indices}")  # Debugging
     print(f"embed.shape {embed.shape}")  # Debugging
 
     embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
-    # indices = indices.view(-1).float()  # **Keep it float to preserve gradients**
+    indices = indices.view(-1)  # Ensure 1D tensor (128,)
 
     print(f"indices shape after reshape: {indices.shape}")  # Should be (128,)
-    print(f"indices shape after reshape: {indices}")  # Should be (128,)
 
-    # **Replace One-Hot with Soft Assignment**
-    soft_weights = torch.softmax(indices, dim=-1)  # Convert indices into soft probabilities
+    # **Use Gumbel-Softmax to Create Soft Cluster Assignments**
+    tau = 1.0  # Temperature for controlling sharpness
+    num_clusters = embed.shape[0]  # Number of clusters
+    cluster_logits = torch.randn(indices.shape[0], num_clusters, device=indices.device, requires_grad=True)
+    soft_weights = F.gumbel_softmax(cluster_logits, tau=tau, hard=False)  # Differentiable probabilities
 
-    print(f"soft_weights shape after reshape: {soft_weights.shape}")  # Should be (128,)
-    quantized = torch.matmul(soft_weights.unsqueeze(1), embed)  # (128, 64)
+    print(f"soft_weights.shape: {soft_weights.shape}")  # Expected: (128, 10)
 
-    print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
-    """
-    dim = 64
-    codebook_size = 10
-    batch_size = 128 
-    
-    indices shape torch.Size([128, 1])  cluster id for data
-    embed.shape torch.Size([1, 10, 64])  cluster centroids
-    indices shape after reshape: torch.Size([128])  
-    soft_weights shape after reshape: torch.Size([128])"""
+    # **Use Matmul for Differentiable Soft Embedding Lookup**
+    quantized = torch.matmul(soft_weights, embed)  # Shape: (128, 64)
+
+    print(f"quantized.shape: {quantized.shape}")  # Expected: (128, 64)
+
     return quantized
+
 
 
 
