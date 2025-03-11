@@ -749,18 +749,19 @@ class EuclideanCodebook(nn.Module):
     import torch
     import torch.nn.functional as F
     from einops import rearrange
+    import torch
+    import torch.nn.functional as F
+    from einops import rearrange
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        # Ensure x is a leaf tensor and retains gradients
-        x = x.float().clone().detach().requires_grad_(True)
+        x = x.float()  # Ensure floating point type
 
-        # Check if x has the correct shape
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')  # Expand dimensions if necessary
 
-        flatten = rearrange(x, 'h ... d -> h (...) d')  # Reshape to (batch, seq_len, dim)
+        flatten = rearrange(x, 'h ... d -> h (...) d').clone()  # 🚀 Ensure `flatten` tracks `x`
 
         # **Debug: Check Gradient Tracking**
         print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
@@ -771,7 +772,7 @@ class EuclideanCodebook(nn.Module):
         init_cb = self.embed.detach().clone().contiguous()
 
         # **Fix Normalization to Preserve Gradients**
-        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
+        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)  # ✅ Does NOT detach
         embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
 
         print(
