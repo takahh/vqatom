@@ -759,18 +759,19 @@ class EuclideanCodebook(nn.Module):
 
         tau = 1.0
         embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
-        print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
-        print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
-        # **Ensure embed_ind remains differentiable**
-        embed_ind_soft = torch.matmul(embed_ind_one_hot,
-                                      torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
-                                                   dtype=torch.float32).unsqueeze(1))
-        print(f"0 embed_ind_soft: {embed_ind_soft.shape}")  # Debug print
-        print(f"embed_ind_soft: {embed_ind_soft}")  # Debug print
-        # # **Apply STE trick to allow gradient flow**
-        # embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
-        embed_ind = embed_ind_soft.expand_as(embed_ind_one_hot) + (
-                    embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
+
+        # Compute soft indices (weighted sum)
+        embed_ind_soft = torch.matmul(
+            embed_ind_one_hot,
+            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
+        )  # Shape (128, 1)
+
+        # **Apply STE Trick Without argmax()**
+        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach()).matmul(
+            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
+        )  # Keeps gradients flowing
+
+        print(f"Final embed_ind.shape: {embed_ind.shape}")  # Should be (128, 1)
 
         print(f"0 embed_ind: {embed_ind.shape}")  # Debug print
         print(f"embed_ind: {embed_ind}")  # Debug print
