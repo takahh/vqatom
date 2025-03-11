@@ -450,15 +450,15 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
-    indices = indices.squeeze(1)  # Remove extra dimension
-    # Ensure indices is 2D: (batch_size, num_codebooks)
-    indices = indices.view(-1, embed.shape[0])  # Reshape correctly
-    indices = indices.float()  # Ensure float type for matmul
-    # Fix dimension order in `embed` to match indices
+    # reshape cluster centers
     embed = embed.T  # Transpose to (1000, 64)
     minibatch_size = embed.shape[1]
+    # reshape cluster IDs
+    indices = indices.squeeze(1)  # Remove extra dimension
+    indices = indices.view(-1, embed.shape[0])  # Reshape correctly
+    indices = indices.float()  # Ensure float type for matmul
     indices = torch.reshape(indices, (minibatch_size, -1))
-    # Perform matrix multiplication
+    print(f"embed, indices {embed.shape}, {indices.shape}")
     quantized = torch.matmul(embed, indices)  # Now should work
     return quantized
 
