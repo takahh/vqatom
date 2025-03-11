@@ -761,9 +761,24 @@ class EuclideanCodebook(nn.Module):
         embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
         print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
         print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
-        embed_ind = torch.matmul(embed_ind_one_hot,
-                                     torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
-                                                  dtype=torch.float32).unsqueeze(1))
+        # **Ensure embed_ind remains differentiable**
+        embed_ind_soft = torch.matmul(embed_ind_one_hot,
+                                      torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
+                                                   dtype=torch.float32).unsqueeze(1))
+        print(f"0 embed_ind_soft: {embed_ind_soft.shape}")  # Debug print
+        print(f"embed_ind_soft: {embed_ind_soft}")  # Debug print
+        # **Apply STE trick to allow gradient flow**
+        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
+
+        print(f"0 embed_ind: {embed_ind.shape}")  # Debug print
+        print(f"embed_ind: {embed_ind}")  # Debug print
+        # tau = 1.0
+        # embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
+        # print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
+        # print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
+        # embed_ind = torch.matmul(embed_ind_one_hot,
+        #                              torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
+        #                                           dtype=torch.float32).unsqueeze(1))
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
         # **Retain Gradients for Debugging**
