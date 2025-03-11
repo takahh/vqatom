@@ -1,33 +1,45 @@
 import torch
-from vq import compute_contrastive_loss
+from vq import EuclideanCodebook
+import torch
 
-def test_compute_contrastive_loss():
+
+def test_euclidean_codebook_forward():
     torch.manual_seed(42)  # For reproducibility
 
-    # Create dummy latent vectors (z) and atom types
-    batch_size = 10
-    latent_dim = 16
-    num_atom_types = 5
+    # **Initialize Codebook**
+    dim = 16
+    codebook_size = 10
+    batch_size = 8
+    num_codebooks = 1
 
-    # Random latent vectors with requires_grad=True for gradient tracking
-    z = torch.randn(batch_size, latent_dim, device="cuda", requires_grad=True)
+    model = EuclideanCodebook(dim, codebook_size, num_codebooks=num_codebooks).cuda()
 
-    # Random atom types as integer labels
-    atom_types = torch.randint(0, num_atom_types, (batch_size,), device="cuda")
+    # **Create Input**
+    x = torch.randn(batch_size, dim, device="cuda", requires_grad=True)
 
-    # Compute loss
-    loss = compute_contrastive_loss(z, atom_types, num_atom_types=num_atom_types)
+    # **Forward Pass**
+    quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
 
-    # **Basic Functionality Checks**
-    assert loss.dim() == 0, "Loss should be a scalar value."
-    assert loss.item() >= 0, "Loss should be non-negative."
+    # **Basic Checks**
+    assert quantize.shape == x.shape, "Quantized output shape mismatch"
+    assert embed_ind.shape[1] == batch_size, "Embedding index shape mismatch"
+    assert dist.shape == (num_codebooks, batch_size, codebook_size), "Distance matrix shape mismatch"
+
+    assert embed_ind.min() >= 0, "embed_ind contains negative values"
+    assert embed_ind.max() < codebook_size, "embed_ind contains out-of-range values"
 
     # **Gradient Flow Check**
+    loss = quantize.mean()  # Dummy loss function
     loss.backward()
-    assert z.grad is not None, "Gradient for z should not be None."
-    assert z.grad.abs().sum().item() > 0, "Gradient for z should not be zero."
 
-    print("✅ Test passed: compute_contrastive_loss works correctly and has proper gradient flow!")
+    assert x.grad is not None, "Gradient for input x should not be None"
+    assert x.grad.abs().sum().item() > 0, "Gradient for input x should not be zero"
+
+    assert model.embed.grad is not None, "Gradient for codebook embed should not be None"
+    assert model.embed.grad.abs().sum().item() > 0, "Gradient for codebook embed should not be zero"
+
+    print("✅ Test passed: EuclideanCodebook.forward() works correctly and has proper gradient flow!")
+
 
 # Run the test
-test_compute_contrastive_loss()
+test_euclidean_codebook_forward()
