@@ -435,16 +435,15 @@ def mini_batch_kmeans(
     return means, counts
 
 
-def batched_embedding(indices, embeds):
-    indices = indices.long()
-    batch, dim = indices.shape[1], embeds.shape[-1]
-    indices = indices.squeeze(1)  # Remove the second dimension if it's always 1
-    indices = repeat(indices, 'h n -> h n d', d=dim)  # Adjust pattern
+def batched_embedding(indices, embed):
+    indices = indices.squeeze(1)  # Ensure correct shape by removing unnecessary dimension
+    dim = embed.shape[-1]
 
-    # indices = repeat(indices, 'h b n -> h b n d', d=dim)
-    embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
-    return embeds.gather(2, indices)
+    # Ensure indices is 2D before repeating
+    indices = indices.reshape(indices.shape[0], -1)  # Reshape to (h, n)
 
+    indices = repeat(indices, 'h n -> h n d', d=dim)  # Now it should work
+    return torch.gather(embed, 1, indices)
 
 
 # this is corrected new one, minus sign is correctly added
