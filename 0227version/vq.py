@@ -450,17 +450,19 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
-    print(f"0 embed, indices {embed.shape}, {indices.shape}")
-    # embed, indices torch.Size([1, 1000, 64]), torch.Size([22013000, 1])
-    # reshape cluster centers
-    embed = torch.squeeze(embed)  # (1000, 64)
-    minibatch_size = embed.shape[0]  # 1000
-    # reshape cluster IDs
-    indices = indices.float()  # Ensure float type for matmul
-    indices = torch.reshape(indices, (minibatch_size, -1))  # (1000, 22013)
-    print(f"1 embed, indices {embed.shape}, {indices.shape}")
-    quantized = torch.matmul(embed, indices)  # Now should work
+    indices = indices.squeeze(1)  # Ensure correct shape
+    indices = indices.long()  # Convert to int64
+
+    # Convert indices to one-hot encoding
+    one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
+
+    # Use matmul for soft assignment of embeddings (keeps gradients)
+    quantized = torch.matmul(one_hot, embed)  # (batch, embedding_dim)
+
+    print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
+
     return quantized
+
 
 
 # this is corrected new one, minus sign is correctly added
