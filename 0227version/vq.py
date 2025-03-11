@@ -459,7 +459,7 @@ def batched_embedding(indices, embed):
     minibatch_size = embed.shape[1]
     indices = torch.reshape(indices, (minibatch_size, -1))
     # Perform matrix multiplication
-    quantized = torch.matmul(indices, embed)  # Now should work
+    quantized = torch.matmul(embed, indices)  # Now should work
     return quantized
 
 
