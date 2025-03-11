@@ -38,6 +38,8 @@ def test_euclidean_codebook_forward():
     assert x.grad.abs().sum().item() > 0, "Gradient for input x should not be zero"
 
     # Ensure Codebook Embeddings Have Gradients
+    assert quantize.grad is not None, "Gradient for quantize should not be None"
+    # Ensure Codebook Embeddings Have Gradients
     assert model.embed.grad is not None, "Gradient for codebook embed should not be None"
     assert model.embed.grad.abs().sum().item() > 0, "Gradient for codebook embed should not be zero"
 
