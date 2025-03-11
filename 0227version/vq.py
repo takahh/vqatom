@@ -450,23 +450,14 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
-    print(f"0 indices.shape {indices.shape}")
     indices = indices.squeeze(1)  # Remove extra dimension
-    print(f"1 indices.shape {indices.shape}")
     # Ensure indices is 2D: (batch_size, num_codebooks)
     indices = indices.view(-1, embed.shape[0])  # Reshape correctly
-    print(f"2 indices.shape {indices.shape}")
     indices = indices.float()  # Ensure float type for matmul
-
     # Fix dimension order in `embed` to match indices
-    # embed = embed.T  # Transpose to (1000, 64)
-
-    print(f"0 embed.shape {embed.shape}")
+    embed = embed.T  # Transpose to (1000, 64)
     minibatch_size = embed.shape[1]
-    indices = torch.reshape(indices, (-1, minibatch_size))
-
-    print(f"After reshaping: indices.shape = {indices.shape}, embed.shape = {embed.shape}")
-
+    indices = torch.reshape(indices, (minibatch_size, -1))
     # Perform matrix multiplication
     quantized = torch.matmul(indices, embed)  # Now should work
     return quantized
@@ -1302,7 +1293,8 @@ class VectorQuantize(nn.Module):
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
-        embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
+        # embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
+        print(f"embed_ind: {embed_ind.shape}")
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
