@@ -809,6 +809,7 @@ class EuclideanCodebook(nn.Module):
         # **Retain Gradients for Debugging**
         quantize.retain_grad()
         x.retain_grad()
+        flatten.retain_grad()  # Retain gradients for debugging
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
