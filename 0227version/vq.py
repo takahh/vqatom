@@ -770,18 +770,18 @@ class EuclideanCodebook(nn.Module):
         print(f"dist {dist}")
         tau = 1.0
         embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
+        print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
+        print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
 
         # **Extract integer indices while preserving gradients**
         embed_ind_int = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
+        print(f"1 embed_ind_int: {embed_ind_int.shape}")  # Debug print
+        print(f"embed_ind_int: {embed_ind_int}")  # Debug print
         embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
 
-        print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
+        print(f"2 embed_ind: {embed_ind.shape}")  # Debug print
+        print(f"embed_ind: {embed_ind}")  # Debug print
 
-        # **Ensure Valid Reshape**
-        # embed_ind = embed_ind.view(-1, 1)  # Use view() instead of reshape()
-        print("embed_ind")
-        print(embed_ind.shape)
-        print(embed_ind)
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
 
