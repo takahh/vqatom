@@ -455,7 +455,10 @@ def batched_embedding(indices, embed):
 
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
-
+    print(f"one_hot {one_hot.shape}")
+    print(f"one_hot {one_hot}")
+    print(f"embed {embed.shape}")
+    print(f"embed {embed}")
     # Use matmul for soft assignment of embeddings (keeps gradients)
     quantized = torch.matmul(one_hot, embed)  # (batch, embedding_dim)
 
