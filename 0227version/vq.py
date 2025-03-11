@@ -746,60 +746,51 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
+    import torch
+    import torch.nn.functional as F
+    from einops import rearrange
+
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        x = x.float()  # Ensure floating point type
+        x = x.float()
 
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
-            x = rearrange(x, '... -> 1 ...')  # Expand dimensions if necessary
+            x = rearrange(x, '... -> 1 ...')
 
-        flatten = rearrange(x, 'h ... d -> h (...) d')  # Reshape to (batch, seq_len, dim)
+        flatten = rearrange(x, 'h ... d -> h (...) d').clone()
 
         # Initialize codebook vectors
         self.init_embed_(flatten, logger)
-        embed = self.embed  # (1, 10, 64)
+        embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
 
-        # **Normalize to Prevent Vanishing Gradients**
-        flatten = F.normalize(flatten, p=2, dim=-1)  # (1, 128, 64)
-        embed = F.normalize(embed, p=2, dim=-1)  # (1, 10, 64)
+        # Normalize Without Breaking Gradient Flow
+        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
+        embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
 
-        # **Fix 1: Compute Squared Euclidean Distance Manually**
-        # dist[i, j] = ||flatten[i] - embed[j]||^2
-        flatten_sq = flatten.pow(2).sum(dim=-1, keepdim=True)  # (1, 128, 1)
-        embed_sq = embed.pow(2).sum(dim=-1, keepdim=True)  # (1, 10, 1)
+        # Compute Distance
+        dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
+        dist = -dist  # Negative similarity
 
-        dist = flatten_sq - 2 * torch.matmul(flatten, embed.transpose(-2, -1)) + embed_sq.transpose(-2, -1)
-        dist = -dist  # Negative for similarity measure (shape: (1, 128, 10))
+        # Gumbel-Softmax for Soft Cluster Assignments
+        tau = 1.0
+        embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
 
-        # **Ensure Correct Shape Before Applying Gumbel-Softmax**
-        dist = dist.view(dist.shape[0] * dist.shape[1], -1)  # Reshape to (128, 10) for softmax
+        # **STE Trick to Maintain Differentiability**
+        soft_indices = embed_ind_one_hot @ torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
+                                                        device=embed_ind_one_hot.device).unsqueeze(1)
+        embed_ind = soft_indices + (embed_ind_one_hot - embed_ind_one_hot.detach()) @ torch.arange(
+            embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device).unsqueeze(1)
 
-        tau = 1.0  # Temperature for softmax
-        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=False)  # Soft assignment (128, 10)
+        # Fix Shape for batched_embedding()
+        embed_ind = embed_ind.view(1, -1, 1)
+        quantize = batched_embedding(embed_ind, self.embed)
 
-        # **Compute Soft Indices (Weighted Sum)**
-        embed_ind_soft = torch.matmul(
-            embed_ind_one_hot,
-            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
-        )  # Shape: (128, 1)
-
-        # **Fix 2: Ensure `embed_ind` is Differentiable**
-        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach()).matmul(
-            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
-        )  # Keeps gradients flowing
-
-        print(f"Final embed_ind.shape: {embed_ind.shape}")  # Expected (128, 1)
-
-        # **Fix 3: Ensure Proper Shape for `batched_embedding()`**
-        embed_ind = embed_ind.view(1, -1, 1)  # Reshape to (1, 128, 1) to match input dimensions
-        quantize = batched_embedding(embed_ind, self.embed)  # (1, 128, 64), fully differentiable
-
-        # **Retain Gradients for Debugging**
+        # **Ensure Gradients Are Retained**
         quantize.retain_grad()
         x.retain_grad()
-        flatten.retain_grad()  # Retain gradients for debugging
+        flatten.retain_grad()
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
