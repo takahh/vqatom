@@ -764,18 +764,11 @@ class EuclideanCodebook(nn.Module):
         embed_ind = torch.matmul(embed_ind_one_hot,
                                      torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
                                                   dtype=torch.float32).unsqueeze(1))
-
-        # **Ensure `embed_ind_int` has the correct shape (22013, 1)**
-        # embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
-
-        # **Extract integer indices while preserving gradients**
-        # embed_ind = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
-
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
-
         # **Retain Gradients for Debugging**
         quantize.retain_grad()
+        x.retain_grad()
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
