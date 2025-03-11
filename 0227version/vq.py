@@ -453,14 +453,14 @@ def batched_embedding(indices, embed):
     embed = torch.squeeze(embed)
     indices = indices.squeeze(1)  # Ensure correct shape
     indices = indices.long()  # Convert to int64
-    print(f"indices {indices.shape}") # indices torch.Size([22013000])
+    print(f"indices {indices.shape}") # indices torch.Size([22013, 1000])
     print(f"indices {indices}")
-    print(f"embed.shape {embed.shape}")  # embed.shape torch.Size([1, 1000, 64])
+    print(f"embed.shape {embed.shape}")  # torch.Size([1000, 64])
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
     print(f"one_hot {one_hot.shape}")  # one_hot torch.Size([22013000, 1])
     print(f"one_hot {one_hot}")
-    print(f"embed {embed.shape}")
+    print(f"embed {embed.shape}")  #
     print(f"embed {embed}")
     # Use matmul for soft assignment of embeddings (keeps gradients)
     quantized = torch.matmul(one_hot, embed)  # (batch, embedding_dim)
@@ -768,15 +768,12 @@ class EuclideanCodebook(nn.Module):
         tau = 1.0
         print(f"1 dist {dist.shape}")
         print(f"dist {dist}")
-        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
+        tau = 1.0
+        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
 
-        print(f"1 embed_ind {embed_ind.shape}")
-        print(f"embed_ind {embed_ind}")
-        # Convert One-Hot to Indices
-        embed_ind_int = embed_ind.argmax(dim=-1, keepdim=True)  # Integer cluster IDs
-
-        # **Fix STE Trick: Ensure embed_ind has correct scale**
-        embed_ind = embed_ind_int.float() + (embed_ind - embed_ind.detach())  # Maintain differentiability
+        # **Extract integer indices while preserving gradients**
+        embed_ind_int = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
+        embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
 
         print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
 
