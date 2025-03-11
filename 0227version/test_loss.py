@@ -25,8 +25,7 @@ def test_euclidean_codebook_forward():
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
     quantize = torch.squeeze(quantize)
     x = torch.squeeze(x)
-    # **Fix Output Shape Check**
-    expected_shape = (1, *x.shape)
+
     assert quantize.shape == expected_shape, f"Quantized output shape mismatch: expected {expected_shape}, got {quantize.shape}"
 
     assert embed_ind.shape[1] == batch_size, "Embedding index shape mismatch"
