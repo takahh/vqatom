@@ -746,6 +746,9 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
+    import torch
+    import torch.nn.functional as F
+    from einops import rearrange
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
@@ -764,14 +767,14 @@ class EuclideanCodebook(nn.Module):
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
 
-        # **Normalize to Prevent Vanishing Gradients**
-        flatten = F.normalize(flatten, p=2, dim=-1)
-        embed = F.normalize(embed, p=2, dim=-1)
+        # **Fix Normalization to Preserve Gradients**
+        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
+        embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
 
         print(
             f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
 
-        # **Compute Squared Euclidean Distance Manually**
+        # **Compute Squared Euclidean Distance Without `torch.cdist()`**
         flatten_sq = flatten.pow(2).sum(dim=-1, keepdim=True)  # (1, 128, 1)
         embed_sq = embed.pow(2).sum(dim=-1, keepdim=True)  # (1, 10, 1)
 
@@ -789,14 +792,10 @@ class EuclideanCodebook(nn.Module):
         print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
 
         # **Compute Soft Indices (Weighted Sum)**
-        embed_ind_soft = torch.matmul(
+        embed_ind = torch.matmul(
             embed_ind_one_hot,
             torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
         )  # Shape: (128, 1)
-
-        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach()).matmul(
-            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
-        )  # Keeps gradients flowing
 
         print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
 
