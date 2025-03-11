@@ -465,22 +465,19 @@ def batched_embedding(indices, embed):
     print(f"indices shape {indices.shape}")  # Debugging
     print(f"embed.shape {embed.shape}")  # Debugging
 
-    embed = embed.squeeze(0)  # Remove batch dimension if present (1, 1000, 64) → (1000, 64)
-    indices = indices.view(-1)  # Convert to 1D tensor (22013,)
+    embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
+    indices = indices.view(-1).float()  # **Keep it float to preserve gradients**
 
-    print(f"indices shape after reshape: {indices.shape}")  # Should be (22013,)
+    print(f"indices shape after reshape: {indices.shape}")  # Should be (128,)
 
-    # Convert indices to one-hot encoding
-    one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # Shape: (22013, 1000)
-
-    print(f"one_hot.shape {one_hot.shape}")  # Expected: (22013, 1000)
-
-    # Use matmul for soft assignment of embeddings (keeps gradients)
-    quantized = torch.matmul(one_hot, embed)  # Shape: (22013, 64)
+    # **Replace One-Hot with Soft Assignment**
+    soft_weights = torch.softmax(indices, dim=-1)  # Convert indices into soft probabilities
+    quantized = torch.matmul(soft_weights.unsqueeze(1), embed)  # (128, 64)
 
     print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
 
     return quantized
+
 
 
 # this is corrected new one, minus sign is correctly added
