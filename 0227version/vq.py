@@ -1253,6 +1253,7 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
+        print(f"embed_ind after codebook = {embed_ind.shape}")
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
