@@ -469,6 +469,7 @@ def batched_embedding(indices, embed):
     indices = indices.view(-1).float()  # **Keep it float to preserve gradients**
 
     print(f"indices shape after reshape: {indices.shape}")  # Should be (128,)
+    print(f"indices shape after reshape: {indices}")  # Should be (128,)
 
     # **Replace One-Hot with Soft Assignment**
     soft_weights = torch.softmax(indices, dim=-1)  # Convert indices into soft probabilities
@@ -477,7 +478,15 @@ def batched_embedding(indices, embed):
     quantized = torch.matmul(soft_weights.unsqueeze(1), embed)  # (128, 64)
 
     print(f"indices.shape: {indices.shape}, embed.shape: {embed.shape}, quantized.shape: {quantized.shape}")
-
+    """
+    dim = 64
+    codebook_size = 10
+    batch_size = 128 
+    
+    indices shape torch.Size([128, 1])  cluster id for data
+    embed.shape torch.Size([1, 10, 64])  cluster centroids
+    indices shape after reshape: torch.Size([128])  
+    soft_weights shape after reshape: torch.Size([128])"""
     return quantized
 
 
