@@ -746,53 +746,66 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
-    @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None):
-        x = x.float()
-        needs_codebook_dim = x.ndim < 4
-        if needs_codebook_dim:
-            x = rearrange(x, '... -> 1 ...')
-        flatten = rearrange(x, 'h ... d -> h (...) d')
-        # Initialize codebook vectors
-        self.init_embed_(flatten, logger)
-        embed = self.embed
-        init_cb = self.embed.detach().clone().contiguous()
-        # **Normalize to Prevent Vanishing Gradients**
-        flatten = F.normalize(flatten, p=2, dim=-1)
-        embed = F.normalize(embed, p=2, dim=-1)
-        print(f"flatten shape {flatten.shape}, embed shape {embed.shape}")
-        # Compute squared Euclidean distance manually (keeps gradients)
-        # dist = torch.sum(flatten ** 2, dim=-1, keepdim=True) - 2 * torch.matmul(flatten, embed.T) + torch.sum(
-        #     embed ** 2, dim=-1)
 
-        dist = -torch.cdist(flatten, embed, p=2)
-        # **Ensure Correct Shape Before Applying Gumbel-Softmax**
-        dist = dist.view(dist.shape[1], -1)  # Ensure 2D shape
+import torch
+import torch.nn.functional as F
+from einops import rearrange
 
-        tau = 1.0
-        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=False)  # One-hot encoding
 
-        # Compute soft indices (weighted sum)
-        embed_ind_soft = torch.matmul(
-            embed_ind_one_hot,
-            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
-        )  # Shape (128, 1)
+@torch.amp.autocast('cuda', enabled=False)
+def forward(self, x, logger=None):
+    x = x.float()  # Ensure floating point type
+    needs_codebook_dim = x.ndim < 4
+    if needs_codebook_dim:
+        x = rearrange(x, '... -> 1 ...')  # Expand dimensions if necessary
 
-        # **Apply STE Trick Without argmax()**
-        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach()).matmul(
-            torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
-        )  # Keeps gradients flowing
+    flatten = rearrange(x, 'h ... d -> h (...) d')  # Reshape to (batch, seq_len, dim)
 
-        print(f"Final embed_ind.shape: {embed_ind.shape}")  # Should be (128, 1)
+    # Initialize codebook vectors
+    self.init_embed_(flatten, logger)
+    embed = self.embed  # (1, 10, 64)
+    init_cb = self.embed.detach().clone().contiguous()
 
-        print(f"0 embed_ind: {embed_ind.shape}")  # Debug print
-        print(f"embed_ind: {embed_ind}")  # Debug print
-        quantize = batched_embedding(embed_ind, self.embed)
-        # **Retain Gradients for Debugging**
-        quantize.retain_grad()
-        x.retain_grad()
+    # **Normalize to Prevent Vanishing Gradients**
+    flatten = F.normalize(flatten, p=2, dim=-1)  # (1, 128, 64)
+    embed = F.normalize(embed, p=2, dim=-1)  # (1, 10, 64)
 
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb
+    # **Fix 1: Compute Squared Euclidean Distance Manually**
+    # dist[i, j] = ||flatten[i] - embed[j]||^2
+    flatten_sq = flatten.pow(2).sum(dim=-1, keepdim=True)  # (1, 128, 1)
+    embed_sq = embed.pow(2).sum(dim=-1, keepdim=True)  # (1, 10, 1)
+
+    dist = flatten_sq - 2 * torch.matmul(flatten, embed.transpose(-2, -1)) + embed_sq.transpose(-2, -1)
+    dist = -dist  # Negative for similarity measure (shape: (1, 128, 10))
+
+    # **Ensure Correct Shape Before Applying Gumbel-Softmax**
+    dist = dist.view(dist.shape[0] * dist.shape[1], -1)  # Reshape to (128, 10) for softmax
+
+    tau = 1.0  # Temperature for softmax
+    embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=False)  # Soft assignment (128, 10)
+
+    # **Compute Soft Indices (Weighted Sum)**
+    embed_ind_soft = torch.matmul(
+        embed_ind_one_hot,
+        torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
+    )  # Shape: (128, 1)
+
+    # **Fix 2: Ensure `embed_ind` is Differentiable**
+    embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach()).matmul(
+        torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device, dtype=torch.float32).unsqueeze(1)
+    )  # Keeps gradients flowing
+
+    print(f"Final embed_ind.shape: {embed_ind.shape}")  # Expected (128, 1)
+
+    # **Fix 3: Ensure Proper Shape for `batched_embedding()`**
+    embed_ind = embed_ind.view(1, -1, 1)  # Reshape to (1, 128, 1) to match input dimensions
+    quantize = batched_embedding(embed_ind, self.embed)  # (1, 128, 64), fully differentiable
+
+    # **Retain Gradients for Debugging**
+    quantize.retain_grad()
+    x.retain_grad()
+
+    return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
