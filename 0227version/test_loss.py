@@ -24,9 +24,9 @@ def test_euclidean_codebook_forward():
     # **Forward Pass**
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
     quantize = torch.squeeze(quantize)
+    embed_ind = torch.squeeze(embed_ind)
     x = torch.squeeze(x)
-    print(f"embed_ind: {embed_ind.shape}")
-    assert embed_ind.shape[1] == batch_size, "Embedding index shape mismatch"
+    assert embed_ind.shape[0] == batch_size, "Embedding index shape mismatch"
     assert dist.shape == (num_codebooks, batch_size, codebook_size), "Distance matrix shape mismatch"
 
     assert embed_ind.min() >= 0, "embed_ind contains negative values"
