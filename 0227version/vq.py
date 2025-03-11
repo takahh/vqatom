@@ -746,10 +746,6 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
-    import torch
-    import torch.nn.functional as F
-    from einops import rearrange
-
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
         x = x.float()
@@ -777,22 +773,22 @@ class EuclideanCodebook(nn.Module):
         tau = 1.0
         embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
 
-        # **STE Trick to Maintain Differentiability**
-        soft_indices = embed_ind_one_hot @ torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
-                                                        device=embed_ind_one_hot.device).unsqueeze(1)
-        embed_ind = soft_indices + (embed_ind_one_hot - embed_ind_one_hot.detach()) @ torch.arange(
-            embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device).unsqueeze(1)
+        print(f"After Gumbel-Softmax: embed_ind_one_hot.shape: {embed_ind_one_hot.shape}")  # Debugging
 
-        # Fix Shape for batched_embedding()
-        embed_ind = embed_ind.view(1, -1, 1)
-        quantize = batched_embedding(embed_ind, self.embed)
+        # ✅ Ensure Correct Shape Before Passing to batched_embedding()
+        embed_ind_one_hot = embed_ind_one_hot.view(dist.shape[0] * dist.shape[1], -1)  # Shape: (22013, 10)
+
+        # **Pass `embed_ind_one_hot` Directly into `batched_embedding()`**
+        quantize = batched_embedding(embed_ind_one_hot, self.embed)  # 🔥 Soft quantization
+
+        print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
         # **Ensure Gradients Are Retained**
         quantize.retain_grad()
         x.retain_grad()
         flatten.retain_grad()
 
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb
+        return quantize, embed_ind_one_hot, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
