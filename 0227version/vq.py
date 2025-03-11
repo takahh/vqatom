@@ -462,6 +462,8 @@ def batched_embedding(indices, embed):
     embed = embed.T  # Transpose to (1000, 64)
 
     print(f"0 embed.shape {embed.shape}")
+    minibatch_size = embed.shape[1]
+    indices = torch.reshape(indices, (minibatch_size, -1))
 
     print(f"After reshaping: indices.shape = {indices.shape}, embed.shape = {embed.shape}")
 
