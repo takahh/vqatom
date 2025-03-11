@@ -463,6 +463,7 @@ def mini_batch_kmeans(
 
 def batched_embedding(indices, embed):
     print(f"indices shape {indices.shape}")  # Debugging
+    print(f"indices shape {indices}")  # Debugging
     print(f"embed.shape {embed.shape}")  # Debugging
 
     embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
