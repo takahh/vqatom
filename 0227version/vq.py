@@ -712,38 +712,37 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
-
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        needs_codebook_dim = x.ndim < 4
         x = x.float()
+        needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
+
         flatten = rearrange(x, 'h ... d -> h (...) d')
-        # ----------------------------------------------------
-        # set the initial codebook vectors by k-means
-        # ----------------------------------------------------
+
+        # Initialize codebook vectors
         self.init_embed_(flatten, logger)
+
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
+
+        # **Normalize to Prevent Vanishing Gradients**
+        flatten = F.normalize(flatten, p=2, dim=-1)
+        embed = F.normalize(embed, p=2, dim=-1)
+
         dist = -torch.cdist(flatten, embed, p=2)
-        # ----------------------------------------------------
-        # get codebook ID assigned
-        # ----------------------------------------------------
-        embed_ind = get_ind(dist)
-        indices = torch.argmax(embed_ind, dim=-1, keepdim=True)  # Non-differentiable forward pass
-        embed_ind = indices + (embed_ind - embed_ind.detach())  # Straight-through trick
-        indices = embed_ind[:, :, 0]  # Keep the float tensor
-        proxy_indices = indices.long()  # Convert to integer for forward pass
-        embed_ind = proxy_indices + (indices - indices.detach())
-        # Validate values
-        if embed_ind.min() < 0:
-            raise ValueError("embed_ind contains negative values.")
-        if embed_ind.max() >= self.codebook_size:
-            raise ValueError(
-                f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
+
+        # **Use Differentiable Indexing (Gumbel-Softmax)**
+        tau = 1.0
+        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=True)  # Replaces torch.argmax()
+
         embed_ind = embed_ind.unsqueeze(0)
+
+        # Ensure batched_embedding does not detach
         quantize = batched_embedding(embed_ind, self.embed)
+
+        # **Retain Gradients for Debugging**
         quantize.retain_grad()
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
