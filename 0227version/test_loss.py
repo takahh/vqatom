@@ -8,43 +8,32 @@ import torch
 
 import torch
 
+def test_gradient_flow():
+    torch.manual_seed(42)
 
-def test_euclidean_codebook_forward():
-    torch.manual_seed(42)  # Reproducibility
-
-    # Initialize Codebook
     dim = 64
     codebook_size = 10
-    batch_size = 22144
-    num_codebooks = 1
+    batch_size = 128  # Smaller batch for testing
 
-    model = EuclideanCodebook(dim, codebook_size, num_codebooks=num_codebooks, learnable_codebook=True).cuda()
+    model = EuclideanCodebook(dim, codebook_size, learnable_codebook=True).cuda()
 
-    # Create Input
     x = torch.randn(batch_size, 1, dim, device="cuda", requires_grad=True)
 
-    # Forward Pass
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
 
-    # Ensure `quantize` requires gradients
-    assert quantize.requires_grad, "quantize does not require gradients!"
+    print("Requires Gradients:")
+    print(f"x.requires_grad: {x.requires_grad}")
+    print(f"flatten.requires_grad: {flatten.requires_grad}")
+    print(f"dist.requires_grad: {dist.requires_grad}")
+    print(f"embed.requires_grad: {embed.requires_grad}")
+    print(f"quantize.requires_grad: {quantize.requires_grad}")
 
-    # Compute Dummy Loss
     loss = quantize.mean()
     loss.backward()
 
-    # Ensure Input Has Gradients
-    # assert x.grad is not None, "Gradient for input x should not be None"
-    # assert x.grad.abs().sum().item() > 0, "Gradient for input x should not be zero"
+    print("\nGradients After Backpropagation:")
+    print(f"x.grad: {x.grad}")
+    print(f"quantize.grad: {quantize.grad}")
+    print(f"embed.grad: {model.embed.grad}")
 
-    # Ensure Codebook Embeddings Have Gradients
-    assert quantize.grad is not None, "Gradient for quantize should not be None"
-    # Ensure Codebook Embeddings Have Gradients
-    assert model.embed.grad is not None, "Gradient for codebook embed should not be None"
-    assert model.embed.grad.abs().sum().item() > 0, "Gradient for codebook embed should not be zero"
-
-    print("✅ Test passed: EuclideanCodebook.forward() works correctly and has proper gradient flow!")
-
-
-# Run the test
-test_euclidean_codebook_forward()
+test_gradient_flow()

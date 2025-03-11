@@ -715,24 +715,18 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        print("x.shape")
-        print(x.shape)
         needs_codebook_dim = x.ndim < 4
         x = x.float()
-
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = rearrange(x, 'h ... d -> h (...) d')
-
         # ----------------------------------------------------
         # set the initial codebook vectors by k-means
         # ----------------------------------------------------
         self.init_embed_(flatten, logger)
         embed = self.embed
         init_cb = self.embed.detach().clone().contiguous()
-
         dist = -torch.cdist(flatten, embed, p=2)
-
         # ----------------------------------------------------
         # get codebook ID assigned
         # ----------------------------------------------------
@@ -742,17 +736,14 @@ class EuclideanCodebook(nn.Module):
         indices = embed_ind[:, :, 0]  # Keep the float tensor
         proxy_indices = indices.long()  # Convert to integer for forward pass
         embed_ind = proxy_indices + (indices - indices.detach())
-
         # Validate values
         if embed_ind.min() < 0:
             raise ValueError("embed_ind contains negative values.")
         if embed_ind.max() >= self.codebook_size:
             raise ValueError(
                 f"embed_ind contains out-of-range values: max={embed_ind.max()}, codebook_size={self.codebook_size}")
-
         embed_ind = embed_ind.unsqueeze(0)
         quantize = batched_embedding(embed_ind, self.embed)
-
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
