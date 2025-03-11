@@ -436,14 +436,20 @@ def mini_batch_kmeans(
 
 
 def batched_embedding(indices, embed):
-    indices = indices.squeeze(1)  # Remove unnecessary dimensions
-    dim = embed.shape[-1]
+    indices = indices.squeeze(1)  # Remove extra dimension if present
+    dim = embed.shape[-1]  # Get embedding dimension
+
+    # Ensure indices is 2D before repeating
+    indices = indices.reshape(indices.shape[0], -1)  # (h, n)
 
     # Ensure indices are int64
     indices = indices.long()
 
-    indices = repeat(indices, 'h n -> h n d', d=dim)  # Repeat in correct shape
+    # Correct shape before repeating
+    indices = repeat(indices, 'h n -> h n d', d=dim)  # Ensure proper shape
+
     return torch.gather(embed, 1, indices)
+
 
 
 # this is corrected new one, minus sign is correctly added
