@@ -749,11 +749,14 @@ class EuclideanCodebook(nn.Module):
 
         dist = -torch.cdist(flatten, embed, p=2)
 
-        # **Use Fully Differentiable Indexing**
-        tau = 1.0
-        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=False)  # ✅ Use soft embeddings
+        # **Ensure Correct Shape Before Applying Gumbel-Softmax**
+        dist = dist.view(dist.shape[0], -1)  # Ensure 2D shape
+        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=False)
 
-        embed_ind = embed_ind.unsqueeze(0)
+        print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
+
+        # **Ensure Valid Reshape**
+        embed_ind = embed_ind.view(-1, 1)  # Use view() instead of reshape()
 
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
