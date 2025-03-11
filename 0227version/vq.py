@@ -435,20 +435,28 @@ def mini_batch_kmeans(
     return means, counts
 
 
+# def batched_embedding(indices, embed):
+#     indices = indices.squeeze(1)  # Remove extra dimension if present
+#     dim = embed.shape[-1]  # Get embedding dimension
+#
+#     # Ensure indices is 2D before repeating
+#     indices = indices.reshape(indices.shape[0], -1)  # (h, n)
+#
+#     # Ensure indices are int64
+#     indices = indices.long()
+#
+#     # Correct shape before repeating
+#     indices = repeat(indices, 'h n -> h n d', d=dim)  # Ensure proper shape
+#
+#     return torch.gather(embed, 1, indices)
+
 def batched_embedding(indices, embed):
-    indices = indices.squeeze(1)  # Remove extra dimension if present
-    dim = embed.shape[-1]  # Get embedding dimension
+    indices = indices.squeeze(1)  # Ensure correct shape
+    dim = embed.shape[-1]
 
-    # Ensure indices is 2D before repeating
-    indices = indices.reshape(indices.shape[0], -1)  # (h, n)
-
-    # Ensure indices are int64
-    indices = indices.long()
-
-    # Correct shape before repeating
-    indices = repeat(indices, 'h n -> h n d', d=dim)  # Ensure proper shape
-
-    return torch.gather(embed, 1, indices)
+    # **Replace torch.gather() with soft-weighted sum**
+    quantized = torch.matmul(indices.float(), embed)  # Uses soft assignment
+    return quantized
 
 
 
@@ -741,13 +749,13 @@ class EuclideanCodebook(nn.Module):
 
         dist = -torch.cdist(flatten, embed, p=2)
 
-        # **Use Differentiable Indexing (Gumbel-Softmax)**
+        # **Use Fully Differentiable Indexing**
         tau = 1.0
-        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=True)  # Replaces torch.argmax()
+        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=False)  # ✅ Use soft embeddings
 
         embed_ind = embed_ind.unsqueeze(0)
 
-        # Ensure batched_embedding does not detach
+        # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
 
         # **Retain Gradients for Debugging**
