@@ -760,7 +760,11 @@ class EuclideanCodebook(nn.Module):
         # **Normalize to Prevent Vanishing Gradients**
         flatten = F.normalize(flatten, p=2, dim=-1)
         embed = F.normalize(embed, p=2, dim=-1)
-        dist = -torch.cdist(flatten, embed, p=2)
+        # Compute squared Euclidean distance manually (keeps gradients)
+        dist = torch.sum(flatten ** 2, dim=-1, keepdim=True) - 2 * torch.matmul(flatten, embed.T) + torch.sum(
+            embed ** 2, dim=-1)
+
+        # dist = -torch.cdist(flatten, embed, p=2)
         # **Ensure Correct Shape Before Applying Gumbel-Softmax**
         dist = dist.view(dist.shape[1], -1)  # Ensure 2D shape
 
