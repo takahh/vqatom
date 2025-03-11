@@ -452,10 +452,11 @@ def mini_batch_kmeans(
 def batched_embedding(indices, embed):
     indices = indices.squeeze(1)  # Ensure correct shape
     indices = indices.long()  # Convert to int64
-
+    print(f"indices {indices.shape}")
+    print(f"indices {indices}")
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
-    print(f"one_hot {one_hot.shape}")
+    print(f"one_hot {one_hot.shape}")  # one_hot torch.Size([22013000, 1])
     print(f"one_hot {one_hot}")
     print(f"embed {embed.shape}")
     print(f"embed {embed}")
