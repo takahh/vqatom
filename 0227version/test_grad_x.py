@@ -13,17 +13,21 @@ def test_gradient_flow():
     model = EuclideanCodebook(dim, codebook_size, learnable_codebook=True).cuda()
     # Replace with your actual model instance
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
+    flatten.retain_grad()  # Retain gradients for debugging
 
-    # Define loss (simple sum)
+    # Backpropagate
     loss = quantize.sum()
     loss.backward()
 
-    # Check gradient flow
-    print(f"x.grad is None: {x.grad is None}")  # If True, gradient is blocked
+    # Debug prints
+    print(f"x.grad is None: {x.grad is None}")
     if x.grad is not None:
-        print(f"x.grad.sum(): {x.grad.sum()}")  # Ensure nonzero gradient
-    else:
-        print("❌ x.grad is None, gradient flow is blocked!")
+        print(f"x.grad.sum(): {x.grad.sum()}")
+
+    print(f"flatten.grad is None: {flatten.grad is None}")
+    if flatten.grad is not None:
+        print(f"flatten.grad.sum(): {flatten.grad.sum()}")
+
 
 # Run the test
 test_gradient_flow()
