@@ -1317,7 +1317,6 @@ class VectorQuantize(nn.Module):
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
-        print(f"embed_ind: {embed_ind.shape}")
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
