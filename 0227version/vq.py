@@ -450,24 +450,24 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
+    print(f"0 indices.shape {indices.shape}")
     indices = indices.squeeze(1)  # Remove extra dimension
-    dim = embed.shape[-1]  # Get embedding dimension
-
+    print(f"1 indices.shape {indices.shape}")
     # Ensure indices is 2D: (batch_size, num_codebooks)
     indices = indices.view(-1, embed.shape[0])  # Reshape correctly
+    print(f"2 indices.shape {indices.shape}")
     indices = indices.float()  # Ensure float type for matmul
 
     # Fix dimension order in `embed` to match indices
     embed = embed.T  # Transpose to (1000, 64)
+
+    print(f"0 embed.shape {embed.shape}")
 
     print(f"After reshaping: indices.shape = {indices.shape}, embed.shape = {embed.shape}")
 
     # Perform matrix multiplication
     quantized = torch.matmul(indices, embed)  # Now should work
     return quantized
-
-
-
 
 
 # this is corrected new one, minus sign is correctly added
