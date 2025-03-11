@@ -768,7 +768,9 @@ class EuclideanCodebook(nn.Module):
 
         # **Ensure Valid Reshape**
         embed_ind = embed_ind.view(-1, 1)  # Use view() instead of reshape()
-
+        print("embed_ind")
+        print(embed_ind.shape)
+        print(embed_ind)
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
 
