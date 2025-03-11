@@ -438,7 +438,10 @@ def mini_batch_kmeans(
 def batched_embedding(indices, embeds):
     indices = indices.long()
     batch, dim = indices.shape[1], embeds.shape[-1]
-    indices = repeat(indices, 'h b n -> h b n d', d=dim)
+    indices = indices.squeeze(1)  # Remove the second dimension if it's always 1
+    indices = repeat(indices, 'h n -> h n d', d=dim)  # Adjust pattern
+
+    # indices = repeat(indices, 'h b n -> h b n d', d=dim)
     embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
     return embeds.gather(2, indices)
 
