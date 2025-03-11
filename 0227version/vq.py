@@ -459,7 +459,7 @@ def batched_embedding(indices, embed):
     indices = indices.float()  # Ensure float type for matmul
 
     # Fix dimension order in `embed` to match indices
-    embed = embed.T  # Transpose to (1000, 64)
+    # embed = embed.T  # Transpose to (1000, 64)
 
     print(f"0 embed.shape {embed.shape}")
     minibatch_size = embed.shape[1]
