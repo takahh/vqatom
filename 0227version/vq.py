@@ -461,13 +461,8 @@ def mini_batch_kmeans(
 #
 #     return quantized
 def batched_embedding(indices, embed):
-    print(f"indices shape {indices.shape}")  # Debugging
-    print(f"embed.shape {embed.shape}")  # Debugging
-
     embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
     indices = indices.view(-1)  # Ensure 1D tensor (128,)
-
-    print(f"indices shape after reshape: {indices.shape}")  # Should be (128,)
 
     # **Use Gumbel-Softmax to Create Soft Cluster Assignments**
     tau = 1.0  # Temperature for controlling sharpness
@@ -475,12 +470,8 @@ def batched_embedding(indices, embed):
     cluster_logits = torch.randn(indices.shape[0], num_clusters, device=indices.device, requires_grad=True)
     soft_weights = F.gumbel_softmax(cluster_logits, tau=tau, hard=False)  # Differentiable probabilities
 
-    print(f"soft_weights.shape: {soft_weights.shape}")  # Expected: (128, 10)
-
     # **Use Matmul for Differentiable Soft Embedding Lookup**
     quantized = torch.matmul(soft_weights, embed)  # Shape: (128, 64)
-
-    print(f"quantized.shape: {quantized.shape}")  # Expected: (128, 64)
 
     return quantized
 
@@ -774,7 +765,7 @@ class EuclideanCodebook(nn.Module):
         dist = dist.view(dist.shape[1], -1)  # Ensure 2D shape
 
         tau = 1.0
-        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
+        embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=False)  # One-hot encoding
 
         # Compute soft indices (weighted sum)
         embed_ind_soft = torch.matmul(
@@ -791,14 +782,6 @@ class EuclideanCodebook(nn.Module):
 
         print(f"0 embed_ind: {embed_ind.shape}")  # Debug print
         print(f"embed_ind: {embed_ind}")  # Debug print
-        # tau = 1.0
-        # embed_ind_one_hot = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
-        # print(f"0 embed_ind_one_hot: {embed_ind_one_hot.shape}")  # Debug print
-        # print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
-        # embed_ind = torch.matmul(embed_ind_one_hot,
-        #                              torch.arange(embed_ind_one_hot.shape[-1], device=embed_ind_one_hot.device,
-        #                                           dtype=torch.float32).unsqueeze(1))
-        # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
         # **Retain Gradients for Debugging**
         quantize.retain_grad()
