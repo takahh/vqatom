@@ -92,7 +92,7 @@ class WeightedThreeHopGCN(nn.Module):
          equivalent_atom_loss) = self.vq(h, init_feat, logger)
         losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
-                 pair_loss, sil_loss.item(), equivalent_atom_loss.item()]
+                 pair_loss, sil_loss, equivalent_atom_loss.item()]
         # --------------------------------
         # collect data for molecule images
         # --------------------------------
