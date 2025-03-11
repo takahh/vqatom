@@ -454,6 +454,7 @@ def batched_embedding(indices, embed):
     indices = indices.long()  # Convert to int64
     print(f"indices {indices.shape}") # indices torch.Size([22013000])
     print(f"indices {indices}")
+    print(f"embed.shape {embed.shape}")
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
     print(f"one_hot {one_hot.shape}")  # one_hot torch.Size([22013000, 1])
