@@ -4,14 +4,16 @@ import torch
 
 import torch
 
+import torch
+
 
 def test_euclidean_codebook_forward():
     torch.manual_seed(42)  # For reproducibility
 
     # **Initialize Codebook**
-    dim = 64  # Match your use case
+    dim = 64
     codebook_size = 10
-    batch_size = 22144  # Match your input
+    batch_size = 22144
     num_codebooks = 1
 
     model = EuclideanCodebook(dim, codebook_size, num_codebooks=num_codebooks).cuda()
@@ -22,9 +24,10 @@ def test_euclidean_codebook_forward():
     # **Forward Pass**
     quantize, embed_ind, dist, embed, flatten, init_cb = model(x)
 
-    # **Basic Checks**
-    assert quantize.shape == (
-    1, *x.shape), f"Quantized output shape mismatch: expected {(1, *x.shape)}, got {quantize.shape}"
+    # **Fix Output Shape Check**
+    expected_shape = (1, *x.shape)
+    assert quantize.shape == expected_shape, f"Quantized output shape mismatch: expected {expected_shape}, got {quantize.shape}"
+
     assert embed_ind.shape[1] == batch_size, "Embedding index shape mismatch"
     assert dist.shape == (num_codebooks, batch_size, codebook_size), "Distance matrix shape mismatch"
 
