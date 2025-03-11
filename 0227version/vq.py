@@ -774,13 +774,7 @@ class EuclideanCodebook(nn.Module):
         print(f"embed_ind_one_hot: {embed_ind_one_hot}")  # Debug print
 
         # **Extract integer indices while preserving gradients**
-        embed_ind_int = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
-        print(f"1 embed_ind_int: {embed_ind_int.shape}")  # Debug print
-        print(f"embed_ind_int: {embed_ind_int}")  # Debug print
-        embed_ind = embed_ind_int + (embed_ind_one_hot - embed_ind_one_hot.detach())  # STE Trick ✅
-
-        print(f"2 embed_ind: {embed_ind.shape}")  # Debug print
-        print(f"embed_ind: {embed_ind}")  # Debug print
+        embed_ind = embed_ind_one_hot.argmax(dim=-1, keepdim=True)  # Convert to (22013, 1)
 
         # Ensure `batched_embedding` is differentiable
         quantize = batched_embedding(embed_ind, self.embed)
