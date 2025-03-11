@@ -1316,7 +1316,7 @@ class VectorQuantize(nn.Module):
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
 
-        embed_ind = embed_ind.reshape(embed_ind.shape[-1], 1)
+        embed_ind = torch.squeeze(embed_ind)
         print(f"embed_ind: {embed_ind.shape}")
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
