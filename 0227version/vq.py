@@ -452,7 +452,7 @@ def mini_batch_kmeans(
 def batched_embedding(indices, embed):
     indices = indices.squeeze(1)  # Ensure correct shape
     indices = indices.long()  # Convert to int64
-    print(f"indices {indices.shape}")
+    print(f"indices {indices.shape}") # indices torch.Size([22013000])
     print(f"indices {indices}")
     # Convert indices to one-hot encoding
     one_hot = F.one_hot(indices, num_classes=embed.shape[0]).float()  # (batch, num_clusters)
@@ -779,7 +779,7 @@ class EuclideanCodebook(nn.Module):
         print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
 
         # **Ensure Valid Reshape**
-        embed_ind = embed_ind.view(-1, 1)  # Use view() instead of reshape()
+        # embed_ind = embed_ind.view(-1, 1)  # Use view() instead of reshape()
         print("embed_ind")
         print(embed_ind.shape)
         print(embed_ind)
