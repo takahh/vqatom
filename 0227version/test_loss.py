@@ -1,4 +1,5 @@
 import torch
+from vq import compute_contrastive_loss
 
 def test_compute_contrastive_loss():
     torch.manual_seed(42)  # For reproducibility
