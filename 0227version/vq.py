@@ -754,8 +754,13 @@ class EuclideanCodebook(nn.Module):
 
         # **Ensure Correct Shape Before Applying Gumbel-Softmax**
         dist = dist.view(dist.shape[0], -1)  # Ensure 2D shape
-        tau = 1.0  # Define temperature for Gumbel-Softmax
-        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=False)
+
+        tau = 1.0
+        embed_ind = F.gumbel_softmax(dist, tau=tau, hard=True)  # Returns one-hot vectors
+        embed_ind_int = embed_ind.argmax(dim=-1, keepdim=True)  # Integer indices (needed for indexing)
+
+        # **STE Trick: Preserve Gradient Flow**
+        embed_ind = embed_ind_int + (embed_ind - embed_ind.detach())  # Allows gradients to flow
 
         print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
 
