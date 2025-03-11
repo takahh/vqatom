@@ -756,8 +756,12 @@ class EuclideanCodebook(nn.Module):
         dist = dist.view(dist.shape[0], -1)  # Ensure 2D shape
 
         tau = 1.0
+        print(f"dist {dist.shape}")
+        print(f"dist {dist}")
         embed_ind = F.gumbel_softmax(dist, tau=tau, hard=True)  # One-hot encoding
 
+        print(f"embed_ind {embed_ind.shape}")
+        print(f"embed_ind {embed_ind}")
         # Convert One-Hot to Indices
         embed_ind_int = embed_ind.argmax(dim=-1, keepdim=True)  # Integer cluster IDs
 
