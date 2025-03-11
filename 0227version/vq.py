@@ -751,6 +751,7 @@ class EuclideanCodebook(nn.Module):
 
         # **Ensure Correct Shape Before Applying Gumbel-Softmax**
         dist = dist.view(dist.shape[0], -1)  # Ensure 2D shape
+        tau = 1.0  # Define temperature for Gumbel-Softmax
         embed_ind = F.gumbel_softmax(dist, tau=tau, hard=False)
 
         print(f"embed_ind.shape before reshape: {embed_ind.shape}")  # Debug print
