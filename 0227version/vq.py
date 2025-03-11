@@ -752,7 +752,10 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-        x = x.float()  # Ensure floating point type
+        # Ensure x is a leaf tensor and retains gradients
+        x = x.float().clone().detach().requires_grad_(True)
+
+        # Check if x has the correct shape
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')  # Expand dimensions if necessary
@@ -775,11 +778,10 @@ class EuclideanCodebook(nn.Module):
             f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
 
         # **Compute Squared Euclidean Distance Without `torch.cdist()`**
-        flatten_sq = flatten.pow(2).sum(dim=-1, keepdim=True)  # (1, 128, 1)
-        embed_sq = embed.pow(2).sum(dim=-1, keepdim=True)  # (1, 10, 1)
-
-        dist = flatten_sq - 2 * torch.matmul(flatten, embed.transpose(-2, -1)) + embed_sq.transpose(-2, -1)
-        dist = -dist  # Negative for similarity measure (shape: (1, 128, 10))
+        dist = (
+                flatten.unsqueeze(2) - embed.unsqueeze(1)
+        ).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
+        dist = -dist  # Negative for similarity measure
 
         print(f"After dist computation: dist.requires_grad: {dist.requires_grad}")
 
