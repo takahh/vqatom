@@ -467,7 +467,7 @@ def batched_embedding(indices, embed):
     print(f"embed.shape {embed.shape}")  # Debugging
 
     embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
-    indices = indices.view(-1).float()  # **Keep it float to preserve gradients**
+    # indices = indices.view(-1).float()  # **Keep it float to preserve gradients**
 
     print(f"indices shape after reshape: {indices.shape}")  # Should be (128,)
     print(f"indices shape after reshape: {indices}")  # Should be (128,)
