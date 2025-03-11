@@ -769,7 +769,8 @@ class EuclideanCodebook(nn.Module):
         print(f"embed_ind_soft: {embed_ind_soft}")  # Debug print
         # # **Apply STE trick to allow gradient flow**
         # embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
-        embed_ind = embed_ind_soft + (embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
+        embed_ind = embed_ind_soft.expand_as(embed_ind_one_hot) + (
+                    embed_ind_one_hot - embed_ind_one_hot.detach())  # ✅ Keeps gradients flowing
 
         print(f"0 embed_ind: {embed_ind.shape}")  # Debug print
         print(f"embed_ind: {embed_ind}")  # Debug print
