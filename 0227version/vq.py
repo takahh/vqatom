@@ -450,6 +450,7 @@ def mini_batch_kmeans(
 #
 #     return torch.gather(embed, 1, indices)
 def batched_embedding(indices, embed):
+    print(f"embed, indices {embed.shape}, {indices.shape}")
     # reshape cluster centers
     embed = embed.T  # Transpose to (1000, 64)
     minibatch_size = embed.shape[1]
