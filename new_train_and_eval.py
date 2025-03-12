@@ -436,6 +436,16 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     print(loss)
+
+                    # -----------------------------------------
+                    # Total allocated memory by tensors (bytes)
+                    # -----------------------------------------
+                    allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
+                    # Total reserved memory by PyTorch (bytes)
+                    reserved = torch.cuda.memory_reserved() / (1024 ** 2)  # Convert to MB
+                    print(f"Allocated Memory: {allocated:.2f} MB")
+                    print(f"Reserved Memory: {reserved:.2f} MB")
+
                     # model.reset_kmeans()
                     # latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
                     #                                                                 list) else latent_train.detach()
