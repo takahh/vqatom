@@ -43,6 +43,7 @@ class WeightedThreeHopGCN(nn.Module):
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         # self.codebook_size = args.codebook_size
+        self.ln = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -68,6 +69,7 @@ class WeightedThreeHopGCN(nn.Module):
         edge_weight = transformed_edge_weight
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
+        h = self.ln(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
