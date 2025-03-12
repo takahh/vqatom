@@ -891,11 +891,11 @@ class EuclideanCodebook(nn.Module):
         # print(dist.shape)
         embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
         # print(embed_ind.shape)
-        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
         # print(embed_onehot.shape)
         embed_ind = embed_ind.view(*shape[:-1])
         # print(embed_ind.shape)
-        # embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
+        embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
+        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
         quantize = embed_ind @ self.embed
 
         # quantize = embed_ind @ self.embed  # Keeps gradients
