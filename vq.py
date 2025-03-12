@@ -521,10 +521,26 @@ def batched_embedding_old(indices, embeds):
     return indices @ embeds  # Weighted sum instead of discrete lookup
 
 def batched_embedding(indices, embeds):
-    batch, dim = indices.shape[1], embeds.shape[-1]
-    indices = repeat(indices, 'h b n -> h b n d', d=dim)
-    embeds = repeat(embeds, 'h c d -> h b c d', b=batch)
-    return embeds.gather(2, indices)
+    def batched_embedding(indices, embed):
+        """
+        Fetch embeddings based on soft or hard indices.
+        """
+        print(f"indices shape {indices.shape}")  # Debugging
+        print(f"embed.shape {embed.shape}")  # Debugging
+
+        indices = indices.long()  # ✅ Convert to int64 for `.gather()`
+
+        # Ensure correct shape for `.gather()`
+        if indices.dim() == 2:  # (batch, 1) → (batch,)
+            indices = indices.squeeze(1)
+
+        print(f"indices after reshape: {indices.shape}")
+
+        quantized = embed.gather(1, indices.unsqueeze(-1).expand(-1, -1, embed.shape[-1]))  # (batch, embed_dim)
+
+        print(f"quantized.shape: {quantized.shape}")  # Expected: (batch, embed_dim)
+
+        return quantized
 
 
 def cluster_penalty_loss(feats, quantized, cluster_assignments): # init_feat, quantized, embed_ind
