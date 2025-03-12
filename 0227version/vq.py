@@ -759,6 +759,8 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ NO `.clone()` (preserves gradient flow)
+        print(f"flatten is x: {flatten is x}")  # Should be False
+        print(f"flatten.grad_fn: {flatten.grad_fn}")  # Should NOT be None
 
         print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
 
