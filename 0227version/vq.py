@@ -802,9 +802,9 @@ class EuclideanCodebook(nn.Module):
         print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
         # **Ensure Gradients Are Retained**
-        quantize.retain_grad()
-        x.retain_grad()
-        flatten.retain_grad()
+        # quantize.retain_grad()
+        # x.retain_grad()
+        # flatten.retain_grad()
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
