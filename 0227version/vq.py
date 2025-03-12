@@ -766,6 +766,8 @@ class EuclideanCodebook(nn.Module):
 
         # Initialize codebook vectors (Ensure it does not detach)
         self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
+        print(f"After init_embed_: flatten.requires_grad: {flatten.requires_grad}")
+
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.detach().clone().contiguous()  # Just for logging, not used in the graph
 
