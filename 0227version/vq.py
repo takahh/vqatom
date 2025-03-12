@@ -711,14 +711,6 @@ class EuclideanCodebook(nn.Module):
             # sample_fn=self.sample_fn,
             # all_reduce_fn=self.kmeans_all_reduce_fn
         )
-
-        # embed, cluster_size = kmeans(
-        #     data,
-        #     self.codebook_size,
-        #     self.kmeans_iters,
-        #     False,
-        #     # all_reduce_fn=self.kmeans_all_reduce_fn
-        # )
         self.embed.data.copy_(embed)
         self.embed_avg.data.copy_(embed.clone())
         self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
