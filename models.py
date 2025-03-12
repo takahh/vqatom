@@ -127,10 +127,10 @@ class WeightedThreeHopGCN(nn.Module):
         # h = self.dropout(h)
         # 3-hop message passing (ensuring memory-efficient operations)
 
-        # h = self.norm1(h)
+        h = self.norm1(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         # h = self.activation(h)
-        # h = self.norm2(h)
+        h = self.norm2(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         # h = self.activation(h)
         # h = self.dropout(h)
