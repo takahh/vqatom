@@ -326,7 +326,7 @@ def run_inductive(
                     torch.cuda.empty_cache()
                     args = get_args()
                     if args.get_umap_data:
-                        cb_new = model.vq._codebook.init_embed_(latents, logger)
+                        cb_new = model.embed
                         np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
                         latents = torch.squeeze(latents)
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
