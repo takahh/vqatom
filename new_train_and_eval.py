@@ -109,16 +109,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # ✅ Detach unused tensors to avoid holding references
     del logits, quantized, sample_list_train
     torch.cuda.empty_cache()
-    # ---------------------
-    # check memory leak
-    # ---------------------
-    import gc
-    for obj in gc.get_objects():
-        try:
-            if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
-                print(f"Tensor: {type(obj)}, Shape: {obj.size()}, Device: {obj.device}")
-        except:
-            pass
     return loss, loss_list3, latent_list, latents.detach()
 #
 #
@@ -445,7 +435,7 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     print(loss)
-
+                    print_large_tensors()
                     # -----------------------------------------
                     # Total allocated memory by tensors (bytes)
                     # -----------------------------------------
