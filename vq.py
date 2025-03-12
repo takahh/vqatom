@@ -594,6 +594,9 @@ def compute_contrastive_loss(z, atom_types, name=None, margin=1.0, threshold=0.5
         raise
 
     # Compute pairwise distances for the z vectors
+    with torch.no_grad():
+        pairwise_distances = torch.cdist(z, z, p=2)
+
     pairwise_distances = torch.cdist(z, z, p=2)  # Pairwise Euclidean distances
 
     # Normalize the atom_types vectors
@@ -616,7 +619,9 @@ def compute_contrastive_loss(z, atom_types, name=None, margin=1.0, threshold=0.5
     #       torch.nonzero(same_type_mask).min().item() if same_type_mask.sum() > 0 else "No nonzero indices")
     # print("Max index in mask:",
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
-
+    import gc
+    torch.cuda.empty_cache()
+    gc.collect()
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
 

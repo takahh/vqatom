@@ -454,7 +454,7 @@ def run_inductive(
                     reserved = torch.cuda.memory_reserved() / (1024 ** 2)  # Convert to MB
                     print(f"Allocated Memory: {allocated:.2f} MB")
                     print(f"Reserved Memory: {reserved:.2f} MB")
-                    print(torch.cuda.memory_summary(device=0, abbreviated=False))
+                    # print(torch.cuda.memory_summary(device=0, abbreviated=False))
 
                     # model.reset_kmeans()
                     # latent_train = torch.stack(latent_train).detach() if isinstance(latent_train,
