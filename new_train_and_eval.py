@@ -435,7 +435,6 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     print(loss)
-                    print_large_tensors()
                     # -----------------------------------------
                     # Total allocated memory by tensors (bytes)
                     # -----------------------------------------
