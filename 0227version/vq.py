@@ -757,8 +757,8 @@ class EuclideanCodebook(nn.Module):
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-
-        flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ NO `.clone()` (preserves gradient flow)
+        flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
+        # flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ NO `.clone()` (preserves gradient flow)
 
         print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
 
