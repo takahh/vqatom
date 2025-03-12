@@ -43,4 +43,5 @@ def test_gradient_flow():
         print(f"flatten.grad.sum(): {flatten.grad.sum()}")
 
 
+# **Run the Test**
 test_gradient_flow()
