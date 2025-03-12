@@ -67,9 +67,12 @@ def get_args():
     # Dataset
     # --------------
 
-    parser.add_argument("--train_size", type=int, default=59397)
-    parser.add_argument("--val_size", type=int, default=14849)
-    parser.add_argument("--test_size", type=int, default=14849)
+    parser.add_argument("--train_size", type=int, default=5939)
+    parser.add_argument("--val_size", type=int, default=1484)
+    parser.add_argument("--test_size", type=int, default=1484)
+    # parser.add_argument("--train_size", type=int, default=59397)
+    # parser.add_argument("--val_size", type=int, default=14849)
+    # parser.add_argument("--test_size", type=int, default=14849)
 
     parser.add_argument("--get_umap_data", action="store_true", help="Enable UMAP data processing")
     parser.add_argument("--percent", type=float, default=1)
@@ -126,7 +129,7 @@ def get_args():
     )
 
     """SAGE Specific"""
-    parser.add_argument("--batch_size", type=int, default=10000)
+    parser.add_argument("--batch_size", type=int, default=5000)
     parser.add_argument(
         "--fan_out",
         type=str,
