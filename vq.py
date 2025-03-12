@@ -621,6 +621,7 @@ def compute_contrastive_loss(z, atom_types, name=None, margin=1.0, threshold=0.5
     #       torch.nonzero(same_type_mask).max().item() if same_type_mask.sum() > 0 else "No nonzero indices")
     import gc
     torch.cuda.empty_cache()
+    del pairwise_distances, pairwise_similarities, same_type_mask
     gc.collect()
     # Combine and return mean loss
     return (positive_loss + negative_loss).mean() / 10000
