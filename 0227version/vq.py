@@ -1353,7 +1353,8 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
         if only_one:
-            quantize = rearrange(quantize, '1 b d -> b d')
+            if len(quantize.shape) == 3:
+                quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
