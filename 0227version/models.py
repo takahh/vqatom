@@ -53,38 +53,24 @@ class WeightedThreeHopGCN(nn.Module):
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
-
-        # Move graph and features to the same device
         batched_graph = batched_graph.to(device)
         features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
         edge_type = "_E"  # Batched heterogeneous graph edge type
-
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-
-        # Move bond_weight embedding layer to the same device
         self.bond_weight = self.bond_weight.to(device)
-
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-
-        # Map edge weights to embedding indices (default 0 for unknown weights)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
-
-        # Get transformed edge weights
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight
-
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
-        # batched_graph = dgl.add_self_loop(batched_graph)
-        # 3-hop message passing
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
@@ -93,9 +79,6 @@ class WeightedThreeHopGCN(nn.Module):
         losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
                  pair_loss, sil_loss, equivalent_atom_loss.item()]
-        # --------------------------------
-        # collect data for molecule images
-        # --------------------------------
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         if batched_graph_base:
@@ -105,14 +88,6 @@ class WeightedThreeHopGCN(nn.Module):
         else:
             src, dst = batched_graph.all_edges()
         src, dst = src.to(torch.int64), dst.to(torch.int64)
-
-        # print(f"self.bond_weight(mapped_indices) {self.bond_weight(mapped_indices)[:30]}")
-        # print(f"mapped_indices {mapped_indices[:30]}")
-        # print(f"init_feat {init_feat[:30]}")
-        # print(f"src {src[:30]}")
-        # print(f"dst {dst[:30]}")
-        # print(f"---------")
-
         sample_hop_info = None
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
@@ -120,7 +95,6 @@ class WeightedThreeHopGCN(nn.Module):
         else:
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
-        # print("return losses from Weighted model")
         return (h_list, h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
 
