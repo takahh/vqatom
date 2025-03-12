@@ -461,19 +461,22 @@ def mini_batch_kmeans(
 #
 #     return quantized
 def batched_embedding(indices, embed):
-    embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
-    indices = indices.view(-1)  # Ensure 1D tensor (128,)
+    """
+    Computes the differentiable embedding lookup using soft cluster assignments.
+    """
 
-    # **Use Gumbel-Softmax to Create Soft Cluster Assignments**
-    tau = 1.0  # Temperature for controlling sharpness
-    num_clusters = embed.shape[0]  # Number of clusters
-    cluster_logits = torch.randn(indices.shape[0], num_clusters, device=indices.device, requires_grad=True)
-    soft_weights = F.gumbel_softmax(cluster_logits, tau=tau, hard=False)  # Differentiable probabilities
+    embed = embed.squeeze(0)  # Remove batch dimension if present (1, 10, 64) → (10, 64)
+    indices = indices.view(-1, 1)  # Ensure shape (128, 1)
+
+    # **Use `indices` Directly Instead of Recomputing**
+    soft_weights = F.one_hot(indices.squeeze(-1).long(), num_classes=embed.shape[0]).float()
+    soft_weights = soft_weights + (indices - indices.detach())  # **STE trick to keep gradients**
 
     # **Use Matmul for Differentiable Soft Embedding Lookup**
     quantized = torch.matmul(soft_weights, embed)  # Shape: (128, 64)
 
     return quantized
+
 
 
 

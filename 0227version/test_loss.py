@@ -29,15 +29,15 @@ def test_gradient_flow():
     print(f"embed.requires_grad: {embed.requires_grad}")
     print(f"quantize.requires_grad: {quantize.requires_grad}")
 
-    loss = dist.sum()  # Compute loss from dist instead
-    loss.backward()
+    # loss = dist.sum()  # Compute loss from dist instead
+    # loss.backward()
 
-    print(f"x.grad is None: {x.grad is None}")  # If False, dist is okay
-    print(f"flatten.grad is None: {flatten.grad is None}")  # If False, flatten is okay
+    # print(f"x.grad is None: {x.grad is None}")  # If False, dist is okay
+    # print(f"flatten.grad is None: {flatten.grad is None}")  # If False, flatten is okay
 
     # **Check x.grad after backprop**
-    # loss = quantize.mean()
-    # loss.backward()
+    loss = quantize.mean()
+    loss.backward()
 
     print("\n📢 Gradients After Backpropagation:")
     print(f"x.grad is None: {x.grad is None}")
