@@ -694,7 +694,8 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, logger):
-        #
+        if self.initted:
+            return
         # samples,
         # num_clusters,
         # batch_size=256,
@@ -722,7 +723,7 @@ class EuclideanCodebook(nn.Module):
         self.embed_avg.data.copy_(embed.clone())
         self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
         self.cluster_size.data.copy_(cluster_size)
-
+        self.initted.data.copy_(torch.Tensor([True]))
         return embed
 
     def replace(self, batch_samples, batch_mask):
@@ -853,6 +854,7 @@ class CosineSimCodebook(nn.Module):
             self.embed = nn.Parameter(embed)
         else:
             self.register_buffer('embed', embed)
+        self.initted = False
 
     @torch.jit.ignore
     # @torch.jit.unused
