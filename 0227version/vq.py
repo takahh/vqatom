@@ -758,34 +758,49 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
 
-        flatten = rearrange(x, 'h ... d -> h (...) d').clone()
+        flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ Removed `.clone()` to keep gradients
+
+        print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
 
         # Initialize codebook vectors
-        self.init_embed_(flatten, logger)
+        self.init_embed_(flatten, logger)  # (Custom method, should not detach)
         embed = self.embed
-        init_cb = self.embed.detach().clone().contiguous()
+        init_cb = self.embed.detach().clone().contiguous()  # Just for logging
 
-        # Normalize Without Breaking Gradient Flow
-        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
-        embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
+        # **Normalize Without Breaking Gradient Flow**
+        flatten = F.normalize(flatten, p=2, dim=-1, eps=1e-8)  # ✅ Keeps gradients
+        embed = F.normalize(embed, p=2, dim=-1, eps=1e-8)
 
-        # Compute Distance
+        print(f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
+
+        # Compute Squared Euclidean Distance Manually
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
 
-        # Gumbel-Softmax for Soft Cluster Assignments
+        print(f"After dist computation: dist.requires_grad: {dist.requires_grad}")
+
+        # **Gumbel-Softmax for Soft Cluster Assignments**
         tau = 1.0
         embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
 
-        # **STE Trick to Maintain Differentiability**
+        print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
+
+        # **Compute Soft Indices (Weighted Sum)**
         soft_indices = embed_ind_one_hot @ torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                         device=embed_ind_one_hot.device).unsqueeze(1)
+        soft_indices.retain_grad()  # ✅ Debug if it keeps gradients
+
+        # **STE Trick to Maintain Differentiability**
         embed_ind = soft_indices + (embed_ind_one_hot - embed_ind_one_hot.detach()) @ torch.arange(
             embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device).unsqueeze(1)
 
-        # Fix Shape for batched_embedding()
+        print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
+
+        # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
-        quantize = batched_embedding(embed_ind, self.embed)
+        quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
+
+        print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
         # **Ensure Gradients Are Retained**
         quantize.retain_grad()
