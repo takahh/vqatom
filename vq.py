@@ -868,62 +868,47 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
-
-        needs_codebook_dim = x.ndim < 4
         x = x.float()
 
+        needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
 
-        shape, dtype = x.shape, x.dtype
-        flatten = rearrange(x, 'h ... d -> h (...) d')
-        # print(flatten.shape)
-        self.init_embed_(flatten)
+        flatten = rearrange(x, 'h ... d -> h (...) d').clone()
 
-        # embed = self.embed if not self.learnable_codebook else self.embed.detach()
-        embed = self.embed  # Keep gradients
+        # Initialize codebook vectors
+        self.init_embed_(flatten, logger)
+        embed = self.embed
+        init_cb = self.embed.detach().clone().contiguous()
 
-        # print(embed)
-        # print(flatten.shape, embed.shape)
-        # flatten: 2110 * 3703 embed: 8192*3703
-        # print(f"flatten: {flatten}")
-        dist = -torch.cdist(flatten, embed, p=2)
-        # print(dist.shape)
-        embed_ind = gumbel_sample(dist, dim=-1, temperature=self.sample_codebook_temp)
-        # print(embed_ind.shape)
-        # print(embed_onehot.shape)
-        embed_ind = embed_ind.view(*shape[:-1])
-        # print(embed_ind.shape)
-        embed_ind = F.gumbel_softmax(dist, tau=0.1, hard=False)
-        embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(dtype)
-        quantize = embed_ind @ self.embed
+        # Normalize Without Breaking Gradient Flow
+        flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
+        embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
 
-        # quantize = embed_ind @ self.embed  # Keeps gradients
-        # quantize = batched_embedding(embed_ind, self.embed)
-        # print(embed_onehot.shape)
-        if self.training:
-            cluster_size = embed_onehot.sum(dim=1)
-            # print(cluster_size.shape)
-            self.all_reduce_fn(cluster_size)
-            self.cluster_size.data.lerp_(cluster_size, 1 - self.decay)
+        # Compute Distance
+        dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
+        dist = -dist  # Negative similarity
 
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-            self.all_reduce_fn(embed_sum.contiguous())
-            self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
+        # Gumbel-Softmax for Soft Cluster Assignments
+        tau = 1.0
+        embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
 
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-            # print(cluster_size.shape)
-            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-            self.embed.data.copy_(embed_normalized)
-            self.expire_codes_(x)
+        # **STE Trick to Maintain Differentiability**
+        soft_indices = embed_ind_one_hot @ torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
+                                                        device=embed_ind_one_hot.device).unsqueeze(1)
+        embed_ind = soft_indices + (embed_ind_one_hot - embed_ind_one_hot.detach()) @ torch.arange(
+            embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device).unsqueeze(1)
 
-        if needs_codebook_dim:
-            quantize, embed_ind = map(lambda t: rearrange(t, '1 ... -> ...'), (quantize, embed_ind))
-        # print(quantize.shape)
-        embed_ind = embed_ind.argmax(dim=-1)  # Ensure integer labels
+        # Fix Shape for batched_embedding()
+        embed_ind = embed_ind.view(1, -1, 1)
+        quantize = batched_embedding(embed_ind, self.embed)
 
-        # print(f"vq quantized {quantize}")
-        return quantize, embed_ind, dist, self.embed, flatten, embed
+        # **Ensure Gradients Are Retained**
+        quantize.retain_grad()
+        x.retain_grad()
+        flatten.retain_grad()
+
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward_old(self, x, logger=None):
