@@ -42,8 +42,11 @@ class WeightedThreeHopGCN(nn.Module):
         self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
+        self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
+        self.leakyRelu1 = nn.LeakyReLU(negative_slope=0.2)
         # self.codebook_size = args.codebook_size
-        self.ln = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.ln0 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.ln1 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -70,7 +73,11 @@ class WeightedThreeHopGCN(nn.Module):
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
+        h = self.ln0(h)
+        h = self.leakyRelu0(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
+        h = self.ln1(h)
+        h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
