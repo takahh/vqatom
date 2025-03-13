@@ -1236,7 +1236,7 @@ class VectorQuantize(nn.Module):
             # Update loss in a memory-friendly way
             loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
 
-        return loss/100
+        return loss/5000
 
         # embed_ind, codebook, init_feat, latents, quantize, logger
     def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
