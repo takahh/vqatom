@@ -140,7 +140,7 @@ def transform_node_feats(a):
     torch.where(a[:, 6] == 0, 20, torch.where(a[:, 6] == 1, 10,
     torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
 
-    transformed = transformed / 20
+    # transformed = transformed / 20
 
     return transformed
 
