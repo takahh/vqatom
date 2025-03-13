@@ -1318,7 +1318,7 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
-        print(f"embed_ind after codebook = {embed_ind.shape}")
+        # print(f"embed_ind after codebook = {embed_ind.shape}")
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
@@ -1367,8 +1367,8 @@ class VectorQuantize(nn.Module):
         loss = (loss + self.lamb_div_ele * div_ele_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss)
-                # + self.lamb_equiv_atom * equiv_atom_loss)
+                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+                + self.lamb_equiv_atom * equiv_atom_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
