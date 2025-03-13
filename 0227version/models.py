@@ -33,7 +33,7 @@ class BondWeightLayer(nn.Module):
 
 
 class WeightedThreeHopGCN(nn.Module):
-
+    @staticmethod
     def init_weights(m):
         import torch.nn.init as init
         if isinstance(m, dglnn.GraphConv) and m.weight is not None:
