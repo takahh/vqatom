@@ -69,7 +69,6 @@ class WeightedThreeHopGCN(nn.Module):
         edge_weight = transformed_edge_weight
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
-        h = self.ln(h)
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
