@@ -47,6 +47,7 @@ class WeightedThreeHopGCN(nn.Module):
         # self.codebook_size = args.codebook_size
         self.ln0 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
         self.ln1 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.ln2= nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -79,6 +80,7 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.ln1(h)
         h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
+        h = self.ln1(h)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
