@@ -56,6 +56,7 @@ class WeightedThreeHopGCN(nn.Module):
         self.ln0 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
         self.ln1 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
         self.ln2 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.activation = nn.GELU()
 
         # Apply initialization to GraphConv layers
         self.apply(self.init_weights)
@@ -87,10 +88,10 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.linear_0(features)  # Convert to expected shape
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln0(h)
-        h = self.leakyRelu0(h)
+        h = self.activation(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln1(h)
-        h = self.leakyRelu1(h)
+        h = self.activation(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln2(h)
         h_list = []
