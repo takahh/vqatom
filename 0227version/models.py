@@ -31,8 +31,19 @@ class BondWeightLayer(nn.Module):
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
 
 class WeightedThreeHopGCN(nn.Module):
+    @staticmethod
+    def init_weights2(m):
+        if isinstance(m, nn.Linear):
+            nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
 
     @staticmethod
     def init_weights(m):
@@ -89,10 +100,10 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.linear_0(features)  # Convert to expected shape
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln0(h)
-        h = self.activation(h)
+        h = self.leakyRelu0(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln1(h)
-        h = self.activation(h)
+        h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln2(h)
         h_list = []
