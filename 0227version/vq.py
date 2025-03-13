@@ -797,6 +797,7 @@ class EuclideanCodebook(nn.Module):
         if self.training:
             embed_ind = embed_ind.to(torch.int64)  # Ensure integer type
             embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(x.dtype)
+            print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
             self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
