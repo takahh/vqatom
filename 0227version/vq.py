@@ -508,7 +508,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
 
-    return (positive_loss + negative_loss).mean() / 100000000
+    return (positive_loss + negative_loss).mean() / 1000000
 
 
 # # this is old one in 0227
@@ -1017,7 +1017,7 @@ class VectorQuantize(nn.Module):
             margin_weight=0.8,
             spread_weight=0.2,
             pair_weight=0.01,
-            lamb_div_ele=2,
+            lamb_div_ele=1,
             lamb_div_bonds=1,
             lamb_div_aroma=1,
             lamb_div_ringy=1,
@@ -1276,6 +1276,7 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+        print(equivalent_gtroup_list)
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
         sil_loss = 1
