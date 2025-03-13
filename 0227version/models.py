@@ -43,7 +43,8 @@ class WeightedThreeHopGCN(nn.Module):
 
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(WeightedThreeHopGCN, self).__init__()
-        args = get_args()
+        if args is None:
+            args = get_args()
         self.linear_0 = nn.Linear(7, args.hidden_dim)
         self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="right", weight=True)
         self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="right", weight=True)
@@ -58,8 +59,9 @@ class WeightedThreeHopGCN(nn.Module):
         self.activation = nn.GELU()
 
         # Apply initialization to GraphConv layers
-        self.apply(self.init_weights)
-
+        for module in self.modules():
+            if isinstance(module, dglnn.GraphConv):
+                self.init_weights(module)
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
