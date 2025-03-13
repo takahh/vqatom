@@ -508,7 +508,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = torch.exp(- (1.0 - same_type_mask) * pairwise_distances ** 2)
 
-    return (positive_loss + negative_loss).mean() / 1000000
+    return (positive_loss + negative_loss).mean() / 100
 
 
 # # this is old one in 0227
@@ -1236,7 +1236,7 @@ class VectorQuantize(nn.Module):
             # Update loss in a memory-friendly way
             loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
 
-        return loss
+        return loss/100
 
         # embed_ind, codebook, init_feat, latents, quantize, logger
     def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
