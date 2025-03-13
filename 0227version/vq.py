@@ -795,6 +795,7 @@ class EuclideanCodebook(nn.Module):
         print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
         if self.training:
+            embed_ind = embed_ind.to(torch.int64)  # Ensure integer type
             embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(x.dtype)
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
             self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
