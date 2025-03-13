@@ -293,6 +293,8 @@ def run_inductive(
     # Initialize dataset and dataloader
     dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
     for epoch in range(1, conf["max_epoch"] + 1):
         loss_list_list_train = [[]] * 11
         loss_list_list_test = [[]] * 11
