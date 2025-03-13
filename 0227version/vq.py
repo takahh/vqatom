@@ -754,7 +754,6 @@ class EuclideanCodebook(nn.Module):
         # flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ NO `.clone()` (preserves gradient flow)
         print(f"flatten is x: {flatten is x}")  # Should be False
         print(f"flatten.grad_fn: {flatten.grad_fn}")  # Should NOT be None
-
         print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
 
         # Initialize codebook vectors (Ensure it does not detach)
@@ -813,6 +812,9 @@ class EuclideanCodebook(nn.Module):
 
             # Remove unnecessary dimension (if needed)
             embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+            device = flatten.device  # Ensure consistency
+            embed_ind = embed_ind.to(device)  # Move index tensor to correct device
+            embed_onehot = embed_onehot.to(device)  # Move one-hot tensor to the same device
 
             # Compute the sum of assigned embeddings
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
