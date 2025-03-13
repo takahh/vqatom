@@ -39,8 +39,7 @@ class WeightedThreeHopGCN(nn.Module):
         import torch.nn.init as init
         if isinstance(m, dglnn.GraphConv) and m.weight is not None:
             init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
-            print(f"Initialized {m} with mean: {m.weight.mean().item()}, std: {m.weight.std().item()}")
-
+            print(f"Initialized {m} with mean: {m.weight.mean().detach()}, std: {m.weight.std().detach()}")
 
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(WeightedThreeHopGCN, self).__init__()
