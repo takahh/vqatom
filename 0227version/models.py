@@ -46,9 +46,9 @@ class WeightedThreeHopGCN(nn.Module):
         super(WeightedThreeHopGCN, self).__init__()
         args = get_args()
         self.linear_0 = nn.Linear(7, args.hidden_dim)
-        self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="both", weight=True)
-        self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="both", weight=True)
-        self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
+        self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="right", weight=True)
+        self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="right", weight=True)
+        self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="right", weight=True)  # 3rd hop
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
