@@ -41,7 +41,8 @@ class WeightedThreeHopGCN(nn.Module):
 
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(WeightedThreeHopGCN, self).__init__()
-
+        args = get_args()
+        self.linear_0 = nn.Linear(7, args.hidden_dim)
         self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="both", weight=True)
         self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="both", weight=True)
         self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
