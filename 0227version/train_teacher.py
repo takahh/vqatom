@@ -281,7 +281,6 @@ def run(args):
         model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
-
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     criterion = torch.nn.NLLLoss()
     evaluator = get_evaluator(conf["dataset"])
