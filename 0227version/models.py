@@ -33,10 +33,15 @@ class BondWeightLayer(nn.Module):
 
 
 class WeightedThreeHopGCN(nn.Module):
-    def __init__(self, in_feats, hidden_feats, out_feats):
+
+    def init_weights(m):
+        import torch.nn.init as init
+        if isinstance(m, dglnn.GraphConv) and m.weight is not None:
+            init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+
+    def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(WeightedThreeHopGCN, self).__init__()
-        args = get_args()
-        self.linear_0 = nn.Linear(7, args.hidden_dim)
+
         self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="both", weight=True)
         self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="both", weight=True)
         self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="both", weight=True)  # 3rd hop
@@ -44,10 +49,13 @@ class WeightedThreeHopGCN(nn.Module):
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
         self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
         self.leakyRelu1 = nn.LeakyReLU(negative_slope=0.2)
-        # self.codebook_size = args.codebook_size
         self.ln0 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
         self.ln1 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
-        self.ln2= nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.ln2 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+
+        # Apply initialization to GraphConv layers
+        self.apply(self.init_weights)
+
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
