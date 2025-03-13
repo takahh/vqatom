@@ -794,10 +794,14 @@ class EuclideanCodebook(nn.Module):
 
         print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
 
-        # **Ensure Gradients Are Retained**
-        # quantize.retain_grad()
-        # x.retain_grad()
-        # flatten.retain_grad()
+        if self.training:
+            embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(x.dtype)
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            self.embed.data.copy_(embed_normalized)
+            self.expire_codes_(x)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
