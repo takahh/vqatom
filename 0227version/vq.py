@@ -1211,7 +1211,8 @@ class VectorQuantize(nn.Module):
 
         # Ensure correct shape to avoid unnecessary squeeze/unsqueeze calls
         embed_ind = embed_ind.view(-1)  # Flatten instead of squeeze()
-
+        print("embed_ind in vq_codebook_regularization_loss")
+        print(embed_ind)
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if the group is too small
@@ -1251,8 +1252,8 @@ class VectorQuantize(nn.Module):
         t_norm = torch.norm(t, dim=1, keepdim=True) + 1e-6
         t = t / t_norm
 
-        latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
-        latents = latents / latents_norm
+        # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
+        # latents = latents / latents_norm
 
         # # Pairwise distances
         # dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
