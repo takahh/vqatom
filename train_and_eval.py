@@ -637,13 +637,14 @@ def run_inductive(
                     model, obs_data, obs_feats, obs_labels, criterion, optimizer, epoch, accumulation_steps
                 )
                 model.encoder.reset_kmeans()
-                cb_new = model.encoder.vq._codebook.init_embed_(latents)
+                latents_for_plot = torch.squeeze(latents).clone().detach()
+                cb_for_plot = model.encoder.vq._codebook.init_embed_(latents_for_plot)
                 # save codebook and vectors every epoch
                 # cb_just_trained = np.concatenate([a.cpu().detach().numpy() for a in cb_just_trained[-1]])
-                np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-                latents = torch.squeeze(latents)
+                np.savez(f"./init_codebook_{epoch}", cb_for_plot.cpu().detach().numpy())
+                latents_for_plot = torch.squeeze(latents).clone().detach()
                 # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
-                np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
+                np.savez(f"./latents_{epoch}", latents_for_plot.cpu().detach().numpy())
         elif "MLP" in model.model_name:
             loss = train_mini_batch(
                 model, feats_train, labels_train, batch_size, criterion, optimizer
