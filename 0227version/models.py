@@ -112,8 +112,8 @@ class WeightedThreeHopGCN(nn.Module):
          aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
          equivalent_atom_loss, commit_loss) = self.vq(h, init_feat, logger)
         losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
-                 pair_loss, sil_loss, equivalent_atom_loss.item(), commit_loss.item()]
+                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(),
+                 sil_loss, equivalent_atom_loss.item(), commit_loss.item()]
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
         if batched_graph_base:

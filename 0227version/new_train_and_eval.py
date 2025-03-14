@@ -341,6 +341,10 @@ def run_inductive(
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
+                    """
+                    losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
+                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
+                 pair_loss, sil_loss, equivalent_atom_loss.item(), commit_loss.item()]"""
                     print(
                         f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
                         f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
@@ -349,9 +353,9 @@ def run_inductive(
                         f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
                         f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
                         f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-                        f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
-                        f"train - equiv_atom_loss: {sum(loss_list_list_train[10]) / len(loss_list_list_train[10]): 7f},"
-                        f"train - commit loss: {sum(loss_list_list_train[11]) / len(loss_list_list_train[11]): 7f},"
+                        f"train - sil_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]): 7f},"
+                        f"train - equiv_atom_loss: {sum(loss_list_list_train[8]) / len(loss_list_list_train[8]): 7f},"
+                        f"train - commit loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
                         )
         # --------------------------------
         # Save model
