@@ -806,46 +806,46 @@ class EuclideanCodebook(nn.Module):
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
-        # if self.training:
-        #     distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-        #     temperature = 0.1  # Softmax temperature
-        #
-        #     # Soft assignment instead of one-hot (fixes gradient flow)
-        #     embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-        #
-        #     # Option 1: Fully differentiable soft assignments
-        #     embed_onehot = embed_probs  # Allows gradient flow
-        #
-        #     # Option 2: Straight-Through Estimator (STE) for discrete assignments
-        #     # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)  # Hard one-hot
-        #     # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
-        #
-        #     print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
-        #     # Expected: flatten [1, 15648, 64], embed_onehot [1, 15648, 1000]
-        #
-        #     # Remove unnecessary dimension (if needed)
-        #     embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-        #     device = flatten.device  # Ensure consistency
-        #     embed_ind = embed_ind.to(device)  # Move index tensor to correct device
-        #     embed_onehot = embed_onehot.to(device)  # Move one-hot tensor to the same device
-        #
-        #     # Compute the sum of assigned embeddings
-        #     embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-        #
-        #     # EMA (Exponential Moving Average) update
-        #     self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
-        #
-        #     # Compute normalized cluster sizes
-        #     cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-        #
-        #     # Normalize the codebook embeddings
-        #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-        #
-        #     # Update codebook
-        #     self.embed.data.copy_(embed_normalized)
-        #
-        #     # Expire unused codes (optional step to refresh rarely used codes)
-        #     self.expire_codes_(x)
+        if self.training:
+            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
+            temperature = 0.1  # Softmax temperature
+
+            # Soft assignment instead of one-hot (fixes gradient flow)
+            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
+
+            # Option 1: Fully differentiable soft assignments
+            embed_onehot = embed_probs  # Allows gradient flow
+
+            # Option 2: Straight-Through Estimator (STE) for discrete assignments
+            # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)  # Hard one-hot
+            # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
+
+            print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
+            # Expected: flatten [1, 15648, 64], embed_onehot [1, 15648, 1000]
+
+            # Remove unnecessary dimension (if needed)
+            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+            device = flatten.device  # Ensure consistency
+            embed_ind = embed_ind.to(device)  # Move index tensor to correct device
+            embed_onehot = embed_onehot.to(device)  # Move one-hot tensor to the same device
+
+            # Compute the sum of assigned embeddings
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+
+            # EMA (Exponential Moving Average) update
+            self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
+
+            # Compute normalized cluster sizes
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+
+            # Normalize the codebook embeddings
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+
+            # Update codebook
+            self.embed.data.copy_(embed_normalized)
+
+            # Expire unused codes (optional step to refresh rarely used codes)
+            self.expire_codes_(x)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
