@@ -127,11 +127,11 @@ class WeightedThreeHopGCN(nn.Module):
         if batched_graph_base:
             sample_bond_info = batched_graph_base.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
-            sample_list = [t.clone().detach() for t in sample_list]
+            sample_list = [t.clone().detach() for t in sample_list if t is not None]
         else:
             sample_bond_info = batched_graph.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
-            sample_list = [t.clone().detach() for t in sample_list]
+            sample_list = [t.clone().detach() for t in sample_list if t is not None]
         return (h_list, h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
 
 
