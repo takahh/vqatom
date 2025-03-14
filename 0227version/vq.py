@@ -1040,7 +1040,7 @@ class VectorQuantize(nn.Module):
         codebook_dim = default(codebook_dim, dim)  # use coocbook_dim if not None
         codebook_input_dim = codebook_dim * heads
         requires_projection = codebook_input_dim != dim
-        self.project_in = nn.Linear(dim, codebook_input_dim) if requires_projection else nn.Identity()
+        # self.project_in = nn.Linear(dim, codebook_input_dim) if requires_projection else nn.Identity()
         self.project_out = nn.Linear(codebook_input_dim, dim) if requires_projection else nn.Identity()
 
         self.eps = eps
@@ -1312,7 +1312,7 @@ class VectorQuantize(nn.Module):
         if need_transpose:
             x = rearrange(x, 'b d n -> b n d')
 
-        x = self.project_in(x)
+        # x = self.project_in(x)
 
         if is_multiheaded:
             ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
