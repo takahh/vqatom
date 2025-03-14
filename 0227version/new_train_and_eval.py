@@ -67,6 +67,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     model.train()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.cuda.amp.GradScaler(init_scale=1e2)  # Try lower scale like 1e1
+
     optimizer.zero_grad()
     with torch.cuda.amp.autocast():
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
@@ -74,6 +76,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
+
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
     print(f"Allocated Memory: {allocated:.2f} MB")
