@@ -792,6 +792,7 @@ class EuclideanCodebook(nn.Module):
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
+        embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
