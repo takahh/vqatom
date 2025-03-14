@@ -487,7 +487,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     atom_types = atom_types.to("cuda")
 
     # Convert atom_types to one-hot encoding and float
-    atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
+    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
 
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
@@ -1293,13 +1293,21 @@ class VectorQuantize(nn.Module):
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
         sil_loss = 1
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        atom_type_div_loss = 1
+        bond_num_div_loss = 1
+        charge_div_loss = 1
+        elec_state_div_loss = 1
+        aroma_div_loss = 1
+        ringy_div_loss = 1
+        h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
+
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
