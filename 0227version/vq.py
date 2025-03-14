@@ -361,8 +361,6 @@ def mini_batch_kmeans(
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
-    import time
-
 
     # Get basic dimensions and move tensors to GPU
     num_codebooks, num_samples, dim = samples.shape[0], samples.shape[1], samples.shape[-1]
@@ -696,17 +694,16 @@ class EuclideanCodebook(nn.Module):
     def init_embed_(self, data, logger):
         # if self.initted:
         #     return
+
         # samples,
         # num_clusters,
-        # batch_size=256,
         # num_iters=100,
-        # logger=None,
-        embed, cluster_size = mini_batch_kmeans(
+        # use_cosine_sim=False,
+        # all_reduce_fn=noop
+        embed, cluster_size = kmeans(
             data,
             self.codebook_size,
-            256,
             self.kmeans_iters,
-            logger
             # use_cosine_sim=True,
             # sample_fn=self.sample_fn,
             # all_reduce_fn=self.kmeans_all_reduce_fn
