@@ -786,7 +786,6 @@ class EuclideanCodebook(nn.Module):
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
 
-        print(f"embed_ind {embed_ind}")
         # print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
 
         # **Fix Shape for batched_embedding()**
@@ -794,6 +793,7 @@ class EuclideanCodebook(nn.Module):
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
+        print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
         # if self.training:
