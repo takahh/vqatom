@@ -508,7 +508,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     negative_loss = - torch.log(negative_loss + 1e-8)
     print(f"negative_loss: {negative_loss.mean()}")
     print(f"posi: {positive_loss.mean()}")
-    return (positive_loss.mean() + negative_loss.mean())
+    return (positive_loss.mean() + negative_loss.mean()/100)
 
 
 # # this is old one in 0227
