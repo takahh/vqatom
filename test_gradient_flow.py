@@ -1,5 +1,5 @@
 import torch
-from vq import EuclideanCodebook
+from archive.vq import EuclideanCodebook
 
 # Initialize VectorQuantize module
 vq = EuclideanCodebook(dim=64, codebook_size=1000).cuda()
