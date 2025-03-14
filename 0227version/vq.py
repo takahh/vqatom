@@ -506,8 +506,6 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = (1.0 - same_type_mask) * pairwise_distances ** 2
     negative_loss = - torch.log(negative_loss + 1e-8)
-    print(f"negative_loss: {negative_loss.mean()}")
-    print(f"posi: {positive_loss.mean()}")
     return (positive_loss.mean() + negative_loss.mean()/100)
 
 
@@ -1387,11 +1385,12 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = (loss + self.lamb_div_ele * div_ele_loss
-                + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
-                + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
-                + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
-                + self.lamb_equiv_atom * equiv_atom_loss + self.commitment_weight * commit_loss)
+        loss = (loss + self.lamb_div_h_num * h_num_div_loss)
+        # loss = (loss + self.lamb_div_ele * div_ele_loss
+        #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
+        #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
+        #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+        #         + self.lamb_equiv_atom * equiv_atom_loss + self.commitment_weight * commit_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
