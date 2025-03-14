@@ -107,6 +107,7 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln2(h)
+        print(h)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
