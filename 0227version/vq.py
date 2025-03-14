@@ -1369,7 +1369,7 @@ class VectorQuantize(nn.Module):
                 + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
                 + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
                 + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
-                + self.lamb_equiv_atom * equiv_atom_loss)
+                + self.lamb_equiv_atom * equiv_atom_loss + commit_loss)
 
         if is_multiheaded:
             if self.separate_codebook_per_head:
