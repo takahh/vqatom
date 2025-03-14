@@ -90,23 +90,22 @@ class WeightedThreeHopGCN(nn.Module):
         edge_type = "_E"  # Batched heterogeneous graph edge type
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-        self.bond_weight = self.bond_weight.to(device)
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-        print(edge_weight)
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight
+        print(f"edge_weight {edge_weight}")
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln0(h)
-        # h = self.leakyRelu0(h)
+        h = self.ln0(h)
+        h = self.leakyRelu0(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln1(h)
-        # h = self.leakyRelu1(h)
+        h = self.ln1(h)
+        h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln2(h)
+        h = self.ln2(h)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,

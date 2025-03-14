@@ -282,8 +282,8 @@ def run(args):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    criterion = torch.nn.NLLLoss()
-    evaluator = get_evaluator(conf["dataset"])
+    # criterion = torch.nn.NLLLoss()
+    # evaluator = get_evaluator(conf["dataset"])
 
     """ Data split and run """
     loss_and_score = []
