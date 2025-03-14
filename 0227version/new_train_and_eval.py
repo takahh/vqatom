@@ -306,7 +306,6 @@ def run_inductive(
         loss_list_list_test = [[]] * 11
         loss_list = []
         model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
-        model.vq._codebook.init_embed_()
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
