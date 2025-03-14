@@ -351,6 +351,7 @@ def run_inductive(
                         f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
                         f"train - sil_loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
                         f"train - equiv_atom_loss: {sum(loss_list_list_train[10]) / len(loss_list_list_train[10]): 7f},"
+                        f"train - commit loss: {sum(loss_list_list_train[11]) / len(loss_list_list_train[11]): 7f},"
                         )
         # --------------------------------
         # Save model
