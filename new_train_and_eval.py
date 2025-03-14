@@ -452,7 +452,7 @@ def run_inductive(
                     torch.cuda.synchronize()
                     args = get_args()
                     if args.get_umap_data:
-                        cb_new = model.vq._codebook.init_embed_(latents.detach(), logger)
+                        cb_new = model.vq._codebook.emb.detach()
                         np.savez(f"./init_codebook_{epoch}", cb_new.cpu().numpy())  # Already detached
 
                         # ------------------
