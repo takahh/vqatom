@@ -704,8 +704,8 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, logger):
-        # if self.initted:
-        #     return
+        if self.initted:
+            return
         # samples,
         # num_clusters,
         # num_iters=100,
@@ -899,13 +899,13 @@ class CosineSimCodebook(nn.Module):
     def init_embed_(self, data):
         if self.initted:
             return
-        embed, cluster_size = mini_batch_kmeans(
-            data,
-            self.codebook_size,
-            256,
-            self.kmeans_iters,
-            use_cosine_sim=True,
-        )
+        # embed, cluster_size = mini_batch_kmeans(
+        #     data,
+        #     self.codebook_size,
+        #     256,
+        #     self.kmeans_iters,
+        #     use_cosine_sim=True,
+        # )
         #         #
         # def mini_batch_kmeans(
         #         samples,
@@ -915,14 +915,14 @@ class CosineSimCodebook(nn.Module):
         #         use_cosine_sim=False,
         #         all_reduce_fn=noop
         # ):
-        # embed, cluster_size = kmeans(
-        #     data,
-        #     self.codebook_size,
-        #     self.kmeans_iters,
-        #     use_cosine_sim=True,
-        #     sample_fn=self.sample_fn,
-        #     all_reduce_fn=self.kmeans_all_reduce_fn
-        # )
+        embed, cluster_size = kmeans(
+            data,
+            self.codebook_size,
+            self.kmeans_iters,
+            use_cosine_sim=True,
+            sample_fn=self.sample_fn,
+            all_reduce_fn=self.kmeans_all_reduce_fn
+        )
         self.embed.data.copy_(embed)
         self.cluster_size.data.copy_(cluster_size)
         # this line means init_embed is run only once
