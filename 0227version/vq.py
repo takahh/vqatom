@@ -774,8 +774,8 @@ class EuclideanCodebook(nn.Module):
         # **Normalize Without Breaking Gradient Flow**
         # flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
         # embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
-        print(f"flatten {flatten}")
-        print(f"embed {embed}")
+        # print(f"flatten {flatten}")
+        # print(f"embed {embed}")
         # print(f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
 
         # Compute Distance Without Breaking Gradients
@@ -801,7 +801,7 @@ class EuclideanCodebook(nn.Module):
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
-        print(f"embed_ind {embed_ind}")
+        # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
         # if self.training:
