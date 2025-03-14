@@ -1293,12 +1293,12 @@ class VectorQuantize(nn.Module):
         equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
         sil_loss = 1
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = 1
-        bond_num_div_loss = 1
-        charge_div_loss = 1
-        elec_state_div_loss = 1
-        aroma_div_loss = 1
-        ringy_div_loss = 1
+        atom_type_div_loss = torch.tensor(1)
+        bond_num_div_loss = torch.tensor(1)
+        charge_div_loss = torch.tensor(1)
+        elec_state_div_loss = torch.tensor(1)
+        aroma_div_loss = torch.tensor(1)
+        ringy_div_loss = torch.tensor(1)
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
