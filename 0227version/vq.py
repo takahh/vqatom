@@ -492,7 +492,10 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
-
+    print("pairwise_distances.mean()")
+    print(pairwise_distances.mean())
+    print("pairwise_distances.min()")
+    print(pairwise_distances.min())
     # Normalize atom_types (now properly converted to float)
     atom_types = F.normalize(atom_types, p=2, dim=1)
 
