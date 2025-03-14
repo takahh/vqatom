@@ -638,7 +638,7 @@ def run_inductive(
                 )
                 model.encoder.reset_kmeans()
                 latents_for_plot = torch.squeeze(latents).clone().detach()
-                cb_for_plot = model.encoder.vq._codebook.init_embed_(latents_for_plot)
+                cb_for_plot = model.encoder.vq._codebook.init_embed_for_plot(latents_for_plot)
                 # save codebook and vectors every epoch
                 # cb_just_trained = np.concatenate([a.cpu().detach().numpy() for a in cb_just_trained[-1]])
                 np.savez(f"./init_codebook_{epoch}", cb_for_plot.cpu().detach().numpy())
