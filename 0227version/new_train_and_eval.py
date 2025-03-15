@@ -211,6 +211,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             base_g.edata["weight"] = edge_weights.float()
             # You can optionally customize edge types for the base graph; here we assign all 1-hop edges.
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
+            base_g = dgl.add_self_loop(base_g)
 
             base_graphs.append(base_g)
 
