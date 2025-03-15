@@ -88,6 +88,7 @@ class WeightedThreeHopGCN(nn.Module):
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
         edge_type = "_E"  # Batched heterogeneous graph edge type
+        batched_graph = dgl.remove_self_loop(batched_graph[edge_type])
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
