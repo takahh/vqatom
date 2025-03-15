@@ -107,13 +107,13 @@ class WeightedThreeHopGCN(nn.Module):
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
         h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln0(h)
-        # h = self.leakyRelu0(h)
+        h = self.ln0(h)
+        h = self.leakyRelu0(h)
         h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln1(h)
-        # h = self.leakyRelu1(h)
+        h = self.ln1(h)
+        h = self.leakyRelu1(h)
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-        # h = self.ln2(h)
+        h = self.ln2(h)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
          spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
