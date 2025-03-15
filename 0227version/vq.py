@@ -511,6 +511,39 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
+import torch
+
+
+def compute_codebook_distance_loss(z, codebook, num_bins=50):
+    """
+    z: latent vectors (batch_size, latent_dim)
+    codebook: codebook vectors (num_codebook_vectors, latent_dim)
+    num_bins: Number of bins for distance histogram
+    """
+    # Move tensors to CUDA
+    z = z.to("cuda")
+    codebook = codebook.to("cuda")
+
+    # Compute pairwise distances between latent vectors and codebook vectors
+    distances = torch.cdist(z, codebook, p=2)  # (batch_size, num_codebook_vectors)
+
+    # Normalize distances
+    distances = distances / (distances.max() + 1e-6)
+
+    # Compute histogram of distances per latent vector
+    histograms = torch.zeros((z.shape[0], num_bins), device="cuda")
+
+    for i in range(z.shape[0]):
+        hist, _ = torch.histogram(distances[i], bins=num_bins, range=(0, 1))
+        histograms[i] = hist
+
+    # Penalize cases where multiple codebook vectors fall in the same distance bin
+    loss = torch.sum(histograms ** 2)  # Squaring emphasizes bins with many entries
+
+    return loss / (z.shape[0] * num_bins * 100)
+
+
+
 # # this is old one in 0227
 # def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
 #     """
@@ -1253,15 +1286,13 @@ class VectorQuantize(nn.Module):
         return loss/5000
 
         # embed_ind, codebook, init_feat, latents, quantize, logger
-    def orthogonal_loss_fn(self, embed_ind, t, init_feat, latents, quantized, logger, min_distance=0.5):
+    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5):
         # Normalize embeddings (optional: remove if not necessary)
         embed_ind.to("cuda")
-        t.to("cuda")
+        codebook.to("cuda")
         init_feat.to("cuda")
         latents.to("cuda")
         quantized.to("cuda")
-        t_norm = torch.norm(t, dim=1, keepdim=True) + 1e-6
-        t = t / t_norm
 
         # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
         # latents = latents / latents_norm
@@ -1302,6 +1333,9 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = torch.tensor(1)
         ringy_div_loss = torch.tensor(1)
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
+        equidist_cb_loss = compute_codebook_distance_loss(latents, codebook)
+        print("equidist_cb_loss")
+        print(equidist_cb_loss)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
