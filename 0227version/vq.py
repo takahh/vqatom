@@ -513,9 +513,14 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
 
 import torch
 
+import torch
+
 
 def compute_codebook_distance_loss(z, codebook, num_bins=50):
     """
+    Compute a loss that penalizes multiple codebook vectors existing at the same distance
+    from the same latent vector.
+
     z: latent vectors (batch_size, latent_dim)
     codebook: codebook vectors (num_codebook_vectors, latent_dim)
     num_bins: Number of bins for distance histogram
@@ -530,18 +535,24 @@ def compute_codebook_distance_loss(z, codebook, num_bins=50):
     # Normalize distances
     distances = distances / (distances.max() + 1e-6)
 
-    # Compute histogram of distances per latent vector
-    histograms = torch.zeros((z.shape[0], num_bins), device="cuda")
+    # Move distances to CPU for histogram computation
+    distances_cpu = distances.detach().cpu()
 
+    # Compute histogram manually
+    histograms = torch.zeros((z.shape[0], num_bins), device="cpu")
+
+    bin_edges = torch.linspace(0, 1, num_bins + 1)  # Define bin edges
     for i in range(z.shape[0]):
-        hist, _ = torch.histogram(distances[i], bins=num_bins, range=(0, 1))
+        hist = torch.histc(distances_cpu[i], bins=num_bins, min=0, max=1)  # Manual histogram
         histograms[i] = hist
+
+    # Move histograms back to CUDA
+    histograms = histograms.to("cuda")
 
     # Penalize cases where multiple codebook vectors fall in the same distance bin
     loss = torch.sum(histograms ** 2)  # Squaring emphasizes bins with many entries
 
     return loss / (z.shape[0] * num_bins * 100)
-
 
 
 # # this is old one in 0227
