@@ -552,7 +552,7 @@ def compute_codebook_distance_loss(z, codebook, num_bins=50):
     # Penalize cases where multiple codebook vectors fall in the same distance bin
     loss = torch.sum(histograms ** 2)  # Squaring emphasizes bins with many entries
 
-    return loss / (z.shape[0] * num_bins * 100)
+    return loss / (z.shape[0] * num_bins * 100) / 1000000000
 
 
 # # this is old one in 0227
