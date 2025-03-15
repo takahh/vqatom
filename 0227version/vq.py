@@ -1345,8 +1345,6 @@ class VectorQuantize(nn.Module):
         ringy_div_loss = torch.tensor(1)
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
         equidist_cb_loss = compute_codebook_distance_loss(latents, codebook)
-        print("equidist_cb_loss")
-        print(equidist_cb_loss)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
@@ -1359,7 +1357,7 @@ class VectorQuantize(nn.Module):
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equivalent_atom_loss)
+                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)
 
 
     def forward(self, x, init_feat, logger, mask=None):
@@ -1424,7 +1422,7 @@ class VectorQuantize(nn.Module):
             codebook = codebook[rand_ids]
 
         (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equiv_atom_loss) = \
+         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -1432,7 +1430,7 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = (loss + self.lamb_div_h_num * h_num_div_loss)
+        loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
         # loss = (loss + self.lamb_div_ele * div_ele_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
