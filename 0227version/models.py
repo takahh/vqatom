@@ -92,6 +92,12 @@ class WeightedThreeHopGCN(nn.Module):
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
         print(f"edge_weight {edge_weight}")
+        src, dst = batched_graph[edge_type].edges()
+        src = src.to(device).long()  # Move src to the correct device
+        dst = dst.to(device).long()  # Move dst to the correct device
+        print(f"src {src}")
+        print(f"dst {dst}")
+
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
