@@ -88,32 +88,31 @@ class WeightedThreeHopGCN(nn.Module):
         h = features.clone()
         init_feat = h.clone()  # Store initial features (for later use)
         edge_type = "_E"  # Batched heterogeneous graph edge type
-        batched_graph = dgl.remove_self_loop(batched_graph[edge_type])
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-        print(f"edge_weight {edge_weight}")
+        # print(f"edge_weight {edge_weight}")
         src, dst = batched_graph[edge_type].edges()
-        src = src.to(device).long()  # Move src to the correct device
-        dst = dst.to(device).long()  # Move dst to the correct device
-        print(f"src {src}")
-        print(f"dst {dst}")
+        # src = src.to(device).long()  # Move src to the correct device
+        # dst = dst.to(device).long()  # Move dst to the correct device
+        # print(f"src {src}")
+        # print(f"dst {dst}")
 
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
         edge_weight = transformed_edge_weight
-        print(f"mapped_indices {mapped_indices}")
-        print(f"edge_weight {edge_weight}")
+        # print(f"mapped_indices {mapped_indices}")
+        # print(f"edge_weight {edge_weight}")
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
-        h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.ln0(h)
-        h = self.leakyRelu0(h)
-        h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.ln1(h)
-        h = self.leakyRelu1(h)
-        h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
+        # h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
+        # h = self.ln0(h)
+        # h = self.leakyRelu0(h)
+        # h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
+        # h = self.ln1(h)
+        # h = self.leakyRelu1(h)
+        # h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln2(h)
         h_list = []
         (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
