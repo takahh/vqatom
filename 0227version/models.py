@@ -106,7 +106,7 @@ class WeightedThreeHopGCN(nn.Module):
         # print(f"edge_weight {edge_weight}")
         features = features.to(device)
         h = self.linear_0(features)  # Convert to expected shape
-        # h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
+        h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
         # h = self.ln0(h)
         # h = self.leakyRelu0(h)
         # h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
