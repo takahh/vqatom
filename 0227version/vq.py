@@ -539,9 +539,9 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     codebook torch.Size([1, 500, 64])
     z torch.Size([1, 12451, 64])"""
     distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_codebook_vectors)
-    print(f"distances {distances}")
+    print(f"distances {distances.shape}")
     min_distances, _ = torch.min(distances, dim=-1)  # Shape: (batch,)duplicate_mask
-    print(f"min_distances {min_distances}")
+    print(f"min_distances {min_distances.shape}")
     duplicate_mask = (distances == min_distances).foat()
     print(f"duplicate_mask {duplicate_mask}")
     num_duplicates = duplicate_mask.sum(dim=-1)  # Sum over codebook vectors
