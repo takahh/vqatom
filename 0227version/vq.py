@@ -544,6 +544,9 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     # Softmin to softly approximate the minimum distance selection
     soft_weights = torch.softmax(-softness * distances, dim=-1)  # (batch, num_vectors, num_codebook_vectors)
     print(f"soft_weights shape: {soft_weights.shape}")  # Should match distances shape
+    print(f"soft_weights mean: {soft_weights.mean()}")  # Should match distances shape
+    print(f"soft_weights max: {soft_weights.max()}")  # Should match distances shape
+    print(f"soft_weights min: {soft_weights.min()}")  # Should match distances shape
 
     # Soft count of duplicates (sum of softmin weights near min distance)
     num_duplicates = soft_weights.sum(dim=-1)  # (batch, num_vectors)
