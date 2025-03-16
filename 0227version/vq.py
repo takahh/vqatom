@@ -520,7 +520,7 @@ import torch
 
 def compute_smooth_nearest_codebook_loss(z, codebook, margin=1e-3, softness=10):
     """
-    Smooth loss that penalizes multiple nearest codebook vectors being too close.
+    ある latent vector と最短距離にある、cb vector が複数存在する場合ロスとして計上
 
     z: latent vectors (batch_size, latent_dim)
     codebook: codebook vectors (num_codebook_vectors, latent_dim)
