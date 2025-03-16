@@ -537,7 +537,7 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     print("distances.shape")
     print(distances.shape)
     # Find the minimum distance for each latent vector
-    min_distances, _ = torch.min(distances, dim=0, keepdim=True)  # (batch_size, 1)
+    min_distances, _ = torch.min(distances, dim=2, keepdim=True)  # (batch_size, 1)
     print("min_distances.shape")
     print(min_distances.shape)
     # Count how many codebook vectors have the exact same minimum distance
