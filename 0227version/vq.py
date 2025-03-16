@@ -2,6 +2,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
+from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
 from torch.ao.quantization import quantize
 from torch.amp import autocast
@@ -539,20 +540,15 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     z torch.Size([1, 12451, 64])"""
     distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_codebook_vectors)
     print(f"distances {distances}")
-    # Compute a soft minimum distance
-    weights = torch.nn.functional.softmax(- distances ** 2, dim=1)  # Softmin weights
-    print(f"weights {weights.shape}")
-    approx_min_distances = (weights * distances).sum(dim=1, keepdim=True)  # Soft approximation of min
-    print(f"approx_min_distances {approx_min_distances}")
-
-    # Soft duplicate count (avoiding ==)
-    duplicate_mask = torch.exp(-softness * (distances - approx_min_distances))  # Soft probability mask
-    num_duplicates = duplicate_mask.sum(dim=1)  # Sum over codebook vectors
-
+    min_distances, _ = torch.min(distances, dim=-1)  # Shape: (batch,)duplicate_mask
+    print(f"min_distances {min_distances}")
+    duplicate_mask = (distances == min_distances).foat()
+    print(f"duplicate_mask {duplicate_mask}")
+    num_duplicates = duplicate_mask.sum(dim=-1)  # Sum over codebook vectors
     print(f"num_duplicates {num_duplicates}")
+    penalty = num_duplicates.sum()
     # Smooth penalty (soft exponential growth)
-    penalty = torch.exp(softness * (num_duplicates - 1)) - 1
-    print(f"penalty {penalty.sum()}")
+    # print(f"penalty {penalty.sum()}")
     return penalty.mean()
 
 
