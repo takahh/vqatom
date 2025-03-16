@@ -549,9 +549,10 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     duplicate_mask = torch.exp(-softness * (distances - approx_min_distances))  # Soft probability mask
     num_duplicates = duplicate_mask.sum(dim=1)  # Sum over codebook vectors
 
+    print(f"num_duplicates {num_duplicates}")
     # Smooth penalty (soft exponential growth)
     penalty = torch.exp(softness * (num_duplicates - 1)) - 1
-
+    print(f"penalty {penalty.sum()}")
     return penalty.mean()
 
 
