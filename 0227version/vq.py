@@ -545,7 +545,7 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     print("duplicate_mask")
     print(duplicate_mask.shape)
     print(duplicate_mask)
-    num_duplicates = duplicate_mask.sum(dim=1)  # Count duplicates per latent vector
+    num_duplicates = duplicate_mask.sum(dim=2)  # Count duplicates per latent vector
     print("num_duplicates")
     print(num_duplicates.shape)
     print(num_duplicates)
