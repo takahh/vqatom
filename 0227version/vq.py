@@ -1081,6 +1081,7 @@ class VectorQuantize(nn.Module):
             lamb_div_aroma=1,
             lamb_div_ringy=1,
             lamb_div_h_num=1,
+            lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
             lamb_sil=0.01,
@@ -1119,6 +1120,7 @@ class VectorQuantize(nn.Module):
         self.lamb_equiv_atom = lamb_equiv_atom
         self.lamb_sil = lamb_sil
         self.lamb_div = lamb_div
+        self.lamb_div_equidist = lamb_div_equidist
         self.pair_weight = pair_weight
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
@@ -1432,7 +1434,7 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = (loss + equidist_cb_loss)
+        loss = self.lamb_div_equidist * equidist_cb_loss
         # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
         # loss = (loss + self.lamb_div_ele * div_ele_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
