@@ -533,16 +533,24 @@ def compute_smooth_nearest_codebook_loss(z, codebook, margin=1e-3, softness=10):
 
     # Compute pairwise distances
     distances = torch.cdist(z, codebook, p=2)  # Shape: (batch_size, num_codebook_vectors)
-
+    print("distances.shape")
+    print(distances.shape)
     # Sort distances to get the two closest codebook vectors
     sorted_distances, _ = torch.sort(distances, dim=1)
+    print("sorted_distances.shape")
+    print(sorted_distances.shape)
     d1 = sorted_distances[:, 0]  # Closest codebook vector
     d2 = sorted_distances[:, 1]  # Second closest codebook vector
 
+    print("d1")
+    print(d1)
+    print("d2")
+    print(d2)
     # Smooth penalty: Exponential function to ensure smooth gradients
     penalty = torch.exp(-softness * (d2 - d1 - margin))
 
-    # Return mean loss (normalized for stability)
+    print("penalty")
+    print(penalty)    # Return mean loss (normalized for stability)
     return penalty.mean()
 
 
