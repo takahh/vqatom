@@ -520,36 +520,42 @@ import torch
 
 import torch
 
+import torch
 
 def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     """
     Differentiable loss that penalizes cases where multiple codebook vectors have nearly the same
     closest distance to a latent vector.
 
-    z: latent vectors (batch_size, latent_dim)
-    codebook: codebook vectors (num_codebook_vectors, latent_dim)
+    z: latent vectors (batch_size, num_vectors, latent_dim)
+    codebook: codebook vectors (batch_size, num_codebook_vectors, latent_dim)
     softness: Controls smoothness of the penalty function (higher = sharper penalty)
     """
     z = z.to("cuda")
     codebook = codebook.to("cuda")
-    print(f"codebook {codebook.shape}")
-    print(f"z {z.shape}")
+
+    print(f"z shape: {z.shape}")  # (batch_size, num_vectors, latent_dim)
+    print(f"codebook shape: {codebook.shape}")  # (batch_size, num_codebook_vectors, latent_dim)
+
     # Compute differentiable L2 distance
-    """
-    codebook torch.Size([1, 500, 64])
-    z torch.Size([1, 12451, 64])"""
-    distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_codebook_vectors)
-    print(f"distances {distances.shape}")
-    min_distances, _ = torch.min(distances, dim=-1)  # Shape: (batch,)duplicate_mask
-    print(f"min_distances {min_distances.shape}")
-    duplicate_mask = (distances == min_distances.unsqueeze(-1)).float()
-    print(f"duplicate_mask {duplicate_mask}")
-    num_duplicates = duplicate_mask.sum(dim=-1)  # Sum over codebook vectors
-    print(f"num_duplicates {num_duplicates}")
-    penalty = num_duplicates.sum()
-    # Smooth penalty (soft exponential growth)
-    # print(f"penalty {penalty.sum()}")
-    return penalty.mean()
+    distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_vectors, num_codebook_vectors)
+    print(f"distances shape: {distances.shape}")  # (batch_size, num_vectors, num_codebook_vectors)
+
+    # Softmin to softly approximate the minimum distance selection
+    soft_weights = torch.softmax(-softness * distances, dim=-1)  # (batch, num_vectors, num_codebook_vectors)
+    print(f"soft_weights shape: {soft_weights.shape}")  # Should match distances shape
+
+    # Soft count of duplicates (sum of softmin weights near min distance)
+    num_duplicates = soft_weights.sum(dim=-1)  # (batch, num_vectors)
+    print(f"num_duplicates shape: {num_duplicates.shape}")  # (batch, num_vectors)
+    print(f"num_duplicates values: {num_duplicates}")  # Print actual values for debugging
+
+    # Penalty for duplicate nearest codebooks
+    penalty = num_duplicates.mean()  # Use mean instead of sum for stability
+    print(f"penalty value: {penalty}")  # Print final penalty value
+
+    return penalty
+
 
 
 # # this is old one in 0227
