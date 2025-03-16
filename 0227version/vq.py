@@ -534,7 +534,10 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     print(f"codebook {codebook.shape}")
     print(f"z {z.shape}")
     # Compute differentiable L2 distance
-    distances = torch.norm(z.unsqueeze(1) - codebook.unsqueeze(0), dim=-1)  # (batch_size, num_codebook_vectors)
+    """
+    codebook torch.Size([1, 500, 64])
+    z torch.Size([1, 12451, 64])"""
+    distances = torch.norm(z.squeeze(2) - codebook.squeeze(1), dim=-1)  # (batch_size, num_codebook_vectors)
     print(f"distances {distances.shape}")
     # Compute a soft minimum distance
     weights = torch.nn.functional.softmax(-softness * distances, dim=1)  # Softmin weights
