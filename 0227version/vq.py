@@ -512,17 +512,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
-import torch
-
-import torch
-
-import torch
-
-import torch
-
-import torch
-
-def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
+def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     """
     Differentiable loss that penalizes cases where multiple codebook vectors have nearly the same
     closest distance to a latent vector.
@@ -534,30 +524,21 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     z = z.to("cuda")
     codebook = codebook.to("cuda")
 
-    print(f"z shape: {z.shape}")  # (batch_size, num_vectors, latent_dim)
-    print(f"codebook shape: {codebook.shape}")  # (batch_size, num_codebook_vectors, latent_dim)
-
-    # Compute differentiable L2 distance
     distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_vectors, num_codebook_vectors)
-    print(f"distances shape: {distances.shape}")  # (batch_size, num_vectors, num_codebook_vectors)
 
-    # Softmin to softly approximate the minimum distance selection
-    soft_weights = torch.softmax(-softness * distances, dim=-1)  # (batch, num_vectors, num_codebook_vectors)
-    print(f"soft_weights shape: {soft_weights.shape}")  # Should match distances shape
-    print(f"soft_weights mean: {soft_weights.mean()}")  # Should match distances shape
-    print(f"soft_weights max: {soft_weights.max()}")  # Should match distances shape
-    print(f"soft_weights min: {soft_weights.min()}")  # Should match distances shape
+    # Increase softness factor to make the maximum value closer to 1
+    soft_weights = torch.softmax(-softness * distances, dim=-1)
 
-    # Soft count of duplicates (sum of softmin weights near min distance)
-    num_duplicates = soft_weights.sum(dim=-1)  # (batch, num_vectors)
-    print(f"num_duplicates shape: {num_duplicates.shape}")  # (batch, num_vectors)
-    print(f"num_duplicates values: {num_duplicates}")  # Print actual values for debugging
+    # Debugging outputs
+    print(f"soft_weights mean: {soft_weights.mean().item()}")
+    print(f"soft_weights max: {soft_weights.max().item()}")  # Should be close to 1
+    print(f"soft_weights min: {soft_weights.min().item()}")
 
-    # Penalty for duplicate nearest codebooks
-    penalty = num_duplicates.mean()  # Use mean instead of sum for stability
-    print(f"penalty value: {penalty}")  # Print final penalty value
+    num_duplicates = soft_weights.sum(dim=-1)
+    penalty = num_duplicates.mean()
 
     return penalty
+
 
 
 
