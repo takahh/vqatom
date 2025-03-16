@@ -551,7 +551,8 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     print(num_duplicates)
     # Apply smooth penalty: Exponential growth when more duplicates exist
     penalty = torch.exp(softness * (num_duplicates - 1)) - 1  # No penalty if only 1 nearest
-
+    print("penalty")
+    print(penalty)
     return penalty.mean()
 
 
