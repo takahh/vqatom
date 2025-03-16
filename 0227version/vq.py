@@ -547,6 +547,7 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     print(duplicate_mask)
     num_duplicates = duplicate_mask.sum(dim=1)  # Count duplicates per latent vector
     print("num_duplicates")
+    print(num_duplicates.shape)
     print(num_duplicates)
     # Apply smooth penalty: Exponential growth when more duplicates exist
     penalty = torch.exp(softness * (num_duplicates - 1)) - 1  # No penalty if only 1 nearest
