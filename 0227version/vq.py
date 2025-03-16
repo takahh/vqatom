@@ -517,14 +517,14 @@ import torch
 
 import torch
 
+import torch
 
-def compute_smooth_nearest_codebook_loss(z, codebook, margin=1e-3, softness=10):
+def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     """
-    ある latent vector と最短距離にある、cb vector が複数存在する場合ロスとして計上
+    Penalizes cases where multiple codebook vectors have the exact same closest distance to a latent vector.
 
     z: latent vectors (batch_size, latent_dim)
     codebook: codebook vectors (num_codebook_vectors, latent_dim)
-    margin: Minimum required separation between the closest and second-closest codebook vector
     softness: Controls smoothness of the penalty function (higher = sharper penalty)
     """
     # Move tensors to CUDA
@@ -533,25 +533,19 @@ def compute_smooth_nearest_codebook_loss(z, codebook, margin=1e-3, softness=10):
 
     # Compute pairwise distances
     distances = torch.cdist(z, codebook, p=2)  # Shape: (batch_size, num_codebook_vectors)
-    print("distances.shape")
-    print(distances.shape)
-    # Sort distances to get the two closest codebook vectors
-    sorted_distances, _ = torch.sort(distances, dim=1)
-    print("sorted_distances.shape")
-    print(sorted_distances.shape)
-    d1 = sorted_distances[:, 0]  # Closest codebook vector
-    d2 = sorted_distances[:, 1]  # Second closest codebook vector
 
-    print("d1")
-    print(d1)
-    print("d2")
-    print(d2)
-    # Smooth penalty: Exponential function to ensure smooth gradients
-    penalty = torch.exp(-softness * (d2 - d1 - margin))
+    # Find the minimum distance for each latent vector
+    min_distances, _ = torch.min(distances, dim=1, keepdim=True)  # (batch_size, 1)
 
-    print("penalty")
-    print(penalty)    # Return mean loss (normalized for stability)
+    # Count how many codebook vectors have the exact same minimum distance
+    duplicate_mask = (distances == min_distances).float()  # 1 if same as min_distance, else 0
+    num_duplicates = duplicate_mask.sum(dim=1)  # Count duplicates per latent vector
+
+    # Apply smooth penalty: Exponential growth when more duplicates exist
+    penalty = torch.exp(softness * (num_duplicates - 1)) - 1  # No penalty if only 1 nearest
+
     return penalty.mean()
+
 
 
 # # this is old one in 0227
@@ -1343,7 +1337,7 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = torch.tensor(1)
         ringy_div_loss = torch.tensor(1)
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
-        equidist_cb_loss = compute_smooth_nearest_codebook_loss(latents, codebook)
+        equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
