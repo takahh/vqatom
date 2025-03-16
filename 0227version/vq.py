@@ -540,14 +540,13 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=1):
     distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_codebook_vectors)
     print(f"distances {distances}")
     # Compute a soft minimum distance
-    # weights = torch.nn.functional.softmax(-softness * distances, dim=1)  # Softmin weights
-    # print(f"weights {weights.shape}")
-    # approx_min_distances = (weights * distances).sum(dim=1, keepdim=True)  # Soft approximation of min
-    # print(f"approx_min_distances {approx_min_distances}")
+    weights = torch.nn.functional.softmax(- distances ** 2, dim=1)  # Softmin weights
+    print(f"weights {weights.shape}")
+    approx_min_distances = (weights * distances).sum(dim=1, keepdim=True)  # Soft approximation of min
+    print(f"approx_min_distances {approx_min_distances}")
 
     # Soft duplicate count (avoiding ==)
-    # duplicate_mask = torch.exp(-softness * (distances - approx_min_distances))  # Soft probability mask
-    duplicate_mask = torch.exp(-softness * (distances - distances))  # Soft probability mask
+    duplicate_mask = torch.exp(-softness * (distances - approx_min_distances))  # Soft probability mask
     num_duplicates = duplicate_mask.sum(dim=1)  # Sum over codebook vectors
 
     print(f"num_duplicates {num_duplicates}")
