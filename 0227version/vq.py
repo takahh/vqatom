@@ -515,44 +515,35 @@ import torch
 
 import torch
 
+import torch
 
-def compute_codebook_distance_loss(z, codebook, num_bins=50):
+
+def compute_smooth_nearest_codebook_loss(z, codebook, margin=1e-3, softness=10):
     """
-    Compute a loss that penalizes multiple codebook vectors existing at the same distance
-    from the same latent vector.
+    Smooth loss that penalizes multiple nearest codebook vectors being too close.
 
     z: latent vectors (batch_size, latent_dim)
     codebook: codebook vectors (num_codebook_vectors, latent_dim)
-    num_bins: Number of bins for distance histogram
+    margin: Minimum required separation between the closest and second-closest codebook vector
+    softness: Controls smoothness of the penalty function (higher = sharper penalty)
     """
     # Move tensors to CUDA
     z = z.to("cuda")
     codebook = codebook.to("cuda")
 
-    # Compute pairwise distances between latent vectors and codebook vectors
-    distances = torch.cdist(z, codebook, p=2)  # (batch_size, num_codebook_vectors)
+    # Compute pairwise distances
+    distances = torch.cdist(z, codebook, p=2)  # Shape: (batch_size, num_codebook_vectors)
 
-    # Normalize distances
-    distances = distances / (distances.max() + 1e-6)
+    # Sort distances to get the two closest codebook vectors
+    sorted_distances, _ = torch.sort(distances, dim=1)
+    d1 = sorted_distances[:, 0]  # Closest codebook vector
+    d2 = sorted_distances[:, 1]  # Second closest codebook vector
 
-    # Move distances to CPU for histogram computation
-    distances_cpu = distances.detach().cpu()
+    # Smooth penalty: Exponential function to ensure smooth gradients
+    penalty = torch.exp(-softness * (d2 - d1 - margin))
 
-    # Compute histogram manually
-    histograms = torch.zeros((z.shape[0], num_bins), device="cpu")
-
-    bin_edges = torch.linspace(0, 1, num_bins + 1)  # Define bin edges
-    for i in range(z.shape[0]):
-        hist = torch.histc(distances_cpu[i], bins=num_bins, min=0, max=1)  # Manual histogram
-        histograms[i] = hist
-
-    # Move histograms back to CUDA
-    histograms = histograms.to("cuda")
-
-    # Penalize cases where multiple codebook vectors fall in the same distance bin
-    loss = torch.sum(histograms ** 2)  # Squaring emphasizes bins with many entries
-
-    return loss / (z.shape[0] * num_bins * 100) / 1000000000
+    # Return mean loss (normalized for stability)
+    return penalty.mean()
 
 
 # # this is old one in 0227
@@ -1344,7 +1335,7 @@ class VectorQuantize(nn.Module):
         aroma_div_loss = torch.tensor(1)
         ringy_div_loss = torch.tensor(1)
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
-        equidist_cb_loss = compute_codebook_distance_loss(latents, codebook)
+        equidist_cb_loss = compute_smooth_nearest_codebook_loss(latents, codebook)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
