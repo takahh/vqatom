@@ -539,7 +539,7 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
 
     num_duplicates = soft_weights_only_dupes.sum(dim=-1)
     print(f'soft_weights: {soft_weights.shape}')
-    penalty = num_duplicates.sum()
+    penalty = num_duplicates.sum() / soft_weights.shape[1]
     print("penalty")
     print(penalty)
 
