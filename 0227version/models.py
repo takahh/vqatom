@@ -124,13 +124,14 @@ class WeightedThreeHopGCN(nn.Module):
         h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
         h = self.ln2(h)
         h_list = []
-        (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
-         spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
-         equivalent_atom_loss, commit_loss) = self.vq(h, init_feat, logger)
-        losslist = [div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-                 h_num_div_loss.item(), charge_div_loss, elec_state_div_loss,
-                 sil_loss, equivalent_atom_loss.item(), commit_loss.item()]
+        # (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
+        #  spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
+        #  aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
+        #  equivalent_atom_loss, commit_loss)\
+
+        (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
+         x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
+        losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
         # losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
         #          h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(),
         #          sil_loss, equivalent_atom_loss.item(), commit_loss.item()]
@@ -154,7 +155,7 @@ class WeightedThreeHopGCN(nn.Module):
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
             sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in
                            sample_list]
-        return (h_list, h, loss, dist, codebook, losslist, x, detached_quantize, latents, sample_list)
+        return (h_list, h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
 
 
 class MLP(nn.Module):

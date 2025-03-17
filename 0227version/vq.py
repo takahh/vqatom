@@ -1352,8 +1352,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)
+        return (spread_loss, embed_ind, equidist_cb_loss)
 
 
     def forward(self, x, init_feat, logger, mask=None):
@@ -1418,9 +1417,10 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        (spread_loss, margin_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
-         h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss) = \
-            self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
+        # (spread_loss, commit_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+        #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)\
+            (spread_loss, embed_ind, equidist_cb_loss) = (
+                self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger))
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
@@ -1459,6 +1459,5 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
-        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, margin_loss, spread_loss,
-                pair_distance_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss, aroma_div_loss,
-                ringy_div_loss, h_num_div_loss, silh_loss, charge_div_loss, elec_state_div_loss, equidist_cb_loss, commit_loss)
+        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
+                x, init_cb, equidist_cb_loss, commit_loss)

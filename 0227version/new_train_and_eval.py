@@ -346,17 +346,11 @@ def run_inductive(
                     losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
                  pair_loss, sil_loss, equivalent_atom_loss.item(), commit_loss.item()]"""
+                    """[spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]"""
                     print(
-                        f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-                        f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-                        f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
-                        f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
-                        f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
-                        f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
-                        f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-                        f"train - sil_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]): 7f},"
-                        f"train - equiv_atom_loss: {sum(loss_list_list_train[8]) / len(loss_list_list_train[8]): 7f},"
-                        f"train - commit loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
+                        f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+                        f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+                        f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
                         )
         # --------------------------------
         # Save model
@@ -395,54 +389,29 @@ def run_inductive(
         print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         print(
-            f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-            f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-            f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f}, "
-            f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 7f}, "
-            f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 7f}, "
-            f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]): 7f}, "
-            f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]): 7f},"
-            f"train - equiv_atom_loss: {sum(loss_list_list_train[8]) / len(loss_list_list_train[8]): 7f},"
-            f"train - commit loss: {sum(loss_list_list_train[9]) / len(loss_list_list_train[9]): 7f},"
+            f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+            f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+            f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
-        print(f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
-              f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
-              f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f}, "
-              f"test - ringy_div_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 7f}, "
-              f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 7f}, "
-              f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]): 7f}, "
-              f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 7f}, "
-              f"test - sil_loss: {sum(loss_list_list_test[7]) / len(loss_list_list_test[7]): 7f}",
-              f"test - equiv_atom_loss: {sum(loss_list_list_test[8]) / len(loss_list_list_test[8]): 7f}",
-              f"test - commit_loss: {sum(loss_list_list_test[9]) / len(loss_list_list_test[9]): 7f}"
+        print(
+              f"train - spread loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
+              f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
+              f"train - equidist cb loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
               )
 
         # Log training losses
         logger.info(
-            f"train - div_element_loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]):7f}, "
-            f"train - bond_num_div_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]):7f}, "
-            f"train - aroma_div_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]):7f}, "
-            f"train - ringy_div_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]):7f}, "
-            f"train - h_num_div_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]):7f}, "
-            f"train - elec_state_div_loss: {sum(loss_list_list_train[6]) / len(loss_list_list_train[6]):7f}, "
-            f"train - charge_div_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]):7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[7]) / len(loss_list_list_train[7]):7f}, "
-            f"train - equiv_atom_loss: {sum(loss_list_list_train[8]) / len(loss_list_list_train[8]):7f}, "
+            f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+            f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+            f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
         # Log testing losses
         logger.info(
-            f"test - div_element_loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]):7f}, "
-            f"test - bond_num_div_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]):7f}, "
-            f"test - aroma_div_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]):7f}, "
-            f"test - ringy_div_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]):7f}, "
-            f"test - h_num_div_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]):7f}, "
-            f"test - elec_state_div_loss: {sum(loss_list_list_test[6]) / len(loss_list_list_test[6]):7f}, "
-            f"test - charge_div_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]):7f}, "
-            f"test - sil_loss: {sum(loss_list_list_test[7]) / len(loss_list_list_test[7]):7f}, "
-            f"test - equiv_atom_loss: {sum(loss_list_list_test[8]) / len(loss_list_list_test[8]):7f}, "
+            f"train - spread loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
+              f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
+              f"train - equidist cb loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
         )
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
         np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
