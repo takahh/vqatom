@@ -1421,8 +1421,8 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = self.lamb_div_equidist * equidist_cb_loss
-        # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
+        # loss = self.lamb_div_equidist * equidist_cb_loss
+        loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
         # loss = (loss + self.lamb_div_ele * div_ele_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
         #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
