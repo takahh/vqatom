@@ -1391,20 +1391,20 @@ class VectorQuantize(nn.Module):
         raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
         detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
-        if self.commitment_weight > 0:
-            detached_quantize = quantize.detach()
-            commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-            #
-            # if exists(mask):
-            #     commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-            #     if is_multiheaded:
-            #         mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-            #                       h=commit_loss.shape[1] // mask.shape[0])
-            #     commit_loss = commit_loss[mask].mean()
-            # else:
-            #     commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-            #
-            # raw_commit_loss = commit_loss
+        # if self.commitment_weight > 0:
+        detached_quantize = quantize.detach()
+        commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        #
+        # if exists(mask):
+        #     commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        #     if is_multiheaded:
+        #         mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+        #                       h=commit_loss.shape[1] // mask.shape[0])
+        #     commit_loss = commit_loss[mask].mean()
+        # else:
+        #     commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+        #
+        raw_commit_loss = commit_loss
 
         codebook = self._codebook.embed
 
