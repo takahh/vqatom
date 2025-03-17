@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 soft_weights = torch.linspace(0, 1, 100)
 
 # Gaussian mask around 0.5 with variance 0.01
-dupe_mask = torch.exp(-((soft_weights - 0.5) ** 2) / 0.01)
+dupe_mask = torch.exp(-((soft_weights - 0.5) ** 4) / 0.001)
 
 # Plotting
 plt.figure(figsize=(8, 6))
