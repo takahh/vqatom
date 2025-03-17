@@ -23,7 +23,7 @@ class BondWeightLayer(nn.Module):
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
             # nn.Sigmoid()  # Output weight in range (0,1)
-            nn.ReLU()  # Use ReLU for better gradient flow
+            nn.Softplus()  # Smooth and maintains gradient flow
 
         )
         self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
