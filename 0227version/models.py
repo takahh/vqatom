@@ -21,7 +21,8 @@ class BondWeightLayer(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.Linear(hidden_dim * 2, 1),
             # nn.Sigmoid()  # Output weight in range (0,1)
             nn.Softplus()  # Smooth and maintains gradient flow
 
@@ -31,12 +32,7 @@ class BondWeightLayer(nn.Module):
     def forward(self, edge_types):
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
-        print("edge_weight")
-        print(edge_weight.shape)
-        print(edge_weight)
         edge_weight = edge_weight.squeeze()  # Compute edge weight
-        print(edge_weight.shape)
-        print(edge_weight)
         return edge_weight
 
 def init_weights(m):
