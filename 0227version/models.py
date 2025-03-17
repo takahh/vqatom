@@ -32,8 +32,10 @@ class BondWeightLayer(nn.Module):
         bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         print("edge_weight")
+        print(edge_weight.shape)
         print(edge_weight)
         edge_weight = edge_weight.squeeze()  # Compute edge weight
+        print(edge_weight.shape)
         print(edge_weight)
         return edge_weight
 
