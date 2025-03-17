@@ -1,18 +1,18 @@
 import torch
+import matplotlib.pyplot as plt
 
-# Example 2D tensor
-diff_feat_same_cluster_dist = torch.tensor([
-    [0.0, 0.5, 0.0],
-    [0.2, 0.0, 0.3],
-    [0.0, 0.4, 0.0]
-])
+# Create soft_weights values ranging from 0 to 1
+soft_weights = torch.linspace(0, 1, 100)
 
-# Extract non-zero values
-non_zero_values = diff_feat_same_cluster_dist[diff_feat_same_cluster_dist != 0]
-print("Non-zero values:", non_zero_values)
+# Gaussian mask around 0.5 with variance 0.01
+dupe_mask = torch.exp(-((soft_weights - 0.5) ** 2) / 0.01)
 
-# Get indices and values
-indices = torch.nonzero(diff_feat_same_cluster_dist, as_tuple=True)
-values = diff_feat_same_cluster_dist[indices]
-print("Indices:", indices)
-print("Values at indices:", values)
+# Plotting
+plt.figure(figsize=(8, 6))
+plt.plot(soft_weights.numpy(), dupe_mask.numpy(), label="Gaussian Mask", color="blue")
+plt.title("Gaussian Mask Function Around 0.5")
+plt.xlabel("Soft Weight Value")
+plt.ylabel("Mask Value")
+plt.legend()
+plt.grid(True)
+plt.show()
