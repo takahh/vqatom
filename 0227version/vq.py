@@ -1419,7 +1419,7 @@ class VectorQuantize(nn.Module):
 
         # (spread_loss, commit_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
         #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)\
-            (spread_loss, embed_ind, equidist_cb_loss) = (
+        (spread_loss, embed_ind, equidist_cb_loss) = (
                 self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger))
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
