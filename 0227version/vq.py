@@ -1393,7 +1393,7 @@ class VectorQuantize(nn.Module):
 
         # if self.commitment_weight > 0:
         detached_quantize = quantize.detach()
-        # commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
         #
         # if exists(mask):
         #     commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
@@ -1427,7 +1427,8 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = (self.lamb_div_equidist * equidist_cb_loss)
+        print(f"commit loss {commit_loss}")
+        loss = (self.lamb_div_equidist * equidist_cb_loss + self.commitment_weight * commit_loss)
         # loss = (self.lamb_div_equidist * equidist_cb_loss + self.spread_weight * spread_loss)
                 # + self.commitment_weight * commit_loss)
         # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
