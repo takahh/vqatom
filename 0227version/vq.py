@@ -1305,24 +1305,24 @@ class VectorQuantize(nn.Module):
         # latents = latents / latents_norm
 
         # # Pairwise distances
-        # dist_matrix = torch.squeeze(torch.cdist(t, t, p=2) + 1e-6)  # Avoid zero distances
+        dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
         #
         # # Remove diagonal
-        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
         #
         # # Debug: Log distance statistics
         # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
         #
-        # # Margin loss: Encourage distances >= min_distance
-        # smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
-        # margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
-        #
-        # # Spread loss: Encourage diversity
-        # spread_loss = torch.var(t)
-        #
-        # # Pair distance loss: Regularize distances
-        # pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
+        # Margin loss: Encourage distances >= min_distance
+        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
+        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
+
+        # Spread loss: Encourage diversity
+        spread_loss = torch.var(codebook)
+
+        # Pair distance loss: Regularize distances
+        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
         embed_ind_for_sil = torch.squeeze(embed_ind)
@@ -1352,7 +1352,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (1, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
+        return (spread_loss, 1, 1, atom_type_div_loss, bond_num_div_loss, aroma_div_loss,
                 ringy_div_loss, h_num_div_loss, sil_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)
 
 
@@ -1394,17 +1394,18 @@ class VectorQuantize(nn.Module):
 
         if self.commitment_weight > 0:
             detached_quantize = quantize.detach()
-
-            if exists(mask):
-                commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
-                if is_multiheaded:
-                    mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
-                                  h=commit_loss.shape[1] // mask.shape[0])
-                commit_loss = commit_loss[mask].mean()
-            else:
-                commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
-
-            raw_commit_loss = commit_loss
+            commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+            #
+            # if exists(mask):
+            #     commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+            #     if is_multiheaded:
+            #         mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+            #                       h=commit_loss.shape[1] // mask.shape[0])
+            #     commit_loss = commit_loss[mask].mean()
+            # else:
+            #     commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+            #
+            # raw_commit_loss = commit_loss
 
         codebook = self._codebook.embed
 
@@ -1417,7 +1418,7 @@ class VectorQuantize(nn.Module):
             rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
             codebook = codebook[rand_ids]
 
-        (margin_loss, spread_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+        (spread_loss, margin_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
          h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss) = \
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger)
         if len(embed_ind.shape) == 3:
@@ -1426,7 +1427,8 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        loss = self.lamb_div_equidist * equidist_cb_loss
+        loss = (self.lamb_div_equidist * equidist_cb_loss + self.spread_weight * spread_loss
+                + self.commitment_weight * commit_loss)
         # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
         # loss = (loss + self.lamb_div_ele * div_ele_loss
         #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
