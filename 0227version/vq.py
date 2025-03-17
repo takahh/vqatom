@@ -527,7 +527,7 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     distances = torch.norm(z.unsqueeze(2) - codebook.unsqueeze(1), dim=-1)  # (batch_size, num_vectors, num_codebook_vectors)
 
     # Increase softness factor to make the maximum value closer to 1
-    soft_weights = torch.softmax(-softness * distances, dim=-1)
+    soft_weights = torch.softmax(-softness * distances ** 2, dim=-1)
 
     # Debugging outputs
     print(f"soft_weights mean: {soft_weights.mean().item()}")
