@@ -20,9 +20,15 @@ class BondWeightLayer(nn.Module):
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)
+        nn.init.xavier_uniform_(self.bond_embedding.weight)  # Xavier for embeddings
+        for layer in self.edge_mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
         self.edge_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            nn.Linear(hidden_dim * 2, 1),
+            nn.Linear(hidden_dim, 1),
             # nn.Sigmoid()  # Output weight in range (0,1)
             nn.Softplus()  # Smooth and maintains gradient flow
 
