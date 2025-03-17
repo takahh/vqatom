@@ -528,13 +528,15 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
 
     # Increase softness factor to make the maximum value closer to 1
     soft_weights = torch.softmax(-softness * distances ** 2, dim=-1)
-
+    dupe_mask = (soft_weights < 0.75).float()
+    soft_weights_only_dupes = soft_weights * dupe_mask
     # Debugging outputs
+    print(f"soft_weights mean: {soft_weights}")
     print(f"soft_weights mean: {soft_weights.mean().item()}")
     print(f"soft_weights max: {soft_weights.max().item()}")  # Should be close to 1
     print(f"soft_weights min: {soft_weights.min().item()}")
 
-    num_duplicates = soft_weights.sum(dim=-1)
+    num_duplicates = soft_weights_only_dupes.sum(dim=-1)
     penalty = num_duplicates.sum()/10
     print("penalty")
     print(penalty)
