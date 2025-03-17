@@ -884,7 +884,7 @@ class EuclideanCodebook(nn.Module):
         #     # Expire unused codes (optional step to refresh rarely used codes)
         #     self.expire_codes_(x)
         #
-        # return quantize, embed_ind, dist, self.embed, flatten, init_cb
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
