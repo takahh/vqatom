@@ -46,116 +46,90 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
-class WeightedThreeHopGCN(nn.Module):
-    @staticmethod
-    def init_weights2(m):
-        if isinstance(m, nn.Linear):
-            nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
 
-    @staticmethod
-    def init_weights(m):
-        import torch.nn.init as init
-        if isinstance(m, dglnn.GraphConv) and m.weight is not None:
-            init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
-            print(f"Initialized {m} with mean: {m.weight.mean().detach()}, std: {m.weight.std().detach()}")
+import torch
+import torch.nn as nn
+from egnn_pytorch import EGNN  # Example: EGNN from egnn_pytorch
+import dgl
+from dgl.nn.pytorch import EdgeWeightNorm
 
+class WeightedThreeHopEGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
-        super(WeightedThreeHopGCN, self).__init__()
+        super(WeightedThreeHopEGNN, self).__init__()
         if args is None:
             args = get_args()
+
         self.linear_0 = nn.Linear(7, args.hidden_dim)
-        self.conv1 = dglnn.GraphConv(in_feats, hidden_feats, norm="right", weight=True)
-        self.conv2 = dglnn.GraphConv(hidden_feats, hidden_feats, norm="right", weight=True)
-        self.conv3 = dglnn.GraphConv(hidden_feats, out_feats, norm="right", weight=True)  # 3rd hop
+        self.egnn1 = EGNN(dim=in_feats, edge_dim=1, m_dim=hidden_feats)
+        self.egnn2 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=hidden_feats)
+        self.egnn3 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=out_feats)  # 3rd hop
+
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
+
         self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
         self.leakyRelu1 = nn.LeakyReLU(negative_slope=0.2)
-        self.ln0 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
-        self.ln1 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
-        self.ln2 = nn.LayerNorm(args.hidden_dim)  # Layer normalization after linear transformation
+        self.ln0 = nn.LayerNorm(args.hidden_dim)
+        self.ln1 = nn.LayerNorm(args.hidden_dim)
+        self.ln2 = nn.LayerNorm(args.hidden_dim)
         self.activation = nn.GELU()
-
-        # Apply initialization to GraphConv layers
-        for module in self.modules():
-            if isinstance(module, dglnn.GraphConv):
-                self.init_weights(module)
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    import time
-    import torch
-
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bond_weight = self.bond_weight.to(device)  # Move embedding to correct device
+        self.bond_weight = self.bond_weight.to(device)
         batched_graph = batched_graph.to(device)
-        features = transform_node_feats(features).to(device)  # Ensure features are on the correct device
-        h = features.clone()
-        init_feat = h.clone()  # Store initial features (for later use)
-        edge_type = "_E"  # Batched heterogeneous graph edge type
+        features = transform_node_feats(features).to(device)
+
+        h = self.linear_0(features)
+        edge_type = "_E"
+
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()  # Ensure it's on the correct device
-        # print(f"edge_weight {edge_weight}")
+
+        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
         src, dst = batched_graph[edge_type].edges()
-        # src = src.to(device).long()  # Move src to the correct device
-        # dst = dst.to(device).long()  # Move dst to the correct device
-        # print(f"src {src}")
-        # print(f"dst {dst}")
 
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
-        edge_weight = transformed_edge_weight
-        # print(f"mapped_indices {mapped_indices}")
-        # print(f"edge_weight {edge_weight}")
-        features = features.to(device)
-        h = self.linear_0(features)  # Convert to expected shape
-        h = self.conv1(batched_graph[edge_type], h, edge_weight=edge_weight)
+
+        # EGNN uses position; ensure positions are initialized (if applicable)
+        pos = batched_graph.ndata.get("pos", torch.zeros_like(features))  # Default to zero if no position data
+
+        h = self.egnn1(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
-        h = self.conv2(batched_graph[edge_type], h, edge_weight=edge_weight)
+
+        h = self.egnn2(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
-        h = self.conv3(batched_graph[edge_type], h, edge_weight=edge_weight)
-        h = self.ln2(h)
-        h_list = []
-        # (quantized, emb_ind, loss, dist, codebook, raw_commit_loss, latents, margin_loss,
-        #  spread_loss, pair_loss, detached_quantize, x, init_cb, div_ele_loss, bond_num_div_loss,
-        #  aroma_div_loss, ringy_div_loss, h_num_div_loss, sil_loss, charge_div_loss, elec_state_div_loss,
-        #  equivalent_atom_loss, commit_loss)\
 
+        h = self.egnn3(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
+        h = self.ln2(h)
+
+        init_feat = features.clone()
         (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
+
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
-        # losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-        #          h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(),
-        #          sil_loss, equivalent_atom_loss.item(), commit_loss.item()]
         adj_matrix = batched_graph.adjacency_matrix().to_dense()
         sample_adj = adj_matrix.to_dense()
+
         if batched_graph_base:
-            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()  # 1-hop
-            sample_adj_base = adj_matrix_base.to_dense()  # 1-hop
+            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()
+            sample_adj_base = adj_matrix_base.to_dense()
             src, dst = batched_graph_base.all_edges()
         else:
             src, dst = batched_graph.all_edges()
-        src, dst = src.to(torch.int64), dst.to(torch.int64)
-        sample_hop_info = None
-        if batched_graph_base:
-            sample_bond_info = batched_graph_base.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info, sample_adj_base]
-            sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in
-                           sample_list]
-        else:
-            sample_bond_info = batched_graph.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_hop_info]
-            sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in
-                           sample_list]
-        return (h_list, h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
+
+        sample_bond_info = batched_graph.edata["weight"]
+        sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None]
+        sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
+
+        return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
 
 
 class MLP(nn.Module):
