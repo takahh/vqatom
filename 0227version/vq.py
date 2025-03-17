@@ -1460,4 +1460,4 @@ class VectorQuantize(nn.Module):
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
-                x, init_cb, equidist_cb_loss, commit_loss)
+                x, init_cb, equidist_cb_loss, raw_commit_loss)
