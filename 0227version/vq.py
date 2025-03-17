@@ -743,6 +743,7 @@ class EuclideanCodebook(nn.Module):
     def init_embed_(self, data, logger):
         if self.initted:
             return
+        print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
         # samples,
         # num_clusters,
         # num_iters=100,
