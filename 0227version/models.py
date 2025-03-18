@@ -79,6 +79,8 @@ class WeightedThreeHopEGNN(nn.Module):
 
     def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("device")
+        print(device)
         self.bond_weight = self.bond_weight.to(device)
         batched_graph = batched_graph.to(device)
         features = transform_node_feats(features).to(device)
