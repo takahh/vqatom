@@ -1395,9 +1395,7 @@ class VectorQuantize(nn.Module):
         # if self.commitment_weight > 0:
         # detached_quantize = quantize.detach()
         # commit_loss = F.mse_loss(quantize, x, reduction='none')
-        print("quantize.shape")
-        print(quantize.shape)
-        commit_loss = F.mse_loss(quantize, x, reduction='mean')
+        commit_loss = F.mse_loss(quantize, x, reduction='mean')/quantize.shape[1].float()
 
         #
         # if exists(mask):
