@@ -46,24 +46,26 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
-import torch.nn as nn
-from egnn_pytorch import EGNN
-from torch_geometric.data import Data
 
 # help(EGNN)
+import torch
+import torch.nn as nn
+from e3nn.nn import FullyConnectedTensorProduct
+from e3nn.o3 import Irreps
+from torch_geometric.utils import to_dense_adj
 
-class WeightedThreeHopEGNN(nn.Module):
+class EquivariantThreeHopEGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
-        super(WeightedThreeHopEGNN, self).__init__()
+        super().__init__()
         if args is None:
             args = get_args()
 
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
-        # Use PyG's EGNNConv
-        self.egnn1 = EGNN(dim=in_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn2 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn3 = EGNN(dim=out_feats, edge_dim=1, m_dim=hidden_feats)
+        # Define e3nn layers
+        self.egnn1 = FullyConnectedTensorProduct(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
+        self.egnn2 = FullyConnectedTensorProduct(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
+        self.egnn3 = FullyConnectedTensorProduct(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
@@ -98,16 +100,23 @@ class WeightedThreeHopEGNN(nn.Module):
         # Node positions
         pos = data.pos.to(device) if hasattr(data, 'pos') else torch.zeros_like(features).to(device)
 
-        # Use PyG edge_index instead of adjacency matrix
-        h = self.egnn1(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
+        # Convert edge_index to adjacency matrix
+        adj_matrix = to_dense_adj(data.edge_index).squeeze(0)  # Shape (num_nodes, num_nodes)
+
+        # Compute relative edge vectors
+        src, dst = data.edge_index  # Get source and target nodes
+        edge_vecs = pos[dst] - pos[src]  # Compute relative positions
+
+        # Equivariant message passing
+        h = self.egnn1(h, edge_vecs)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.egnn2(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
+        h = self.egnn2(h, edge_vecs)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.egnn3(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
+        h = self.egnn3(h, edge_vecs)
         h = self.ln2(h)
 
         # Vector Quantization step
