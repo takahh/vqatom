@@ -417,7 +417,7 @@ def main():
         f.write(f"{score_str}\n")
 
     # for collecting aggregated results
-    print(score_str)
+    # print(score_str)
 
 
 import requests

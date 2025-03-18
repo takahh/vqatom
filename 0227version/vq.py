@@ -859,7 +859,7 @@ class EuclideanCodebook(nn.Module):
             # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)  # Hard one-hot
             # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
 
-            print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
+            # print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
             # Expected: flatten [1, 15648, 64], embed_onehot [1, 15648, 1000]
 
             # Remove unnecessary dimension (if needed)
