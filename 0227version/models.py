@@ -122,8 +122,8 @@ class EquivariantThreeHopEGNN(nn.Module):
         # デバッグ用出力
         print("transformed_edge_weight shape:", transformed_edge_weight.shape)
         print("edge_vecs shape:", edge_vecs.shape)
+        print(f"Expected edge_update _in2_dim: {self.edge_update._in2_dim}")
 
-        # edge_update の呼び出し
         transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
 
         # EGNN の処理
