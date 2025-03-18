@@ -45,10 +45,8 @@ def init_weights(m):
         nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
         if m.bias is not None:
             nn.init.zeros_(m.bias)
-
 import torch
 import torch.nn as nn
-from e3nn.nn import Gate
 from e3nn.o3 import Irreps, Linear, TensorProduct
 from torch_geometric.utils import to_dense_adj
 
@@ -67,7 +65,9 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         # Edge feature transformation using TensorProduct
         self.edge_update = TensorProduct(
-            Irreps("1x0e"), Irreps("1x0e"), Irreps(f"{hidden_feats}x0e"), internal_weights=False, shared_weights=False
+            Irreps("1x0e"), Irreps("1x0e"), Irreps(f"{hidden_feats}x0e"),
+            instructions=[(0, 0, 0, "uuu", False)],  # Defines a simple product rule
+            internal_weights=False, shared_weights=False
         )
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
