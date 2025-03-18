@@ -132,9 +132,10 @@ class EquivariantThreeHopGINE(nn.Module):
         """Reset k-means clustering for vector quantization."""
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, data, features, epoch, logger=None, data_base=None):
+    def forward(self, data, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
+        sample_adj = data.adjacency_matrix(scipy_fmt="coo").to_dense()
 
         self.bond_weight = self.bond_weight.to(device)
         data = data.to(device)
@@ -196,6 +197,14 @@ class EquivariantThreeHopGINE(nn.Module):
             transformed_edge_weight,
             torch.zeros_like(features)  # Placeholder for optional value
         ]
+
+        if batched_graph_base:
+            sample_adj_base = batched_graph_base.adjacency_matrix(scipy_fmt="coo").to_dense()
+            sample_bond_info = batched_graph_base.edata["weight"]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
+        else:
+            sample_bond_info = data.edata["weight"]
+            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst]
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
