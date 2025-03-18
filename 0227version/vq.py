@@ -1427,7 +1427,7 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        # print(f"commit loss {commit_loss}")
+        print(f"commit loss {raw_commit_loss}, equidist_cb_loss {equidist_cb_loss}")
         loss = (self.lamb_div_equidist * equidist_cb_loss + self.commitment_weight * raw_commit_loss)
         # loss = (self.lamb_div_equidist * equidist_cb_loss + self.spread_weight * spread_loss)
                 # + self.commitment_weight * commit_loss)
