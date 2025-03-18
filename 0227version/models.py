@@ -48,8 +48,8 @@ def init_weights(m):
 
 import torch
 import torch.nn as nn
-from e3nn.nn import Gate, Linear
-from e3nn.o3 import Irreps, TensorProduct
+from e3nn.nn import Gate
+from e3nn.o3 import Irreps, Linear, TensorProduct
 from torch_geometric.utils import to_dense_adj
 
 class EquivariantThreeHopEGNN(nn.Module):
