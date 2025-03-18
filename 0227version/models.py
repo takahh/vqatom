@@ -49,7 +49,7 @@ import torch
 import torch.nn as nn
 import torch
 from e3nn.o3 import Irreps, TensorProduct
-from e3nn.nn import Linear  # Correct import for Linear
+from e3nn.o3 import Linear
 from torch_geometric.utils import to_dense_adj
 
 class EquivariantThreeHopEGNN(nn.Module):
