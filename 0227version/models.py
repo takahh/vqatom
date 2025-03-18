@@ -62,11 +62,9 @@ class EquivariantThreeHopEGNN(nn.Module):
         self.egnn1 = Linear(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
         self.egnn2 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
         self.egnn3 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
-
-        # Edge feature transformation using TensorProduct
         self.edge_update = TensorProduct(
             Irreps("1x0e"), Irreps("1x0e"), Irreps(f"{hidden_feats}x0e"),
-            instructions=[(0, 0, 0, "uuu", False)],  # Defines a simple product rule
+            instructions=[(0, 0, 0, "uuu", False)],
             internal_weights=False, shared_weights=False
         )
 
