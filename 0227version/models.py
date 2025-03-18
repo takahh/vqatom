@@ -126,7 +126,9 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"transformed_edge_weight {transformed_edge_weight.shape}")
         print(f"src {src.shape}")
         print(f"dst {dst.shape}")
-        h = self.gine1(h, (src, dst), edge_attr=transformed_edge_weight)
+        edge_index = torch.stack([src, dst], dim=0)  # Shape: [2, num_edges]
+        h = self.gine1(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
+
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
