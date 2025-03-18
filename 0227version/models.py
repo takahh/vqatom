@@ -60,7 +60,7 @@ from torch_geometric.data import Data
 import torch
 import torch.nn as nn
 from torch_geometric.nn import GINEConv
-from vector_quantize_pytorch import VectorQuantize  # Ensure correct import
+from vq import VectorQuantize  # Ensure correct import
 from bond_weight_layer import BondWeightLayer  # Adjust import based on your code
 
 
