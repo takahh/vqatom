@@ -119,21 +119,20 @@ class EquivariantThreeHopGINE(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
 
         if transformed_edge_weight.dim() == 1:
-            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)
-
-        # Edge update (optional depending on your implementation)
-        # Edge vectors are typically not needed for GINE, so this can be skipped
+            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)  # [num_edges, 1]
 
         # GINE layers
-        h = self.gine1(h, data.edge_index, edge_attr=transformed_edge_weight)
+        src, dst = data.edges()  # Extract edge indices
+
+        h = self.gine1(h, (src, dst), edge_attr=transformed_edge_weight)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.gine2(h, data.edge_index, edge_attr=transformed_edge_weight)
+        h = self.gine2(h, (src, dst), edge_attr=transformed_edge_weight)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.gine3(h, data.edge_index, edge_attr=transformed_edge_weight)
+        h = self.gine3(h, (src, dst), edge_attr=transformed_edge_weight)
         h = self.ln2(h)
 
         # Vector quantization
@@ -143,7 +142,7 @@ class EquivariantThreeHopGINE(nn.Module):
 
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
 
-        sample_list = [emb_ind, features, data.edge_index, transformed_edge_weight, None]
+        sample_list = [emb_ind, features, (src, dst), transformed_edge_weight, None]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
         return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
