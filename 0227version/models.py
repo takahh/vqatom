@@ -47,9 +47,8 @@ def init_weights(m):
             nn.init.zeros_(m.bias)
 
 import torch.nn as nn
-from e3nn.nn import EGNN
+from e3nn import EGNN
 from torch_geometric.data import Data
-from e3nn.nn import EGNN
 
 
 class WeightedThreeHopEGNN(nn.Module):
