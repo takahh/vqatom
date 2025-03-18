@@ -62,8 +62,8 @@ class WeightedThreeHopEGNN(nn.Module):
 
         # Use PyG's EGNNConv
         self.egnn1 = EGNN(dim=in_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn1 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn1 = EGNN(dim=out_feats, edge_dim=1, m_dim=hidden_feats)
+        self.egnn2 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=hidden_feats)
+        self.egnn3 = EGNN(dim=out_feats, edge_dim=1, m_dim=hidden_feats)
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
