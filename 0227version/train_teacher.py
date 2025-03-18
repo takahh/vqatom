@@ -129,7 +129,7 @@ def get_args():
     )
 
     """SAGE Specific"""
-    parser.add_argument("--batch_size", type=int, default=3000)
+    parser.add_argument("--batch_size", type=int, default=5000)
     parser.add_argument(
         "--fan_out",
         type=str,
@@ -141,7 +141,7 @@ def get_args():
     )
 
     parser.add_argument(
-        "--chunk_size", type=int, default=200
+        "--chunk_size", type=int, default=500
     )
 
     """Optimization"""
