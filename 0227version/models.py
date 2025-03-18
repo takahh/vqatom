@@ -135,7 +135,10 @@ class EquivariantThreeHopGINE(nn.Module):
     def forward(self, data, features, epoch, logger=None, batched_graph_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
-        sample_adj = data.adjacency_matrix(scipy_fmt="coo").to_dense()
+
+        src, dst = data.edges()
+        num_nodes = data.num_nodes()
+        sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
 
         self.bond_weight = self.bond_weight.to(device)
         data = data.to(device)
