@@ -61,8 +61,23 @@ import torch
 import torch.nn as nn
 from torch_geometric.nn import GINEConv
 from vq import VectorQuantize  # Ensure correct import
-from bond_weight_layer import BondWeightLayer  # Adjust import based on your code
 
+
+class BondWeightLayer(nn.Module):
+    def __init__(self, bond_types=4, hidden_dim=64):
+        super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()  # Output weight in range (0,1)
+        )
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
+
+    def forward(self, edge_types):
+        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        return edge_weight
 
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
