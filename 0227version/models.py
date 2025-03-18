@@ -57,24 +57,43 @@ import torch.nn.functional as F
 from torch_geometric.nn import GINEConv, global_mean_pool
 from torch_geometric.data import Data
 
+import torch
+import torch.nn as nn
+from torch_geometric.nn import GINEConv
+from vector_quantize_pytorch import VectorQuantize  # Ensure correct import
+from bond_weight_layer import BondWeightLayer  # Adjust import based on your code
+
 
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(EquivariantThreeHopGINE, self).__init__()
 
         if args is None:
-            args = get_args()
+            args = get_args()  # Ensure this function is defined elsewhere
 
+        # Initial linear layer for node features
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
-        # GINEConv layers for node feature updates
-        nn1 = nn.Sequential(nn.Linear(args.hidden_dim, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, hidden_feats))
-        nn2 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, hidden_feats))
-        nn3 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, out_feats))
+        # GINEConv layers with specified edge_dim
+        nn1 = nn.Sequential(
+            nn.Linear(args.hidden_dim, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, hidden_feats)
+        )
+        nn2 = nn.Sequential(
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, hidden_feats)
+        )
+        nn3 = nn.Sequential(
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(),
+            nn.Linear(hidden_feats, out_feats)
+        )
 
-        self.gine1 = GINEConv(nn1)
-        self.gine2 = GINEConv(nn2)
-        self.gine3 = GINEConv(nn3)
+        self.gine1 = GINEConv(nn1, edge_dim=1)
+        self.gine2 = GINEConv(nn2, edge_dim=1)
+        self.gine3 = GINEConv(nn3, edge_dim=1)
 
         # Vector quantization layer
         self.vq = VectorQuantize(
@@ -84,31 +103,33 @@ class EquivariantThreeHopGINE(nn.Module):
             use_cosine_sim=False
         )
 
+        # Bond weight layer
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
 
-        self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
-        self.leakyRelu1 = nn.LeakyReLU(negative_slope=0.2)
+        # Activation and normalization layers
+        self.leaky_relu0 = nn.LeakyReLU(0.2)
+        self.leaky_relu1 = nn.LeakyReLU(0.2)
         self.ln0 = nn.LayerNorm(args.hidden_dim)
         self.ln1 = nn.LayerNorm(args.hidden_dim)
         self.ln2 = nn.LayerNorm(args.hidden_dim)
 
     def reset_kmeans(self):
+        """Reset k-means clustering for vector quantization."""
         self.vq._codebook.reset_kmeans()
 
     def forward(self, data, features, epoch, logger=None, data_base=None):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print("Using device:", device)
+        print(f"Using device: {device}")
 
         self.bond_weight = self.bond_weight.to(device)
         data = data.to(device)
-        features = transform_node_feats(features).to(device)
+        features = transform_node_feats(features).to(device)  # Ensure this function is defined
 
+        # Initial node feature transformation
         h = self.linear_0(features)
 
-        # Edge weight handling
-        edge_weight = data.edata['edge_attr'].to(device).long() if 'edge_attr' in data.edata else torch.zeros(
-            data.num_edges(), dtype=torch.long, device=device
-        )
+        # Handle edge weights
+        edge_weight = data.edata.get('edge_attr', torch.zeros(data.num_edges, dtype=torch.long, device=device))
 
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
@@ -117,39 +138,51 @@ class EquivariantThreeHopGINE(nn.Module):
         )
 
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
+        transformed_edge_weight = transformed_edge_weight.unsqueeze(
+            -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
 
-        if transformed_edge_weight.dim() == 1:
-            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)  # [num_edges, 1]
+        # Extract edge indices and construct edge_index tensor
+        src, dst = data.edges()
+        edge_index = torch.stack([src, dst], dim=0)  # [2, num_edges]
 
-        # GINE layers
-        src, dst = data.edges()  # Extract edge indices
-        print(f"transformed_edge_weight {transformed_edge_weight.shape}")
-        print(f"src {src.shape}")
-        print(f"dst {dst.shape}")
-        edge_index = torch.stack([src, dst], dim=0)  # Shape: [2, num_edges]
+        # GINE Layer 1
         h = self.gine1(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
-
         h = self.ln0(h)
-        h = self.leakyRelu0(h)
+        h = self.leaky_relu0(h)
 
-        h = self.gine2(h, (src, dst), edge_attr=transformed_edge_weight)
+        # GINE Layer 2
+        h = self.gine2(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
         h = self.ln1(h)
-        h = self.leakyRelu1(h)
+        h = self.leaky_relu1(h)
 
-        h = self.gine3(h, (src, dst), edge_attr=transformed_edge_weight)
+        # GINE Layer 3
+        h = self.gine3(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
         h = self.ln2(h)
 
-        # Vector quantization
+        # Vector Quantization
         init_feat = features.clone()
-        (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
-         x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
+        quantize_output = self.vq(
+            h, init_feat, logger
+        )
 
+        (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
+         x, init_cb, equidist_cb_loss, commit_loss) = quantize_output
+
+        # Loss components list
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
 
-        sample_list = [emb_ind, features, (src, dst), transformed_edge_weight, None]
+        # Sample list for outputs
+        sample_list = [
+            emb_ind,
+            features,
+            edge_index,
+            transformed_edge_weight,
+            torch.zeros_like(features)  # Placeholder for optional value
+        ]
+
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
-        return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
+        return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
 
 
 class MLP(nn.Module):
