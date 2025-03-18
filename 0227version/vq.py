@@ -529,19 +529,19 @@ def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
     # Increase softness factor to make the maximum value closer to 1
     soft_weights = torch.softmax(-softness * distances ** 2, dim=-1)
     dupe_mask = torch.exp(-((soft_weights - 0.5) ** 2) / 0.000001)  # Gaussian mask around 0.5
-    print(f'dupe_mask: {dupe_mask}')
+    # print(f'dupe_mask: {dupe_mask}')
     soft_weights_only_dupes = soft_weights * dupe_mask
     # Debugging outputs
-    print(f"soft_weights mean: {soft_weights}")
-    print(f"soft_weights mean: {soft_weights.mean().item()}")
-    print(f"soft_weights max: {soft_weights.max().item()}")  # Should be close to 1
-    print(f"soft_weights min: {soft_weights.min().item()}")
+    # print(f"soft_weights mean: {soft_weights}")
+    # print(f"soft_weights mean: {soft_weights.mean().item()}")
+    # print(f"soft_weights max: {soft_weights.max().item()}")  # Should be close to 1
+    # print(f"soft_weights min: {soft_weights.min().item()}")
 
     num_duplicates = soft_weights_only_dupes.sum(dim=-1)
-    print(f'soft_weights: {soft_weights.shape}')
+    # print(f'soft_weights: {soft_weights.shape}')
     penalty = num_duplicates.sum() / soft_weights.shape[1]
-    print("penalty")
-    print(penalty)
+    # print("penalty")
+    # print(penalty)
 
     return penalty
 
@@ -1262,8 +1262,8 @@ class VectorQuantize(nn.Module):
 
         # Ensure correct shape to avoid unnecessary squeeze/unsqueeze calls
         embed_ind = embed_ind.view(-1)  # Flatten instead of squeeze()
-        print("embed_ind in vq_codebook_regularization_loss")
-        print(embed_ind)
+        # print("embed_ind in vq_codebook_regularization_loss")
+        # print(embed_ind)
         for group in equivalence_groups:
             if len(group) < 2:
                 continue  # Skip if the group is too small

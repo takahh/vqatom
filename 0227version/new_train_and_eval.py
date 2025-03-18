@@ -313,6 +313,7 @@ def run_inductive(
         # --------------------------------
         if conf["train_or_infer"] == "train":
             # Iterate through batches
+            print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
@@ -347,11 +348,11 @@ def run_inductive(
                  h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
                  pair_loss, sil_loss, equivalent_atom_loss.item(), commit_loss.item()]"""
                     """[spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]"""
-                    print(
-                        f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-                        f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-                        f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
-                        )
+                    # print(
+                    #     f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+                    #     f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
+                    #     f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
+                    #     )
         # --------------------------------
         # Save model
         # --------------------------------
@@ -363,6 +364,7 @@ def run_inductive(
         # --------------------------------
         test_loss_list = []
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 5, None), start=5):
+            print("TEST ---------------")
             if idx == 6:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
