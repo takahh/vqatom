@@ -1395,7 +1395,8 @@ class VectorQuantize(nn.Module):
         # if self.commitment_weight > 0:
         # detached_quantize = quantize.detach()
         # commit_loss = F.mse_loss(quantize, x, reduction='none')
-        commit_loss = F.mse_loss(quantize, x, reduction='mean')/quantize.shape[1].float()
+        commit_loss = F.mse_loss(quantize, x, reduction='mean') / torch.tensor(quantize.shape[1], dtype=torch.float,
+                                                                               device=quantize.device)
 
         #
         # if exists(mask):
