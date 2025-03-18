@@ -144,7 +144,9 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.linear_0(features)
 
         # Handle edge weights
-        edge_weight = data.edata.get('edge_attr', torch.zeros(data.num_edges, dtype=torch.long, device=device))
+        edge_weight = data.edata.get(
+            'edge_attr', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
+        )
 
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
