@@ -1064,7 +1064,7 @@ class VectorQuantize(nn.Module):
             threshold_ema_dead_code=0,
             channel_last=True,
             accept_image_fmap=False,
-            commitment_weight=0.1,
+            commitment_weight=0.001,
             margin_weight=1,
             spread_weight=0.2,
             pair_weight=0.01,
