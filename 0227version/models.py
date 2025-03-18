@@ -68,11 +68,12 @@ class EquivariantThreeHopEGNN(nn.Module):
         # Define edge update with matching irreps
         edge_irreps = Irreps(f"{hidden_feats}x0e")  # Match hidden_feats irreps
         self.edge_update = TensorProduct(
-            edge_irreps,  # Edge features
-            Irreps("1x1o"),  # Relative position vectors (1st-order)
-            edge_irreps,  # Output features
-            instructions=[(i, i, i, "uuu", False) for i in range(len(edge_irreps))],
-            internal_weights=False, shared_weights=False
+            Irreps("1x0e"),  # Edge feature (scalar, even)
+            Irreps("1o"),  # Edge vector (vector, odd)
+            Irreps(f"{hidden_feats}x0o"),  # Output (odd parity)
+            instructions=[(0, 0, 0, "uuu", False)],
+            internal_weights=False,
+            shared_weights=False
         )
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
