@@ -100,7 +100,8 @@ class EquivariantThreeHopEGNN(nn.Module):
         h = self.linear_0(features)
 
         # Edge attributes (bond weights)
-        edge_weight = data.edge_attr.to(device).long()
+        # Edge attributes (bond weights)
+        edge_weight = data.edata['edge_attr'].to(device).long()
         mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
                                      torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # (num_edges, feature_dim)
