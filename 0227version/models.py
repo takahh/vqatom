@@ -47,7 +47,9 @@ def init_weights(m):
             nn.init.zeros_(m.bias)
 import torch
 import torch.nn as nn
-from e3nn.o3 import Irreps, Linear, TensorProduct
+import torch
+from e3nn.o3 import Irreps, TensorProduct
+from e3nn.nn import Linear  # Correct import for Linear
 from torch_geometric.utils import to_dense_adj
 
 class EquivariantThreeHopEGNN(nn.Module):
@@ -58,13 +60,18 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
-        # Define e3nn equivariant layers
+        # Define e3nn equivariant layers with corrected Linear usage
         self.egnn1 = Linear(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
         self.egnn2 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
         self.egnn3 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
+
+        # Define edge update with matching irreps
+        edge_irreps = Irreps(f"{hidden_feats}x0e")  # Match hidden_feats irreps
         self.edge_update = TensorProduct(
-            Irreps("1x0e"), Irreps("1x0e"), Irreps(f"{hidden_feats}x0e"),
-            instructions=[(0, 0, 0, "uuu", False)],
+            edge_irreps,  # Edge features
+            Irreps("1x1o"),  # Relative position vectors (1st-order)
+            edge_irreps,  # Output features
+            instructions=[(i, i, i, "uuu", False) for i in range(len(edge_irreps))],
             internal_weights=False, shared_weights=False
         )
 
@@ -107,6 +114,9 @@ class EquivariantThreeHopEGNN(nn.Module):
         # Compute relative edge vectors
         src, dst = data.edge_index  # Get source and target nodes
         edge_vecs = pos[dst] - pos[src]  # Compute relative positions
+
+        # Convert edge_vecs to correct irreps shape (vector needs 1x1o irrep)
+        edge_vecs = edge_vecs.unsqueeze(-1)  # Add missing dimension if needed
 
         # Update edge features using equivariant TensorProduct
         transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
