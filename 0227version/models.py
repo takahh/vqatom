@@ -46,12 +46,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
-
-# help(EGNN)
 import torch
 import torch.nn as nn
-from e3nn.nn import FullyConnectedTensorProduct
-from e3nn.o3 import Irreps
+from e3nn.nn import Gate, Linear
+from e3nn.o3 import Irreps, TensorProduct
 from torch_geometric.utils import to_dense_adj
 
 class EquivariantThreeHopEGNN(nn.Module):
@@ -62,10 +60,15 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
-        # Define e3nn layers
-        self.egnn1 = FullyConnectedTensorProduct(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
-        self.egnn2 = FullyConnectedTensorProduct(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
-        self.egnn3 = FullyConnectedTensorProduct(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
+        # Define e3nn equivariant layers
+        self.egnn1 = Linear(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
+        self.egnn2 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
+        self.egnn3 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
+
+        # Edge feature transformation using TensorProduct
+        self.edge_update = TensorProduct(
+            Irreps("1x0e"), Irreps("1x0e"), Irreps(f"{hidden_feats}x0e"), internal_weights=False, shared_weights=False
+        )
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
@@ -107,16 +110,19 @@ class EquivariantThreeHopEGNN(nn.Module):
         src, dst = data.edge_index  # Get source and target nodes
         edge_vecs = pos[dst] - pos[src]  # Compute relative positions
 
+        # Update edge features using equivariant TensorProduct
+        transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
+
         # Equivariant message passing
-        h = self.egnn1(h, edge_vecs)
+        h = self.egnn1(h)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.egnn2(h, edge_vecs)
+        h = self.egnn2(h)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.egnn3(h, edge_vecs)
+        h = self.egnn3(h)
         h = self.ln2(h)
 
         # Vector Quantization step
