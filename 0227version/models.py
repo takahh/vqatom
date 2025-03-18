@@ -46,12 +46,10 @@ def init_weights(m):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
-
-import torch
 import torch.nn as nn
-from egnn_pytorch import EGNN  # Example: EGNN from egnn_pytorch
-import dgl
-from dgl.nn.pytorch import EdgeWeightNorm
+from torch_geometric.nn import EGNNConv
+from torch_geometric.data import Data
+
 
 class WeightedThreeHopEGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
@@ -60,9 +58,11 @@ class WeightedThreeHopEGNN(nn.Module):
             args = get_args()
 
         self.linear_0 = nn.Linear(7, args.hidden_dim)
-        self.egnn1 = EGNN(dim=in_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn2 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=hidden_feats)
-        self.egnn3 = EGNN(dim=hidden_feats, edge_dim=1, m_dim=out_feats)  # 3rd hop
+
+        # Use PyG's EGNNConv
+        self.egnn1 = EGNNConv(in_feats, hidden_feats, edge_dim=1)
+        self.egnn2 = EGNNConv(hidden_feats, hidden_feats, edge_dim=1)
+        self.egnn3 = EGNNConv(hidden_feats, out_feats, edge_dim=1)
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
@@ -77,48 +77,36 @@ class WeightedThreeHopEGNN(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, batched_graph, features, epoch, logger=None, batched_graph_base=None):
+    def forward(self, data, features, epoch, logger=None, data_base=None):
+        """ Forward function for PyTorch Geometric """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print("device")
-        print(device)
+        print("Using device:", device)
+
         self.bond_weight = self.bond_weight.to(device)
-        batched_graph = batched_graph.to(device)
+        data = data.to(device)
         features = transform_node_feats(features).to(device)
 
         h = self.linear_0(features)
-        edge_type = "_E"
 
-        if edge_type not in batched_graph.etypes:
-            raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
-
-        # Get edge weights and convert to bond embeddings
-        edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
-        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4),
-                                     edge_weight - 1, torch.zeros_like(edge_weight))
+        # Edge attributes (bond weights)
+        edge_weight = data.edge_attr.to(device).long()
+        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
+                                     torch.zeros_like(edge_weight))
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # (num_edges, feature_dim)
 
-        # Get adjacency matrix and edge attributes
-        adj_matrix = batched_graph.adjacency_matrix().to_dense().to(device)  # (num_nodes, num_nodes)
+        # Node positions
+        pos = data.pos.to(device) if hasattr(data, 'pos') else torch.zeros_like(features).to(device)
 
-        # Edge features matrix with shape (batch_size, num_nodes, num_nodes, edge_dim)
-        edge_features = torch.zeros(batched_graph.num_nodes(), batched_graph.num_nodes(),
-                                    transformed_edge_weight.shape[-1]).to(device)
-        src, dst = batched_graph[edge_type].edges()
-        edge_features[src, dst] = transformed_edge_weight  # Assign transformed edge weights
-
-        # Get node positions or default to zeros if not available
-        pos = batched_graph.ndata.get("pos", torch.zeros_like(features)).to(device)
-
-        # Pass adjacency and edge features directly to EGNN layers
-        h = self.egnn1(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
+        # Use PyG edge_index instead of adjacency matrix
+        h = self.egnn1(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.egnn2(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
+        h = self.egnn2(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.egnn3(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
+        h = self.egnn3(h, edge_index=data.edge_index, edge_attr=transformed_edge_weight, pos=pos)
         h = self.ln2(h)
 
         # Vector Quantization step
@@ -128,12 +116,7 @@ class WeightedThreeHopEGNN(nn.Module):
 
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
 
-        # Sample adjacency and bond info
-        sample_adj = adj_matrix.clone().detach()
-        sample_bond_info = batched_graph.edata["weight"]
-        src, dst = batched_graph.all_edges() if not batched_graph_base else batched_graph_base.all_edges()
-
-        sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None]
+        sample_list = [emb_ind, features, data.edge_index, transformed_edge_weight, None]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
         return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
