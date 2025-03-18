@@ -116,6 +116,8 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         # edge_vecs をここで定義
         pos = data.ndata['pos'].to(device) if 'pos' in data.ndata else torch.zeros_like(features).to(device)
+        print(f"pos shape: {pos.shape}")  # 期待値: [num_nodes, 3]
+
         src, dst = data.edges()
         edge_vecs = pos[dst] - pos[src]
 
