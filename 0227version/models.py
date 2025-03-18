@@ -49,6 +49,7 @@ def init_weights(m):
 import torch.nn as nn
 from torch_geometric.nn import EGNNConv
 from torch_geometric.data import Data
+from e3nn.nn import EGNN
 
 
 class WeightedThreeHopEGNN(nn.Module):
