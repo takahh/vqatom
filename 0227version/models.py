@@ -50,6 +50,7 @@ import torch.nn as nn
 from egnn_pytorch import EGNN
 from torch_geometric.data import Data
 
+help(EGNN)
 
 class WeightedThreeHopEGNN(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
