@@ -96,7 +96,7 @@ class WeightedThreeHopEGNN(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # (num_edges, feature_dim)
 
         # Get adjacency matrix and edge attributes
-        adj_matrix = batched_graph.adjacency_matrix(scipy_fmt="csr").to_dense().to(device)  # (num_nodes, num_nodes)
+        adj_matrix = batched_graph.adjacency_matrix().to_dense().to(device)  # (num_nodes, num_nodes)
 
         # Edge features matrix with shape (batch_size, num_nodes, num_nodes, edge_dim)
         edge_features = torch.zeros(batched_graph.num_nodes(), batched_graph.num_nodes(),
