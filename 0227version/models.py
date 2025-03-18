@@ -98,34 +98,35 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         h = self.linear_0(features)
 
-        # edge_weightをエンコードし、形状を正しく整える
+        # edge_weight の処理
         edge_weight = data.edata['edge_attr'].to(device).long() if 'edge_attr' in data.edata else torch.zeros(
-            data.num_edges(), dtype=torch.long, device=device)
+            data.num_edges(), dtype=torch.long, device=device
+        )
 
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
             torch.zeros_like(edge_weight)
         )
+
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
 
-        # 形状が正しいか確認し、必要なら変形
         if transformed_edge_weight.dim() == 1:
             transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)  # [num_edges, 1]
 
-        print("transformed_edge_weight shape:", transformed_edge_weight.shape)  # デバッグ用
-        print("edge_vecs shape:", edge_vecs.shape)  # デバッグ用
-
-        # edge_update 呼び出し
-        transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
-
+        # edge_vecs をここで定義
         pos = data.ndata['pos'].to(device) if 'pos' in data.ndata else torch.zeros_like(features).to(device)
-
         src, dst = data.edges()
         edge_vecs = pos[dst] - pos[src]
 
+        # デバッグ用出力
+        print("transformed_edge_weight shape:", transformed_edge_weight.shape)
+        print("edge_vecs shape:", edge_vecs.shape)
+
+        # edge_update の呼び出し
         transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
 
+        # EGNN の処理
         h = self.egnn1(h)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
