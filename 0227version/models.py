@@ -201,7 +201,7 @@ class EquivariantThreeHopGINE(nn.Module):
         ]
 
         if batched_graph_base:
-            sample_adj_base = batched_graph_base.adjacency_matrix(scipy_fmt="coo").to_dense()
+            sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
         else:
