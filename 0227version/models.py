@@ -89,43 +89,48 @@ class WeightedThreeHopEGNN(nn.Module):
         if edge_type not in batched_graph.etypes:
             raise ValueError(f"Expected edge type '_E', but found: {batched_graph.etypes}")
 
+        # Get edge weights and convert to bond embeddings
         edge_weight = batched_graph[edge_type].edata["weight"].to(device).long()
+        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4),
+                                     edge_weight - 1, torch.zeros_like(edge_weight))
+        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # (num_edges, feature_dim)
+
+        # Get adjacency matrix and edge attributes
+        adj_matrix = batched_graph.adjacency_matrix(scipy_fmt="csr").to_dense().to(device)  # (num_nodes, num_nodes)
+
+        # Edge features matrix with shape (batch_size, num_nodes, num_nodes, edge_dim)
+        edge_features = torch.zeros(batched_graph.num_nodes(), batched_graph.num_nodes(),
+                                    transformed_edge_weight.shape[-1]).to(device)
         src, dst = batched_graph[edge_type].edges()
+        edge_features[src, dst] = transformed_edge_weight  # Assign transformed edge weights
 
-        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
-                                     torch.zeros_like(edge_weight))
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+        # Get node positions or default to zeros if not available
+        pos = batched_graph.ndata.get("pos", torch.zeros_like(features)).to(device)
 
-        # EGNN uses position; ensure positions are initialized (if applicable)
-        pos = batched_graph.ndata.get("pos", torch.zeros_like(features))  # Default to zero if no position data
-
-        h = self.egnn1(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
+        # Pass adjacency and edge features directly to EGNN layers
+        h = self.egnn1(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.egnn2(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
+        h = self.egnn2(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.egnn3(h, edge_index=torch.stack([src, dst], dim=0), edge_attr=transformed_edge_weight, pos=pos)
+        h = self.egnn3(h, adj=adj_matrix, edge_attr=edge_features, pos=pos)
         h = self.ln2(h)
 
+        # Vector Quantization step
         init_feat = features.clone()
         (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
 
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
-        adj_matrix = batched_graph.adjacency_matrix().to_dense()
-        sample_adj = adj_matrix.to_dense()
 
-        if batched_graph_base:
-            adj_matrix_base = batched_graph_base.adjacency_matrix().to_dense()
-            sample_adj_base = adj_matrix_base.to_dense()
-            src, dst = batched_graph_base.all_edges()
-        else:
-            src, dst = batched_graph.all_edges()
-
+        # Sample adjacency and bond info
+        sample_adj = adj_matrix.clone().detach()
         sample_bond_info = batched_graph.edata["weight"]
+        src, dst = batched_graph.all_edges() if not batched_graph_base else batched_graph_base.all_edges()
+
         sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, None]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
