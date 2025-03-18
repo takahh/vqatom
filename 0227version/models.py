@@ -98,7 +98,7 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         h = self.linear_0(features)
 
-        # 修正箇所: エッジ属性の存在を確認
+        # edge_weightをエンコードし、形状を正しく整える
         edge_weight = data.edata['edge_attr'].to(device).long() if 'edge_attr' in data.edata else torch.zeros(
             data.num_edges(), dtype=torch.long, device=device)
 
@@ -107,7 +107,17 @@ class EquivariantThreeHopEGNN(nn.Module):
             edge_weight - 1,
             torch.zeros_like(edge_weight)
         )
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
+        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
+
+        # 形状が正しいか確認し、必要なら変形
+        if transformed_edge_weight.dim() == 1:
+            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)  # [num_edges, 1]
+
+        print("transformed_edge_weight shape:", transformed_edge_weight.shape)  # デバッグ用
+        print("edge_vecs shape:", edge_vecs.shape)  # デバッグ用
+
+        # edge_update 呼び出し
+        transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
 
         pos = data.ndata['pos'].to(device) if 'pos' in data.ndata else torch.zeros_like(features).to(device)
 
