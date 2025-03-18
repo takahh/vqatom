@@ -2,6 +2,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
+from scipy.version import commit_count
 from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
 from torch.ao.quantization import quantize
@@ -1064,7 +1065,7 @@ class VectorQuantize(nn.Module):
             threshold_ema_dead_code=0,
             channel_last=True,
             accept_image_fmap=False,
-            commitment_weight=0.001,
+            commitment_weight=1,
             margin_weight=1,
             spread_weight=0.2,
             pair_weight=0.01,
@@ -1394,6 +1395,8 @@ class VectorQuantize(nn.Module):
         # if self.commitment_weight > 0:
         # detached_quantize = quantize.detach()
         # commit_loss = F.mse_loss(quantize, x, reduction='none')
+        print("quantize.shape")
+        print(quantize.shape)
         commit_loss = F.mse_loss(quantize, x, reduction='mean')
 
         #
