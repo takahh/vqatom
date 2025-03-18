@@ -2,7 +2,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
-from scipy.version import commit_count
+# from scipy.version import commit_count
 from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
 from torch.ao.quantization import quantize
