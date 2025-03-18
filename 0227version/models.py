@@ -47,7 +47,7 @@ def init_weights(m):
             nn.init.zeros_(m.bias)
 
 import torch.nn as nn
-from torch_geometric.nn import EGNNConv
+from e3nn.nn import EGNN
 from torch_geometric.data import Data
 from e3nn.nn import EGNN
 
