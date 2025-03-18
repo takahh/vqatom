@@ -89,7 +89,6 @@ class EquivariantThreeHopEGNN(nn.Module):
         self.vq._codebook.reset_kmeans()
 
     def forward(self, data, features, epoch, logger=None, data_base=None):
-        """ Forward function for PyTorch Geometric """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device:", device)
 
@@ -99,30 +98,24 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         h = self.linear_0(features)
 
-        # Edge attributes (bond weights)
-        # Edge attributes (bond weights)
-        edge_weight = data.edata['edge_attr'].to(device).long()
-        mapped_indices = torch.where((edge_weight >= 1) & (edge_weight <= 4), edge_weight - 1,
-                                     torch.zeros_like(edge_weight))
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # (num_edges, feature_dim)
+        # 修正箇所: エッジ属性の存在を確認
+        edge_weight = data.edata['edge_attr'].to(device).long() if 'edge_attr' in data.edata else torch.zeros(
+            data.num_edges(), dtype=torch.long, device=device)
 
-        # Node positions
-        pos = data.pos.to(device) if hasattr(data, 'pos') else torch.zeros_like(features).to(device)
+        mapped_indices = torch.where(
+            (edge_weight >= 1) & (edge_weight <= 4),
+            edge_weight - 1,
+            torch.zeros_like(edge_weight)
+        )
+        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)
 
-        # Convert edge_index to adjacency matrix
-        adj_matrix = to_dense_adj(data.edge_index).squeeze(0)  # Shape (num_nodes, num_nodes)
+        pos = data.ndata['pos'].to(device) if 'pos' in data.ndata else torch.zeros_like(features).to(device)
 
-        # Compute relative edge vectors
-        src, dst = data.edge_index  # Get source and target nodes
-        edge_vecs = pos[dst] - pos[src]  # Compute relative positions
+        src, dst = data.edges()
+        edge_vecs = pos[dst] - pos[src]
 
-        # Convert edge_vecs to correct irreps shape (vector needs 1x1o irrep)
-        edge_vecs = edge_vecs.unsqueeze(-1)  # Add missing dimension if needed
-
-        # Update edge features using equivariant TensorProduct
         transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
 
-        # Equivariant message passing
         h = self.egnn1(h)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
@@ -134,14 +127,13 @@ class EquivariantThreeHopEGNN(nn.Module):
         h = self.egnn3(h)
         h = self.ln2(h)
 
-        # Vector Quantization step
         init_feat = features.clone()
         (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
 
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
 
-        sample_list = [emb_ind, features, data.edge_index, transformed_edge_weight, None]
+        sample_list = [emb_ind, features, data.edges(), transformed_edge_weight, None]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
         return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
