@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import glob
 import numpy as np
-from models import EquivariantThreeHopEGNN
+from models import EquivariantThreeHopGINE
 import copy
 from utils import set_seed
 import dgl.dataloading
