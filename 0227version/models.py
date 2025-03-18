@@ -124,6 +124,8 @@ class EquivariantThreeHopGINE(nn.Module):
         # GINE layers
         src, dst = data.edges()  # Extract edge indices
         print(f"transformed_edge_weight {transformed_edge_weight.shape}")
+        print(f"src {src.shape}")
+        print(f"dst {dst.shape}")
         h = self.gine1(h, (src, dst), edge_attr=transformed_edge_weight)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
