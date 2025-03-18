@@ -47,7 +47,7 @@ def init_weights(m):
             nn.init.zeros_(m.bias)
 
 import torch.nn as nn
-from e3nn import EGNN
+from egnn_pytorch import EGNN
 from torch_geometric.data import Data
 
 
@@ -60,9 +60,9 @@ class WeightedThreeHopEGNN(nn.Module):
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
         # Use PyG's EGNNConv
-        self.egnn1 = EGNNConv(in_feats, hidden_feats, edge_dim=1)
-        self.egnn2 = EGNNConv(hidden_feats, hidden_feats, edge_dim=1)
-        self.egnn3 = EGNNConv(hidden_feats, out_feats, edge_dim=1)
+        self.egnn1 = EGNN(in_feats, hidden_feats, edge_dim=1)
+        self.egnn2 = EGNN(hidden_feats, hidden_feats, edge_dim=1)
+        self.egnn3 = EGNN(hidden_feats, out_feats, edge_dim=1)
 
         self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
