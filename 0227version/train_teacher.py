@@ -274,7 +274,7 @@ def run(args):
     """ Model init """
     from models import EquivariantThreeHopEGNN
     # in_feats, hidden_feats, out_feats, args
-    model = WeightedThreeHopEGNN(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
+    model = EquivariantThreeHopEGNN(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
     # model = Model(conf)
 
     if conf["train_or_infer"] == "infer":
