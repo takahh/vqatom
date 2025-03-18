@@ -51,31 +51,39 @@ import torch
 from e3nn.o3 import Irreps, TensorProduct
 from e3nn.o3 import Linear
 from torch_geometric.utils import to_dense_adj
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GINEConv, global_mean_pool
+from torch_geometric.data import Data
 
-class EquivariantThreeHopEGNN(nn.Module):
+
+class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
-        super().__init__()
+        super(EquivariantThreeHopGINE, self).__init__()
+
         if args is None:
             args = get_args()
 
         self.linear_0 = nn.Linear(7, args.hidden_dim)
 
-        # Define e3nn equivariant layers with corrected Linear usage
-        self.egnn1 = Linear(Irreps(f"{in_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
-        self.egnn2 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{hidden_feats}x0e"))
-        self.egnn3 = Linear(Irreps(f"{hidden_feats}x0e"), Irreps(f"{out_feats}x0e"))
+        # GINEConv layers for node feature updates
+        nn1 = nn.Sequential(nn.Linear(args.hidden_dim, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, hidden_feats))
+        nn2 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, hidden_feats))
+        nn3 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU(), nn.Linear(hidden_feats, out_feats))
 
-        # Define edge update with matching irreps
-        self.edge_update = TensorProduct(
-            Irreps("1x0e"),  # Edge feature (scalar, multiplicity=1, l=0)
-            Irreps("1o"),  # Edge vector (vector, multiplicity=1, l=1)
-            Irreps("1x1o"),  # Output (vector, multiplicity=1, l=1)
-            instructions=[(0, 0, 0, "uuu", False)],
-            internal_weights=False,
-            shared_weights=False
+        self.gine1 = GINEConv(nn1)
+        self.gine2 = GINEConv(nn2)
+        self.gine3 = GINEConv(nn3)
+
+        # Vector quantization layer
+        self.vq = VectorQuantize(
+            dim=args.hidden_dim,
+            codebook_size=args.codebook_size,
+            decay=0.8,
+            use_cosine_sim=False
         )
 
-        self.vq = VectorQuantize(dim=args.hidden_dim, codebook_size=args.codebook_size, decay=0.8, use_cosine_sim=False)
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
 
         self.leakyRelu0 = nn.LeakyReLU(negative_slope=0.2)
@@ -83,7 +91,6 @@ class EquivariantThreeHopEGNN(nn.Module):
         self.ln0 = nn.LayerNorm(args.hidden_dim)
         self.ln1 = nn.LayerNorm(args.hidden_dim)
         self.ln2 = nn.LayerNorm(args.hidden_dim)
-        self.activation = nn.GELU()
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -98,9 +105,9 @@ class EquivariantThreeHopEGNN(nn.Module):
 
         h = self.linear_0(features)
 
-        # edge_weight の処理
-        edge_weight = data.edata['edge_attr'].to(device).long() if 'edge_attr' in data.edata else torch.zeros(
-            data.num_edges(), dtype=torch.long, device=device
+        # Edge weight handling
+        edge_weight = data.edge_attr.to(device).long() if data.edge_attr is not None else torch.zeros(
+            data.num_edges, dtype=torch.long, device=device
         )
 
         mapped_indices = torch.where(
@@ -112,41 +119,31 @@ class EquivariantThreeHopEGNN(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
 
         if transformed_edge_weight.dim() == 1:
-            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)  # [num_edges, 1]
+            transformed_edge_weight = transformed_edge_weight.unsqueeze(-1)
 
-        # edge_vecs をここで定義
-        pos = data.ndata['pos'].to(device) if 'pos' in data.ndata else torch.zeros_like(features).to(device)
-        print(f"pos shape: {pos.shape}")  # 期待値: [num_nodes, 3]
+        # Edge update (optional depending on your implementation)
+        # Edge vectors are typically not needed for GINE, so this can be skipped
 
-        src, dst = data.edges()
-        edge_vecs = pos[dst] - pos[src]
-
-        # デバッグ用出力
-        print("transformed_edge_weight shape:", transformed_edge_weight.shape)
-        print("edge_vecs shape:", edge_vecs.shape)
-        print(f"Expected edge_update _in2_dim: {self.edge_update._in2_dim}")
-
-        transformed_edge_weight = self.edge_update(transformed_edge_weight, edge_vecs)
-
-        # EGNN の処理
-        h = self.egnn1(h)
+        # GINE layers
+        h = self.gine1(h, data.edge_index, edge_attr=transformed_edge_weight)
         h = self.ln0(h)
         h = self.leakyRelu0(h)
 
-        h = self.egnn2(h)
+        h = self.gine2(h, data.edge_index, edge_attr=transformed_edge_weight)
         h = self.ln1(h)
         h = self.leakyRelu1(h)
 
-        h = self.egnn3(h)
+        h = self.gine3(h, data.edge_index, edge_attr=transformed_edge_weight)
         h = self.ln2(h)
 
+        # Vector quantization
         init_feat = features.clone()
         (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, equidist_cb_loss, commit_loss) = self.vq(h, init_feat, logger)
 
         losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
 
-        sample_list = [emb_ind, features, data.edges(), transformed_edge_weight, None]
+        sample_list = [emb_ind, features, data.edge_index, transformed_edge_weight, None]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
         return ([], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list)
