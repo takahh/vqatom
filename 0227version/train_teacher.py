@@ -272,7 +272,7 @@ def run(args):
     conf["device"] = device
     # logger.info(f"conf: {conf}")
     """ Model init """
-    from models import WeightedThreeHopEGNN
+    from models import EquivariantThreeHopEGNN
     # in_feats, hidden_feats, out_feats, args
     model = WeightedThreeHopEGNN(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
     # model = Model(conf)
