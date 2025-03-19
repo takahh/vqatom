@@ -59,7 +59,7 @@ from torch_geometric.data import Data
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GINEConv
+from torch_geometric.nn import GINConv
 from vq import VectorQuantize  # Ensure correct import
 
 
@@ -106,9 +106,9 @@ class EquivariantThreeHopGINE(nn.Module):
             nn.Linear(hidden_feats, out_feats)
         )
 
-        self.gine1 = GINEConv(nn1, edge_dim=1)
-        self.gine2 = GINEConv(nn2, edge_dim=1)
-        self.gine3 = GINEConv(nn3, edge_dim=1)
+        self.gine1 = GINConv(nn1, edge_dim=1)
+        self.gine2 = GINConv(nn2, edge_dim=1)
+        self.gine3 = GINConv(nn3, edge_dim=1)
 
         # Vector quantization layer
         self.vq = VectorQuantize(
@@ -203,8 +203,8 @@ class EquivariantThreeHopGINE(nn.Module):
 
         if batched_graph_base:
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
-            sample_adj_base = batched_graph_base.adj().to_dense()
-            sample_bond_info = batched_graph_base.edata["weight"]
+            sample_adj_base = batched_graph_base.detach().adj().to_dense()
+            sample_bond_info = batched_graph_base.detach().edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
