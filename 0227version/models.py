@@ -145,11 +145,12 @@ class EquivariantThreeHopGINE(nn.Module):
 
         self.bond_weight = self.bond_weight.to(device)
         data = data.to(device)
-        features = transform_node_feats(features).to(device)  # Ensure this function is defined
-
+        # features = transform_node_feats(features).to(device)  # Ensure this function is defined
         # Initial node feature transformation
+        print(f"features {features}")
         h = self.linear_0(features)
 
+        print(f"h {h}")
         # Handle edge weights
         edge_weight = data.edata.get(
             'edge_attr', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
@@ -167,8 +168,8 @@ class EquivariantThreeHopGINE(nn.Module):
 
         # Extract edge indices and construct edge_index tensor
         src, dst = data.edges()
-        edge_index = torch.stack([src, dst], dim=0)  # [2, num_edges]
-        edge_attr = torch.ones((transformed_edge_weight.shape[0], transformed_edge_weight.shape[1]), device=src.device)
+        edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
+        edge_attr = torch.ones((transformed_edge_weight.shape[0], transformed_edge_weight.shape[1]), device=src.device) # 結合情報　全部１
 
         # GINE Layer 1
         h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
