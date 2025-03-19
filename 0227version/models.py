@@ -133,6 +133,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.vq._codebook.reset_kmeans()
 
     def forward(self, data, features, epoch, logger=None, batched_graph_base=None):
+        import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         src, dst = data.edges()
