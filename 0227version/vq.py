@@ -1361,7 +1361,7 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     from einops import rearrange
 
-    def forward_debug(self, x, init_feat, logger, mask=None):
+    def forward(self, x, init_feat, logger, mask=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
 
