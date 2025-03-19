@@ -1326,8 +1326,11 @@ class VectorQuantize(nn.Module):
         pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
 
         # sil loss
+        # def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
+
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
+        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-1])
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         # print(equivalent_gtroup_list[:10])
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
@@ -1353,7 +1356,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, equidist_cb_loss)
+        return (spread_loss, embed_ind, sil_loss)
 
 
     def forward(self, x, init_feat, logger, mask=None):
@@ -1424,7 +1427,7 @@ class VectorQuantize(nn.Module):
 
         # (spread_loss, commit_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
         #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)\
-        (spread_loss, embed_ind, equidist_cb_loss) = (
+        (spread_loss, embed_ind, sil_loss) = (
                 self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger))
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -1432,8 +1435,8 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        print(f"commit loss {commit_loss}, equidist_cb_loss {equidist_cb_loss}")
-        loss = (self.lamb_div_equidist * equidist_cb_loss + self.commitment_weight * commit_loss)
+        print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
+        loss = (self.lamb_div_equidist * sil_loss + self.commitment_weight * commit_loss)
         # loss = (self.lamb_div_equidist * equidist_cb_loss + self.spread_weight * spread_loss)
                 # + self.commitment_weight * commit_loss)
         # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
@@ -1467,4 +1470,4 @@ class VectorQuantize(nn.Module):
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
         return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
-                x, init_cb, equidist_cb_loss, raw_commit_loss)
+                x, init_cb, sil_loss, raw_commit_loss)

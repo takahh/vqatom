@@ -148,10 +148,8 @@ class EquivariantThreeHopGINE(nn.Module):
         features = transform_node_feats(features).to(device)  # Ensure this function is defined
         # features = features.to(device)  # Ensure this function is defined
         # Initial node feature transformation
-        print(f"features {features}")
         h = self.linear_0(features)
 
-        print(f"h {h}")
         # Handle edge weights
         edge_weight = data.edata.get(
             'edge_attr', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
@@ -196,10 +194,10 @@ class EquivariantThreeHopGINE(nn.Module):
         )
 
         (quantize, emb_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
-         x, init_cb, equidist_cb_loss, commit_loss) = quantize_output
+         x, init_cb, sil_loss, commit_loss) = quantize_output
 
         # Loss components list
-        losslist = [spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]
+        losslist = [spread_loss.item(), commit_loss.item(), sil_loss.item()]
 
         # Sample list for outputs
         sample_list = [
