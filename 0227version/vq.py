@@ -1437,13 +1437,17 @@ class VectorQuantize(nn.Module):
             quantize = rearrange(quantize, 'b n d -> b d n')
 
         if self.accept_image_fmap:
+            print("fmap ===========")
             quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
         if only_one:
+            print("only one 0 ===========")
             if len(quantize.shape) == 3:
+                print("only one 1 ===========")
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
+                print("only one 2 ===========")
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
