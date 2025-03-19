@@ -1389,7 +1389,7 @@ class VectorQuantize(nn.Module):
         print(f"Before codebook: x shape = {x.shape}")
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
-        print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
+        # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
 
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
