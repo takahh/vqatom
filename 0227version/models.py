@@ -193,9 +193,9 @@ class EquivariantThreeHopGINE(nn.Module):
         quantize_output = self.vq(
             h, init_feat, logger
         )
-        #  (quantize, embed_ind, dist, embed, latents, init_cb)
-        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
-         x, init_cb, sil_loss, commit_loss) = quantize_output
+        # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
+        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss,
+         x, sil_loss, commit_loss) = quantize_output
 
         # Loss components list
         losslist = [spread_loss.item(), commit_loss.item(), sil_loss]
