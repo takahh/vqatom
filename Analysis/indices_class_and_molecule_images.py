@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 2
+EPOCH = 1
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -290,7 +290,7 @@ def main():
     arr_adj = getdata(adj_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
-    arr_feat = restore_node_feats(arr_feat)
+    # arr_feat = restore_node_feats(arr_feat)
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
