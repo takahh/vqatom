@@ -1357,6 +1357,7 @@ class VectorQuantize(nn.Module):
         # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (spread_loss, embed_ind, sil_loss)
 
+
     def forward(self, x, init_feat, logger, mask=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
@@ -1364,48 +1365,108 @@ class VectorQuantize(nn.Module):
         if only_one:
             x = rearrange(x, 'b d -> b 1 d')
 
-        print(f"Input x shape: {x.shape}")
+        shape, device, heads, is_multiheaded, codebook_size = x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
+        need_transpose = not self.channel_last and not self.accept_image_fmap
 
-        # Ensure `x` is consistent before codebook
-        print(f"x before codebook: {x[0, :5] if x.shape[0] > 1 else x[:5]}")
+        if self.accept_image_fmap:
+            height, width = x.shape[-2:]
+            x = rearrange(x, 'b c h w -> b (h w) c')
 
-        # Call codebook function
+        if need_transpose:
+            x = rearrange(x, 'b d n -> b n d')
+
+        # x = self.project_in(x)
+
+        if is_multiheaded:
+            ein_rhs_eq = 'h b n d' if self.separate_codebook_per_head else '1 (b h) n d'
+            x = rearrange(x, f'b n (h d) -> {ein_rhs_eq}', h=heads)
+
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
+        # print(f"embed_ind after codebook = {embed_ind.shape}")
+        quantize = quantize.squeeze(0)
+        x_tmp = x.squeeze(1).unsqueeze(0)
 
-        # Check the output of `_codebook`
-        print(f"After _codebook - quantize shape: {quantize.shape}, embed_ind shape: {embed_ind.shape}")
-        print(f"embed_ind (first few values): {embed_ind.flatten()[:10]}")
+        if self.training:
+            quantize = x_tmp + (quantize - x_tmp)
 
-        # Ensure equivalent atoms have same cluster IDs
-        unique_codes = torch.unique(embed_ind)
-        print(f"Unique cluster IDs in batch: {unique_codes}")
+        loss = torch.zeros(1, device=device, requires_grad=True)
 
-        # Check stability across batches
-        if not hasattr(self, 'prev_embed_ind'):
-            self.prev_embed_ind = embed_ind.clone().detach()
-        else:
-            if not torch.equal(self.prev_embed_ind, embed_ind):
-                print("⚠️ WARNING: Cluster assignments changed between batches!")
-            self.prev_embed_ind = embed_ind.clone().detach()
+        raw_commit_loss = torch.tensor([0.], device=device, requires_grad=self.training)
+        detached_quantize = torch.tensor([0.], device=device, requires_grad=self.training)
 
-        # Debugging transformations
+        # if self.commitment_weight > 0:
+        # detached_quantize = quantize.detach()
+        # commit_loss = F.mse_loss(quantize, x, reduction='none')
+        print(f"torch.squeeze(quantize) {torch.squeeze(quantize).shape}, torch.squeeze(x) {torch.squeeze(x).shape}")
+        commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') / torch.tensor(quantize.shape[1], dtype=torch.float,
+                                                                               device=quantize.device)
+
+        #
+        # if exists(mask):
+        #     commit_loss = F.mse_loss(detached_quantize, x, reduction='none')
+        #     if is_multiheaded:
+        #         mask = repeat(mask, 'b n -> c (b h) n', c=commit_loss.shape[0],
+        #                       h=commit_loss.shape[1] // mask.shape[0])
+        #     commit_loss = commit_loss[mask].mean()
+        # else:
+        #     commit_loss = F.mse_loss(detached_quantize.squeeze(0), x.squeeze(1))
+        #
+        # raw_commit_loss = commit_loss
+
+        codebook = self._codebook.embed
+
+        if self.orthogonal_reg_active_codes_only:
+            unique_code_ids = torch.unique(embed_ind)
+            codebook = torch.squeeze(codebook)[unique_code_ids]
+
+        num_codes = codebook.shape[0]
+        if exists(self.orthogonal_reg_max_codes) and num_codes > self.orthogonal_reg_max_codes:
+            rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
+            codebook = codebook[rand_ids]
+
+        # (spread_loss, commit_loss, pair_distance_loss, div_ele_loss, bond_num_div_loss, aroma_div_loss, ringy_div_loss,
+        #  h_num_div_loss, silh_loss, embed_ind, charge_div_loss, elec_state_div_loss, equidist_cb_loss)\
+        (spread_loss, embed_ind, sil_loss) = (
+                self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize, logger))
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
+        elif embed_ind.ndim != 1:
+            raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
+        print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
+        loss = (self.lamb_div_equidist * sil_loss + self.commitment_weight * commit_loss)
+        # loss = (self.lamb_div_equidist * equidist_cb_loss + self.spread_weight * spread_loss)
+                # + self.commitment_weight * commit_loss)
+        # loss = (loss + self.lamb_div_h_num * h_num_div_loss + equidist_cb_loss)
+        # loss = (loss + self.lamb_div_ele * div_ele_loss
+        #         + self.lamb_div_bonds * bond_num_div_loss + self.lamb_div_aroma * aroma_div_loss
+        #         + self.lamb_div_charge * charge_div_loss + self.lamb_div_elec_state * elec_state_div_loss
+        #         + self.lamb_div_ringy * ringy_div_loss + self.lamb_div_h_num * h_num_div_loss
+        #         + self.lamb_equiv_atom * equiv_atom_loss + self.commitment_weight * commit_loss)
 
-        print(f"embed_ind after reshaping: {embed_ind.shape}")
+        if is_multiheaded:
+            if self.separate_codebook_per_head:
+                quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
+                embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
+            else:
+                quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
+                embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
-        # Check if unique codes match across batches
-        print(f"Unique embed_ind after reshaping: {torch.unique(embed_ind)}")
+        quantize = self.project_out(quantize)
 
-        # Ensure cluster assignment is stable with orthogonal regularization
-        if self.orthogonal_reg_active_codes_only:
-            unique_code_ids = torch.unique(embed_ind)
-            print(f"Active unique codes for orthogonal reg: {unique_code_ids}")
+        if need_transpose:
+            quantize = rearrange(quantize, 'b n d -> b d n')
 
-        # Log quantization behavior
-        print(f"Quantized output (first few values): {quantize.flatten()[:10]}")
+        if self.accept_image_fmap:
+            quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
+            embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
-        return (quantize, embed_ind, dist, embed, latents, init_cb)
+        if only_one:
+            if len(quantize.shape) == 3:
+                quantize = rearrange(quantize, '1 b d -> b d')
+            if len(embed_ind.shape) == 2:
+                embed_ind = rearrange(embed_ind, 'b 1 -> b')
 
+        return (quantize, embed_ind, loss, dist, embed, raw_commit_loss, latents, spread_loss, detached_quantize,
+                x, init_cb, sil_loss, raw_commit_loss)
