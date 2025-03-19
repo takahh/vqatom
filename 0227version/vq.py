@@ -849,6 +849,11 @@ class EuclideanCodebook(nn.Module):
 
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
+        print("embed_ind shape:", embed_ind.shape)
+        print("embed_ind min:", embed_ind.min().item(), "embed_ind max:", embed_ind.max().item())
+        print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
+        print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
+
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
