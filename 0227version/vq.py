@@ -855,7 +855,7 @@ class EuclideanCodebook(nn.Module):
         print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
 
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
-        embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
+        # embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
