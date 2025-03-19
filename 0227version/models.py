@@ -197,7 +197,7 @@ class EquivariantThreeHopGINE(nn.Module):
          x, init_cb, sil_loss, commit_loss) = quantize_output
 
         # Loss components list
-        losslist = [spread_loss.item(), commit_loss.item(), sil_loss.item()]
+        losslist = [spread_loss.item(), commit_loss.item(), sil_loss]
 
         # Sample list for outputs
         sample_list = [
