@@ -1221,7 +1221,7 @@ class VectorQuantize(nn.Module):
         b_normalized = b / (b.max() + epsilon)  # Normalize distances
         loss = -torch.mean(torch.log(b_normalized + epsilon))  # Maximize inter-cluster distances
 
-        return embed_ind, loss
+        return loss
 
 
 
