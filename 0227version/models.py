@@ -109,6 +109,9 @@ class EquivariantThreeHopGINE(nn.Module):
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
         self.gine3 = GINEConv(nn3, edge_dim=1)
+        # self.gine1 = GINEConv(nn1, edge_dim=1)
+        # self.gine2 = GINEConv(nn2, edge_dim=1)
+        # self.gine3 = GINEConv(nn3, edge_dim=1)
 
         # Vector quantization layer
         self.vq = VectorQuantize(
@@ -165,22 +168,23 @@ class EquivariantThreeHopGINE(nn.Module):
         # Extract edge indices and construct edge_index tensor
         src, dst = data.edges()
         edge_index = torch.stack([src, dst], dim=0)  # [2, num_edges]
+        edge_attr = torch.ones((transformed_edge_weight.shape[0], transformed_edge_weight.shape[1]), device=src.device)
 
         # GINE Layer 1
-        # h = self.gine1(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
-        h = self.gine1(h, edge_index=edge_index)
+        h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine1(h, edge_index=edge_index)
         h = self.ln0(h)
         h = self.leaky_relu0(h)
 
         # GINE Layer 2
-        # h = self.gine2(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
-        h = self.gine2(h, edge_index=edge_index)
+        h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine2(h, edge_index=edge_index)
         h = self.ln1(h)
         h = self.leaky_relu1(h)
 
         # GINE Layer 3
-        # h = self.gine3(h, edge_index=edge_index, edge_attr=transformed_edge_weight)
-        h = self.gine3(h, edge_index=edge_index)
+        h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine3(h, edge_index=edge_index)
         h = self.ln2(h)
 
         # Vector Quantization
