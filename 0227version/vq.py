@@ -828,12 +828,15 @@ class EuclideanCodebook(nn.Module):
         # **Gumbel-Softmax for Soft Cluster Assignments**
         # tau = 1.0
         # embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
-        embed_ind_hard = F.one_hot(dist.argmax(dim=-1), num_classes=self.embed.shape[0]).float()
-
-        # STE trick: keep gradients from soft assignments
+        # Compute soft assignment
         embed_ind_soft = F.softmax(dist, dim=-1)
 
-        # Apply STE: Use hard values in forward pass, soft values in backward pass
+        # Convert to hard assignments
+        embed_ind_hard_idx = dist.argmax(dim=-1)
+        embed_ind_hard_idx = torch.clamp(embed_ind_hard_idx, min=0, max=self.embed.shape[0] - 1)
+        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[0]).float()
+
+        # Apply STE trick
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
 
         # print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
