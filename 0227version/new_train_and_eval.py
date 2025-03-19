@@ -315,6 +315,7 @@ def run_inductive(
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
+                if idx == 1:
                     break
                 # print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist

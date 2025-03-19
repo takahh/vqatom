@@ -201,11 +201,15 @@ class EquivariantThreeHopGINE(nn.Module):
         ]
 
         if batched_graph_base:
-            sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
+            # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
+            sample_adj_base = batched_graph_base.adj().to_sparse_coo().to_dense()
+
             sample_bond_info = batched_graph_base.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
+            import torch
+            sample_adj_base = batched_graph_base.adj().to_sparse_coo().to_dense()
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst]
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
