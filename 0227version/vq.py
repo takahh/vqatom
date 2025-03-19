@@ -1431,7 +1431,7 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
                 embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
-        quantize = self.project_out(quantize)
+        # quantize = self.project_out(quantize)
 
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
@@ -1442,12 +1442,10 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
 
         if only_one:
-            print("only one 0 ===========")
             if len(quantize.shape) == 3:
-                print("only one 1 ===========")
+                # this line is executed
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
-                print("only one 2 ===========")
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
