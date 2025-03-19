@@ -1419,18 +1419,18 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
+        # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
 
         loss = self.lamb_div_equidist * sil_loss + self.commitment_weight * commit_loss
 
-        if is_multiheaded:
-            print("multiheaded ====================")
-            if self.separate_codebook_per_head:
-                quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
-                embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
-            else:
-                quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
-                embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
+        # if is_multiheaded:
+        #     print("multiheaded ====================")
+        #     if self.separate_codebook_per_head:
+        #         quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
+        #         embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
+        #     else:
+        #         quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
+        #         embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
 
         # quantize = self.project_out(quantize)
 
