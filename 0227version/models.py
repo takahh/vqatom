@@ -212,6 +212,10 @@ class EquivariantThreeHopGINE(nn.Module):
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
+            print(f"emb_ind shape {emb_ind.shape}")
+            print(f"features shape {features.shape}")
+            print(f"src shape {src.shape}")
+            print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
