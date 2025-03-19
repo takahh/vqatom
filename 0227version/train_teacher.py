@@ -186,6 +186,12 @@ def get_args():
     args = parser.parse_args()
     return args
 
+import sys
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["CUDA_DEBUG_INFO"] = "0"
+os.environ["CUDA_VERBOSE_LOGGING"] = "0"
+
 
 def run(args):
     """

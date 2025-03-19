@@ -855,13 +855,7 @@ class EuclideanCodebook(nn.Module):
         print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
 
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
-        import sys
-        import os
-        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-        os.environ["CUDA_DEBUG_INFO"] = "0"
-        os.environ["CUDA_VERBOSE_LOGGING"] = "0"
-        print("Before stopping")
-        sys.exit()  # or exit()
+
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
         # print(f"embed_ind {embed_ind}")
