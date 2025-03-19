@@ -1407,10 +1407,7 @@ class VectorQuantize(nn.Module):
         #     print(f"Unique codebook IDs used: {unique_code_ids}")
         #     codebook = torch.squeeze(self._codebook.embed)[unique_code_ids]
 
-        # num_codes = codebook.shape[0]
-        # if hasattr(self, 'orthogonal_reg_max_codes') and num_codes > self.orthogonal_reg_max_codes:
-        #     rand_ids = torch.randperm(num_codes, device=device)[:self.orthogonal_reg_max_codes]
-        #     codebook = codebook[rand_ids]
+        codebook = self._codebook.embed
 
         spread_loss, embed_ind, sil_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
