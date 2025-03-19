@@ -1445,5 +1445,7 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
-
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x
+        """
+        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
+         x, init_cb, sil_loss, commit_loss) = quantize_output"""
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
