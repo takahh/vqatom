@@ -841,7 +841,13 @@ class EuclideanCodebook(nn.Module):
         # embed_ind_hard_idx = torch.clamp(embed_ind_hard_idx, min=0, max=self.embed.shape[0] - 1)
         # print(f"embed_ind_hard_idx 2 shape {embed_ind_hard_idx.shape}")
         # print(f"embed_ind_hard_idx 2 {embed_ind_hard_idx}")
-        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[0]).float()
+        # Access embeddings correctly with shape (1, 1000, 64)
+        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
+        print(f"embed_ind_hard shape: {embed_ind_hard.shape}")
+
+        # Retrieve embeddings safely
+        embed_vectors = torch.matmul(embed_ind_hard, self.embed.squeeze(0))
+        print(f"embed_vectors shape: {embed_vectors.shape}")
 
         print(f"embed_ind_hard shape {embed_ind_hard.shape}")
         print(f"embed_ind_hard {embed_ind_hard}")
