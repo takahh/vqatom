@@ -79,6 +79,7 @@ class BondWeightLayer(nn.Module):
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
 
+
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(EquivariantThreeHopGINE, self).__init__()
@@ -210,13 +211,14 @@ class EquivariantThreeHopGINE(nn.Module):
 
         if batched_graph_base:
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
+            latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
             print(f"emb_ind shape {emb_ind.shape}")
             print(f"features shape {features.shape}")
             print(f"src shape {src.shape}")
             print(f"dst shape {dst.shape}")
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst, sample_adj_base]
+            sample_list = [emb_ind, features, latents, sample_bond_info, src, dst, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src, dst]

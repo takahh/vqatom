@@ -417,10 +417,10 @@ def run_inductive(
         )
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
         np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
-        np.savez(f"./sample_adj_{epoch}", sample_list_test[2].cpu()[:500, :500])
+        np.savez(f"./latents_{epoch}", sample_list_test[2].cpu()[:500, :500])
         np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:500])
-        np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:500])
-        np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:500])
+        np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:1200])
+        np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:1200])
         # np.savez(f"./sample_hop_type_{epoch}", None)
         np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:500])
 
