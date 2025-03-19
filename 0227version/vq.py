@@ -832,6 +832,8 @@ class EuclideanCodebook(nn.Module):
         embed_ind_soft = F.softmax(dist, dim=-1)
         print(f"embed_ind_soft shape {embed_ind_soft.shape}")
         print(f"embed_ind_soft {embed_ind_soft}")
+        print(f"Embedding table shape: {self.embed.shape}")
+
         # Convert to hard assignments
         embed_ind_hard_idx = dist.argmax(dim=-1)
         print(f"embed_ind_hard_idx shape {embed_ind_hard_idx.shape}")
