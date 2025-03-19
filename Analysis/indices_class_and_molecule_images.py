@@ -76,7 +76,7 @@ def to_superscript(number):
     }
     return "".join(superscript_map.get(char, char) for char in str(number))
 
-def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
+def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
@@ -104,6 +104,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         component_indices = np.where(labels == i)[0]
         # Extract subgraph features for this component
         mol_features = feature_matrix[component_indices]
+        mol_latents = subset_latents[component_indices]
 
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
@@ -114,6 +115,7 @@ def visualize_molecules_with_classes_on_atoms(adj_matrix, feature_matrix, classe
         print("mol_bond:", mol_bond)
         print("mol_src:", mol_src)
         print("mol_dst:", mol_dst)
+        print("mol_latents:", mol_latents)
 
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
@@ -278,7 +280,7 @@ def restore_node_feats(transformed):
 
 def main():
     path = PATH
-    adj_file = f"{path}/sample_adj_{EPOCH}.npz"
+    latent_file = f"{path}/latents_{EPOCH}.npz"
     adj_base_file = f"{path}/sample_adj_base_{EPOCH}.npz"                     # input data
     feat_file = f"{path}sample_node_feat_{EPOCH}.npz"      # assigned code vector id
     indices_file = f"{path}sample_emb_ind_{EPOCH}.npz"
@@ -287,7 +289,7 @@ def main():
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
 
     arr_indices = getdata(indices_file)   # indices of the input
-    arr_adj = getdata(adj_file)       # assigned quantized code vec indices
+    arr_latents = getdata(latent_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
     # arr_feat = restore_node_feats(arr_feat)
@@ -319,16 +321,16 @@ def main():
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
     limit_num = 200
-    arr_adj = arr_adj[0:limit_num, 0:limit_num]
-    subset_adj_matrix = arr_adj[0:limit_num, 0:limit_num]
+    arr_latents = arr_latents[0:limit_num, 0:limit_num]
+    subset_latents = arr_latents[0:limit_num, 0:limit_num]
     subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
     subset_attr_matrix = arr_feat[:limit_num]
-    print(f"arr_adj {arr_adj.shape}")
+    print(f"subset_latents {subset_latents.shape}")
     print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
-    visualize_molecules_with_classes_on_atoms(subset_adj_matrix, subset_attr_matrix, node_indices, arr_src, arr_dst, arr_bond_order, subset_adj_base_matrix)
+    visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src, arr_dst, arr_bond_order, subset_adj_base_matrix)
 
 
 if __name__ == '__main__':
