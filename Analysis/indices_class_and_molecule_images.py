@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 1
+EPOCH = 27
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -90,7 +90,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     # Ensure node indices match the feature matrix.
     node_indices = np.arange(feature_matrix.shape[0])
+    print("node_indices")
+    print(node_indices)
     node_to_class = {node: cls for node, cls in zip(node_indices, classes)}
+
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
@@ -110,12 +113,11 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
-        mol_bond = arr_bond_order[mask]
-        print("mol_features:", mol_features)
-        print("mol_bond:", mol_bond)
-        print("mol_src:", mol_src)
-        print("mol_dst:", mol_dst)
-        print("mol_latents:", mol_latents)
+        mol_bond = arr_bond_order[mask[:500]]
+        component_indices_int = component_indices.tolist()
+        component_indices_int = [int(i) for i in component_indices_int]
+        mol_embed_id = [classes[i] for i in component_indices_int]  # ✅ Works for Python lists
+
 
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
@@ -123,7 +125,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         atom_labels = {}   # For custom atom labels in the drawing
 
         # Add atoms and annotate with class labels
-        for idx, features in zip(component_indices, mol_features):
+        for idx, features, latents in zip(component_indices, mol_features, mol_latents):
             atomic_num = int(features[0])  # Assume the first feature is the atomic number
             atom = Chem.Atom(atomic_num)
             atom_idx = mol.AddAtom(atom)
@@ -131,6 +133,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
             # Annotate atom with its class label if available
             class_label = node_to_class.get(idx, "Unknown")
+            print(f"ID {class_label} - {latents}")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
             atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
 
@@ -297,7 +300,10 @@ def main():
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
     arr_bond_order = getdata(bond_order_file)
-
+    print(f"arr_src {arr_src.shape}")
+    print(f"arr_dst {arr_dst.shape}")
+    print(f"arr_bond_order {arr_bond_order.shape}")
+    print(f"arr_feat {arr_feat.shape}")
     # -------------------------------------
     # rebuild attr matrix
     # -------------------------------------

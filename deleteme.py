@@ -1,18 +1,42 @@
-import torch
-import matplotlib.pyplot as plt
+# Given string representations
+a = "-0.8246711  -0.9321385   1.150675    0.48586696 -0.04270709 -1.5818331 \
+ -2.219942    1.0310255  -2.009806    2.388125    0.396557   -3.5395184 \
+ -1.1872835  -0.32694554 -1.5225948  -0.47347447 -1.3257073  -1.2586671 \
+ -2.5205283   1.4886148   2.2520392  -1.4823209  -1.7946213  -0.43935975 \
+ -2.7103412   2.0180554   0.99989414 -1.0966929  -1.3712978  -1.6446232 \
+ -1.4936006   0.04270762 -1.6476833   1.6856134   1.3928385  -0.6333273 \
+ -0.11480875 -0.4213977  -0.4914943   1.6009555   1.0192733  -1.2590005 \
+ -2.8073323   0.62113005  0.47641647  1.2159665   1.3665503   0.5136641 \
+  3.7089834   0.96079427  1.0119946  -0.20617065 -1.0975584   0.16812207 \
+  1.9224005   1.4091573  -0.6332731   0.13061492  4.025759    0.11390416 \
+ -0.14908977 -2.1653934  -3.932731   -2.9877217"
 
-# Create soft_weights values ranging from 0 to 1
-soft_weights = torch.linspace(0.4, 0.6, 100)
+b = "-0.8246711  -0.9321385   1.150675    0.48586696 -0.04270709 -1.5818331 \
+ -2.219942    1.0310255  -2.009806    2.388125    0.396557   -3.5395184 \
+ -1.1872835  -0.32694554 -1.5225948  -0.47347447 -1.3257073  -1.2586671 \
+ -2.5205283   1.4886148   2.2520392  -1.4823209  -1.7946213  -0.43935975 \
+ -2.7103412   2.0180554   0.99989414 -1.0966929  -1.3712978  -1.6446232 \
+ -1.4936006   0.04270762 -1.6476833   1.6856134   1.3928385  -0.6333273 \
+ -0.11480875 -0.4213977  -0.4914943   1.6009555   1.0192733  -1.2590005 \
+ -2.8073323   0.62113005  0.47641647  1.2159665   1.3665503   0.5136641 \
+  3.7089834   0.96079427  1.0119946  -0.20617065 -1.0975584   0.16812207 \
+  1.9224005   1.4091573  -0.6332731   0.13061492  4.025759    0.11390416 \
+ -0.14908977 -2.1653934  -3.932731   -2.9877217"
 
-# Gaussian mask around 0.5 with variance 0.01
-dupe_mask = torch.exp(-((soft_weights - 0.5) ** 2) / 0.000001)
+# Convert to lists of floats
+list_a = list(map(float, a.split()))
+list_b = list(map(float, b.split()))
 
-# Plotting
-plt.figure(figsize=(8, 6))
-plt.plot(soft_weights.numpy(), dupe_mask.numpy(), label="Gaussian Mask", color="blue")
-plt.title("Gaussian Mask Function Around 0.5")
-plt.xlabel("Soft Weight Value")
-plt.ylabel("Mask Value")
-plt.legend()
-plt.grid(True)
-plt.show()
+# Check if lists are equal
+if list_a == list_b:
+    print("The lists are identical.")
+else:
+    print("The lists are different.")
+
+# Optionally, compare element-wise differences
+import numpy as np
+diff = np.array(list_a) - np.array(list_b)
+if np.allclose(list_a, list_b, atol=1e-6):  # Adjust tolerance if needed
+    print("The lists are numerically the same within a small tolerance.")
+else:
+    print("Differences found:", diff)
