@@ -106,9 +106,12 @@ class EquivariantThreeHopGINE(nn.Module):
             nn.Linear(hidden_feats, out_feats)
         )
 
-        self.gine1 = GINConv(nn1, edge_dim=1)
-        self.gine2 = GINConv(nn2, edge_dim=1)
-        self.gine3 = GINConv(nn3, edge_dim=1)
+        # self.gine1 = GINEConv(nn1, edge_dim=1)
+        # self.gine2 = GINEConv(nn2, edge_dim=1)
+        # self.gine3 = GINEConv(nn3, edge_dim=1)
+        self.gine1 = GINConv(nn1)
+        self.gine2 = GINConv(nn2)
+        self.gine3 = GINConv(nn3)
 
         # Vector quantization layer
         self.vq = VectorQuantize(
