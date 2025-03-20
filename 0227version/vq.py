@@ -1380,7 +1380,7 @@ class VectorQuantize(nn.Module):
         h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
         equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
         # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
         # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
         # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
@@ -1390,7 +1390,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss)
+        return (spread_loss, embed_ind, sil_loss, atom_type_div_loss)
 
     import torch
     import torch.nn.functional as F
@@ -1444,7 +1444,7 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
-        spread_loss, embed_ind, sil_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
+        spread_loss, embed_ind, sil_loss, atom_type_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
         if len(embed_ind.shape) == 3:
@@ -1455,7 +1455,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
-
+        print(f"atom_type_div_loss {atom_type_div_loss}")
         loss = self.lamb_div_equidist * sil_loss + self.commitment_weight * commit_loss
 
         # if is_multiheaded:
