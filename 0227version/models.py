@@ -156,12 +156,16 @@ class EquivariantThreeHopGINE(nn.Module):
             'edge_attr', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
 
+        print(f"edge_weight {edge_weight.shape}")
+        print(f"edge_weight {edge_weight}")
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
             torch.zeros_like(edge_weight)
         )
 
+        print(f"mapped_indices {mapped_indices.shape}")
+        print(f"mapped_indices {mapped_indices}")
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
         transformed_edge_weight = transformed_edge_weight.unsqueeze(
             -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
