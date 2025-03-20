@@ -151,39 +151,27 @@ class EquivariantThreeHopGINE(nn.Module):
         # Initial node feature transformation
         h = self.linear_0(features)
 
-        print(f"h {h.shape}")
-        print(f"h {h}")
         # Handle edge weights
         edge_weight = data.edata.get(
             'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
 
-        print(f"edge_weight {edge_weight.shape}")
-        print(f"edge_weight {edge_weight}")
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
             torch.zeros_like(edge_weight)
         )
         mapped_indices = mapped_indices.long()
-        print(f"mapped_indices {mapped_indices.shape}")
-        print(f"mapped_indices {mapped_indices}")
-
+        print(f"features {features[:40]}")
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
         transformed_edge_weight = transformed_edge_weight.unsqueeze(
             -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
-        print(f"transformed_edge_weight {transformed_edge_weight.shape}")
-        print(f"transformed_edge_weight {transformed_edge_weight}")
         # Extract edge indices and construct edge_index tensor
         src, dst = data.edges()
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
         # edge_attr = torch.ones((transformed_edge_weight[0], transformed_edge_weight[1]), device=src.device) # 結合情報　全部１
         edge_attr = transformed_edge_weight
-        print(f"h {h.shape}")
-        print(f"edge_index {edge_index.shape}")
-        print(f"edge_index {edge_index}")
-        print(f"edge_attr {edge_attr.shape}")
-        print(f"edge_attr {edge_attr}")
+        print(f"edge_index {edge_index[:80]}")
         # GINE Layer 1
         h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
         # h = self.gine1(h, edge_index=edge_index)
