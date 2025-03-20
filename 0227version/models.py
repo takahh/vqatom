@@ -143,7 +143,10 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        src, dst = data.edges()
+        src_one_way, dst_one_way = data.edges()
+        src = torch.cat([src_one_way, dst_one_way])
+        dst = torch.cat([dst_one_way, src_one_way])
+
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
 
@@ -165,17 +168,16 @@ class EquivariantThreeHopGINE(nn.Module):
             torch.zeros_like(edge_weight)
         )
         mapped_indices = mapped_indices.long()
-        print(f"features {features[:40]}")
+        # print(f"features {features[:40]}")
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
         transformed_edge_weight = transformed_edge_weight.unsqueeze(
             -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
         # Extract edge indices and construct edge_index tensor
-        src, dst = data.edges()
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
         # edge_attr = torch.ones((transformed_edge_weight[0], transformed_edge_weight[1]), device=src.device) # 結合情報　全部１
         edge_attr = transformed_edge_weight
-        print(f"src {src[:80]}")
-        print(f"dst {dst[:80]}")
+        # print(f"src {src[:80]}")
+        # print(f"dst {dst[:80]}")
         # GINE Layer 1
         h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
         # h = self.gine1(h, edge_index=edge_index)

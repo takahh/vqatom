@@ -1,42 +1,100 @@
-# Given string representations
-a = "-0.8246711  -0.9321385   1.150675    0.48586696 -0.04270709 -1.5818331 \
- -2.219942    1.0310255  -2.009806    2.388125    0.396557   -3.5395184 \
- -1.1872835  -0.32694554 -1.5225948  -0.47347447 -1.3257073  -1.2586671 \
- -2.5205283   1.4886148   2.2520392  -1.4823209  -1.7946213  -0.43935975 \
- -2.7103412   2.0180554   0.99989414 -1.0966929  -1.3712978  -1.6446232 \
- -1.4936006   0.04270762 -1.6476833   1.6856134   1.3928385  -0.6333273 \
- -0.11480875 -0.4213977  -0.4914943   1.6009555   1.0192733  -1.2590005 \
- -2.8073323   0.62113005  0.47641647  1.2159665   1.3665503   0.5136641 \
-  3.7089834   0.96079427  1.0119946  -0.20617065 -1.0975584   0.16812207 \
-  1.9224005   1.4091573  -0.6332731   0.13061492  4.025759    0.11390416 \
- -0.14908977 -2.1653934  -3.932731   -2.9877217"
+import torch
+import networkx as nx
+import matplotlib.pyplot as plt
+from rdkit import Chem
+from rdkit.Chem import Draw, AllChem
+from rdkit.Geometry import Point2D
+from rdkit.Chem.Draw import rdMolDraw2D
 
-b = "-0.8246711  -0.9321385   1.150675    0.48586696 -0.04270709 -1.5818331 \
- -2.219942    1.0310255  -2.009806    2.388125    0.396557   -3.5395184 \
- -1.1872835  -0.32694554 -1.5225948  -0.47347447 -1.3257073  -1.2586671 \
- -2.5205283   1.4886148   2.2520392  -1.4823209  -1.7946213  -0.43935975 \
- -2.7103412   2.0180554   0.99989414 -1.0966929  -1.3712978  -1.6446232 \
- -1.4936006   0.04270762 -1.6476833   1.6856134   1.3928385  -0.6333273 \
- -0.11480875 -0.4213977  -0.4914943   1.6009555   1.0192733  -1.2590005 \
- -2.8073323   0.62113005  0.47641647  1.2159665   1.3665503   0.5136641 \
-  3.7089834   0.96079427  1.0119946  -0.20617065 -1.0975584   0.16812207 \
-  1.9224005   1.4091573  -0.6332731   0.13061492  4.025759    0.11390416 \
- -0.14908977 -2.1653934  -3.932731   -2.9877217"
+# Convert the binary drawing to an image
+from PIL import Image
+from io import BytesIO
 
-# Convert to lists of floats
-list_a = list(map(float, a.split()))
-list_b = list(map(float, b.split()))
+# Mapping atomic numbers to element symbols
+element_symbols = {6: 'C', 7: 'N', 8: 'O', 9: 'F', 16: 'S', 17: 'Cl', 35: 'Br', 53: 'I'}
 
-# Check if lists are equal
-if list_a == list_b:
-    print("The lists are identical.")
-else:
-    print("The lists are different.")
+# Function to get atomic element symbol
+def get_element_symbol(atomic_number):
+    return element_symbols.get(int(atomic_number), '?')  # Default to '?' if not found
 
-# Optionally, compare element-wise differences
-import numpy as np
-diff = np.array(list_a) - np.array(list_b)
-if np.allclose(list_a, list_b, atol=1e-6):  # Adjust tolerance if needed
-    print("The lists are numerically the same within a small tolerance.")
-else:
-    print("Differences found:", diff)
+# Data
+src = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                    19, 20, 21, 22, 23, 24, 24, 25, 25, 26, 26, 27, 28, 29, 30, 31,
+                    32, 33, 34, 35, 36, 37, 37, 38, 38])
+
+dst = torch.tensor([0, 1, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 13, 12, 16, 17,
+                    18, 19, 19, 21, 22, 21, 23, 10, 17, 8, 25, 26, 27, 28, 29, 30,
+                    31, 32, 32, 32, 31, 28, 36, 3, 7])
+
+features = torch.tensor([
+    [6., 1., 0., 4., 0., 0., 3.],
+    [6., 3., 0., 4., 0., 0., 1.],
+    [6., 1., 0., 4., 0., 0., 3.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [6., 2., 0., 3., 1., 1., 1.],
+    [6., 2., 0., 3., 1., 1., 1.],
+    [7., 2., 0., 3., 1., 1., 0.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [7., 2., 0., 3., 1., 1., 0.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [6., 2., 0., 3., 1., 1., 1.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [6., 3., 0., 3., 0., 0., 0.],
+    [8., 1., 0., 3., 0., 0., 0.],
+    [8., 1., 0., 3., 0., 0., 1.],
+    [7., 2., 0., 3., 1., 1., 0.],
+    [6., 3., 0., 3., 1., 1., 0.],
+    [7., 2., 0., 3., 0., 0., 1.],
+    [6., 3., 0., 4., 0., 0., 1.],
+    [6., 1., 0., 4., 0., 0., 3.],
+    [6., 3., 0., 4., 0., 1., 1.],
+    [6., 2., 0., 4., 0., 1., 2.],
+    [6., 2., 0., 4., 0., 1., 2.],
+    [6., 2., 0., 4., 0., 1., 2.],
+])
+
+# Create an RDKit molecule
+mol = Chem.RWMol()
+atom_mapping = {}  # Map original node index to RDKit atom index
+atom_labels = {}  # For custom atom labels
+
+# Add atoms and annotate with class labels
+for idx, feature_vector in enumerate(features):
+    atomic_num = int(feature_vector[0])  # First feature is atomic number
+    atom = Chem.Atom(atomic_num)
+    atom_idx = mol.AddAtom(atom)
+    atom_mapping[idx] = atom_idx
+
+    # Annotate atom with class number
+    element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
+    atom_labels[atom_idx] = f"{element}{idx}"  # Add class number
+
+# Define a bond type map
+bond_type_map = {1: Chem.BondType.SINGLE,
+                 2: Chem.BondType.DOUBLE,
+                 3: Chem.BondType.TRIPLE,
+                 4: Chem.BondType.AROMATIC}
+
+# Add bonds
+for s, d in zip(src, dst):
+    s, d = int(s), int(d)
+    if s in atom_mapping and d in atom_mapping:
+        mol.AddBond(atom_mapping[s], atom_mapping[d], Chem.BondType.SINGLE)
+
+# Compute 2D coordinates for drawing
+AllChem.Compute2DCoords(mol)
+
+# Prepare the molecule for drawing with kekulization disabled
+mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
+
+# Draw the molecule with atom labels
+drawer = rdMolDraw2D.MolDraw2DCairo(1000, 400)
+drawer.drawOptions().addAtomIndices = True  # Show atom indices
+drawer.DrawMolecule(mol)
+drawer.FinishDrawing()
+
+# Convert to an image and save
+img = Image.open(BytesIO(drawer.GetDrawingText()))
+img.show()
+img.save("molecule.png")
