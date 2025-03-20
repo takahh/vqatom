@@ -178,13 +178,13 @@ class EquivariantThreeHopGINE(nn.Module):
         # h = self.leaky_relu0(h)
 
         # GINE Layer 2
-        h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine2(h, edge_index=edge_index)
-        # h = self.ln1(h)
-        # h = self.leaky_relu1(h)
-
-        # GINE Layer 3
-        h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
+        # # h = self.gine2(h, edge_index=edge_index)
+        # # h = self.ln1(h)
+        # # h = self.leaky_relu1(h)
+        #
+        # # GINE Layer 3
+        # h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
         # h = self.gine3(h, edge_index=edge_index)
         # h = self.ln2(h)
 

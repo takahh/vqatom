@@ -27,7 +27,7 @@ PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
-    if "mol" in filename:
+    if "mol" in filename and "latents" not in filename:
         arr = np.load(f"{filename}")
     else:
         arr = np.load(f"{filename}")["arr_0"]
@@ -283,7 +283,7 @@ def restore_node_feats(transformed):
 
 def main():
     path = PATH
-    latent_file = f"{path}/latents_{EPOCH}.npz"
+    latent_file = f"{path}/latents_mol_{EPOCH}.npz"
     adj_base_file = f"{path}/sample_adj_base_{EPOCH}.npz"                     # input data
     feat_file = f"{path}sample_node_feat_{EPOCH}.npz"      # assigned code vector id
     indices_file = f"{path}sample_emb_ind_{EPOCH}.npz"
@@ -327,7 +327,8 @@ def main():
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
     limit_num = 200
-    arr_latents = arr_latents[0:limit_num, 0:limit_num]
+    print(arr_latents.shape)
+    arr_latents = arr_latents[0:limit_num]
     subset_latents = arr_latents[0:limit_num, 0:limit_num]
     subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
     subset_attr_matrix = arr_feat[:limit_num]
