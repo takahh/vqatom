@@ -165,7 +165,8 @@ class EquivariantThreeHopGINE(nn.Module):
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
         transformed_edge_weight = transformed_edge_weight.unsqueeze(
             -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
-
+        print(f"transformed_edge_weight {transformed_edge_weight.shape}")
+        print(f"transformed_edge_weight {transformed_edge_weight}")
         # Extract edge indices and construct edge_index tensor
         src, dst = data.edges()
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
@@ -182,13 +183,13 @@ class EquivariantThreeHopGINE(nn.Module):
         # h = self.leaky_relu0(h)
 
         # GINE Layer 2
-        # h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
+        h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
         # # h = self.gine2(h, edge_index=edge_index)
         # # h = self.ln1(h)
         # # h = self.leaky_relu1(h)
         #
         # # GINE Layer 3
-        # h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
+        h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
         # h = self.gine3(h, edge_index=edge_index)
         # h = self.ln2(h)
 
