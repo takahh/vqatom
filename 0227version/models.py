@@ -177,14 +177,15 @@ class EquivariantThreeHopGINE(nn.Module):
         src, dst = data.edges()
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
         edge_attr = torch.ones((transformed_edge_weight[0], transformed_edge_weight[1]), device=src.device) # 結合情報　全部１
+        edge_attr = transformed_edge_weight
         print(f"h {h.shape}")
         print(f"edge_index {edge_index.shape}")
         print(f"edge_index {edge_index}")
         print(f"edge_attr {edge_attr.shape}")
         print(f"edge_attr {edge_attr}")
         # GINE Layer 1
-        h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine1(h, edge_index=edge_index)
+        # h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
+        h = self.gine1(h, edge_index=edge_index)
         # h = self.ln0(h)
         # h = self.leaky_relu0(h)
 
