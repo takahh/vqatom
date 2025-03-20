@@ -830,48 +830,48 @@ class EuclideanCodebook(nn.Module):
         # embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
         # Compute soft assignment
         embed_ind_soft = F.softmax(dist, dim=-1)
-        print(f"embed_ind_soft shape {embed_ind_soft.shape}")
-        print(f"embed_ind_soft {embed_ind_soft}")
-        print(f"Embedding table shape: {self.embed.shape}")
+        # print(f"embed_ind_soft shape {embed_ind_soft.shape}")
+        # print(f"embed_ind_soft {embed_ind_soft}")
+        # print(f"Embedding table shape: {self.embed.shape}")
 
         # Convert to hard assignments
         embed_ind_hard_idx = dist.argmax(dim=-1)
-        print(f"embed_ind_hard_idx shape {embed_ind_hard_idx.shape}")
-        print(f"embed_ind_hard_idx {embed_ind_hard_idx}")
+        # print(f"embed_ind_hard_idx shape {embed_ind_hard_idx.shape}")
+        # print(f"embed_ind_hard_idx {embed_ind_hard_idx}")
         # embed_ind_hard_idx = torch.clamp(embed_ind_hard_idx, min=0, max=self.embed.shape[0] - 1)
         # print(f"embed_ind_hard_idx 2 shape {embed_ind_hard_idx.shape}")
         # print(f"embed_ind_hard_idx 2 {embed_ind_hard_idx}")
         # Access embeddings correctly with shape (1, 1000, 64)
         embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
-        print(f"embed_ind_hard shape: {embed_ind_hard.shape}")
+        # print(f"embed_ind_hard shape: {embed_ind_hard.shape}")
 
         # Retrieve embeddings safely
         embed_vectors = torch.matmul(embed_ind_hard, self.embed.squeeze(0))
-        print(f"embed_vectors shape: {embed_vectors.shape}")
-
-        print(f"embed_ind_hard shape {embed_ind_hard.shape}")
-        print(f"embed_ind_hard {embed_ind_hard}")
+        # print(f"embed_vectors shape: {embed_vectors.shape}")
+        #
+        # print(f"embed_ind_hard shape {embed_ind_hard.shape}")
+        # print(f"embed_ind_hard {embed_ind_hard}")
         # Apply STE trick
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
 
-        print(f"embed_ind_one_hot shape {embed_ind_one_hot.shape}")
-        print(f"embed_ind_one_hot {embed_ind_one_hot}")
+        # print(f"embed_ind_one_hot shape {embed_ind_one_hot.shape}")
+        # print(f"embed_ind_one_hot {embed_ind_one_hot}")
         # print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
 
         # **Compute Soft Indices (Weighted Sum)**
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
 
-        print(f"embed_ind shape {embed_ind.shape}")
-        print(f"embed_ind {embed_ind}")
+        # print(f"embed_ind shape {embed_ind.shape}")
+        # print(f"embed_ind {embed_ind}")
         # print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
 
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
-        print("embed_ind shape:", embed_ind.shape)
-        print("embed_ind min:", embed_ind.min().item(), "embed_ind max:", embed_ind.max().item())
-        print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
-        print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
+        # print("embed_ind shape:", embed_ind.shape)
+        # print("embed_ind min:", embed_ind.min().item(), "embed_ind max:", embed_ind.max().item())
+        # print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
+        # print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
 
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
 
