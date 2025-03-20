@@ -155,7 +155,7 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"h {h}")
         # Handle edge weights
         edge_weight = data.edata.get(
-            'edge_attr', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
+            'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
 
         print(f"edge_weight {edge_weight.shape}")
