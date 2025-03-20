@@ -142,6 +142,7 @@ class EquivariantThreeHopGINE(nn.Module):
 
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        data = data.to(device)
 
         src_one_way, dst_one_way = data.edges()
         src = torch.cat([src_one_way, dst_one_way])
@@ -151,7 +152,6 @@ class EquivariantThreeHopGINE(nn.Module):
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
 
         self.bond_weight = self.bond_weight.to(device)
-        data = data.to(device)
         # features = transform_node_feats(features).to(device)  # Ensure this function is defined
         features = features.to(device)  # Ensure this function is defined
         # Initial node feature transformation
