@@ -184,8 +184,8 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"edge_attr {edge_attr.shape}")
         print(f"edge_attr {edge_attr}")
         # GINE Layer 1
-        # h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-        h = self.gine1(h, edge_index=edge_index)
+        h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine1(h, edge_index=edge_index)
         # h = self.ln0(h)
         # h = self.leaky_relu0(h)
 
