@@ -163,7 +163,7 @@ class EquivariantThreeHopGINE(nn.Module):
         )
         print("edge_weight.shape")
         print(edge_weight.shape)
-        edge_weight = torch.cat(edge_weight, edge_weight)
+        edge_weight = torch.cat([edge_weight, edge_weight])
 
         print("edge_weight.shape")
         print(edge_weight.shape)
