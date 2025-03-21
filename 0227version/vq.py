@@ -1223,7 +1223,6 @@ class VectorQuantize(nn.Module):
     #     return positive_loss  # Loss remains differentiable
     import torch
     import torch.nn.functional as F
-
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters):
         """
         Compute a differentiable silhouette-like loss that keeps gradient flow.
@@ -1237,31 +1236,29 @@ class VectorQuantize(nn.Module):
             loss (torch.Tensor): Scalar differentiable loss value
         """
         device = embeddings.device
-        N, D = embeddings.shape
-        # print(f"embed_ind {embed_ind.shape}, num_clusters {num_clusters}")
-        # print(f"embed_ind max {embed_ind.max()}, min {embed_ind.min()}")
-        # One-hot encoding of cluster assignments (soft assignments keep gradients)
         cluster_assignments = F.one_hot(embed_ind.long(), num_classes=num_clusters).float()  # (N, K)
 
-        # Compute cluster centroids (weighted averaging)
+        # Compute cluster centroids
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
         cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1)  # Avoid division by zero
-        centroids = cluster_sums / cluster_sizes  # (K, D), keeps gradient flow
+        centroids = cluster_sums / cluster_sizes  # (K, D)
 
-        # Compute centroid distances (use smoothing for differentiability)
+        # Compute inter-cluster distances (b)
         centroid_distances = torch.cdist(centroids, centroids)  # (K, K)
-
-        # Small smoothing to keep gradients
-        eye_mask = torch.eye(num_clusters, device=device) * 1e6  # Large value instead of inf
-        centroid_distances = centroid_distances + eye_mask  # Avoid self-distances
-
-        # Get minimum inter-cluster distances (nearest other cluster)
+        eye_mask = torch.eye(num_clusters, device=device) * 1e3  # Avoid self-distances
+        centroid_distances = centroid_distances + eye_mask
         b = centroid_distances.min(dim=1)[0]  # (K,)
 
-        # Normalize and compute loss
-        b_normalized = b / (b.max() + 1e-6)
-        loss = -torch.mean(torch.log(torch.clamp(b_normalized, min=1e-6)))  # Keeps gradients
+        # Compute intra-cluster distances (a)
+        a = torch.einsum("nk,nd->k", cluster_assignments,
+                         torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)) / cluster_sizes.squeeze()
+
+        # Compute silhouette score
+        silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
+
+        # Final loss (maximize silhouette score)
+        loss = -torch.mean(silhouette_score)
 
         return loss
 
