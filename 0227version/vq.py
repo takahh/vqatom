@@ -1225,9 +1225,11 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters):
         device = embeddings.device
+        if embed_ind.dim() == 1:
+            embed_ind = embed_ind.unsqueeze(1)  # Make it (N, 1)
+        embed_ind = embed_ind.expand(-1, num_clusters)  # Expand to (N, K)
 
-        # Soft cluster assignments
-        cluster_assignments = F.softmax(embed_ind, dim=-1)  # (N, K), keeps gradient flowcluster_sums
+        cluster_assignments = F.softmax(embed_ind, dim=-1)
         print(f"cluster_assignments {cluster_assignments.shape}")
         # Compute cluster centroids
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
@@ -1237,7 +1239,14 @@ class VectorQuantize(nn.Module):
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
         print(f"cluster_sizes 1 {cluster_sizes.shape}")
         centroids = cluster_sums / cluster_sizes  # (K, D)
-
+        """cluster_assignments torch.Size([15648])
+            cluster_sums torch.Size([64])
+            cluster_sizes 0 torch.Size([1])
+            cluster_sizes 1 torch.Size([1])
+            centroids torch.Size([1, 64])
+            embeddings torch.Size([15648, 64])
+            (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)) torch.Size([15648, 15648])
+            a torch.Size([15648]), b torch.Size([1000])"""
         # Ensure centroids remain at least 2D
         if centroids.dim() == 1:
             centroids = centroids.unsqueeze(0)  # Convert (D,) → (1, D)
