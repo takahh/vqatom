@@ -1246,6 +1246,10 @@ class VectorQuantize(nn.Module):
         centroid_distances = centroid_distances + eye_mask
         b = torch.logsumexp(-centroid_distances, dim=1)  # Soft min instead of min()
 
+        print(f"centroids {centroids.shape}")
+        print(f"embeddings {embeddings.shape}")
+        print(f"(cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1))"
+              f" {(cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).shape}")
         # Compute intra-cluster distances (a)
         a = (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).sum(dim=0) / cluster_sizes.squeeze()
         print(f"a {a.shape}, b {b.shape}") # a torch.Size([15648]), b torch.Size([1000]) a is weird should be 1000
