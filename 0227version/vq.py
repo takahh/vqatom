@@ -2,7 +2,6 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
-from rdkit.Contrib.LEF.ClusterFps import cluster
 # from scipy.version import commit_count
 from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
