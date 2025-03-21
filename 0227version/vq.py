@@ -1228,15 +1228,19 @@ class VectorQuantize(nn.Module):
 
         # Soft cluster assignments
         cluster_assignments = F.softmax(embed_ind, dim=-1)  # (N, K), keeps gradient flow
-
         # Compute cluster centroids
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
         cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
         centroids = cluster_sums / cluster_sizes  # (K, D)
 
+        # Ensure centroids remain at least 2D
+        if centroids.dim() == 1:
+            centroids = centroids.unsqueeze(0)  # Convert (D,) → (1, D)
+
         # Compute inter-cluster distances (b)
         centroid_distances = torch.cdist(centroids, centroids)  # (K, K)
+
         eye_mask = torch.eye(num_clusters, device=device) * 1e3
         centroid_distances = centroid_distances + eye_mask
         b = torch.logsumexp(-centroid_distances, dim=1)  # Soft min instead of min()
