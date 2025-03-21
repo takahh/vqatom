@@ -1331,7 +1331,7 @@ class VectorQuantize(nn.Module):
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         # print(equivalent_gtroup_list[:10])
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
-        equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
         atom_type_div_loss = torch.tensor(1)
         bond_num_div_loss = torch.tensor(1)
