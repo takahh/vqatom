@@ -1459,7 +1459,7 @@ class VectorQuantize(nn.Module):
         #     print("fmap ===========")
         #     quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
         #     embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
-        commit_loss = None
+        commit_loss = torch.tensor(1)
         if only_one:
             if len(quantize.shape) == 3:
                 # this line is executed
