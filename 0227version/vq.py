@@ -744,8 +744,8 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, logger):
-        # if self.initted:
-        #     return
+        if self.initted:
+            return
         print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
         # samples,
         # num_clusters,
@@ -1098,7 +1098,7 @@ class VectorQuantize(nn.Module):
             threshold_ema_dead_code=0,
             channel_last=True,
             accept_image_fmap=False,
-            commitment_weight=0.0001,
+            commitment_weight=0.1,
             margin_weight=1,
             spread_weight=0.2,
             pair_weight=0.01,
@@ -1110,8 +1110,8 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            lamb_sil=0.01,
-            lamb_div=1,
+            lamb_sil=0.1,
+            lamb_div=100,
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
@@ -1424,7 +1424,7 @@ class VectorQuantize(nn.Module):
         print(f"feat_div_loss: {feat_div_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
         print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
-        loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss
+        loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
