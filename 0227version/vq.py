@@ -919,6 +919,8 @@ class EuclideanCodebook(nn.Module):
 
             # Expire unused codes (optional step)
             self.expire_codes_(x)
+            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+            torch.cuda.empty_cache()  # Frees unused GPU memory
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
