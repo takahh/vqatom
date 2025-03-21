@@ -1249,12 +1249,7 @@ class VectorQuantize(nn.Module):
         a = (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).sum(dim=0) / cluster_sizes.squeeze()
 
         # Compute silhouette score
-        # silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
-        a_per_cluster = torch.einsum("nk,nd->k", cluster_assignments,
-                                     torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1))
-        a_per_cluster = a_per_cluster / (cluster_sizes.squeeze() + 1e-6)  # Keep dimensions consistent
-        silhouette_score = (b - a_per_cluster) / (torch.max(a_per_cluster, b) + 1e-6)
-
+        silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
         # Final loss (maximize silhouette score)
         loss = -torch.mean(silhouette_score)
 
