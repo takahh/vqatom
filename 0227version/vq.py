@@ -880,41 +880,45 @@ class EuclideanCodebook(nn.Module):
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
-        # if self.training:
-        #     distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-        #     temperature = 0.1  # Softmax temperature
-        #
-        #     # Soft assignment instead of one-hot (fixes gradient flow)
-        #     embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-        #     embed_onehot = embed_probs  # Fully differentiable soft assignment
-        #
-        #     # Optional: Straight-Through Estimator (STE) if you need discrete assignments
-        #     # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)
-        #     # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
-        #
-        #     embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-        #     device = flatten.device
-        #     embed_ind = embed_ind.to(device)
-        #     embed_onehot = embed_onehot.to(device)
-        #
-        #     # Compute the sum of assigned embeddings
-        #     embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-        #
-        #     # EMA (Exponential Moving Average) update - Fixing gradient flow
-        #     self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
-        #
-        #     # Compute normalized cluster sizes
-        #     cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-        #
-        #     # Normalize the codebook embeddings
-        #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-        #
-        #     # Update codebook - Fixing gradient flow
-        #     # self.embed = embed_normalized.clone()  # ✅ FIXED
-        #     self.embed = torch.nn.Parameter(embed_normalized.clone())
-        #
-        #     # Expire unused codes (optional step)
-        #     self.expire_codes_(x)
+        if self.training:
+            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
+            temperature = 0.1  # Softmax temperature
+
+            # Soft assignment instead of one-hot (fixes gradient flow)
+            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
+            embed_onehot = embed_probs  # Fully differentiable soft assignment
+
+            # Optional: Straight-Through Estimator (STE) if you need discrete assignments
+            # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)
+            # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
+
+            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+            device = flatten.device
+            embed_ind = embed_ind.to(device)
+            embed_onehot = embed_onehot.to(device)
+
+            # Compute the sum of assigned embeddings
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+
+            # EMA (Exponential Moving Average) update - Fixing gradient flow
+            self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
+
+            # Compute normalized cluster sizes
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+
+            # Normalize the codebook embeddings
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+
+            # Update codebook - Fixing gradient flow
+            # self.embed = embed_normalized.clone()  # ✅ FIXED
+            # Update the existing parameter in-place without redefining it
+            with torch.no_grad():
+                self.embed.copy_(embed_normalized)
+
+            # self.embed = torch.nn.Parameter(embed_normalized.clone())
+
+            # Expire unused codes (optional step)
+            self.expire_codes_(x)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
