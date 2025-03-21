@@ -1327,7 +1327,7 @@ class VectorQuantize(nn.Module):
 
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-1])
+        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         # print(equivalent_gtroup_list[:10])
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
