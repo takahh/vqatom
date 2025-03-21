@@ -1235,7 +1235,7 @@ class VectorQuantize(nn.Module):
         """
         device = embeddings.device
         N, D = embeddings.shape
-        print(f"embed_ind {embed_ind.shape}, num_clusters {num_clusters.shape}")
+        print(f"embed_ind {embed_ind.shape}, num_clusters {num_clusters}")
         # One-hot encoding of cluster assignments (soft assignments keep gradients)
         cluster_assignments = F.one_hot(embed_ind.long(), num_classes=num_clusters).float()  # (N, K)
 
