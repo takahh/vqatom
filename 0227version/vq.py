@@ -1227,12 +1227,15 @@ class VectorQuantize(nn.Module):
         device = embeddings.device
 
         # Soft cluster assignments
-        cluster_assignments = F.softmax(embed_ind, dim=-1)  # (N, K), keeps gradient flow
+        cluster_assignments = F.softmax(embed_ind, dim=-1)  # (N, K), keeps gradient flowcluster_sums
+        print(f"cluster_assignments {cluster_assignments.shape}")
         # Compute cluster centroids
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
+        print(f"cluster_sums {cluster_sums.shape}")
         cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
+        print(f"cluster_sizes 0 {cluster_sizes.shape}")
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
-        print(f"cluster_sizes {cluster_sizes.shape}")
+        print(f"cluster_sizes 1 {cluster_sizes.shape}")
         centroids = cluster_sums / cluster_sizes  # (K, D)
 
         # Ensure centroids remain at least 2D
@@ -1254,6 +1257,11 @@ class VectorQuantize(nn.Module):
         a = (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).sum(dim=0) / cluster_sizes.squeeze()
         print(f"a {a.shape}, b {b.shape}") # a torch.Size([15648]), b torch.Size([1000]) a is weird should be 1000
         # Compute silhouette score
+        """cluster_sizes torch.Size([1])
+            centroids torch.Size([1, 64])
+            embeddings torch.Size([15648, 64])
+            (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)) torch.Size([15648, 15648])
+            a torch.Size([15648]), b torch.Size([1000])"""
         silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
         # Final loss (maximize silhouette score)
         loss = -torch.mean(silhouette_score)
