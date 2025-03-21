@@ -911,7 +911,7 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
 
             self.embed.data.copy_(embed_normalized)
-            print(f"actual cluster count : {cluster_size}")
+            print(f"actual cluster count : {cluster_size.shape}")
             # self.embed = torch.nn.Parameter(embed_normalized.clone())
 
             # Expire unused codes (optional step)
