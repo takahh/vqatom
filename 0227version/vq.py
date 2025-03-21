@@ -880,46 +880,40 @@ class EuclideanCodebook(nn.Module):
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
-        # if self.training:
-        #     distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-        #     temperature = 0.1  # Softmax temperature
-        #
-        #     # Soft assignment instead of one-hot (fixes gradient flow)
-        #     embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-        #
-        #     # Option 1: Fully differentiable soft assignments
-        #     embed_onehot = embed_probs  # Allows gradient flow
-        #
-        #     # Option 2: Straight-Through Estimator (STE) for discrete assignments
-        #     # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)  # Hard one-hot
-        #     # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
-        #
-        #     # print(f"flatten {flatten.shape}, embed_onehot {embed_onehot.shape}")
-        #     # Expected: flatten [1, 15648, 64], embed_onehot [1, 15648, 1000]
-        #
-        #     # Remove unnecessary dimension (if needed)
-        #     embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-        #     device = flatten.device  # Ensure consistency
-        #     embed_ind = embed_ind.to(device)  # Move index tensor to correct device
-        #     embed_onehot = embed_onehot.to(device)  # Move one-hot tensor to the same device
-        #
-        #     # Compute the sum of assigned embeddings
-        #     embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-        #
-        #     # EMA (Exponential Moving Average) update
-        #     self.embed_avg.data.lerp_(embed_sum, 1 - self.decay)
-        #
-        #     # Compute normalized cluster sizes
-        #     cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-        #
-        #     # Normalize the codebook embeddings
-        #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-        #
-        #     # Update codebook
-        #     self.embed.data.copy_(embed_normalized)
-        #
-        #     # Expire unused codes (optional step to refresh rarely used codes)
-        #     self.expire_codes_(x)
+        if self.training:
+            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
+            temperature = 0.1  # Softmax temperature
+
+            # Soft assignment instead of one-hot (fixes gradient flow)
+            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
+            embed_onehot = embed_probs  # Fully differentiable soft assignment
+
+            # Optional: Straight-Through Estimator (STE) if you need discrete assignments
+            # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)
+            # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
+
+            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+            device = flatten.device
+            embed_ind = embed_ind.to(device)
+            embed_onehot = embed_onehot.to(device)
+
+            # Compute the sum of assigned embeddings
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+
+            # EMA (Exponential Moving Average) update - Fixing gradient flow
+            self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
+
+            # Compute normalized cluster sizes
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+
+            # Normalize the codebook embeddings
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+
+            # Update codebook - Fixing gradient flow
+            self.embed = embed_normalized.clone()  # ✅ FIXED
+
+            # Expire unused codes (optional step)
+            self.expire_codes_(x)
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
@@ -1293,46 +1287,6 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def vq_codebook_regularization_loss(self, embed_ind, equivalence_groups, logger):
-        """
-        VQ Codebook Regularization Loss to ensure equivalent atoms (e.g., carbons in benzene)
-        are assigned to the same discrete codebook entry while being memory efficient.
-        """
-        args = get_args()
-        loss = torch.tensor(0.0, device=embed_ind.device, requires_grad=True)  # Keep it learnable
-        num_groups = len(equivalence_groups)
-
-        # Ensure correct shape to avoid unnecessary squeeze/unsqueeze calls
-        embed_ind = embed_ind.view(-1)  # Flatten instead of squeeze()
-        # print("embed_ind in vq_codebook_regularization_loss")
-        # print(embed_ind)
-        for group in equivalence_groups:
-            if len(group) < 2:
-                continue  # Skip if the group is too small
-
-            group_tensor = torch.tensor(group, device=embed_ind.device)  # Move indices to the correct device
-            # logger.info(f"group_tensor {group_tensor}" )
-            if torch.max(group_tensor) >= embed_ind.shape[0]:
-                # logger.warning(f"Skipping group {group} - Index out of bounds!")
-                continue  # Skip this group
-
-            # Extract cluster indices for equivalent atoms
-            equivalent_cluster_indices = torch.index_select(embed_ind, 0, group_tensor)
-            # logger.info(f"equivalent_cluster_indices {equivalent_cluster_indices}")
-            # Ensure indices are within codebook bounds
-            max_index = torch.max(equivalent_cluster_indices).item()
-            if max_index >= args.codebook_size:
-                # logger.warning(f"Skipping group {group} - Index {max_index} exceeds codebook size {args.codebook_size}")
-                continue
-
-            # Compute pairwise agreement loss efficiently
-            equivalent_cluster_indices = equivalent_cluster_indices.unsqueeze(1).float()
-            pairwise_diffs = torch.cdist(equivalent_cluster_indices, equivalent_cluster_indices, p=2)
-            # logger.info(f"pairwise_diffs {pairwise_diffs}")
-            # Update loss in a memory-friendly way
-            loss = loss + torch.mean(pairwise_diffs) / (num_groups + 1e-6)  # Normalize to prevent large loss values
-
-        return loss/5000
 
         # embed_ind, codebook, init_feat, latents, quantize, logger
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5):
@@ -1387,16 +1341,17 @@ class VectorQuantize(nn.Module):
         equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
         atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        div_loss_list = [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss]
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss, atom_type_div_loss)
+        return (spread_loss, embed_ind, sil_loss, div_loss_list)
 
     import torch
     import torch.nn.functional as F
@@ -1441,8 +1396,6 @@ class VectorQuantize(nn.Module):
         commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
                       / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
 
-        print(f"Commit loss: {commit_loss.item()}")
-
         # if self.orthogonal_reg_active_codes_only:
         #     unique_code_ids = torch.unique(embed_ind)
         #     print(f"Unique codebook IDs used: {unique_code_ids}")
@@ -1450,7 +1403,7 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
-        spread_loss, embed_ind, sil_loss, atom_type_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
+        spread_loss, embed_ind, sil_loss, div_loss_list = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
         if len(embed_ind.shape) == 3:
@@ -1459,9 +1412,14 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-
+        """  div_loss_list = 
+        [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
+         aroma_div_loss, ringy_div_loss, h_num_div_loss]
+        """
+        print(f"atom_div : {div_loss_list[0]}, bond_num: {div_loss_list[1]}, charge: {div_loss_list[2]},"
+              f"elec: {div_loss_list[3]}, aroma: {div_loss_list[4]}, ringy: {div_loss_list[5]}, h_num: {div_loss_list[6]}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
-        print(f"atom_type_div_loss {atom_type_div_loss}")
+        print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
         loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss
 
         # if is_multiheaded:
