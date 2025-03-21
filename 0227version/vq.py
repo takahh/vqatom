@@ -1237,7 +1237,7 @@ class VectorQuantize(nn.Module):
         N, D = embeddings.shape
 
         # One-hot encoding of cluster assignments (soft assignments keep gradients)
-        cluster_assignments = F.one_hot(embed_ind, num_clusters).float()  # (N, K)
+        cluster_assignments = F.one_hot(embed_ind.long(), num_classes=num_clusters).float()  # (N, K)
 
         # Compute cluster centroids (weighted averaging)
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
