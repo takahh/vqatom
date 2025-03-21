@@ -910,7 +910,8 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
 
             # Update codebook - Fixing gradient flow
-            self.embed = embed_normalized.clone()  # ✅ FIXED
+            # self.embed = embed_normalized.clone()  # ✅ FIXED
+            self.embed = torch.nn.Parameter(embed_normalized.clone())
 
             # Expire unused codes (optional step)
             self.expire_codes_(x)
