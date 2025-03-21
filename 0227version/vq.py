@@ -1339,21 +1339,21 @@ class VectorQuantize(nn.Module):
         elec_state_div_loss = torch.tensor(1)
         aroma_div_loss = torch.tensor(1)
         ringy_div_loss = torch.tensor(1)
-        h_num_div_loss = compute_contrastive_loss(quantized, init_feat)
-        equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
+        feat_div_loss = compute_contrastive_loss(quantized, init_feat)
+        # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
-        atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
-        div_loss_list = [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss]
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        # div_loss_list = [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss]
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss, div_loss_list)
+        return (spread_loss, embed_ind, sil_loss, feat_div_loss)
 
     import torch
     import torch.nn.functional as F
@@ -1405,7 +1405,7 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
-        spread_loss, embed_ind, sil_loss, div_loss_list = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
+        spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
         if len(embed_ind.shape) == 3:
@@ -1418,8 +1418,7 @@ class VectorQuantize(nn.Module):
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]
         """
-        print(f"atom_div : {div_loss_list[0]}, bond_num: {div_loss_list[1]}, charge: {div_loss_list[2]},"
-              f"elec: {div_loss_list[3]}, aroma: {div_loss_list[4]}, ringy: {div_loss_list[5]}, h_num: {div_loss_list[6]}")
+        print(f"feat_div_loss: {feat_div_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
         print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
         loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss
