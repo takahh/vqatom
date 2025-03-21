@@ -899,10 +899,12 @@ class EuclideanCodebook(nn.Module):
 
             # Compute the sum of assigned embeddings
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-
             with torch.no_grad():
-                # EMA (Exponential Moving Average) update - Fixing gradient flow
-                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
+                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+
+            # with torch.no_grad():
+            #     # EMA (Exponential Moving Average) update - Fixing gradient flow
+            #     self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
             # Compute normalized cluster sizes
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
             # Normalize the codebook embeddings
