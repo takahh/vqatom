@@ -1232,6 +1232,7 @@ class VectorQuantize(nn.Module):
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
         cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
+        print(f"cluster_sizes {cluster_sizes.shape}")
         centroids = cluster_sums / cluster_sizes  # (K, D)
 
         # Ensure centroids remain at least 2D
@@ -1247,7 +1248,7 @@ class VectorQuantize(nn.Module):
 
         # Compute intra-cluster distances (a)
         a = (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).sum(dim=0) / cluster_sizes.squeeze()
-        print(f"a {a.shape}, b {b.shape}")
+        print(f"a {a.shape}, b {b.shape}") # a torch.Size([15648]), b torch.Size([1000]) a is weird should be 1000
         # Compute silhouette score
         silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
         # Final loss (maximize silhouette score)
