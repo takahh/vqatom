@@ -1230,23 +1230,11 @@ class VectorQuantize(nn.Module):
         embed_ind = embed_ind.expand(-1, num_clusters)  # Expand to (N, K)
 
         cluster_assignments = F.softmax(embed_ind, dim=-1)
-        print(f"cluster_assignments {cluster_assignments.shape}")
         # Compute cluster centroids
         cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
-        print(f"cluster_sums {cluster_sums.shape}")
         cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
-        print(f"cluster_sizes 0 {cluster_sizes.shape}")
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
-        print(f"cluster_sizes 1 {cluster_sizes.shape}")
         centroids = cluster_sums / cluster_sizes  # (K, D)
-        """cluster_assignments torch.Size([15648])
-            cluster_sums torch.Size([64])
-            cluster_sizes 0 torch.Size([1])
-            cluster_sizes 1 torch.Size([1])
-            centroids torch.Size([1, 64])
-            embeddings torch.Size([15648, 64])
-            (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)) torch.Size([15648, 15648])
-            a torch.Size([15648]), b torch.Size([1000])"""
         # Ensure centroids remain at least 2D
         if centroids.dim() == 1:
             centroids = centroids.unsqueeze(0)  # Convert (D,) → (1, D)
@@ -1258,19 +1246,9 @@ class VectorQuantize(nn.Module):
         centroid_distances = centroid_distances + eye_mask
         b = torch.logsumexp(-centroid_distances, dim=1)  # Soft min instead of min()
 
-        print(f"centroids {centroids.shape}")
-        print(f"embeddings {embeddings.shape}")
-        print(f"(cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1))"
-              f" {(cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).shape}")
         # Compute intra-cluster distances (a)
         a = (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)).sum(dim=0) / cluster_sizes.squeeze()
-        print(f"a {a.shape}, b {b.shape}") # a torch.Size([15648]), b torch.Size([1000]) a is weird should be 1000
         # Compute silhouette score
-        """cluster_sizes torch.Size([1])
-            centroids torch.Size([1, 64])
-            embeddings torch.Size([15648, 64])
-            (cluster_assignments * torch.norm(embeddings.unsqueeze(1) - centroids, dim=-1)) torch.Size([15648, 15648])
-            a torch.Size([15648]), b torch.Size([1000])"""
         silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
         # Final loss (maximize silhouette score)
         loss = -torch.mean(silhouette_score)
