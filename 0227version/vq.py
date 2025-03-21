@@ -1239,8 +1239,8 @@ class VectorQuantize(nn.Module):
         """
         device = embeddings.device
         N, D = embeddings.shape
-        print(f"embed_ind {embed_ind.shape}, num_clusters {num_clusters}")
-        print(f"embed_ind max {embed_ind.max()}, min {embed_ind.min()}")
+        # print(f"embed_ind {embed_ind.shape}, num_clusters {num_clusters}")
+        # print(f"embed_ind max {embed_ind.max()}, min {embed_ind.min()}")
         # One-hot encoding of cluster assignments (soft assignments keep gradients)
         cluster_assignments = F.one_hot(embed_ind.long(), num_classes=num_clusters).float()  # (N, K)
 
@@ -1382,13 +1382,13 @@ class VectorQuantize(nn.Module):
         if need_transpose:
             x = rearrange(x, 'b d n -> b n d')
 
-        print("Input x shape:", x.shape)
+        # print("Input x shape:", x.shape)
 
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
 
         # Debug before codebook step
-        print(f"Before codebook: x shape = {x.shape}")
+        # print(f"Before codebook: x shape = {x.shape}")
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
