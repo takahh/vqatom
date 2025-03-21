@@ -913,7 +913,7 @@ class EuclideanCodebook(nn.Module):
             # self.embed = embed_normalized.clone()  # ✅ FIXED
             # Update the existing parameter in-place without redefining it
             with torch.no_grad():
-                self.embed.copy_(embed_normalized)
+                self.embed.data.copy_(embed_normalized)
 
             # self.embed = torch.nn.Parameter(embed_normalized.clone())
 
