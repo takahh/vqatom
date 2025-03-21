@@ -2,6 +2,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
+from rdkit.Contrib.LEF.ClusterFps import cluster
 # from scipy.version import commit_count
 from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
@@ -911,7 +912,7 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
 
             self.embed.data.copy_(embed_normalized)
-
+            print(f"actual cluster count : {cluster_size}")
             # self.embed = torch.nn.Parameter(embed_normalized.clone())
 
             # Expire unused codes (optional step)
