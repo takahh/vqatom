@@ -1223,42 +1223,48 @@ class VectorQuantize(nn.Module):
     #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
     #
     #     return positive_loss  # Loss remains differentiable
+    import torch
+    import torch.nn.functional as F
 
-    def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
-        # Preprocess clusters to ensure the desired number of non-empty clusters
-        # print_non_empty_cluster_count(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
-        # embed_ind = increase_non_empty_clusters(embed_ind, embeddings, num_clusters, target_non_empty_clusters)
-        embed_ind.data.copy_(embed_ind)
-        # Compute pairwise distances for all points
-        pairwise_distances = torch.cdist(embeddings, embeddings)  # Shape: (N, N)
-        inter_cluster_distances = []
-        # Iterate over clusters
-        for k in range(num_clusters):
-            cluster_mask = (embed_ind == k)
-            cluster_indices = cluster_mask.nonzero(as_tuple=True)[0]
+    def fast_silhouette_loss(embeddings, embed_ind, num_clusters):
+        """
+        Compute a differentiable silhouette-like loss that keeps gradient flow.
 
-            if cluster_indices.numel() == 0:
-                continue  # Skip empty clusters
-            # Compute inter-cluster distances
-            other_mask = ~cluster_mask
-            if other_mask.sum() > 0:
-                other_distances = pairwise_distances[cluster_indices][:, other_mask]
-                inter_cluster_distances.append(other_distances.mean())
-            else:
-                inter_cluster_distances.append(torch.tensor(float('inf'), device=embeddings.device))
+        Args:
+            embeddings (torch.Tensor): Latent vectors of shape (N, D)
+            embed_ind (torch.Tensor): Cluster assignments (N,)
+            num_clusters (int): Number of clusters (codebook size)
 
-        # Stack inter-cluster distances into a tensor
-        b = torch.stack(inter_cluster_distances, dim=0) if inter_cluster_distances else torch.tensor([],
-                                                                                                     device=embeddings.device)
+        Returns:
+            loss (torch.Tensor): Scalar differentiable loss value
+        """
+        device = embeddings.device
+        N, D = embeddings.shape
 
-        # Compute inter-cluster loss
-        epsilon = 1e-6  # Small value to avoid division by zero
-        b_normalized = b / (b.max() + epsilon)  # Normalize distances
-        loss = -torch.mean(torch.log(b_normalized + epsilon))  # Maximize inter-cluster distances
+        # One-hot encoding of cluster assignments (soft assignments keep gradients)
+        cluster_assignments = F.one_hot(embed_ind, num_clusters).float()  # (N, K)
+
+        # Compute cluster centroids (weighted averaging)
+        cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
+        cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
+        cluster_sizes = cluster_sizes.clamp(min=1)  # Avoid division by zero
+        centroids = cluster_sums / cluster_sizes  # (K, D), keeps gradient flow
+
+        # Compute centroid distances (use smoothing for differentiability)
+        centroid_distances = torch.cdist(centroids, centroids)  # (K, K)
+
+        # Small smoothing to keep gradients
+        eye_mask = torch.eye(num_clusters, device=device) * 1e6  # Large value instead of inf
+        centroid_distances = centroid_distances + eye_mask  # Avoid self-distances
+
+        # Get minimum inter-cluster distances (nearest other cluster)
+        b = centroid_distances.min(dim=1)[0]  # (K,)
+
+        # Normalize and compute loss
+        b_normalized = b / (b.max() + 1e-6)
+        loss = -torch.mean(torch.log(torch.clamp(b_normalized, min=1e-6)))  # Keeps gradients
 
         return loss
-
-
 
     def fast_find_equivalence_groups(self, latents):
 
@@ -1456,7 +1462,7 @@ class VectorQuantize(nn.Module):
 
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
         print(f"atom_type_div_loss {atom_type_div_loss}")
-        loss = self.lamb_div_equidist * sil_loss + self.commitment_weight * commit_loss
+        loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
