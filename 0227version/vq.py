@@ -1109,7 +1109,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=0.001,  # using
+            commitment_weight=0.01,  # using
             lamb_sil=0.01,           # using
             lamb_div=0.1,           # using
             lamb_equiv_atom=1,
@@ -1411,8 +1411,8 @@ class VectorQuantize(nn.Module):
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
 
-        commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
-                      / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
+        # commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
+        #               / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
 
         # if self.orthogonal_reg_active_codes_only:
         #     unique_code_ids = torch.unique(embed_ind)
@@ -1436,8 +1436,10 @@ class VectorQuantize(nn.Module):
         """
         print(f"feat_div_loss: {feat_div_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
-        print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
-        loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        print(f"sil_loss {sil_loss}")
+        # print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
+        loss = self.lamb_sil * sil_loss
+        # loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
