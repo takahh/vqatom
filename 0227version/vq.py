@@ -893,19 +893,20 @@ class EuclideanCodebook(nn.Module):
             # embed_onehot = F.one_hot(embed_ind, self.codebook_size).type(flatten.dtype)
             # embed_onehot = embed_onehot + (embed_probs - embed_probs.detach())  # STE trick
 
-            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-            device = flatten.device
-            embed_ind = embed_ind.to(device)
-            embed_onehot = embed_onehot.to(device)
+            with torch.no_grad():
+                embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+                device = flatten.device
+                embed_ind = embed_ind.to(device)
+                embed_onehot = embed_onehot.to(device)
 
-            # Compute the sum of assigned embeddings
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+                # Compute the sum of assigned embeddings
+                embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
 
-            # EMA (Exponential Moving Average) update - Fixing gradient flow
-            self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
+                # EMA (Exponential Moving Average) update - Fixing gradient flow
+                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)  # ✅ FIXED
 
-            # Compute normalized cluster sizes
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+                # Compute normalized cluster sizes
+                cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
 
             # Normalize the codebook embeddings
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
