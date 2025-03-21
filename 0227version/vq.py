@@ -494,7 +494,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
-    close_dist_mask = (0.2 > pairwise_distances).float()  # 距離がだいぶ近いペア
+    close_dist_mask = (0.01 > pairwise_distances).float()  # 距離がだいぶ近いペア
 
     # Normalize atom_types (now properly converted to float)
     atom_types = F.normalize(atom_types, p=2, dim=1)
@@ -503,7 +503,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # Create mask for "same type"
     same_type_mask = (pairwise_similarities >= 1).float()
     close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
-    close_type_mask_1 = (pairwise_similarities > 0.9).float() # かなり似ているペア
+    close_type_mask_1 = (pairwise_similarities > 0.95).float() # かなり似ているペア
 
     # Compute positive and negative losses
     positive_loss = same_type_mask * pairwise_distances ** 2
