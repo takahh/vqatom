@@ -1226,7 +1226,7 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
 
-    def fast_silhouette_loss(embeddings, embed_ind, num_clusters):
+    def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters):
         device = embeddings.device
 
         if embed_ind.dim() == 1:
