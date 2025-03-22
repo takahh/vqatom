@@ -1264,7 +1264,7 @@ class VectorQuantize(nn.Module):
         # expanded_centroids torch.Size([1, 1000, 64]), intra_distances torch.Size([15648, 1000])
         print("(cluster_assignments * intra_distances).shape")
         print((cluster_assignments * intra_distances).shape)
-        a = (cluster_assignments * intra_distances).sum(dim=1)  # Soft weighted mean distance
+        a = (cluster_assignments * intra_distances).sum(dim=0)  # Soft weighted mean distance
         print(f"a {a.shape}, b {b.shape}")  # a torch.Size([15648]), b torch.Size([1000])
         # Compute silhouette score
         silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
