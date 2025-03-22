@@ -509,7 +509,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     negative_loss = - torch.log(negative_loss + 1e-8)
-    return negative_loss.mean()/100
+    return negative_loss.mean()/10000
     # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
@@ -1350,7 +1350,7 @@ class VectorQuantize(nn.Module):
         elec_state_div_loss = torch.tensor(1)
         aroma_div_loss = torch.tensor(1)
         ringy_div_loss = torch.tensor(1)
-        feat_div_loss = compute_contrastive_loss(quantized, init_feat)
+        feat_div_loss = compute_contrastive_loss(latents_for_sil, init_feat)
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
