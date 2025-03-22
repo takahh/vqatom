@@ -1258,8 +1258,12 @@ class VectorQuantize(nn.Module):
 
         # Compute intra-cluster distance (a)
         expanded_centroids = centroids.unsqueeze(0)  # (1, K, D)
+        # norm here is ノルム
         intra_distances = torch.norm(embeddings.unsqueeze(1) - expanded_centroids, dim=-1)  # (N, K)
         print(f"expanded_centroids {expanded_centroids.shape}, intra_distances {intra_distances.shape}")
+        # expanded_centroids torch.Size([1, 1000, 64]), intra_distances torch.Size([15648, 1000])
+        print("(cluster_assignments * intra_distances).shape")
+        print((cluster_assignments * intra_distances).shape)
         a = (cluster_assignments * intra_distances).sum(dim=1)  # Soft weighted mean distance
         print(f"a {a.shape}, b {b.shape}")  # a torch.Size([15648]), b torch.Size([1000])
         # Compute silhouette score
