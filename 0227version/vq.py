@@ -1225,7 +1225,7 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     import torch
     import torch.nn.functional as F
-    def improved_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
+    def silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
         batch_size = embeddings.size(0)
 
