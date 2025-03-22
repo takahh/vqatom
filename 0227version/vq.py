@@ -1225,7 +1225,6 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     import torch
     import torch.nn.functional as F
-
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters):
         device = embeddings.device
 
@@ -1241,31 +1240,21 @@ class VectorQuantize(nn.Module):
         cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
         centroids = cluster_sums / cluster_sizes  # (K, D)
 
-        # Ensure centroids remain at least 2D
-        if centroids.dim() == 1:
-            centroids = centroids.unsqueeze(0)  # (1, D)
-
-        # Compute inter-cluster distances (b) using softmin
+        # Compute inter-cluster distances (b)
         centroid_distances = torch.cdist(centroids, centroids)  # (K, K)
+        eye_mask = torch.eye(num_clusters, device=device) * 1e6  # Large mask for self-distances
+        centroid_distances = centroid_distances + eye_mask
 
-        # Mask diagonal (self-distances) to prevent selecting own cluster
-        eye_mask = torch.eye(num_clusters, device=device) * 1e3
-        centroid_distances = centroid_distances + eye_mask  # Large values on diagonal
-
-        # Softmin to approximate the second-nearest cluster
-        softmin_b = torch.softmax(-centroid_distances * 10, dim=1)  # Sharpened softmin
-        b = (softmin_b * centroid_distances).sum(dim=1)  # Softmin approximation
+        # Select the second-nearest cluster distance
+        sorted_distances, _ = torch.sort(centroid_distances, dim=1)
+        b = sorted_distances[:, 1]  # (K,)
 
         # Compute intra-cluster distance (a)
         expanded_centroids = centroids.unsqueeze(0)  # (1, K, D)
-        # norm here is ノルム
         intra_distances = torch.norm(embeddings.unsqueeze(1) - expanded_centroids, dim=-1)  # (N, K)
-        print(f"expanded_centroids {expanded_centroids.shape}, intra_distances {intra_distances.shape}")
-        # expanded_centroids torch.Size([1, 1000, 64]), intra_distances torch.Size([15648, 1000])
-        print("(cluster_assignments * intra_distances).shape")
-        print((cluster_assignments * intra_distances).shape)
-        a = (cluster_assignments * intra_distances).sum(dim=0)  # Soft weighted mean distance
-        print(f"a {a.shape}, b {b.shape}")  # a torch.Size([15648]), b torch.Size([1000])
+
+        a = (cluster_assignments * intra_distances).sum(dim=1)  # (N,) → Per-sample mean distance
+
         # Compute silhouette score
         silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
 
