@@ -488,9 +488,6 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
 
-    # Convert atom_types to one-hot encoding and float
-    # atom_types = torch.nn.functional.one_hot(atom_types.long(), num_atom_types + 1).float()
-
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
@@ -500,6 +497,8 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     atom_types = F.normalize(atom_types, p=2, dim=1)
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
+    print("pairwise_similarities")
+    print(pairwise_similarities.max())
     # Create mask for "same type"
     same_type_mask = (pairwise_similarities >= 1).float()
     close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
@@ -509,7 +508,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     negative_loss = - torch.log(negative_loss + 1e-8)
-    return negative_loss.mean()/10000
+    return negative_loss.mean()/100
     # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
