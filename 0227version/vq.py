@@ -509,7 +509,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     negative_loss = - torch.log(negative_loss + 1e-8)
-    return negative_loss.mean()/10000
+    return negative_loss.mean()/100
     # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
@@ -1110,8 +1110,8 @@ class VectorQuantize(nn.Module):
             lamb_div_elec_state=1,
             lamb_div_charge=1,
             commitment_weight=0.01,  # using
-            lamb_sil=0.1,           # using
-            lamb_div=100,           # using
+            lamb_sil=1,           # using
+            lamb_div=1,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
