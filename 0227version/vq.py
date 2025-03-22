@@ -1416,8 +1416,9 @@ class VectorQuantize(nn.Module):
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
         print(f"sil_loss {sil_loss}")
         # print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
-        loss = self.lamb_sil * sil_loss
+        # loss = self.lamb_sil * sil_loss
         # loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        loss = self.lamb_sil * sil_loss + self.lamb_div * feat_div_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
