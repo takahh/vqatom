@@ -22,8 +22,8 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2300
 CANVAS_HEIGHT = 1500
 FONTSIZE = 40
-EPOCH = 1
-PATH = "/Users/taka/Documents/vqgraph_0222/"
+EPOCH = 15
+PATH = "/Users/taka/Downloads/0322/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -101,7 +101,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     print(n_components)
 
     images = []
-    for i in range(n_components - 1):
+    # for i in range(n_components - 1):
+    for i in range(20):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -113,7 +114,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
-        mol_bond = arr_bond_order[mask[:500]]
+        mol_bond = arr_bond_order[mask[:3500]]
         component_indices_int = component_indices.tolist()
         component_indices_int = [int(i) for i in component_indices_int]
         mol_embed_id = [classes[i] for i in component_indices_int]  # ✅ Works for Python lists
@@ -326,7 +327,7 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    limit_num = 200
+    limit_num = 3500
     print(arr_latents.shape)
     arr_latents = arr_latents[0:limit_num]
     subset_latents = arr_latents[0:limit_num, 0:limit_num]

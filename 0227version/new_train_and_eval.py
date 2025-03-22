@@ -391,27 +391,27 @@ def run_inductive(
         print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.7f}, test_loss {sum(test_loss_list)/len(test_loss_list):.7f}")
         print(
-            f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+            f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
             f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
             f"train - sil_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
         print(
-              f"train - spread loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
+              f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
               f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
               f"train - sil_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
               )
 
         # Log training losses
         logger.info(
-            f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
+            f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
             f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
             f"train - sil_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
         # Log testing losses
         logger.info(
-            f"train - spread loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
+            f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
               f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
               f"train - sil_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
         )
