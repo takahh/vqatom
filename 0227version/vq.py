@@ -1225,41 +1225,51 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     import torch
     import torch.nn.functional as F
-    def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters):
+    def improved_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
+        batch_size = embeddings.size(0)
 
+        # Get soft cluster assignments with temperature control
         if embed_ind.dim() == 1:
             embed_ind = embed_ind.unsqueeze(1)  # (N, 1)
-        embed_ind = embed_ind.expand(-1, num_clusters)  # (N, K)
 
-        cluster_assignments = F.softmax(embed_ind, dim=-1)  # Soft cluster assignment (N, K)
+        logits = embed_ind.expand(-1, num_clusters)  # (N, K)
+        cluster_assignments = F.softmax(logits / temperature, dim=-1)  # (N, K)
 
-        # Compute cluster centroids
-        cluster_sums = cluster_assignments.T @ embeddings  # (K, D)
-        cluster_sizes = cluster_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
-        cluster_sizes = cluster_sizes.clamp(min=1e-6)  # Avoid zero division
+        # Get hard assignments for centroid calculation
+        hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
+            1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
+        )
+
+        # Compute cluster centroids using hard assignments for stability
+        cluster_sums = hard_assignments.T @ embeddings  # (K, D)
+        cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
+        cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
 
-        # Compute inter-cluster distances (b)
-        centroid_distances = torch.cdist(centroids, centroids)  # (K, K)
-        eye_mask = torch.eye(num_clusters, device=device) * 1e6  # Large mask for self-distances
-        centroid_distances = centroid_distances + eye_mask
+        # Compute distances to assigned cluster (a)
+        assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
+        assigned_centroids = centroids[assigned_clusters]  # (N, D)
+        a = torch.norm(embeddings - assigned_centroids, dim=1)  # (N,)
 
-        # Select the second-nearest cluster distance
-        sorted_distances, _ = torch.sort(centroid_distances, dim=1)
-        b = sorted_distances[:, 1]  # (K,)
+        # Compute nearest different cluster distance (b)
+        # Create a mask to ignore the assigned cluster
+        mask = torch.ones((batch_size, num_clusters), device=device)
+        mask.scatter_(1, assigned_clusters.unsqueeze(1), 0)
 
-        # Compute intra-cluster distance (a)
-        expanded_centroids = centroids.unsqueeze(0)  # (1, K, D)
-        intra_distances = torch.norm(embeddings.unsqueeze(1) - expanded_centroids, dim=-1)  # (N, K)
+        # Calculate distances to all centroids
+        all_distances = torch.cdist(embeddings, centroids)  # (N, K)
+        masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
 
-        a = (cluster_assignments * intra_distances).sum(dim=0)  # (N,) → Per-sample mean distance
+        # Get the nearest different cluster
+        b, _ = torch.min(masked_distances, dim=1)  # (N,)
 
-        # Compute silhouette score
-        silhouette_score = (b - a) / (torch.max(a, b) + 1e-6)
+        # Calculate silhouette score with a margin to encourage separation
+        max_dist = torch.max(a, b) + 1e-6
+        silhouette = (b - a) / max_dist - margin
 
-        # Final loss (maximize silhouette score)
-        loss = -torch.mean(silhouette_score)
+        # Apply a smoothing function to make the loss more gradient-friendly
+        loss = -torch.mean(torch.tanh(silhouette))
 
         return loss
 
