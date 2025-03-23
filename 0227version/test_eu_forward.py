@@ -16,10 +16,10 @@ class TestYourModel(unittest.TestCase):
         x = torch.randn(1, 128, 64, requires_grad=True, device="cuda")  # Example input
 
         # Ensure model parameters require gradients
-        self.assertTrue(self.model.embed.requires_grad, "self.embed should require gradients before forward()")
+        self.assertTrue(self.model.vq._codebook.embed.requires_grad, "self.embed should require gradients before forward()")
 
         # Check grad_fn is None initially (expected for parameters)
-        self.assertIsNone(self.model.embed.grad_fn, "self.embed.grad_fn should be None initially")
+        self.assertIsNone(self.model.vq._codebook.embed.grad_fn, "self.embed.grad_fn should be None initially")
 
         # Forward pass
         quantize, embed_ind, dist, embed, flatten, init_cb = self.model.forward(x)
@@ -34,8 +34,8 @@ class TestYourModel(unittest.TestCase):
         loss.backward()
 
         # Ensure gradients were computed
-        self.assertIsNotNone(self.model.embed.grad, "Gradients should flow to self.embed")
-        self.assertNotEqual(self.model.embed.grad.abs().sum().item(), 0, "Gradient sum should be non-zero")
+        self.assertIsNotNone(self.model.vq._codebook.embed.grad, "Gradients should flow to self.embed")
+        self.assertNotEqual(self.model.vq._codebook.embed.grad.abs().sum().item(), 0, "Gradient sum should be non-zero")
 
 if __name__ == '__main__':
     unittest.main()
