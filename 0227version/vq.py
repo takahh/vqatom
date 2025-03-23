@@ -506,7 +506,7 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # negative_loss = - torch.log(negative_loss + 1e-8)
     last_target_mask = torch.sigmoid(10 * (0.1 - negative_loss))
     negative_loss = negative_loss * last_target_mask
-    negative_loss = 100 * torch.pow(negative_loss, 2)
+    negative_loss = 1000000 * torch.pow(negative_loss, 2)
     print(f"negative_loss min: {negative_loss.min()}, mean {negative_loss.mean()}, max {negative_loss.max()}")
     del close_type_mask_1, close_type_mask_0, pairwise_distances, pairwise_similarities
     return negative_loss.mean()
@@ -1111,7 +1111,7 @@ class VectorQuantize(nn.Module):
             lamb_div_charge=1,
             commitment_weight=0.01,  # using
             lamb_sil=1,           # using
-            lamb_div=100,           # using
+            lamb_div=1,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
