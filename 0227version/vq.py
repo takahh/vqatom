@@ -497,8 +497,11 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
     # Create mask for "same type"
-    close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
-    close_type_mask_1 = (pairwise_similarities > 0.98).float() # かなり似ているペア
+    # close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
+    # close_type_mask_1 = (pairwise_similarities > 0.98).float() # かなり似ているペア
+    close_type_mask_0 = torch.sigmoid(10 * (1 - pairwise_similarities))  # Soft transition
+    close_type_mask_1 = torch.sigmoid(10 * (pairwise_similarities - 0.98))
+
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     # negative_loss = - torch.log(negative_loss + 1e-8)
     negative_loss = torch.pow(0.1 - negative_loss, 2)
