@@ -502,12 +502,14 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     # Create mask for "same type"
     close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
     close_type_mask_1 = (pairwise_similarities > 0.99).float() # かなり似ているペア
-    debug_matrix = pairwise_similarities * close_type_mask_0 * close_type_mask_1
+    debug_matrix = pairwise_similarities * close_type_mask_0
     debug_matrix = debug_matrix[debug_matrix != 0]
     print("debug_matrix")  # 0.1550
     print(debug_matrix)
     print("debug_matrix.max(")  # 0.1550
     print(debug_matrix.max())
+    print("debug_matrix.mean(")  # 0.1550
+    print(debug_matrix.mean())
     # positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     nonzero_count = torch.count_nonzero(negative_loss)
