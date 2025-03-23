@@ -2,6 +2,7 @@ import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
 from einops import rearrange, repeat, pack, unpack
+from numba.misc.help.inspector import commit
 # from scipy.version import commit_count
 from statsmodels.stats.dist_dependence_measures import distance_covariance
 from torch import nn, einsum
@@ -1115,7 +1116,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=0.01,  # using
+            commitment_weight=1,  # using
             lamb_sil=1,           # using
             lamb_div=1,           # using
             lamb_equiv_atom=1,
@@ -1434,13 +1435,17 @@ class VectorQuantize(nn.Module):
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]
         """
+        detached_quantize = quantize.detach()
+        commit_loss = F.mse_loss(detached_quantize, x)
+
         print(f"feat_div_loss: {feat_div_loss}")
+        print(f"commit_loss: {commit_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
-        print(f"sil_loss {sil_loss}")
+        # print(f"sil_loss {sil_loss}")
         # print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
         # loss = self.lamb_sil * sil_loss
         # loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
-        loss = self.lamb_sil * sil_loss + self.lamb_div * feat_div_loss
+        loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
