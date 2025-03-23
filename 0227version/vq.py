@@ -801,6 +801,8 @@ class EuclideanCodebook(nn.Module):
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
         x = x.float()
+        print("embed.requires_grad in Eu")  # Should be True
+        print(self.embed.requires_grad)  # Should be True
 
         print("self.embed.grad -1")  # Must be True
         print(self.embed.grad)  # Must be True
