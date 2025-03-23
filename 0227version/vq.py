@@ -814,7 +814,7 @@ class EuclideanCodebook(nn.Module):
         # print(f"After init_embed_: flatten.requires_grad: {flatten.requires_grad}")
 
         embed = self.embed  # ✅ DO NOT detach embed
-        init_cb = self.embed.detach().clone().contiguous()  # Just for logging, not used in the graph
+        init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
 
         # **Normalize Without Breaking Gradient Flow**
         # flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
