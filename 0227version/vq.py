@@ -1435,9 +1435,9 @@ class VectorQuantize(nn.Module):
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]
         """
-        detached_quantize = quantize.detach()
-        commit_loss = F.mse_loss(detached_quantize, x)
-
+        # detached_quantize = quantize.detach()
+        # commit_loss = F.mse_loss(detached_quantize, x)
+        commit_loss = F.mse_loss(quantize.detach(), x.detach()) + F.mse_loss(quantize, x.detach())
         print(f"feat_div_loss: {feat_div_loss}")
         print(f"commit_loss: {commit_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
