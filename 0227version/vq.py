@@ -876,9 +876,13 @@ class EuclideanCodebook(nn.Module):
         # print("embed_ind min:", embed_ind.min().item(), "embed_ind max:", embed_ind.max().item())
         # print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
         # print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
+        print("self.embed.grad 0")  # Must be True
+        print(self.embed.grad)  # Must be True
 
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
 
+        print("self.embed.grad 1")  # Must be True
+        print(self.embed.grad)  # Must be True
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
         # print(f"embed_ind {embed_ind}")
