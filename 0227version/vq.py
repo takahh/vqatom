@@ -729,6 +729,8 @@ class EuclideanCodebook(nn.Module):
         else:
             self.register_buffer('embed', embed)
 
+        print("self.embed in Eu init")  # Must be True
+        print(self.embed.grad)  # Must be True
 
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
@@ -1430,6 +1432,8 @@ class VectorQuantize(nn.Module):
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
+        print("codebook.grad -1")  # Must be True
+        print(codebook.grad)  # Must be True
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
