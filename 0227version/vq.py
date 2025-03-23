@@ -800,6 +800,8 @@ class EuclideanCodebook(nn.Module):
     def forward(self, x, logger=None):
         x = x.float()
 
+        print("self.embed.grad -1")  # Must be True
+        print(self.embed.grad)  # Must be True
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
