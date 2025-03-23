@@ -1431,6 +1431,9 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
+        print("codebook.grad -2")  # Must be True
+        print(codebook.grad)  # Must be True
+
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
