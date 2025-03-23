@@ -478,39 +478,43 @@ def batched_embedding(indices, embed):
     return quantized
 
 
-# this is corrected new one, minus sign is correctly added
 def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     """
     atom_types : categorical labels (integers)
     z : latent vectors
     """
-    # Move to CUDA
     z = z.to("cuda")
     atom_types = atom_types.to("cuda")
+
     # Compute pairwise distances for the z vectors
     pairwise_distances = torch.cdist(z, z, p=2)
-    pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
-    nonzero_distances = pairwise_distances[pairwise_distances != 0]
-    close_dist_mask = (0.01 > pairwise_distances).float()  # 距離がだいぶ近いペア
-    # Normalize atom_types (now properly converted to float)
+    pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize
+    close_dist_mask = (0.01 > pairwise_distances).float()
+
+    # Normalize atom_types
     atom_types = F.normalize(atom_types, p=2, dim=1)
+
     # Compute pairwise similarity for the atom_types
-    pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
-    # Create mask for "same type"
-    # close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
-    # close_type_mask_1 = (pairwise_similarities > 0.98).float() # かなり似ているペア
-    close_type_mask_0 = torch.sigmoid(10 * (1 - pairwise_similarities))  # Soft transition
+    pairwise_similarities = torch.mm(atom_types, atom_types.T)
+
+    # Use soft masking
+    close_type_mask_0 = torch.sigmoid(10 * (1 - pairwise_similarities))
     close_type_mask_1 = torch.sigmoid(10 * (pairwise_similarities - 0.98))
 
+    # Compute the loss
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
-    # negative_loss = - torch.log(negative_loss + 1e-8)
-    last_target_mask = torch.sigmoid(10 * (0.1 - negative_loss))
+
+    # Improve stability of last_target_mask
+    last_target_mask = torch.sigmoid(5 * torch.clamp(0.1 - negative_loss, min=-2, max=2))
     negative_loss = negative_loss * last_target_mask
-    negative_loss = 10000000 * torch.pow(negative_loss, 2)
+
+    # Clamp and scale
+    negative_loss = torch.clamp(negative_loss, max=0.1)  # Prevent runaway growth
+    negative_loss = 1000 * torch.pow(negative_loss, 2)  # Reduce scaling
+
     print(f"negative_loss min: {negative_loss.min()}, mean {negative_loss.mean()}, max {negative_loss.max()}")
-    del close_type_mask_1, close_type_mask_0, pairwise_distances, pairwise_similarities
+
     return negative_loss.mean()
-    # return (positive_loss.mean() + negative_loss.mean()/100)
 
 
 def compute_duplicate_nearest_codebook_loss(z, codebook, softness=10):
