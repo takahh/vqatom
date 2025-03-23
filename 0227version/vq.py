@@ -887,6 +887,8 @@ class EuclideanCodebook(nn.Module):
         print(self.embed.grad)  # Must be True
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
+        print("embed.grad -1")  # Must be True
+        print(embed.grad)  # Must be True
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
