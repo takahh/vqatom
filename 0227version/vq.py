@@ -492,27 +492,26 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     pairwise_distances = torch.cdist(z, z, p=2)
     pairwise_distances = pairwise_distances / (pairwise_distances.max() + 1e-6)  # Normalize to [0,1]
     nonzero_distances = pairwise_distances[pairwise_distances != 0]
-    close_dist_mask = (0.005 > pairwise_distances).float()  # 距離がだいぶ近いペア
-    print("nonzero_distances.min()")
+    close_dist_mask = (0.01 > pairwise_distances).float()  # 距離がだいぶ近いペア
+    print("nonzero_distances.min()") # 0.0024
     print(nonzero_distances.min())
     # Normalize atom_types (now properly converted to float)
     atom_types = F.normalize(atom_types, p=2, dim=1)
     # Compute pairwise similarity for the atom_types
     pairwise_similarities = torch.mm(atom_types, atom_types.T)  # Cosine similarity
     # Create mask for "same type"
-    same_type_mask = (pairwise_similarities >= 1).float()
     close_type_mask_0 = (1 > pairwise_similarities).float()   # 特徴量が少しでも違うペア
     close_type_mask_1 = (pairwise_similarities > 0.99).float() # かなり似ているペア
-    print("pairwise_distances.mean()")
-    print(pairwise_distances.mean())
-    count_of_similar_feat_pairs = torch.count_nonzero((close_type_mask_0 * close_type_mask_1 * pairwise_similarities)[pairwise_distances != 0])
-    # Compute positive and negative losses
-    print("count_of_similar_feat_pairs")
-    print(count_of_similar_feat_pairs)
+    debug_matrix = pairwise_similarities * close_type_mask_0 * close_type_mask_1
+    debug_matrix = debug_matrix[debug_matrix != 0]
+    print("debug_matrix")  # 0.1550
+    print(debug_matrix)
+    print("debug_matrix.max(")  # 0.1550
+    print(debug_matrix.max())
     # positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
     nonzero_count = torch.count_nonzero(negative_loss)
-    print("nonzero_count")
+    print("nonzero_count")  # 6780 / 15630
     print(nonzero_count)
     print("pairwise_similarities")
     print(pairwise_similarities.shape)
