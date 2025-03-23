@@ -72,6 +72,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     with torch.cuda.amp.autocast():
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
                                                                                                         logger)  # g is blocks
+    # cb is self.embed
+    model.vq._codebook.embed.data.copy_(cb)
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
