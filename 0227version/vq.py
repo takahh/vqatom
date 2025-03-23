@@ -506,15 +506,15 @@ def compute_contrastive_loss(z, atom_types, threshold=0.5, num_atom_types=20):
     debug_matrix = debug_matrix[debug_matrix != 0]
     print("debug_matrix")  # 0.1550
     print(debug_matrix)
-    print("debug_matrix.max(")  # 0.1550
+    print("debug_matrix.max(")  # 0.9995
     print(debug_matrix.max())
-    print("debug_matrix.mean(")  # 0.1550
+    print("debug_matrix.mean(")  # 0.9574
     print(debug_matrix.mean())
     # positive_loss = same_type_mask * pairwise_distances ** 2
     negative_loss = close_type_mask_0 * close_type_mask_1 * (pairwise_distances * close_dist_mask)
-    nonzero_count = torch.count_nonzero(negative_loss)
-    print("nonzero_count")  # 6780 / 15630
-    print(nonzero_count)
+    negative_loss_count_nonzero = len(negative_loss[negative_loss != 0])
+    print("negative_loss_count_nonzero")  # 6780 / 15630
+    print(negative_loss_count_nonzero)
     print("pairwise_similarities")
     print(pairwise_similarities.shape)
     negative_loss = - torch.log(negative_loss + 1e-8)
