@@ -724,10 +724,10 @@ class EuclideanCodebook(nn.Module):
         self.register_buffer('embed_avg', embed.clone())
 
         self.learnable_codebook = learnable_codebook
-        if learnable_codebook:
-            self.embed = nn.Parameter(embed)
-        else:
-            self.register_buffer('embed', embed)
+        # if learnable_codebook:
+        self.embed = nn.Parameter(embed, requires_grad=True)
+        # else:
+        #     self.register_buffer('embed', embed)
 
         print("self.embed.grad_fn in Eu init")  # Must be True
         print(self.embed.grad_fn)  # Must be True
