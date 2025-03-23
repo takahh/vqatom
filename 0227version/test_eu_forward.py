@@ -1,10 +1,15 @@
 import torch
 import unittest
+from models import EquivariantThreeHopGINE
+from train_teacher import get_args
 
 class TestYourModel(unittest.TestCase):
     def setUp(self):
         # Setup a minimal instance of your model
-        self.model = YourModel(...)  # Initialize with necessary arguments
+        args = get_args()
+        self.model = EquivariantThreeHopGINE(in_feats=64, hidden_feats=64,
+                                        out_feats=64, args=args)
+
         self.model.train()  # Ensure training mode
 
     def test_forward_gradient_flow(self):
