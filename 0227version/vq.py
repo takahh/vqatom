@@ -1262,7 +1262,12 @@ class VectorQuantize(nn.Module):
         # Calculate silhouette score with a margin to encourage separation
         max_dist = torch.max(a, b) + 1e-6
         silhouette = (b - a) / max_dist - margin
-
+        print("silhouette")
+        print(silhouette)
+        print("a")
+        print(a)
+        print("b")
+        print(b)
         # Apply a smoothing function to make the loss more gradient-friendly
         loss = -torch.mean(torch.tanh(silhouette))
 
