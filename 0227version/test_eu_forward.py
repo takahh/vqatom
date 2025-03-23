@@ -14,6 +14,7 @@ class TestYourModel(unittest.TestCase):
 
     def test_forward_gradient_flow(self):
         x = torch.randn(1, 128, 64, requires_grad=True, device="cuda")  # Example input
+        feature = torch.randn(100, 7, device="cuda")  # Random tensor for feature
 
         # Ensure model parameters require gradients
         self.assertTrue(self.model.vq._codebook.embed.requires_grad, "self.embed should require gradients before forward()")
@@ -22,7 +23,7 @@ class TestYourModel(unittest.TestCase):
         self.assertIsNone(self.model.vq._codebook.embed.grad_fn, "self.embed.grad_fn should be None initially")
 
         # Forward pass
-        quantize, embed_ind, dist, embed, flatten, init_cb = self.model.forward(x)
+        quantize, embed_ind, dist, embed, flatten, init_cb = self.model.forward(x, feature, 1)
 
         # Ensure output requires gradients
         self.assertTrue(quantize.requires_grad, "Quantized output should require gradients")
