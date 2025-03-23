@@ -803,11 +803,6 @@ class EuclideanCodebook(nn.Module):
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None):
         x = x.float()
-        print("embed.requires_grad in Eu")  # Should be True
-        print(self.embed.requires_grad)  # Should be True
-
-        print("self.embed.grad_fn -1")  # Must be True
-        print(self.embed.grad_fn)  # Must be True
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
@@ -885,17 +880,10 @@ class EuclideanCodebook(nn.Module):
         # print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
         # print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
 
-        print("self.embed.grad_fn 0")  # Must be True
-        print(self.embed.grad_fn)  # Must be True
-
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
 
-        print("self.embed.grad_fn 1")  # Must be True
-        print(self.embed.grad_fn)  # Must be True
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
-        print("self.embed.grad_fn 2")  # Must be True
-        print(self.embed.grad_fn)  # Must be True
         # print(f"embed_ind {embed_ind}")
         # print(f"After batched_embedding: quantize.requires_grad: {quantize.requires_grad}")
         #
@@ -930,7 +918,6 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
 
             self.embed.data.copy_(embed_normalized)
-            print(f"actual cluster count : {cluster_size.shape}")
             # self.embed = torch.nn.Parameter(embed_normalized.clone())
 
             # Expire unused codes (optional step)
@@ -1434,14 +1421,9 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
-        print("codebook.grad_fn -2")  # Must be True
-        print(codebook.grad_fn)  # Must be True
-
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
 
-        print("codebook.grad_fn -1")  # Must be True
-        print(codebook.grad_fn)  # Must be True
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
