@@ -1439,8 +1439,10 @@ class VectorQuantize(nn.Module):
         """
         # detached_quantize = quantize.detach()
         # commit_loss = F.mse_loss(detached_quantize, x)
-        commit_loss = F.mse_loss(quantize.detach(), x)
-        codebook_loss = F.mse_loss(quantize, x.detach())
+        #  (torch.Size([6307, 1, 64])) input size (torch.Size([1, 6307, 64])) (inp, tar)
+        # commit_loss = F.mse_loss(quantize.detach(), x)
+        commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
+        codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))
         print(f"feat_div_loss: {feat_div_loss}")
         print(f"codebook_loss: {codebook_loss}")
         print(f"commit_loss: {commit_loss}")
