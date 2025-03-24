@@ -1437,8 +1437,10 @@ class VectorQuantize(nn.Module):
         """
         # detached_quantize = quantize.detach()
         # commit_loss = F.mse_loss(detached_quantize, x)
-        commit_loss = F.mse_loss(quantize.detach(), x.detach()) + F.mse_loss(quantize, x.detach())
+        commit_loss = F.mse_loss(quantize.detach(), x)
+        codebook_loss = F.mse_loss(quantize, x.detach())
         print(f"feat_div_loss: {feat_div_loss}")
+        print(f"codebook_loss: {codebook_loss}")
         print(f"commit_loss: {commit_loss}")
         # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
         # print(f"sil_loss {sil_loss}")
