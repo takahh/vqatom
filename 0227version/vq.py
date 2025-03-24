@@ -1118,6 +1118,7 @@ class VectorQuantize(nn.Module):
             lamb_div_charge=1,
             commitment_weight=1,  # using
             lamb_sil=1,           # using
+            lamb_cb=1,           # using
             lamb_div=1,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
@@ -1153,6 +1154,7 @@ class VectorQuantize(nn.Module):
         self.lamb_equiv_atom = lamb_equiv_atom
         self.lamb_sil = lamb_sil
         self.lamb_div = lamb_div
+        self.lamb_cb = lamb_cb
         self.lamb_div_equidist = lamb_div_equidist
         self.pair_weight = pair_weight
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
@@ -1447,7 +1449,7 @@ class VectorQuantize(nn.Module):
         # print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
         # loss = self.lamb_sil * sil_loss
         # loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
-        loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
@@ -1477,4 +1479,4 @@ class VectorQuantize(nn.Module):
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, sil_loss, commit_loss
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, cb_loss, commit_loss

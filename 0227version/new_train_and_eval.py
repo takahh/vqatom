@@ -395,27 +395,27 @@ def run_inductive(
         print(
             f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
             f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
+            f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
         print(
               f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
               f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
-              f"train - sil_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
+              f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
               )
 
         # Log training losses
         logger.info(
             f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
             f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-            f"train - sil_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
+            f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
         )
 
         # Log testing losses
         logger.info(
             f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 7f}, "
               f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 7f}, "
-              f"train - sil_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
+              f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 7f},"
         )
         np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
         np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
