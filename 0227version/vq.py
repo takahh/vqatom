@@ -1479,4 +1479,4 @@ class VectorQuantize(nn.Module):
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, cb_loss, commit_loss
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, codebook_loss, commit_loss
