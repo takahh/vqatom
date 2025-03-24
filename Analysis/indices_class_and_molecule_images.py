@@ -19,10 +19,10 @@ from rdkit import Chem
 print(Chem.__file__)
 
 
-CANVAS_WIDTH = 2300
-CANVAS_HEIGHT = 1500
-FONTSIZE = 40
-EPOCH = 4
+CANVAS_WIDTH = 3300
+CANVAS_HEIGHT = 2500
+FONTSIZE = 30
+EPOCH = 1
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
@@ -204,7 +204,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     # Display all images.
     for i, img in enumerate(images):
-        plt.figure(dpi=250)
+        plt.figure(dpi=350)
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
