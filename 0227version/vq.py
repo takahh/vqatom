@@ -896,30 +896,30 @@ class EuclideanCodebook(nn.Module):
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
 
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
-
-        if self.training:
-            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-            temperature = 0.1  # Softmax temperature
-            # Soft assignment instead of one-hot (fixes gradient flow)
-            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-            embed_onehot = embed_probs  # Fully differentiable soft assignment
-            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-            device = flatten.device
-            embed_ind = embed_ind.to(device)
-            embed_onehot = embed_onehot.to(device)
-            # Compute the sum of assigned embeddings
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-            with torch.no_grad():
-                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-            # Compute normalized cluster sizes
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-            # Normalize the codebook embeddings
-            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-            self.embed.data.copy_(embed_normalized)
-            # Expire unused codes (optional step)
-            self.expire_codes_(x)
-            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
-            torch.cuda.empty_cache()  # Frees unused GPU memory
+        #
+        # if self.training:
+        #     distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
+        #     temperature = 0.1  # Softmax temperature
+        #     # Soft assignment instead of one-hot (fixes gradient flow)
+        #     embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
+        #     embed_onehot = embed_probs  # Fully differentiable soft assignment
+        #     embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+        #     device = flatten.device
+        #     embed_ind = embed_ind.to(device)
+        #     embed_onehot = embed_onehot.to(device)
+        #     # Compute the sum of assigned embeddings
+        #     embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+        #     with torch.no_grad():
+        #         self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+        #     # Compute normalized cluster sizes
+        #     cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+        #     # Normalize the codebook embeddings
+        #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+        #     self.embed.data.copy_(embed_normalized)
+        #     # Expire unused codes (optional step)
+        #     self.expire_codes_(x)
+        #     del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+        #     torch.cuda.empty_cache()  # Frees unused GPU memory
 
         #  ORIGINAL VQGRAPH version
         # if self.training:
