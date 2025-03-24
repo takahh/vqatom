@@ -1450,20 +1450,17 @@ class VectorQuantize(nn.Module):
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]
         """
-        # detached_quantize = quantize.detach()
-        # commit_loss = F.mse_loss(detached_quantize, x)
-        #  (torch.Size([6307, 1, 64])) input size (torch.Size([1, 6307, 64])) (inp, tar)
-        # commit_loss = F.mse_loss(quantize.detach(), x)
-        commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
-        codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))
+        """
+        /vqatom/0227version/vq.py:1457: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
+          commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
+        /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
+          codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
+        commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
+        codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
         print(f"feat_div_loss: {feat_div_loss}")
         print(f"codebook_loss: {codebook_loss}")
         print(f"commit_loss: {commit_loss}")
-        # print(f"Final embed_ind shape: {embed_ind.shape}, unique IDs: {torch.unique(embed_ind)}")
-        # print(f"sil_loss {sil_loss}")
-        # print(f"commit loss {commit_loss}, sil_loss {sil_loss}")
-        # loss = self.lamb_sil * sil_loss
-        # loss = self.lamb_sil * sil_loss + self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+
         loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
 
         # if is_multiheaded:
