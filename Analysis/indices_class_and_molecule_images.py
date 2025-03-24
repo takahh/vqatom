@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 10
+EPOCH = 11
 PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):

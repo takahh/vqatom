@@ -119,7 +119,8 @@ class EquivariantThreeHopGINE(nn.Module):
             dim=args.hidden_dim,
             codebook_size=args.codebook_size,
             decay=0.8,
-            use_cosine_sim=False
+            use_cosine_sim=False,
+            threshold_ema_dead_code=2,
         )
 
         # Bond weight layer
