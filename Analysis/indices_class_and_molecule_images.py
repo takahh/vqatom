@@ -185,9 +185,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(1500, 1000)
+        drawer = Draw.MolDraw2DCairo(3000, 1800)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 4  # Increase font size for readability
+        options.atomLabelFontSize = 5  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
