@@ -820,81 +820,27 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
-        # flatten = rearrange(x, 'h ... d -> h (...) d')  # ✅ NO `.clone()` (preserves gradient flow)
-        # print(f"flatten is x: {flatten is x}")  # Should be False
-        # print(f"flatten.grad_fn: {flatten.grad_fn}")  # Should NOT be None
-        # print(f"Before init_embed_: x.requires_grad: {x.requires_grad}, flatten.requires_grad: {flatten.requires_grad}")
-
         # Initialize codebook vectors (Ensure it does not detach)
         self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
-        # print(f"After init_embed_: flatten.requires_grad: {flatten.requires_grad}")
-
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
-
-        # **Normalize Without Breaking Gradient Flow**
-        # flatten = flatten / (torch.norm(flatten, dim=-1, keepdim=True) + 1e-8)
-        # embed = embed / (torch.norm(embed, dim=-1, keepdim=True) + 1e-8)
-        # print(f"flatten {flatten}")
-        # print(f"embed {embed}")
-        # print(f"After normalization: flatten.requires_grad: {flatten.requires_grad}, embed.requires_grad: {embed.requires_grad}")
-
         # Compute Distance Without Breaking Gradients
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
-
-        # print(f"After dist computation: dist.requires_grad: {dist.requires_grad}")
-
-        # **Gumbel-Softmax for Soft Cluster Assignments**
-        # tau = 1.0
-        # embed_ind_one_hot = F.gumbel_softmax(dist.view(dist.shape[0] * dist.shape[1], -1), tau=tau, hard=False)
         # Compute soft assignment
         embed_ind_soft = F.softmax(dist, dim=-1)
-        # print(f"embed_ind_soft shape {embed_ind_soft.shape}")
-        # print(f"embed_ind_soft {embed_ind_soft}")
-        # print(f"Embedding table shape: {self.embed.shape}")
-
         # Convert to hard assignments
         embed_ind_hard_idx = dist.argmax(dim=-1)
-        # print(f"embed_ind_hard_idx shape {embed_ind_hard_idx.shape}")
-        # print(f"embed_ind_hard_idx {embed_ind_hard_idx}")
-        # embed_ind_hard_idx = torch.clamp(embed_ind_hard_idx, min=0, max=self.embed.shape[0] - 1)
-        # print(f"embed_ind_hard_idx 2 shape {embed_ind_hard_idx.shape}")
-        # print(f"embed_ind_hard_idx 2 {embed_ind_hard_idx}")
         # Access embeddings correctly with shape (1, 1000, 64)
         embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
-        # print(f"embed_ind_hard shape: {embed_ind_hard.shape}")
-
-        # Retrieve embeddings safely
-        embed_vectors = torch.matmul(embed_ind_hard, self.embed.squeeze(0))
-        # print(f"embed_vectors shape: {embed_vectors.shape}")
-        #
-        # print(f"embed_ind_hard shape {embed_ind_hard.shape}")
-        # print(f"embed_ind_hard {embed_ind_hard}")
         # Apply STE trick
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
-
-        # print(f"embed_ind_one_hot shape {embed_ind_one_hot.shape}")
-        # print(f"embed_ind_one_hot {embed_ind_one_hot}")
-        # print(f"After Gumbel-Softmax: embed_ind_one_hot.requires_grad: {embed_ind_one_hot.requires_grad}")
-
         # **Compute Soft Indices (Weighted Sum)**
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
-
-        # print(f"embed_ind shape {embed_ind.shape}")
-        # print(f"embed_ind {embed_ind}")
-        # print(f"Final embed_ind.requires_grad: {embed_ind.requires_grad}")
-
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
-        # print("embed_ind shape:", embed_ind.shape)
-        # print("embed_ind min:", embed_ind.min().item(), "embed_ind max:", embed_ind.max().item())
-        # print("NaN in embed_ind:", torch.isnan(embed_ind).any().item())
-        # print("Inf in embed_ind:", torch.isinf(embed_ind).any().item())
-
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
-
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
         if self.training:  # mine
@@ -937,7 +883,6 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
-
 
         return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
@@ -1387,6 +1332,36 @@ class VectorQuantize(nn.Module):
         # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (spread_loss, embed_ind, sil_loss, feat_div_loss)
 
+
+    def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
+        # Compute distances between encoder outputs and codebook vectors
+        distances = torch.cdist(encoder_outputs, codebook)
+
+        # Soft assignment with temperature
+        soft_assignments = F.softmax(-distances / temperature, dim=-1)
+
+        # Straight-through estimator for discrete selection
+        quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
+
+        # Commitment loss with continuous relaxation
+        commitment_loss = (
+            # Encourage encoder outputs to be close to selected codebook vectors
+                F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean') +
+
+                # Encourage codebook vectors to be close to encoder outputs
+                F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
+        )
+
+        # Entropy regularization to prevent codebook collapse
+        entropy_loss = torch.mean(
+            torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
+        )
+
+        # Combine losses with tunable weights
+        total_loss = commitment_loss + 0.1 * entropy_loss
+
+        return total_loss
+
     import torch
     import torch.nn.functional as F
     from einops import rearrange
@@ -1420,6 +1395,13 @@ class VectorQuantize(nn.Module):
 
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
+        """
+        quantize: データの数だけ存在する、離散化されたクラスタ中心
+        embed_ind: データの数だけ存在する、所属するクラスタID
+        embed: クラスタ中心ベクトル
+        latents: データの数だけ存在する、潜在変数ベクトル
+        init_cb: 
+        """
 
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
@@ -1455,8 +1437,10 @@ class VectorQuantize(nn.Module):
           commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
         /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
-        commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
-        codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
+        commit_loss = self.commitment_loss(x.squeeze(), quantize.detach().squeeze())
+        codebook_loss = self.commitment_loss(x.detach().squeeze(), quantize.squeeze())
+        # commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
+        # codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
         print(f"feat_div_loss: {feat_div_loss}")
         print(f"codebook_loss: {codebook_loss}")
         print(f"commit_loss: {commit_loss}")
