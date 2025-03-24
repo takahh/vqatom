@@ -1362,7 +1362,7 @@ class VectorQuantize(nn.Module):
         print(f"commitment_loss in fn {commitment_loss}")
         print(f"entropy_loss in fn {entropy_loss}")
         # Combine losses with tunable weights
-        total_loss = commitment_loss + 0.1 * entropy_loss
+        total_loss = commitment_loss + 0.00001 * entropy_loss
 
         return total_loss
 
