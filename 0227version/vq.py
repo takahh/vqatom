@@ -1119,7 +1119,7 @@ class VectorQuantize(nn.Module):
             commitment_weight=1,  # using
             lamb_sil=1,           # using
             lamb_cb=1,           # using
-            lamb_div=1,           # using
+            lamb_div=100,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
