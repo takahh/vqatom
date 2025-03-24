@@ -1116,9 +1116,9 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=0.1,  # using
+            commitment_weight=0.01,  # using
             lamb_sil=1,           # using
-            lamb_cb=0.1,           # using
+            lamb_cb=0.01,           # using
             lamb_div=100,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
