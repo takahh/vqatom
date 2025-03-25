@@ -1359,10 +1359,6 @@ class VectorQuantize(nn.Module):
         # entropy_loss = torch.mean(
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
-        print(f"torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1) {torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)}")
-        print(f"soft_assignments in fn {soft_assignments}")
-        print(f"commitment_loss in fn {commitment_loss}")
-        print(f"entropy_loss in fn {entropy_loss}")  # -6.712613685522228e-05
         # Combine losses with tunable weights
         total_loss = commitment_loss + 0.00001 * entropy_loss
 
