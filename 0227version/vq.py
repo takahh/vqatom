@@ -1352,8 +1352,8 @@ class VectorQuantize(nn.Module):
                 F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
         )
 
-        # Entropy regularization to prevent codebook collapse
-        entropy_loss = -torch.mean(
+        # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
+        entropy_loss = torch.mean(
             torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         )
         # entropy_loss = torch.mean(
@@ -1362,7 +1362,7 @@ class VectorQuantize(nn.Module):
         print(f"torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1) {torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)}")
         print(f"soft_assignments in fn {soft_assignments}")
         print(f"commitment_loss in fn {commitment_loss}")
-        print(f"entropy_loss in fn {entropy_loss}")
+        print(f"entropy_loss in fn {0.00001 * entropy_loss}")
         # Combine losses with tunable weights
         total_loss = commitment_loss + 0.00001 * entropy_loss
 
