@@ -1074,9 +1074,9 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=0.01,  # using
+            commitment_weight=0.001,  # using
             lamb_sil=1,           # using
-            lamb_cb=0.01,           # using
+            lamb_cb=0.001,           # using
             lamb_div=100,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
@@ -1356,6 +1356,10 @@ class VectorQuantize(nn.Module):
         entropy_loss = -torch.mean(
             torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         )
+        """
+        feat_div_loss: 0.0001748909562593326
+        codebook_loss: 0.00524178147315979
+        commit_loss: 0.00524178147315979"""
         # entropy_loss = torch.mean(
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
@@ -1446,8 +1450,11 @@ class VectorQuantize(nn.Module):
         print(f"feat_div_loss: {feat_div_loss}")
         print(f"codebook_loss: {codebook_loss}")
         print(f"commit_loss: {commit_loss}")
-
-        loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
+        """
+        # feat_div_loss: 0.0001748909562593326 * 100
+        commit_loss: 0.00524178147315979     * 0.01  """
+        loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
+        # loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
 
         # if is_multiheaded:
         #     print("multiheaded ====================")
