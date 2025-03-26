@@ -577,76 +577,76 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 #
 #     return negative_loss.mean()
 
-
-def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
-    """
-    Advanced contrastive loss with optimized gradient flow
-
-    Args:
-    z (torch.Tensor): Latent vectors [batch_size, latent_dim]
-    atom_types (torch.Tensor): Atom type feature vectors [batch_size, feat_dim]
-    margin (float): Margin for sample separation
-    temperature (float): Gradient smoothing temperature
-
-    Returns:
-    torch.Tensor: Contrastive loss value
-    """
-    # Robust normalization with gradient-preserving epsilon
-    eps = 1e-8
-    z_normalized = z / (torch.norm(z, dim=1, keepdim=True) + eps)
-    atom_types_normalized = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + eps)
-
-    # Compute similarity matrices using log-sum-exp trick for numerical stability
-    def stable_cosine_similarity(x, y):
-        x_norm = x / (torch.norm(x, dim=1, keepdim=True) + eps)
-        y_norm = y / (torch.norm(y, dim=1, keepdim=True) + eps)
-        return torch.mm(x_norm, y_norm.T)
-
-    # Latent representation similarity
-    latent_sim = stable_cosine_similarity(z_normalized, z_normalized)
-
-    # Atom type similarity with continuous soft matching
-    type_sim = stable_cosine_similarity(atom_types_normalized, atom_types_normalized)
-
-    # Smooth type matching using exponential kernel
-    type_kernel = torch.exp(type_sim / temperature)
-    type_kernel = type_kernel / type_kernel.sum(dim=1, keepdim=True)
-
-    # Adaptive margin enforcement
-    adaptive_margin = margin * type_kernel
-
-    # Contrastive loss components with smooth gradients
-    pos_loss = (1 - latent_sim) * type_kernel
-    neg_loss = F.softplus(latent_sim - adaptive_margin)
-
-    # Balanced loss computation
-    total_loss = pos_loss + neg_loss
-
-    # Gradient-friendly reduction
-    loss = total_loss.mean()
-
-    # Soft orthogonality regularization with gradient preservation
-    I = torch.eye(z.shape[1], device=z.device)
-    orthogonality_reg = torch.norm(
-        torch.mm(z_normalized.T, z_normalized) - I,
-        p='fro'
-    )
-
-    # Final loss with adaptive weighting
-    final_loss = loss + 0.01 * orthogonality_reg
-
-    # Gradient clipping prevention
-    final_loss = torch.clamp(final_loss, min=0, max=10)
-
-    # Optional detailed logging
-    with torch.no_grad():
-        print(f"Loss Components:")
-        print(f"  Positive Loss: {pos_loss.mean().item()}")
-        print(f"  Negative Loss: {neg_loss.mean().item()}")
-        print(f"  Orthogonality Reg: {orthogonality_reg.item()}")
-
-    return final_loss
-
+#
+# def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
+#     """
+#     Advanced contrastive loss with optimized gradient flow
+#
+#     Args:
+#     z (torch.Tensor): Latent vectors [batch_size, latent_dim]
+#     atom_types (torch.Tensor): Atom type feature vectors [batch_size, feat_dim]
+#     margin (float): Margin for sample separation
+#     temperature (float): Gradient smoothing temperature
+#
+#     Returns:
+#     torch.Tensor: Contrastive loss value
+#     """
+#     # Robust normalization with gradient-preserving epsilon
+#     eps = 1e-8
+#     z_normalized = z / (torch.norm(z, dim=1, keepdim=True) + eps)
+#     atom_types_normalized = atom_types / (torch.norm(atom_types, dim=1, keepdim=True) + eps)
+#
+#     # Compute similarity matrices using log-sum-exp trick for numerical stability
+#     def stable_cosine_similarity(x, y):
+#         x_norm = x / (torch.norm(x, dim=1, keepdim=True) + eps)
+#         y_norm = y / (torch.norm(y, dim=1, keepdim=True) + eps)
+#         return torch.mm(x_norm, y_norm.T)
+#
+#     # Latent representation similarity
+#     latent_sim = stable_cosine_similarity(z_normalized, z_normalized)
+#
+#     # Atom type similarity with continuous soft matching
+#     type_sim = stable_cosine_similarity(atom_types_normalized, atom_types_normalized)
+#
+#     # Smooth type matching using exponential kernel
+#     type_kernel = torch.exp(type_sim / temperature)
+#     type_kernel = type_kernel / type_kernel.sum(dim=1, keepdim=True)
+#
+#     # Adaptive margin enforcement
+#     adaptive_margin = margin * type_kernel
+#
+#     # Contrastive loss components with smooth gradients
+#     pos_loss = (1 - latent_sim) * type_kernel
+#     neg_loss = F.softplus(latent_sim - adaptive_margin)
+#
+#     # Balanced loss computation
+#     total_loss = pos_loss + neg_loss
+#
+#     # Gradient-friendly reduction
+#     loss = total_loss.mean()
+#
+#     # Soft orthogonality regularization with gradient preservation
+#     I = torch.eye(z.shape[1], device=z.device)
+#     orthogonality_reg = torch.norm(
+#         torch.mm(z_normalized.T, z_normalized) - I,
+#         p='fro'
+#     )
+#
+#     # Final loss with adaptive weighting
+#     final_loss = loss + 0.01 * orthogonality_reg
+#
+#     # Gradient clipping prevention
+#     final_loss = torch.clamp(final_loss, min=0, max=10)
+#
+#     # Optional detailed logging
+#     with torch.no_grad():
+#         print(f"Loss Components:")
+#         print(f"  Positive Loss: {pos_loss.mean().item()}")
+#         print(f"  Negative Loss: {neg_loss.mean().item()}")
+#         print(f"  Orthogonality Reg: {orthogonality_reg.item()}")
+#
+#     return final_loss
+#
 
 # # this is old one in 0227
 # def compute_contrastive_loss(z, atom_types, margin=1.0, threshold=0.5, num_atom_types=100):
