@@ -203,10 +203,10 @@ class EquivariantThreeHopGINE(nn.Module):
         )
         # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, feat_div_loss,
-         x, cb_loss, commit_loss) = quantize_output
+         x, cb_loss, sil_loss) = quantize_output
         detached_quantize = quantize.detach()
         # Loss components list
-        losslist = [feat_div_loss.item(), commit_loss.item(), cb_loss.item()]
+        losslist = [feat_div_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item()]
 
         # Sample list for outputs
         sample_list = [

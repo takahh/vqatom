@@ -1455,7 +1455,6 @@ class VectorQuantize(nn.Module):
         commit_loss: 0.00524178147315979     * 0.01  """
         loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
         # loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
-
         # if is_multiheaded:
         #     print("multiheaded ====================")
         #     if self.separate_codebook_per_head:
@@ -1484,4 +1483,4 @@ class VectorQuantize(nn.Module):
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, codebook_loss, commit_loss
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, feat_div_loss, x, codebook_loss, sil_loss
