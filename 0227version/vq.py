@@ -531,7 +531,6 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     print("loss.mean()")
     print(loss.mean())
     final_loss = loss.mean() + orthogonality_reg
-
     # Optional logging
     print(f"Contrastive Loss: {loss.mean().item()}")
     print(f"Orthogonality Regularization: {orthogonality_reg.item()}")
