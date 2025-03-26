@@ -511,7 +511,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     similarity_matrix torch.Size([6198, 6198])
     similarity_matrix torch.Size([6198, 6198])
     type_mask torch.Size([6198, 6198, 7])"""
-    pos_loss = (1 - similarity_matrix) * type_mask
+    pos_loss = (1 - similarity_matrix) * type_mask * 1000000
 
     neg_loss = F.relu(similarity_matrix + margin) * (1 - type_mask)
 
@@ -525,10 +525,12 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     loss = torch.clamp(loss, min=0, max=10)
 
     # Soft orthogonality regularization
-    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) - torch.eye(z.shape[1], device=z.device))
+    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) - torch.eye(z.shape[1], device=z.device))/10000
 
     # Final loss combining contrastive and orthogonality components
-    final_loss = loss.mean() + 0.01 * orthogonality_reg
+    print("loss.mean()")
+    print(loss.mean())
+    final_loss = loss.mean() + orthogonality_reg
 
     # Optional logging
     print(f"Contrastive Loss: {loss.mean().item()}")
