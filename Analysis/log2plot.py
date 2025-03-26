@@ -3,38 +3,45 @@ import numpy as np
 
 # Data extraction
 epochs = []
-feat_div_loss = []
-cb_loss = []
-sil_loss1 = []
-sil_loss2 = []
+feat_div_loss_train = []
+feat_div_loss_test = []
+cb_loss_train = []
+cb_loss_test = []
+sil_loss_train = []
+sil_loss_test = []
 train_loss = []
 test_loss = []
 
 # Parse the log file
 with open('/Users/taka/Downloads/0326_cb1000/outputs/log', 'r') as file:
     lines = file.readlines()
-    for i in range(0, len(lines), 2):
+    for i in range(0, len(lines), 3):
         # Extract epoch
         epoch_match = lines[i].split('epoch ')[1].split(':')[0]
         epochs.append(int(epoch_match))
 
         # Extract losses from both lines
-        line1_parts = lines[i].split(', ')
-        line2_parts = lines[i + 1].split(', ')
+        line1_parts = lines[i].split(' ')
+        line2_parts = lines[i + 1].split(' ')
+        line3_parts = lines[i + 2].split(' ')
+        print(line1_parts)
+        print(line2_parts)
+        print(line3_parts)
 
         # Extract specific losses
-        train_loss.append(float(line1_parts[0].split('loss ')[1]))
-        test_loss.append(float(line1_parts[1].split('test_loss ')[1]))
+        train_loss.append(float(line1_parts[5].replace(',', '')))
+        test_loss.append(float(line1_parts[7].strip()))
 
         # Feature divergence loss
-        feat_div_loss.append(float(line2_parts[0].split('feat_div loss:  ')[1]))
+        feat_div_loss_train.append(float(line2_parts[7].replace(',', '')))
+        feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
 
         # CB loss
-        cb_loss.append(float(line2_parts[2].split('cb_loss:  ')[1]))
-
+        cb_loss_train.append(float(line2_parts[17].split(',')[0]))
+        cb_loss_test.append(float(line3_parts[17].split(',')[0]))
         # Silhouette losses (from two consecutive lines)
-        sil_loss1.append(float(line2_parts[3].split('sil_loss:  ')[1]))
-        sil_loss2.append(float(lines[i + 1].split('sil_loss:  ')[1].strip()))
+        sil_loss_train.append(float(line2_parts[-1].replace(',', '')))
+        sil_loss_test.append(float(line3_parts[-1].replace(',', '')))
 
 # Create the plot
 plt.figure(figsize=(12, 8))
@@ -42,10 +49,12 @@ plt.figure(figsize=(12, 8))
 # Plot different loss metrics
 plt.plot(epochs, train_loss, label='Train Loss', marker='o')
 plt.plot(epochs, test_loss, label='Test Loss', marker='s')
-plt.plot(epochs, feat_div_loss, label='Feature Div Loss', marker='^')
-plt.plot(epochs, cb_loss, label='CB Loss', marker='v')
-plt.plot(epochs, sil_loss1, label='Silhouette Loss 1', marker='d')
-plt.plot(epochs, sil_loss2, label='Silhouette Loss 2', marker='p')
+plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
+plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Train', marker='_')
+plt.plot(epochs, cb_loss_train, label='CB Loss Train', marker='v')
+plt.plot(epochs, cb_loss_test, label='CB Loss Test', marker='x')
+plt.plot(epochs, sil_loss_train, label='Silhouette Loss Train', marker='d')
+plt.plot(epochs, sil_loss_test, label='Silhouette Loss Test', marker='p')
 
 plt.title('Training Metrics Across Epochs', fontsize=16)
 plt.xlabel('Epoch', fontsize=12)

@@ -1077,7 +1077,7 @@ class VectorQuantize(nn.Module):
             commitment_weight=0.001,  # using
             lamb_sil=1,           # using
             lamb_cb=0.001,           # using
-            lamb_div=100,           # using
+            lamb_div=1,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
@@ -1453,8 +1453,8 @@ class VectorQuantize(nn.Module):
         """
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
-        loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        # loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
+        # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
+        loss = self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_cb * codebook_loss
         # if is_multiheaded:
         #     print("multiheaded ====================")
         #     if self.separate_codebook_per_head:
