@@ -539,7 +539,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     # Negative pairs: enforce margin for dissimilar types
     neg_loss = F.relu(similarity_matrix + margin) * (1 - type_mask)
 
-    print(f"posi loss {pos_loss}, nega {neg_loss}")
+    print(f"posi loss {pos_loss.mean()}, nega {neg_loss.mean()}")
 
     # Combine losses with soft weighting
     loss = (pos_loss + neg_loss) / (type_mask.sum() + (1 - type_mask).sum() + 1e-8)
