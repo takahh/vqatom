@@ -502,13 +502,12 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).float()
 
     # Compute pairwise losses
-    # Similar pairs: minimize distance
-    pos_loss = (1 - similarity_matrix) * type_mask
 
     # Dissimilar pairs: enforce margin
     print(f"similarity_matrix {similarity_matrix.shape}")
     print(f"similarity_matrix {similarity_matrix.shape}")
-    print(f"type_mask {type_mask.shape}")
+    print(f"type_mask {type_mask.shape}")    pos_loss = (1 - similarity_matrix) * type_mask
+
     neg_loss = F.relu(similarity_matrix + margin) * (1 - type_mask)
 
     # Combine losses with soft weighting
