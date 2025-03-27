@@ -549,6 +549,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.01 * orthogonality_reg
+    print(f"loss {loss}, orthogonality reg {orthogonality_reg * 0.01}")
 
     return final_loss
 
