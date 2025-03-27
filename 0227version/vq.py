@@ -523,24 +523,17 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Compute cosine similarity matrix for atom types
     type_similarity_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
-    print(f"type_similarity_matrix {type_similarity_matrix.shape}")
     # Compute cosine similarity matrix for latent representations
     similarity_matrix = torch.mm(z_normalized, z_normalized.T)
-
-    print(f"similarity_matrix {similarity_matrix.shape}")
 
     # Compute type similarity mask (soft matching)
     type_mask = torch.sigmoid(type_similarity_matrix)
 
-    print(f"type_mask {type_mask.shape}")
     # Positive pairs: minimize distance for similar types
     pos_loss = (1 - similarity_matrix) * type_mask * 100
 
     # Negative pairs: enforce margin for dissimilar types
     neg_loss = F.relu(similarity_matrix + margin) * (1 - type_mask)
-
-    print(f"posi loss {pos_loss.mean()}, nega {neg_loss.mean()}")
-
     # Combine losses with soft weighting
     loss = (pos_loss + neg_loss) / (type_mask.sum() + (1 - type_mask).sum() + 1e-8)
 
@@ -557,9 +550,6 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     final_loss = loss.mean() + orthogonality_reg
 
     # Optional logging
-    print(f"final_loss: {final_loss}")
-    print(f"Orthogonality Regularization: {orthogonality_reg.item()}")
-
     # Contrastive
     # Loss: 0.0
     # Orthogonality
