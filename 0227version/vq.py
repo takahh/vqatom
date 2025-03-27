@@ -502,9 +502,13 @@ def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, tempera
     return sparsity_loss
 
 
+import torch
+import torch.nn.functional as F
+
+
 def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     """
-    Contrastive loss designed for smooth gradient flow with feature-based atom types
+    Improved contrastive loss with more stable normalization
 
     Args:
     z (torch.Tensor): Latent vectors [batch_size, latent_dim]
@@ -523,46 +527,29 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Compute cosine similarity matrix for atom types
     type_similarity_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
+
     # Compute cosine similarity matrix for latent representations
     similarity_matrix = torch.mm(z_normalized, z_normalized.T)
 
-    # Compute type similarity mask (soft matching)
-    type_mask = torch.sigmoid(type_similarity_matrix)
+    # Soft type similarity mask with temperature scaling
+    type_mask = torch.sigmoid(type_similarity_matrix / temperature)
 
     # Positive pairs: minimize distance for similar types
-    pos_loss = (1 - similarity_matrix) * type_mask * 100
+    pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
 
     # Negative pairs: enforce margin for dissimilar types
-    neg_loss = F.relu(similarity_matrix + margin) * (1 - type_mask)
-    print(f"neg_loss {neg_loss}")
-    print(f"pos_loss {pos_loss}")
-    print(f"(pos_loss + neg_loss).mean() {(pos_loss + neg_loss).mean()}")
+    neg_loss = torch.mean(F.relu(similarity_matrix + margin) * (1 - type_mask))
 
-    print(f"(type_mask.sum() + (1 - type_mask).sum() + 1e-8) {(type_mask.sum() + (1 - type_mask).sum() + 1e-8)}")
-    # Combine losses with soft weighting
-    loss = (pos_loss + neg_loss) / (type_mask.sum() + (1 - type_mask).sum() + 1e-8)
-
-    # Temperature-based scaling
-    loss = loss / temperature
-
-    # Prevent loss explosion
-    loss = torch.clamp(loss, min=0, max=10)
+    # Combine losses with balanced weighting
+    loss = pos_loss + neg_loss
 
     # Soft orthogonality regularization
-    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) - torch.eye(z.shape[1], device=z.device))/10000
-    print(f"loss.mean() {loss.mean()}")
-    print(f"orthogonality_reg {orthogonality_reg}")
-    # Final loss combining contrastive and orthogonality components
-    final_loss = loss.mean() + orthogonality_reg
+    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
+                                    torch.eye(z.shape[1], device=z.device)) / z.shape[1]
 
-    # Optional logging
-    # Contrastive
-    # Loss: 0.0
-    # Orthogonality
-    # Regularization: 6281.32177734375
-    # feat_div_loss: 62.81321716308594
-    # codebook_loss: 0.0016403334448114038
-    # commit_loss: 0.0016403334448114038
+    # Final loss combining contrastive and orthogonality components
+    final_loss = loss + 0.01 * orthogonality_reg
+
     return final_loss
 
 import torch.nn.functional as F
