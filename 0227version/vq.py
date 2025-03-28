@@ -1376,9 +1376,9 @@ class VectorQuantize(nn.Module):
         codebook_loss = self.commitment_loss(x.detach().squeeze(), quantize.squeeze())
         # commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
         # codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
-        print(f"feat_div_loss: {feat_div_loss}")
-        print(f"codebook_loss: {codebook_loss}")
-        print(f"commit_loss: {commit_loss}")
+        print(f"feat_div_loss: {self.lamb_div * feat_div_loss}")
+        print(f"codebook_loss: {self.lamb_cb * codebook_loss}")
+        print(f"commit_loss: {self.commitment_weight * commit_loss}")
         """
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """

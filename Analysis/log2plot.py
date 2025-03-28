@@ -13,7 +13,7 @@ train_loss = []
 test_loss = []
 
 # Parse the log file
-with open('/Users/taka/Downloads/0327cb1000/outputs/log', 'r') as file:
+with open('/Users/taka/Documents/vqgraph_0222/log', 'r') as file:
     lines = file.readlines()
     for i in range(0, len(lines), 3):
         # Extract epoch
@@ -49,12 +49,12 @@ plt.figure(figsize=(12, 8))
 # Plot different loss metrics
 plt.plot(epochs, train_loss, label='Train Loss', marker='o')
 plt.plot(epochs, test_loss, label='Test Loss', marker='s')
-plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
-plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Train', marker='_')
-plt.plot(epochs, cb_loss_train, label='CB Loss Train', marker='v')
-plt.plot(epochs, cb_loss_test, label='CB Loss Test', marker='x')
-plt.plot(epochs, sil_loss_train, label='Silhouette Loss Train', marker='d')
-plt.plot(epochs, sil_loss_test, label='Silhouette Loss Test', marker='p')
+# plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
+# plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Train', marker='_')
+# plt.plot(epochs, cb_loss_train, label='CB Loss Train', marker='v')
+# plt.plot(epochs, cb_loss_test, label='CB Loss Test', marker='x')
+# plt.plot(epochs, sil_loss_train, label='Silhouette Loss Train', marker='d')
+# plt.plot(epochs, sil_loss_test, label='Silhouette Loss Test', marker='p')
 
 plt.title('Training Metrics Across Epochs', fontsize=16)
 plt.xlabel('Epoch', fontsize=12)

@@ -22,8 +22,8 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 21
-PATH = "/Users/taka/Downloads/0326_cb1000/"
+EPOCH = 50
+PATH = "/Users/taka/Documents/vqgraph_0222/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
