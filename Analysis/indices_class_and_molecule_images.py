@@ -22,8 +22,9 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 50
-PATH = "/Users/taka/Documents/vqgraph_0222/"
+EPOCH = 46
+PATH = "/Users/taka/Documents/0328_cb1500/"
+
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -94,19 +95,24 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     print(node_indices)
     node_to_class = {node: cls for node, cls in zip(node_indices, classes)}
 
-
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
     print("n_components")
     print(n_components)
+    classes = np.array(classes)
 
     images = []
     # for i in range(n_components - 1):
-    for i in range(20):
+    # for i in range(20):
+    for i in range(8, 9):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
         # Extract subgraph features for this component
+        mol_classes = classes[component_indices]
+        mol_node_indices = node_indices[component_indices]
+        mol_node_to_class = {node: cls for node, cls in zip(mol_node_indices, mol_classes)}
+
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
 
@@ -133,8 +139,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
             atom_mapping[idx] = atom_idx
 
             # Annotate atom with its class label if available
-            class_label = node_to_class.get(idx, "Unknown")
-            print(f"ID {class_label} - {latents}")
+            class_label = mol_node_to_class.get(idx, "Unknown")
+            # print(f"ID {class_label} - {latents}")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
             atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
 
@@ -148,6 +154,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         unique_bonds = {}
         for src, dst, bond_order in zip(mol_src, mol_dst, mol_bond):
             src, dst, bond_order = int(src), int(dst), int(bond_order)
+            print(src, dst, bond_order)
             # Ensure both atoms exist in the mapping.
             if src not in atom_mapping or dst not in atom_mapping:
                 continue
@@ -192,7 +199,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Assign custom labels.
         for idx, label in atom_labels.items():
             options.atomLabels[idx] = label
-
+        print()
         # Draw the molecule.
         drawer.DrawMolecule(mol_for_drawing)
         drawer.FinishDrawing()
@@ -208,7 +215,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
-
+    print(node_to_class)
     plt.tight_layout()
     plt.show()
 
