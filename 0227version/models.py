@@ -139,8 +139,7 @@ class EquivariantThreeHopGINE(nn.Module):
 
     def is_bidirectional(self, src, dst):
         # Create a set of all edges as tuples
-        edges = set(zip(src, dst))
-        # Check if the reverse of each edge exists
+        edges = set([(int(u), int(v)) for u, v in zip(src, dst)])        # Check if the reverse of each edge exists
         for u, v in edges:
             if u == v:
                 continue
@@ -226,14 +225,14 @@ class EquivariantThreeHopGINE(nn.Module):
         # Loss components list
         losslist = [feat_div_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item()]
 
-        # Sample list for outputs
-        sample_list = [
-            emb_ind,
-            features,
-            edge_index,
-            transformed_edge_weight,
-            torch.zeros_like(features)  # Placeholder for optional value
-        ]
+        # # Sample list for outputs
+        # sample_list = [
+        #     emb_ind,
+        #     features,
+        #     edge_index,
+        #     transformed_edge_weight,
+        #     torch.zeros_like(features)  # Placeholder for optional value
+        # ]
 
         if batched_graph_base:
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
