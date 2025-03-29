@@ -142,7 +142,9 @@ class EquivariantThreeHopGINE(nn.Module):
         edges = set(zip(src, dst))
         # Check if the reverse of each edge exists
         for u, v in edges:
-            if (v, u) not in edges:
+            if u == v:
+                continue
+            elif (v, u) not in edges:
                 print(f"Edge ({u}, {v}) doesn't have corresponding reverse edge ({v}, {u})")
                 return False
         return True
