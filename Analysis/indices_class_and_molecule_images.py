@@ -77,6 +77,20 @@ def to_superscript(number):
     }
     return "".join(superscript_map.get(char, char) for char in str(number))
 
+
+def is_bidirectional(src, dst):
+    # Create a set of all edges as tuples
+    edges = set(zip(src, dst))
+
+    # Check if the reverse of each edge exists
+    for u, v in edges:
+        if (v, u) not in edges:
+            print(f"Edge ({u}, {v}) doesn't have corresponding reverse edge ({v}, {u})")
+            return False
+
+    return True
+
+
 def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
     import numpy as np
     import matplotlib.pyplot as plt
@@ -93,7 +107,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     node_indices = np.arange(feature_matrix.shape[0])
 
     node_to_class = {node: cls for node, cls in zip(node_indices, classes)}
-    print(f"node_to_class len {len(node_to_class)}")
+    print(is_bidirectional(arr_src, arr_dst))
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
@@ -103,10 +117,15 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     images = []
     # for i in range(n_components - 1):
     # for i in range(20):
-    for i in range(8, 9):
+    for i in range(0, 1):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
+        print(arr_src[7100: 7130])
+        print(arr_src[:30])
+        print(arr_dst[:30])
         component_indices = np.where(labels == i)[0]
+        print("component_indices")
+        print(component_indices)
         # Extract subgraph features for this component
         mol_classes = classes[component_indices]
         print(f"mol_classes len {len(mol_classes)}")
@@ -121,9 +140,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Filter edges to only those within the component
         a = np.isin(arr_src, component_indices)
         b = np.isin(arr_dst, component_indices)
-        print(f"np.isin(arr_src, component_indices) {a.shape}")
-        print(f"np.isin(arr_dst, component_indices) {b.shape}")
-        mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
+        maska = np.isin(arr_src, component_indices) | np.isin(arr_dst, component_indices)
+        maskb = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
+        print(f"maska len {maska[:100]}")
+        print(f"maskb len {maskb[:100]}")
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
         mol_bond = arr_bond_order[mask[:3500]]
