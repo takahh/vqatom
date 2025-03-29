@@ -157,14 +157,14 @@ class EquivariantThreeHopGINE(nn.Module):
         data = data.to(device)
 
         src_one_way, dst_one_way = data.edges()
+        # ------------------------
+        # make edges bidirectional
+        # ------------------------
         src = torch.cat([src_one_way, dst_one_way])
         dst = torch.cat([dst_one_way, src_one_way])
-
         # Create detached copies for the output
         src_output = src.detach().clone()
         dst_output = dst.detach().clone()
-        print("is_bidirectional(src, dst)")
-        print(self.is_bidirectional(src_output, dst_output))
 
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
@@ -180,6 +180,7 @@ class EquivariantThreeHopGINE(nn.Module):
             'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
         edge_weight = torch.cat([edge_weight, edge_weight])
+        print(f"len edges {src.shape}, edge weight len {edge_weight.shape}")
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
