@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from dgl import batch
 from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
 
-from Analysis.indices_class_and_molecule_images import is_bidirectional
 from train_teacher import get_args
 from vq import VectorQuantize
 import dgl
@@ -163,6 +162,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # Create detached copies for the output
         src_output = src.detach().clone()
         dst_output = dst.detach().clone()
+        print("is_bidirectional(src, dst)")
         print(is_bidirectional(src, dst))
 
         num_nodes = data.num_nodes()
