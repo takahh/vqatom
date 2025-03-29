@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 46
+EPOCH = 20
 PATH = "/Users/taka/Documents/0328_cb1500/"
 
 
@@ -131,12 +131,12 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
-        print(f"mol_classes {np.where(mol_classes == 1140)}")
-        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][0]}")
-        print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][0]}")
-        print(f"mol_classes {np.where(mol_classes == 1140)}")
-        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][1]}")
-        print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][1]}")
+        # print(f"mol_classes {np.where(mol_classes == 1140)}")
+        # print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][0]}")
+        # print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][0]}")
+        # print(f"mol_classes {np.where(mol_classes == 1140)}")
+        # print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][1]}")
+        # print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][1]}")
 
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)

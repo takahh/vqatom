@@ -180,7 +180,7 @@ class EquivariantThreeHopGINE(nn.Module):
             'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
         edge_weight = torch.cat([edge_weight, edge_weight])
-        print(f"len edges {src.shape}, edge weight len {edge_weight.shape}")
+        # print(f"len edges {src.shape}, edge weight len {edge_weight.shape}")
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
