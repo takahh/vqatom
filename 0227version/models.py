@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from dgl import batch
 from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
 
+from Analysis.indices_class_and_molecule_images import is_bidirectional
 from train_teacher import get_args
 from vq import VectorQuantize
 import dgl
@@ -137,6 +138,16 @@ class EquivariantThreeHopGINE(nn.Module):
         """Reset k-means clustering for vector quantization."""
         self.vq._codebook.reset_kmeans()
 
+    def is_bidirectional(self, src, dst):
+        # Create a set of all edges as tuples
+        edges = set(zip(src, dst))
+        # Check if the reverse of each edge exists
+        for u, v in edges:
+            if (v, u) not in edges:
+                print(f"Edge ({u}, {v}) doesn't have corresponding reverse edge ({v}, {u})")
+                return False
+        return True
+
     def forward(self, data, features, epoch, logger=None, batched_graph_base=None):
         import torch
         torch.set_printoptions(threshold=10_000)  # Set a high threshold to print all elements
@@ -152,6 +163,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # Create detached copies for the output
         src_output = src.detach().clone()
         dst_output = dst.detach().clone()
+        print(is_bidirectional(src, dst))
 
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)

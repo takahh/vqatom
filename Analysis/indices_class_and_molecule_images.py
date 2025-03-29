@@ -105,9 +105,12 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     # Ensure node indices match the feature matrix.
     node_indices = np.arange(feature_matrix.shape[0])
+    # print("arr_src")
+    # print(arr_src[0:200])
+    # print(arr_dst[0:70])
 
     node_to_class = {node: cls for node, cls in zip(node_indices, classes)}
-    print(is_bidirectional(arr_src, arr_dst))
+    # print(is_bidirectional(arr_src, arr_dst))
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
@@ -117,33 +120,26 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     images = []
     # for i in range(n_components - 1):
     # for i in range(20):
-    for i in range(0, 1):
+    for i in range(8, 9):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
-        print(arr_src[7100: 7130])
-        print(arr_src[:30])
-        print(arr_dst[:30])
         component_indices = np.where(labels == i)[0]
-        print("component_indices")
-        print(component_indices)
         # Extract subgraph features for this component
         mol_classes = classes[component_indices]
-        print(f"mol_classes len {len(mol_classes)}")
         mol_node_indices = node_indices[component_indices]
-        print(f"mol_node_indices len {len(mol_node_indices)}")
         mol_node_to_class = {node: cls for node, cls in zip(mol_node_indices, mol_classes)}
-        print(f"mol_node_to_class len {len(mol_node_to_class)}")
 
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
+        print(f"mol_classes {np.where(mol_classes == 1140)}")
+        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][0]}")
+        print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][0]}")
+        print(f"mol_classes {np.where(mol_classes == 1140)}")
+        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][1]}")
+        print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][1]}")
 
         # Filter edges to only those within the component
-        a = np.isin(arr_src, component_indices)
-        b = np.isin(arr_dst, component_indices)
-        maska = np.isin(arr_src, component_indices) | np.isin(arr_dst, component_indices)
-        maskb = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
-        print(f"maska len {maska[:100]}")
-        print(f"maskb len {maskb[:100]}")
+        mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
         mol_bond = arr_bond_order[mask[:3500]]
@@ -180,7 +176,6 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         unique_bonds = {}
         for src, dst, bond_order in zip(mol_src, mol_dst, mol_bond):
             src, dst, bond_order = int(src), int(dst), int(bond_order)
-            print(src, dst, bond_order)
             # Ensure both atoms exist in the mapping.
             if src not in atom_mapping or dst not in atom_mapping:
                 continue
@@ -240,7 +235,6 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
-    print(mol_node_to_class)
     plt.tight_layout()
     plt.show()
 
