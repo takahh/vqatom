@@ -148,6 +148,8 @@ class EquivariantThreeHopGINE(nn.Module):
         src_one_way, dst_one_way = data.edges()
         print(f"src_one_way {src_one_way}")
         print(f"src_one_way {src_one_way.shape}")
+        print(f"dst_one_way {dst_one_way}")
+        print(f"dst_one_way {dst_one_way.shape}")
         src = torch.cat([src_one_way, dst_one_way])
         dst = torch.cat([dst_one_way, src_one_way])
         print(f"src both direction {src}")
