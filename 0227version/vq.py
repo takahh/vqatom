@@ -1301,7 +1301,7 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     from einops import rearrange
 
-    def forward(self, x, init_feat, logger, mask=None):
+    def forward(self, x, init_feat, logger, epoch=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
 
@@ -1384,7 +1384,10 @@ class VectorQuantize(nn.Module):
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        if epoch < 10:
+            loss = (self.lamb_div * feat_div_loss)
+        else:
+            loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
                 + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
         # if is_multiheaded:
         #     print("multiheaded ====================")

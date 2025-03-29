@@ -217,7 +217,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # Vector Quantization
         init_feat = features.clone()
         quantize_output = self.vq(
-            h, init_feat, logger
+            h, init_feat, logger, epoch
         )
         # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, feat_div_loss,
