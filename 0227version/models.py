@@ -163,7 +163,7 @@ class EquivariantThreeHopGINE(nn.Module):
         src_output = src.detach().clone()
         dst_output = dst.detach().clone()
         print("is_bidirectional(src, dst)")
-        print(self.is_bidirectional(src, dst))
+        print(self.is_bidirectional(src_output, dst_output))
 
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
