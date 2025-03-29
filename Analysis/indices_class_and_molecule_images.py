@@ -119,6 +119,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_latents = subset_latents[component_indices]
 
         # Filter edges to only those within the component
+        a = np.isin(arr_src, component_indices)
+        b = np.isin(arr_dst, component_indices)
+        print(f"np.isin(arr_src, component_indices) {a.shape}")
+        print(f"np.isin(arr_dst, component_indices) {b.shape}")
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]

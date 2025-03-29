@@ -146,14 +146,8 @@ class EquivariantThreeHopGINE(nn.Module):
         data = data.to(device)
 
         src_one_way, dst_one_way = data.edges()
-        print(f"src_one_way {src_one_way}")
-        print(f"src_one_way {src_one_way.shape}")
-        print(f"dst_one_way {dst_one_way}")
-        print(f"dst_one_way {dst_one_way.shape}")
         src = torch.cat([src_one_way, dst_one_way])
         dst = torch.cat([dst_one_way, src_one_way])
-        print(f"src both direction {src}")
-        print(f"src both direction {src.shape}")
 
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
