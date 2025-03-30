@@ -22,8 +22,9 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 20
+EPOCH = 9
 PATH = "/Users/taka/Documents/0328_cb1500/"
+PATH = "/Users/taka/Downloads/0330_tmp/"
 
 
 def getdata(filename):
