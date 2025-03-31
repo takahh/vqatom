@@ -67,12 +67,12 @@ def get_args():
     # Dataset
     # --------------
 
-    # parser.add_argument("--train_size", type=int, default=5939)
-    # parser.add_argument("--val_size", type=int, default=1484)
-    # parser.add_argument("--test_size", type=int, default=1484)
-    parser.add_argument("--train_size", type=int, default=59397)
-    parser.add_argument("--val_size", type=int, default=14849)
-    parser.add_argument("--test_size", type=int, default=14849)
+    parser.add_argument("--train_size", type=int, default=5939)
+    parser.add_argument("--val_size", type=int, default=1484)
+    parser.add_argument("--test_size", type=int, default=1484)
+    # parser.add_argument("--train_size", type=int, default=59397)
+    # parser.add_argument("--val_size", type=int, default=14849)
+    # parser.add_argument("--test_size", type=int, default=14849)
 
     parser.add_argument("--get_umap_data", action="store_true", help="Enable UMAP data processing")
     parser.add_argument("--percent", type=float, default=1)
@@ -219,7 +219,7 @@ def run(args):
         args.output_path = Path.cwd().joinpath(
             args.output_path, "noisy_features", f"noise_{args.feature_noise}"
         )
-
+    print(f"cb size is {args.codebook_size} -----------------")
     if args.feature_aug_k > 0:
         args.output_path = Path.cwd().joinpath(
             args.output_path, "aug_features", f"aug_hop_{args.feature_aug_k}"

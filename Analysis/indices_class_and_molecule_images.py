@@ -22,9 +22,8 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 9
-PATH = "/Users/taka/Documents/0328_cb1500/"
-PATH = "/Users/taka/Downloads/0330_tmp/"
+EPOCH = 7
+PATH = "/Users/taka/Downloads/0331_1500/"
 
 
 def getdata(filename):
@@ -120,8 +119,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     images = []
     # for i in range(n_components - 1):
-    # for i in range(20):
-    for i in range(8, 9):
+    for i in range(20):
+    # for i in range(8, 9):
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
