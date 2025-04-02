@@ -169,8 +169,9 @@ class EquivariantThreeHopGINE(nn.Module):
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
 
-        self.bond_weight = self.bond_weight.to(device)
-        features = transform_node_feats(features).to(device) # Ensure this function is defined
+        # self.bond_weight = self.bond_weight.to(device)
+        self.bond_weight = torch.tensor(1).to(device)
+        # features = transform_node_feats(features).to(device) # Ensure this function is defined
         # features = features.to(device)  # Ensure this function is defined
         # Initial node feature transformation
         h = self.linear_0(features)
