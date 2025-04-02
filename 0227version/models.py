@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dgl import batch
-from dgl.backend.mxnet import shape
 from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
 
 from train_teacher import get_args
@@ -199,7 +198,7 @@ class EquivariantThreeHopGINE(nn.Module):
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
         # edge_attr = torch.ones((transformed_edge_weight[0], transformed_edge_weight[1]), device=src.device) # 結合情報　全部１
         edge_attr = transformed_edge_weight
-        edge_attr = torch.tensor(1, shape(edge_attr))
+        edge_attr = torch.ones(edge_attr.shape)
         # print(f"src {src[:80]}")
         # print(f"dst {dst[:80]}")
         # GINE Layer 1
