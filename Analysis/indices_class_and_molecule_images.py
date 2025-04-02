@@ -119,8 +119,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     images = []
     # for i in range(n_components - 1):
-    for i in range(20):
-    # for i in range(8, 9):
+    # for i in range(20):
+    for i in [16, 17]:
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -131,12 +131,17 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
-        # print(f"mol_classes {np.where(mol_classes == 1140)}")
-        # print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][0]}")
-        # print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][0]}")
-        # print(f"mol_classes {np.where(mol_classes == 1140)}")
-        # print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == 1140)][1]}")
-        # print(f"mol_latents {mol_latents[np.where(mol_classes == 1140)][1]}")
+
+        if i == 16:
+            target_id = 198
+        else:
+            target_id = 380
+        print(f"mol_classes {np.where(mol_classes == target_id)}")
+        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][0]}")
+        print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][0]}")
+        print(f"mol_classes {np.where(mol_classes == target_id)}")
+        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][1]}")
+        print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][1]}")
 
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
