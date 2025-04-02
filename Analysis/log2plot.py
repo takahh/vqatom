@@ -15,7 +15,7 @@ def plot(type):
     test_loss = []
 
     # Parse the log filepath = "/Users/taka/Downloads/0331_1500/"
-    with open('/Users/taka/Downloads/0331_1500/outputs/log', 'r') as file:
+    with open('/Users/taka/Documents/vqatom_results/0401_2000/outputs/log', 'r') as file:
         lines = file.readlines()
         for i in range(0, len(lines), 3):
             # Extract epoch

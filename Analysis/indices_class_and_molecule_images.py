@@ -23,7 +23,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 7
-PATH = "/Users/taka/Downloads/0331_1500/"
+PATH = "/Users/taka/Documents/vqatom_results/0401_2000/"
 
 
 def getdata(filename):
@@ -164,7 +164,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
             class_label = mol_node_to_class.get(idx, "Unknown")
             # print(f"ID {class_label} - {latents}")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
-            atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
+            # atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
+            atom_labels[atom_idx] = f"{class_label}" if class_label != "Unknown" else element
+            # atom_labels[atom_idx] = element
 
         # Define a bond type map
         bond_type_map = {1: Chem.BondType.SINGLE,
@@ -213,7 +215,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(3000, 1800)
+        drawer = Draw.MolDraw2DCairo(1500, 900)
         options = drawer.drawOptions()
         options.atomLabelFontSize = 5  # Increase font size for readability
 

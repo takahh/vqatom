@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-path = "/Users/taka/Downloads/0331_1500/"
+path = "/Users/taka/Documents/vqatom_results/0401_2000/"
 # path = "/Users/taka/Downloads/"
 # LMIN = 2.5
 # LMAX = 7.5
