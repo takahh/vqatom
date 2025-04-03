@@ -1,5 +1,6 @@
 import numpy as np
 from rdkit.Chem import Draw
+from requests.packages import target
 from scipy.sparse import csr_matrix
 # np.set_printoptions(threshold=np.inf)
 from rdkit import Chem
@@ -23,7 +24,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 7
-PATH = "/Users/taka/Documents/vqatom_results/0401_2000/"
+PATH = "/Users/taka/Documents/vqatom_results/0403_1500_no_bondinfo_no_element_num_change/"
 
 
 def getdata(filename):
@@ -119,8 +120,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     images = []
     # for i in range(n_components - 1):
-    # for i in range(20):
-    for i in [16, 17]:
+    for i in range(20):
+    # for i in [16, 17]:
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -132,17 +133,30 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
 
-        if i == 16:
-            target_id = 198
+        if i == 8:
+            node1 = 245
+            node2 = 983
+            print(f"mol_classes {np.where(mol_classes == node1)}")
+            print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node1)]}")
+            print(f"mol_latents {mol_latents[np.where(mol_classes == node1)]}")
+            print(f"mol_feature {mol_features[np.where(mol_classes == node1)]}")
+            print(f"mol_classes {np.where(mol_classes == node2)}")
+            print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node2)]}")
+            print(f"mol_latents {mol_latents[np.where(mol_classes == node2)]}")
+            print(f"mol_feature {mol_features[np.where(mol_classes == node2)]}")
         else:
-            target_id = 380
-        print(f"mol_classes {np.where(mol_classes == target_id)}")
-        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][0]}")
-        print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][0]}")
-        print(f"mol_classes {np.where(mol_classes == target_id)}")
-        print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][1]}")
-        print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][1]}")
-
+            continue
+        #
+        # if i == 14:
+        #     target_id = 1767
+        #     print(f"mol_classes {np.where(mol_classes == target_id)}")
+        #     print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][0]}")
+        #     print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][0]}")
+        #     print(f"mol_classes {np.where(mol_classes == target_id)}")
+        #     print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == target_id)][1]}")
+        #     print(f"mol_latents {mol_latents[np.where(mol_classes == target_id)][1]}")
+        # else:
+        #     continue
         # Filter edges to only those within the component
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
@@ -329,7 +343,7 @@ def main():
     arr_latents = getdata(latent_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
-    arr_feat = restore_node_feats(arr_feat)
+    # arr_feat = restore_node_feats(arr_feat)
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)

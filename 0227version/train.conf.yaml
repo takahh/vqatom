@@ -1,6 +1,5 @@
 global:
   num_layers: 3
-  hidden_dim: 64
 
 molecules:
   SAGE:
