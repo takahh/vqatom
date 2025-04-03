@@ -168,6 +168,10 @@ class EquivariantThreeHopGINE(nn.Module):
 
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
+        self.gine1 = self.gine1.to(device)
+        self.gine2 = self.gine2.to(device)
+        self.gine3 = self.gine3.to(device)
+        self.vq = self.vq.to(device)
 
         self.bond_weight = self.bond_weight.to(device)
         # self.bond_weight = torch.tensor(1).to(device)
@@ -202,21 +206,22 @@ class EquivariantThreeHopGINE(nn.Module):
         # print(f"src {src[:80]}")
         # print(f"dst {dst[:80]}")
         # GINE Layer 1
-        h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine1(h, edge_index=edge_index)
-        h = self.ln0(h)
-        h = self.leaky_relu0(h)
+        with torch.cuda.amp.autocast():
+            h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
+            # h = self.gine1(h, edge_index=edge_index)
+            h = self.ln0(h)
+            h = self.leaky_relu0(h)
 
-        # GINE Layer 2
-        h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
-        # # h = self.gine2(h, edge_index=edge_index)
-        h = self.ln1(h)
-        h = self.leaky_relu1(h)
-        #
-        # # GINE Layer 3
-        h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine3(h, edge_index=edge_index)
-        h = self.ln2(h)
+            # GINE Layer 2
+            h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
+            # # h = self.gine2(h, edge_index=edge_index)
+            h = self.ln1(h)
+            h = self.leaky_relu1(h)
+            #
+            # # GINE Layer 3
+            h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
+            # h = self.gine3(h, edge_index=edge_index)
+            h = self.ln2(h)
 
         # Vector Quantization
         init_feat = features.clone()
