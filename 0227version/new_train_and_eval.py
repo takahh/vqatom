@@ -65,6 +65,8 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()
+    g.to(device)
+    feats.to(device)
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # scaler = torch.cuda.amp.GradScaler()
     scaler = torch.cuda.amp.GradScaler(init_scale=1e2)  # Try lower scale like 1e1
