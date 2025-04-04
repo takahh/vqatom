@@ -750,7 +750,7 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # Initialize codebook vectors (Ensure it does not detach)
-        if self.training and epoch == 1:  # mine
+        if self.training and epoch == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
