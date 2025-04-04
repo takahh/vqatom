@@ -743,14 +743,14 @@ class EuclideanCodebook(nn.Module):
     from einops import rearrange
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None):
+    def forward(self, x, logger=None, epoch=None):
         x = x.float()
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # Initialize codebook vectors (Ensure it does not detach)
-        if self.training:  # mine
+        if self.training and epoch == 1:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
@@ -1330,7 +1330,7 @@ class VectorQuantize(nn.Module):
         # Debug before codebook step
         # print(f"Before codebook: x shape = {x.shape}")
 
-        quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger)
+        quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
         """
         quantize: データの数だけ存在する、離散化されたクラスタ中心
