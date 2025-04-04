@@ -750,7 +750,8 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # Initialize codebook vectors (Ensure it does not detach)
-        self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
+        if self.training:  # mine
+            self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
         # Compute Distance Without Breaking Gradients
@@ -1121,6 +1122,7 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     import torch
     import torch.nn.functional as F
+
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
         batch_size = embeddings.size(0)
