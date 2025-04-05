@@ -1274,6 +1274,9 @@ class VectorQuantize(nn.Module):
         # Straight-through estimator for discrete selection
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
 
+        print(f"0 quantized Gradients: {quantized}")
+        print(f"0 encoder_outputs Gradients: {encoder_outputs}")
+
         # Commitment loss with continuous relaxation
         commitment_loss = (
             # Encourage encoder outputs to be close to selected codebook vectors
@@ -1282,6 +1285,9 @@ class VectorQuantize(nn.Module):
                 # Encourage codebook vectors to be close to encoder outputs
                 F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
         )
+
+        print(f"1 quantized Gradients: {quantized}")
+        print(f"1 encoder_outputs Gradients: {encoder_outputs}")
 
         # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
         entropy_loss = -torch.mean(

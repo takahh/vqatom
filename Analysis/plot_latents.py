@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-path = "/Users/taka/Documents/vqatom_results/0403_1500_no_bondinfo_no_element_num_change/"
+path = "/Users/taka/Documents/vqatom_results/1500_64/"
 # path = "/Users/taka/Downloads/"
 # LMIN = 2.5
 # LMAX = 7.5
