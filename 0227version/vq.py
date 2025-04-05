@@ -1288,11 +1288,12 @@ class VectorQuantize(nn.Module):
 
         print(f"1 quantized Gradients: {quantized}")
         print(f"1 encoder_outputs Gradients: {encoder_outputs}")
-
+        print(f"commitment_loss: {commitment_loss}")
         # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
         entropy_loss = -torch.mean(
             torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         )
+        print(f"entropy_loss: {entropy_loss}")
         """
         feat_div_loss: 0.0001748909562593326
         codebook_loss: 0.00524178147315979
