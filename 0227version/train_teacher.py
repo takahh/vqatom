@@ -283,8 +283,15 @@ def run(args):
     model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
     # model = Model(conf)
 
+    # if conf["train_or_infer"] == "infer":
+    #     model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
+
     if conf["train_or_infer"] == "infer":
-        model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
+        thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+        best_epoch_dict = {'1000_64': 73, '1000_128': 80, '1000_256': 74, '1500_64': 55, '1500_128': 80, '1500_256': 72,
+                           '2000_64': 75, '2000_128': 37, '2000_256': 73}
+        model.load_state_dict(f"model_epoch_{best_epoch_dict[thiskey]}.pth")
+        print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
