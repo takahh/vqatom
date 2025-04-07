@@ -437,7 +437,7 @@ def run_inductive(
         if conf['train_or_infer'] == "infer":
             import os
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-            os.mkdir(kw)
+            os.makedirs(kw, exist_ok=True)
             np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
             np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
             np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
