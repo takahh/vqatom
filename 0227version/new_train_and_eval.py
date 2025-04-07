@@ -111,7 +111,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     test_loss = test_loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test
+    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, cb
 
 
 class MoleculeGraphDataset(Dataset):
@@ -377,6 +377,7 @@ def run_inductive(
         # Test
         # --------------------------------
         test_loss_list = []
+        cb = None
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 10, None), start=10):
             print("TEST ---------------")
             if idx == 11:
@@ -392,7 +393,7 @@ def run_inductive(
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, logger, g_base
-                test_loss, loss_list_test, latent_train, latents, sample_list_test = evaluate(
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, cb = evaluate(
                     model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
@@ -434,12 +435,16 @@ def run_inductive(
                   f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             )
         if conf['train_or_infer'] == "infer":
-            np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-            np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
-            np.savez(f"./latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
-            np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
-            np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
-            np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
+            import os
+            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+            os.mkdir(kw)
+            np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
+            np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
+            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
+            np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
+            np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
+            np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
+            np.savez(f"./{kw}/cb_{epoch}", cb.cpu())
             # np.savez(f"./sample_hop_type_{epoch}", None)
             np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
 
