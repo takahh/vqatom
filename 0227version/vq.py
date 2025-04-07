@@ -1274,8 +1274,8 @@ class VectorQuantize(nn.Module):
         # Straight-through estimator for discrete selection
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
 
-        print(f"0 quantized Gradients: {quantized}")
-        print(f"0 encoder_outputs Gradients: {encoder_outputs}")
+        # print(f"0 quantized Gradients: {quantized}")
+        # print(f"0 encoder_outputs Gradients: {encoder_outputs}")
 
         # Commitment loss with continuous relaxation
         commitment_loss = (
@@ -1286,14 +1286,14 @@ class VectorQuantize(nn.Module):
                 F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
         )
 
-        print(f"1 quantized Gradients: {quantized}")
-        print(f"1 encoder_outputs Gradients: {encoder_outputs}")
-        print(f"commitment_loss: {commitment_loss}")
+        # print(f"1 quantized Gradients: {quantized}")
+        # print(f"1 encoder_outputs Gradients: {encoder_outputs}")
+        # print(f"commitment_loss: {commitment_loss}")
         # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
         entropy_loss = -torch.mean(
             torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         )
-        print(f"entropy_loss: {entropy_loss}")
+        # print(f"entropy_loss: {entropy_loss}")
         # entropy_loss = torch.mean(
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
@@ -1384,10 +1384,10 @@ class VectorQuantize(nn.Module):
         # codebook_loss = self.commitment_loss(x.detach().squeeze(), quantize.squeeze())
         # commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
         # codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
-        print(f"feat_div_loss: {self.lamb_div * feat_div_loss}")
-        # print(f"codebook_loss: {self.lamb_cb * codebook_loss}")
-        print(f"commit_loss: {self.commitment_weight * commit_loss}")
-        print(f"sil loss: {self.lamb_sil * sil_loss}")
+        # print(f"feat_div_loss: {self.lamb_div * feat_div_loss}")
+        # # print(f"codebook_loss: {self.lamb_cb * codebook_loss}")
+        # print(f"commit_loss: {self.commitment_weight * commit_loss}")
+        # print(f"sil loss: {self.lamb_sil * sil_loss}")
         """
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
