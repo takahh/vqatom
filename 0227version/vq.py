@@ -1298,6 +1298,9 @@ class VectorQuantize(nn.Module):
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
         # Combine losses with tunable weights
+        """
+        commitment_loss: 0.001366406329907477
+        entropy_loss: 8.031081199645996"""
         total_loss = commitment_loss + 0.00001 * entropy_loss
 
         return total_loss
@@ -1411,7 +1414,7 @@ class VectorQuantize(nn.Module):
         #     print("fmap ===========")
         #     quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
         #     embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
-        commit_loss = torch.tensor(1)
+        # commit_loss = torch.tensor(1)
         if only_one:
             if len(quantize.shape) == 3:
                 # this line is executed

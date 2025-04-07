@@ -363,9 +363,14 @@ def run_inductive(
         # --------------------------------
         # Save model
         # --------------------------------
-        state = copy.deepcopy(model.state_dict())
-        torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
-        model.load_state_dict(state)
+        if conf["train_or_infer"] == "infer":
+            thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+            best_epoch_dict = {'1000_64': 73, '1000_128': 80, '1000_256': 74, '1500_64': 55, '1500_128': 80, '1500_256': 72, '2000_64': 75, '2000_128': 37, '2000_256': 73}
+            model.load_state_dict(f"model_epoch_{best_epoch_dict[thiskey]}.pth")
+        else:
+            state = copy.deepcopy(model.state_dict())
+            torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
+            model.load_state_dict(state)
         # --------------------------------
         # Test
         # --------------------------------
@@ -426,12 +431,13 @@ def run_inductive(
               f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
               f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
         )
-        # np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-        # np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
-        # np.savez(f"./latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
-        # np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
-        # np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
-        # np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
-        # # np.savez(f"./sample_hop_type_{epoch}", None)
-        # np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
+        if conf['train_or_infer'] == "infer":
+            np.savez(f"./sample_emb_ind_{epoch}", sample_list_test[0].cpu())
+            np.savez(f"./sample_node_feat_{epoch}", sample_list_test[1].cpu())
+            np.savez(f"./latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
+            np.savez(f"./sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
+            np.savez(f"./sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
+            np.savez(f"./sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
+            # np.savez(f"./sample_hop_type_{epoch}", None)
+            np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
 

@@ -60,7 +60,7 @@ def get_args():
     )
     parser.add_argument(
         "--save_results",
-        action="store_true",
+        action="store_false",
         help="Set to True to save the loss curves, trained model, and min-cut loss for the transductive setting",
     )
     # --------------
