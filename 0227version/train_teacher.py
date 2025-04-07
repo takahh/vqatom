@@ -345,19 +345,26 @@ def run(args):
         # ----------------------------------------------------------------------------
         # run the model
         # ----------------------------------------------------------------------------
-        out, score_val, score_test_tran, score_test_ind, h_list, dist, codebook, latents_trans, latents_ind, latent_train_list = run_inductive(
+        # out, score_val, score_test_tran, score_test_ind, h_list, dist, codebook, latents_trans, latents_ind, latent_train_list = run_inductive(
+        #     conf,
+        #     model,
+        #     optimizer,
+        #     args.accumulation_steps,
+        #     logger
+        # )
+        run_inductive(
             conf,
             model,
             optimizer,
             args.accumulation_steps,
             logger
         )
-        score_lst = [score_test_tran, score_test_ind]
-
-    logger.info(
-        f"num_layers: {conf['num_layers']}. hidden_dim: {conf['hidden_dim']}. dropout_ratio: {conf['dropout_ratio']}"
-    )
-    logger.info(f"# params {sum(p.numel() for p in model.parameters())}")
+        # score_lst = [score_test_tran, score_test_ind]
+    #
+    # logger.info(
+    #     f"num_layers: {conf['num_layers']}. hidden_dim: {conf['hidden_dim']}. dropout_ratio: {conf['dropout_ratio']}"
+    # )
+    # logger.info(f"# params {sum(p.numel() for p in model.parameters())}")
 
     # def squeezeit(dlist):
     #     dlist = [torch.squeeze(x) for x in dlist]
@@ -394,15 +401,15 @@ def run(args):
     # np.savez(output_dir.joinpath("loss_and_score"), loss_and_score)
 
     # Model
-    torch.save(model.state_dict(), output_dir.joinpath("model.pth"))
+    # torch.save(model.state_dict(), output_dir.joinpath("model.pth"))
 
     """ Saving min-cut loss """
-    if args.exp_setting == "tran" and args.compute_min_cut:
-        min_cut = compute_min_cut_loss(g, out)
-        with open(output_dir.parent.joinpath("min_cut_loss"), "a+") as f:
-            f.write(f"{min_cut :.4f}\n")
-
-    return score_lst
+    # if args.exp_setting == "tran" and args.compute_min_cut:
+    #     min_cut = compute_min_cut_loss(g, out)
+    #     with open(output_dir.parent.joinpath("min_cut_loss"), "a+") as f:
+    #         f.write(f"{min_cut :.4f}\n")
+    #
+    # return score_lst
 
 
 def repeat_run(args):
