@@ -109,7 +109,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
     test_loss = test_loss.to(device)
-    del logits, quantized
+    del logits
     torch.cuda.empty_cache()
     return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized
 
