@@ -111,7 +111,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     test_loss = test_loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, cb
+    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized
 
 
 class MoleculeGraphDataset(Dataset):
@@ -377,7 +377,7 @@ def run_inductive(
         # Test
         # --------------------------------
         test_loss_list = []
-        cb = None
+        quantized = None
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 10, None), start=10):
             print("TEST ---------------")
             if idx == 11:
@@ -393,7 +393,7 @@ def run_inductive(
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, logger, g_base
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, cb = evaluate(
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized = evaluate(
                     model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
@@ -444,7 +444,7 @@ def run_inductive(
             np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
             np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
             np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
-            np.savez(f"./{kw}/cb_{epoch}", cb.detach().cpu().numpy())
+            np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
             # np.savez(f"./sample_hop_type_{epoch}", None)
             np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
 
