@@ -440,7 +440,7 @@ def run_inductive(
             os.makedirs(kw, exist_ok=True)
             np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
             np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
-            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu()[:3500, :3500])
+            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
             np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
             np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
             np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])

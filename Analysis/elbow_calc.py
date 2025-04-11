@@ -10,29 +10,41 @@ import matplotlib.pyplot as plt
 def calc_wcss(latents, centroid):
     # Compute WCSS manually
     wcss = 0.0
-    diff = latents - centroid
-    wcss += np.dot(diff, diff)  # ||x - c||²
+    for i in range(len(latents)):
+        diff = latents[i] - centroid[i]
+        wcss += np.dot(diff, diff)  # ||x - c||²
     return wcss
 
 exp_list = ['1000_64', '1000_128', '1000_256', '1500_64', '1500_128', '1500_256', '2000_64', '2000_128', '2000_256']
+non_list = ['2500_64', '2500_128', '2500_256']
+
+def run():
+    used_exp_list = []
+    wcss_list = []
+    for dim in [64, 128, 256, 512, 1024]:
+        for cb_size in [1000, 1500, 2000, 2500]:
+            exp_name = f"{cb_size}_{dim}"
+            if exp_name in non_list:
+                continue
+            cb = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/quantized_1.npz")['arr_0'][:3500]
+            latent = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/latents_mol_1.npz")['arr_0']
+            print(f"cb {cb_size}, latent {dim}")
+            wcss_list.append(calc_wcss(latent, cb))
+            used_exp_list.append(exp_name)
+
+    return wcss_list, used_exp_list
 
 
-def get_data(exp_name):
-    "/Users/taka/Documents/data_for_elbow/1000_64/cb_1.npz"
-    cb = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/cb_1.npz")['arr_0']
-    latent = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/latents_mol_1.npz")['arr_0']
-    return latent, cb
-
-wcss_list = []
-for exp in exp_list:
-    latent, cb = get_data(exp)
-    wcss_list.append(calc_wcss(latent, cb))
+wcss_list, used_exp_list = run()
 
 
 # Plot
-plt.plot(exp_list, wcss_list, marker='o')
+
+plt.figure(dpi=350)
+plt.plot(used_exp_list, wcss_list, marker='o')
 plt.title('Elbow Method using Precomputed Clusters')
 plt.xlabel('Number of clusters (k)')
 plt.ylabel('WCSS')
+plt.xticks(fontsize=7)
 plt.grid(True)
 plt.show()
