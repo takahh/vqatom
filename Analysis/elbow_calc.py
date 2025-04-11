@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 def calc_wcss(latents, centroid):
     # Compute WCSS manually
     wcss = 0.0
+    print(f"latents: {latents.shape}, centroid: {centroid.shape}")
     for i in range(len(latents)):
         diff = latents[i] - centroid[i]
         wcss += np.dot(diff, diff)  # ||x - c||²
@@ -26,9 +27,9 @@ def run():
             exp_name = f"{cb_size}_{dim}"
             if exp_name in non_list:
                 continue
-            cb = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/quantized_1.npz")['arr_0'][:3500]
+            cb = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/quantized_1.npz")['arr_0']
             latent = np.load(f"/Users/taka/Documents/data_for_elbow/{exp_name}/latents_mol_1.npz")['arr_0']
-            print(f"cb {cb_size}, latent {dim}")
+            print(f"cb {cb.shape}, latent {latent.shape}")
             wcss_list.append(calc_wcss(latent, cb))
             used_exp_list.append(exp_name)
 
