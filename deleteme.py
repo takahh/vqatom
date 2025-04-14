@@ -1,7 +1,18 @@
+import matplotlib.pyplot as plt
 import numpy as np
 
 
 # Load the .pth file
-model_data = np.load("/Users/taka/Documents/vqatom_results/1500_64/init_codebook_34.npz")
+epochs = []
+train_losses = []
+with open("/Users/taka/Downloads/log", 'r') as file:
+    for lines in file.readlines():
+        print(lines)
+        if "epoch" in lines:
+            ele = lines.split()
+            epochs.append(int(ele[3].replace(":", "")))
+            train_losses.append(float(ele[7].replace(",", "")))
 
-print(model_data["arr_0"].shape)
+plt.figure()
+plt.plot(epochs, train_losses)
+plt.show()
