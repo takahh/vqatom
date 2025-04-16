@@ -286,7 +286,7 @@ def run(args):
     # if conf["train_or_infer"] == "infer":
     #     model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
 
-    if conf["train_or_infer"] == "infer":
+    if conf["train_or_infer"] != "train":
         thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         print(f"thiskey is {thiskey}")
         best_epoch_dict = {'1000_64': 73, '1000_128': 80, '1000_256': 74, '1500_64': 80, '1500_128': 80, '1500_256': 72,
