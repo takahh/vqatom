@@ -451,7 +451,7 @@ def run_inductive(
                   f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
                   f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             )
-        if conf['train_or_infer'] == "infer":
+        if conf['train_or_infer'] != "train":
             import os
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             os.makedirs(kw, exist_ok=True)
