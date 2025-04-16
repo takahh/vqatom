@@ -1336,6 +1336,7 @@ class VectorQuantize(nn.Module):
         # Debug before codebook step
         # print(f"Before codebook: x shape = {x.shape}")
 
+        print(f"x: {x}")
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
         """
@@ -1362,6 +1363,7 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
+        print(f"embed_ind 0: {embed_ind}")
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
         print(f"embed_ind: {embed_ind}")
