@@ -255,14 +255,14 @@ class EquivariantThreeHopGINE(nn.Module):
             # print(f"src shape {src.shape}")
             # print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, features, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
-            print(sample_list)
+            print(len(sample_list))
         else:
             print(f"batched graph does not exists !!!!!")
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src_output, dst_output]
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
-        print(sample_list)
+        print(len(sample_list))
 
         return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
 
