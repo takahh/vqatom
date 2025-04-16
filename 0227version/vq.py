@@ -1364,10 +1364,10 @@ class VectorQuantize(nn.Module):
 
         codebook = self._codebook.embed
 
-        print(f"embed_ind 0: {embed_ind}")
+        # print(f"embed_ind 0: {embed_ind}")
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
-        print(f"embed_ind: {embed_ind}")
+        # print(f"embed_ind: {embed_ind}")
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
