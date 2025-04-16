@@ -465,5 +465,5 @@ def run_inductive(
             # np.savez(f"./sample_hop_type_{epoch}", None)
             print("sample_list_test[6]")
             print(sample_list_test[6])
-            np.savez(f"./sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
+            np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
 
