@@ -1,3 +1,5 @@
+from turtledemo.penrose import start
+
 import numpy as np
 import torch
 from pandas.conftest import datapath
@@ -384,7 +386,11 @@ def run_inductive(
         # --------------------------------
         test_loss_list = []
         quantized = None
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 10, None), start=10):
+        if conf['train_or_infer'] == "analysis":
+            start_num = 0
+        else:
+            start_num = 10
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
             if idx == 11:
                 break
