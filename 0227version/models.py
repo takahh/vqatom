@@ -255,6 +255,7 @@ class EquivariantThreeHopGINE(nn.Module):
             # print(f"src shape {src.shape}")
             # print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, features, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
+            print(sample_adj_base)
         else:
             print(f"batched graph does not exists !!!!!")
             sample_bond_info = data.edata["weight"]
