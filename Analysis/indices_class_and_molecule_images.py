@@ -24,7 +24,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 1
-PATH = "/Users/taka/Downloads/3000_512/"
+PATH = "//Users/taka/Documents/data_for_elbow/1000_128/"
 
 
 def getdata(filename):
@@ -92,7 +92,7 @@ def is_bidirectional(src, dst):
     return True
 
 
-def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base):
+def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base, limit):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
@@ -161,12 +161,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
-        mol_bond = arr_bond_order[mask[:3500]]
+        mol_bond = arr_bond_order[mask[:limit]]
         component_indices_int = component_indices.tolist()
         component_indices_int = [int(i) for i in component_indices_int]
         mol_embed_id = [classes[i] for i in component_indices_int]  # ✅ Works for Python lists
-
-
         # Create an editable RDKit molecule
         mol = Chem.RWMol()
         atom_mapping = {}  # Map original node index to RDKit atom index
@@ -256,8 +254,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         plt.title(f"Molecule {i + 1}")
         plt.imshow(img)
         plt.axis("off")
-    plt.tight_layout()
-    plt.show()
+        plt.tight_layout()
+        plt.show()
 
 
 
@@ -340,6 +338,7 @@ def main():
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
 
     arr_indices = getdata(indices_file)   # indices of the input
+    print(arr_indices[:100])
     arr_latents = getdata(latent_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
@@ -374,18 +373,17 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    limit_num = 3500
+    limit_num = 391
     print(arr_latents.shape)
     arr_latents = arr_latents[0:limit_num]
     subset_latents = arr_latents[0:limit_num, 0:limit_num]
     subset_adj_base_matrix = arr_adj_base[0:limit_num, 0:limit_num]
     subset_attr_matrix = arr_feat[:limit_num]
-    print(f"subset_latents {subset_latents.shape}")
-    print(f"subset_adj_base_matrix {subset_adj_base_matrix.shape}")
+    print(f"subset_attr_matrix {subset_attr_matrix}")
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
-    visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src, arr_dst, arr_bond_order, subset_adj_base_matrix)
+    visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src, arr_dst, arr_bond_order, subset_adj_base_matrix, limit_num)
 
 
 if __name__ == '__main__':

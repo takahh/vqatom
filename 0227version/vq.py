@@ -1364,13 +1364,14 @@ class VectorQuantize(nn.Module):
 
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, latents, quantize,
                                                                    logger)
-
+        print(f"embed_ind: {embed_ind}")
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
+        print(f"embed_ind processed: {embed_ind}")
         """  div_loss_list = 
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]

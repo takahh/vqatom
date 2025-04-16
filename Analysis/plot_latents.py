@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-path = "/Users/taka/Documents/vqatom_results/1500_64/"
+path = "//Users/taka/Documents/vqatom_results/3000_512/"
 # path = "/Users/taka/Downloads/"
 # LMIN = 2.5
 # LMAX = 7.5
@@ -139,9 +139,9 @@ def getdata(filename):
 
 def main():
     arr_list = []
-    DIMENSION = 64
+    DIMENSION = 512
     BATCH = 8000
-    EPOCH = 8
+    EPOCH = 77
     EPOCH2 = EPOCH + 1
 
     # MODE = "tsne"
