@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from pandas.conftest import datapath
 from torch.utils.data import Dataset, DataLoader
 import glob
 import numpy as np
@@ -13,6 +14,7 @@ import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
 DATAPATH = "../data/both_mono"
+DATAPATH_INFER = "../data/additional_data_for_analysis"
 
 
 def transform_node_feats(a):
@@ -300,7 +302,11 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    dataset = MoleculeGraphDataset(adj_dir=DATAPATH, attr_dir=DATAPATH)
+    if conf['train_or_infer'] == "train":
+        datapath = DATAPATH
+    else:
+        datapath = DATAPATH_INFER
+    dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
