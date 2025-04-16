@@ -27,11 +27,11 @@ def plot(cbsize, dim):
 
 
 
-non_list = ['2500_64', '2500_128', '3000_64', '3000_128']
+non_list = ['2500_64', '2500_128', '3000_64', '3000_128', '3500_64', '3500_128']
 
 def run():
     for dim in [64, 128, 256, 512, 1024]:
-        for cb_size in [1000, 1500, 2000, 2500, 3000]:
+        for cb_size in [1000, 1500, 2000, 2500, 3000, 3500]:
             exp_name = f"{cb_size}_{dim}"
             if exp_name in non_list:
                 continue
