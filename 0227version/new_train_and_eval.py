@@ -391,7 +391,7 @@ def run_inductive(
             start_num = 10
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
-            print(f"adj_batch: {adj_batch.shape}")
+            print(f"adj_batch: {adj_batch}")
             if idx == 11:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
