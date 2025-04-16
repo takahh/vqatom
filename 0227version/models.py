@@ -245,6 +245,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # ]
 
         if batched_graph_base:
+            print(f"batched graph exists !!!!!")
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
@@ -255,6 +256,7 @@ class EquivariantThreeHopGINE(nn.Module):
             # print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, features, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:
+            print(f"batched graph does not exists !!!!!")
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, features, sample_adj, sample_bond_info, src_output, dst_output]
 

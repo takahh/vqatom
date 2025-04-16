@@ -23,8 +23,8 @@ print(Chem.__file__)
 CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
-EPOCH = 50
-PATH = "/Users/taka/Documents/vqatom_results/1500_256/"
+EPOCH = 1
+PATH = "/Users/taka/Downloads/3000_512/"
 
 
 def getdata(filename):
