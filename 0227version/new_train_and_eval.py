@@ -186,8 +186,13 @@ def convert_to_dgl(adj_batch, attr_batch):
         #     break
         # print(f"{i} - {adj_batch[i].shape}")
         # Reshape the current batch
-        adj_matrices = adj_batch[i].view(1000, 100, 100)
-        attr_matrices = attr_batch[i].view(1000, 100, 7)
+        args = get_args()
+        if args.train_or_infer == 'analysis':
+            adj_matrices = adj_batch[i].view(75, 100, 100)
+            attr_matrices = attr_batch[i].view(75, 100, 7)
+        else:
+            adj_matrices = adj_batch[i].view(1000, 100, 100)
+            attr_matrices = attr_batch[i].view(1000, 100, 7)
 
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
