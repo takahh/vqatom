@@ -86,12 +86,12 @@ class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
         self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=64)   # element
-        self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
+        self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=16)       # degree
         self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
-        self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=3)
-        self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=3)
-        self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
+        self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
+        self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=16)
+        self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=16)
+        self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=16)
 
     def forward(self, atom_inputs):
         """
@@ -124,7 +124,7 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()  # Ensure this function is defined elsewhere
         self.feat_embed = AtomEmbedding()
         # Initial linear layer for node features
-        self.linear_0 = nn.Linear(84, args.hidden_dim)
+        self.linear_0 = nn.Linear(136, args.hidden_dim)
 
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
