@@ -86,7 +86,7 @@ class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
         self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=64)   # element
-        self.degree_embed = nn.Embedding(num_embeddings=6, embedding_dim=4)       # degree
+        self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
         self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
         self.charge_embed = nn.Embedding(num_embeddings=5, embedding_dim=3)
         self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
