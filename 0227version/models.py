@@ -99,13 +99,13 @@ class AtomEmbedding(nn.Module):
         Each column is an integer feature:
         [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
         """
-        x0 = self.element_embed(atom_inputs[:, 0].long)
-        x1 = self.degree_embed(atom_inputs[:, 1].long)
-        x2 = self.valence_embed(atom_inputs[:, 2].long)
-        x3 = self.charge_embed(atom_inputs[:, 3].long)
-        x4 = self.aromatic_embed(atom_inputs[:, 4].long)
-        x5 = self.hybrid_embed(atom_inputs[:, 5].long)
-        x6 = self.hydrogen_embed(atom_inputs[:, 6].long)
+        x0 = self.element_embed(atom_inputs[:, 0].long())
+        x1 = self.degree_embed(atom_inputs[:, 1].long())
+        x2 = self.valence_embed(atom_inputs[:, 2].long())
+        x3 = self.charge_embed(atom_inputs[:, 3].long())
+        x4 = self.aromatic_embed(atom_inputs[:, 4].long())
+        x5 = self.hybrid_embed(atom_inputs[:, 5].long())
+        x6 = self.hydrogen_embed(atom_inputs[:, 6].long())
 
         out = torch.cat([x0, x1, x2, x3, x4, x5, x6], dim=-1)  # shape: [num_atoms, total_embedding_dim]
         return out
