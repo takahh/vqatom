@@ -88,7 +88,7 @@ class AtomEmbedding(nn.Module):
         self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=64)   # element
         self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
         self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
-        self.charge_embed = nn.Embedding(num_embeddings=7, embedding_dim=3)
+        self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=3)
         self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
         self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=3)
         self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
