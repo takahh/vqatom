@@ -396,7 +396,7 @@ def run_inductive(
             start_num = 10
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
-            print(f"adj_batch: {adj_batch[0].shape}")
+            # print(f"adj_batch: {adj_batch[0].shape}")
             if idx == 11:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
@@ -463,7 +463,7 @@ def run_inductive(
             np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
             # np.savez(f"./sample_hop_type_{epoch}", None)
-            print("sample_list_test[6]")
-            print(sample_list_test[6])
+            # print("sample_list_test[6]")
+            # print(sample_list_test[6])
             np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
 

@@ -1336,8 +1336,8 @@ class VectorQuantize(nn.Module):
         # Debug before codebook step
         # print(f"Before codebook: x shape = {x.shape}")
 
-        print(f"x: {x}")
-        print(f"init_feat: {init_feat}")
+        # print(f"x: {x}")
+        # print(f"init_feat: {init_feat}")
         quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
         """
@@ -1374,7 +1374,6 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        print(f"embed_ind processed: {embed_ind}")
         """  div_loss_list = 
         [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
          aroma_div_loss, ringy_div_loss, h_num_div_loss]
