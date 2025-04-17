@@ -106,7 +106,7 @@ class AtomEmbedding(nn.Module):
 
         x0 = self.element_embed(atom_inputs[:, 0].long())
         x1 = self.degree_embed(atom_inputs[:, 1].long())
-        x2 = self.valence_embed(atom_inputs[:, 2].long())
+        x2 = self.valence_embed(atom_inputs[:, 2].long() + 1)
         x3 = self.charge_embed(atom_inputs[:, 3].long())
         x4 = self.aromatic_embed(atom_inputs[:, 4].long())
         x5 = self.hybrid_embed(atom_inputs[:, 5].long())
