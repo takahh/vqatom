@@ -24,7 +24,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 1
-PATH = "//Users/taka/Documents/data_for_elbow/1000_128/"
+PATH = "//Users/taka/Downloads/"
 
 
 def getdata(filename):
@@ -133,19 +133,19 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_features = feature_matrix[component_indices]
         mol_latents = subset_latents[component_indices]
 
-        if i == 8:
-            node1 = 245
-            node2 = 983
-            print(f"mol_classes {np.where(mol_classes == node1)}")
-            print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node1)]}")
-            print(f"mol_latents {mol_latents[np.where(mol_classes == node1)]}")
-            print(f"mol_feature {mol_features[np.where(mol_classes == node1)]}")
-            print(f"mol_classes {np.where(mol_classes == node2)}")
-            print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node2)]}")
-            print(f"mol_latents {mol_latents[np.where(mol_classes == node2)]}")
-            print(f"mol_feature {mol_features[np.where(mol_classes == node2)]}")
-        else:
-            continue
+        # if i == 8:
+        #     node1 = 245
+        #     node2 = 983
+        #     print(f"mol_classes {np.where(mol_classes == node1)}")
+        #     print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node1)]}")
+        #     print(f"mol_latents {mol_latents[np.where(mol_classes == node1)]}")
+        #     print(f"mol_feature {mol_features[np.where(mol_classes == node1)]}")
+        #     print(f"mol_classes {np.where(mol_classes == node2)}")
+        #     print(f"mol_node_indices {mol_node_indices[np.where(mol_classes == node2)]}")
+        #     print(f"mol_latents {mol_latents[np.where(mol_classes == node2)]}")
+        #     print(f"mol_feature {mol_features[np.where(mol_classes == node2)]}")
+        # else:
+        #     continue
         #
         # if i == 14:
         #     target_id = 1767
@@ -181,10 +181,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
             class_label = mol_node_to_class.get(idx, "Unknown")
             # print(f"ID {class_label} - {latents}")
             element = Chem.GetPeriodicTable().GetElementSymbol(atomic_num)
-            # atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
-            atom_labels[atom_idx] = f"{class_label}" if class_label != "Unknown" else element
+            atom_labels[atom_idx] = f"{element}{class_label}" if class_label != "Unknown" else element
+            # atom_labels[atom_idx] = f"{class_label}" if class_label != "Unknown" else element
             # atom_labels[atom_idx] = element
-
+        print(atom_labels)
         # Define a bond type map
         bond_type_map = {1: Chem.BondType.SINGLE,
                          2: Chem.BondType.DOUBLE,
@@ -248,14 +248,39 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         img = Image.open(BytesIO(img_data))
         images.append(img)
 
-    # Display all images.
+    # # # Display all images
+    # for i, img in enumerate(images):
+    #     plt.figure(dpi=350)
+    #     plt.title(f"Molecule {i + 1}")
+    #     plt.imshow(img)
+    #     plt.axis("off")
+    #     plt.tight_layout()
+    #     plt.show()
+
+    import matplotlib.pyplot as plt
+
+    # Assuming `images` is a list of image arrays
+    num_images = len(images)
+    cols = 4  # Number of columns you want
+    rows = (num_images + cols - 1) // cols  # Calculate the number of rows needed
+
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 2, rows * 2), dpi=350)
+
+    # Flatten axes array in case it's 2D
+    axes = axes.flatten()
+
     for i, img in enumerate(images):
-        plt.figure(dpi=350)
-        plt.title(f"Molecule {i + 1}")
-        plt.imshow(img)
-        plt.axis("off")
-        plt.tight_layout()
-        plt.show()
+        axes[i].imshow(img)
+        axes[i].set_title(f"Molecule {i + 1}", fontsize=8)
+        axes[i].axis("off")
+
+    # Hide any unused subplots
+    for j in range(i + 1, len(axes)):
+        axes[j].axis("off")
+
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig("./similar_mols.png")
 
 
 

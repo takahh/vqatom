@@ -79,6 +79,37 @@ class BondWeightLayer(nn.Module):
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
 
+import torch
+import torch.nn as nn
+
+class AtomEmbedding(nn.Module):
+    def __init__(self):
+        super(AtomEmbedding, self).__init__()
+        self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=64)   # element
+        self.degree_embed = nn.Embedding(num_embeddings=6, embedding_dim=4)       # degree
+        self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
+        self.charge_embed = nn.Embedding(num_embeddings=5, embedding_dim=3)
+        self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=3)
+        self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
+
+    def forward(self, atom_inputs):
+        """
+        atom_inputs: LongTensor of shape [num_atoms, 7]
+        Each column is an integer feature:
+        [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
+        """
+        x0 = self.element_embed(atom_inputs[:, 0])
+        x1 = self.degree_embed(atom_inputs[:, 1])
+        x2 = self.valence_embed(atom_inputs[:, 2])
+        x3 = self.charge_embed(atom_inputs[:, 3])
+        x4 = self.aromatic_embed(atom_inputs[:, 4])
+        x5 = self.hybrid_embed(atom_inputs[:, 5])
+        x6 = self.hydrogen_embed(atom_inputs[:, 6])
+
+        out = torch.cat([x0, x1, x2, x3, x4, x5, x6], dim=-1)  # shape: [num_atoms, total_embedding_dim]
+        return out
+
 
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
@@ -86,9 +117,9 @@ class EquivariantThreeHopGINE(nn.Module):
 
         if args is None:
             args = get_args()  # Ensure this function is defined elsewhere
-
+        self.feat_embed = AtomEmbedding()
         # Initial linear layer for node features
-        self.linear_0 = nn.Linear(7, args.hidden_dim)
+        self.linear_0 = nn.Linear(84, args.hidden_dim)
 
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
@@ -176,10 +207,10 @@ class EquivariantThreeHopGINE(nn.Module):
         self.bond_weight = self.bond_weight.to(device)
         # self.bond_weight = torch.tensor(1).to(device)
         # self.bond_weight = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=True).to(device)
-        # features = transform_node_feats(features).to(device) # Ensure this function is defined
+        features = self.feat_embed(features).to(device) # Ensure this function is defined
         # features = features.to(device)  # Ensure this function is defined
-        # Initial node feature transformation
-        features = features.to(device)
+        # # Initial node feature transformation
+        # features = features.to(device)
         h = self.linear_0(features)
 
         # Handle edge weights
