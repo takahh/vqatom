@@ -101,6 +101,9 @@ class AtomEmbedding(nn.Module):
         """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         atom_inputs = atom_inputs.to(device)
+        print("valence input min:", atom_inputs[:, 2].min().item())
+        print("valence input max:", atom_inputs[:, 2].max().item())
+
         x0 = self.element_embed(atom_inputs[:, 0].long())
         x1 = self.degree_embed(atom_inputs[:, 1].long())
         x2 = self.valence_embed(atom_inputs[:, 2].long())
