@@ -212,8 +212,10 @@ class EquivariantThreeHopGINE(nn.Module):
         self.bond_weight = self.bond_weight.to(device)
         # self.bond_weight = torch.tensor(1).to(device)
         # self.bond_weight = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=True).to(device)
+
         feat_before_transform = features.detach()
-        features = self.feat_embed(features).to(device) # Ensure this function is defined
+        # features = self.feat_embed(features).to(device) # Ensure this function is defined
+        features = transform_node_feats(features)
         # features = features.to(device)  # Ensure this function is defined
         # # Initial node feature transformation
         # features = features.to(device)
