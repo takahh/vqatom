@@ -24,7 +24,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 1
-PATH = "//Users/taka/Downloads/"
+PATH = "/Users/taka/Downloads/3500_512/"
 
 
 def getdata(filename):
@@ -375,7 +375,7 @@ def main():
     print(f"arr_src {arr_src.shape}")
     print(f"arr_dst {arr_dst.shape}")
     print(f"arr_bond_order {arr_bond_order.shape}")
-    print(f"arr_feat {arr_feat.shape}")
+    print(f"arr_feat {arr_feat}")
     # -------------------------------------
     # rebuild attr matrix
     # -------------------------------------

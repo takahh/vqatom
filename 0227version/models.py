@@ -212,6 +212,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.bond_weight = self.bond_weight.to(device)
         # self.bond_weight = torch.tensor(1).to(device)
         # self.bond_weight = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=True).to(device)
+        feat_before_transform = features.detach()
         features = self.feat_embed(features).to(device) # Ensure this function is defined
         # features = features.to(device)  # Ensure this function is defined
         # # Initial node feature transformation
@@ -289,10 +290,10 @@ class EquivariantThreeHopGINE(nn.Module):
             # print(f"features shape {features.shape}")
             # print(f"src shape {src.shape}")
             # print(f"dst shape {dst.shape}")
-            sample_list = [emb_ind, features, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
+            sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
-            sample_list = [emb_ind, features, sample_adj, sample_bond_info, src_output, dst_output]
+            sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
 
