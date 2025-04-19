@@ -218,7 +218,7 @@ class EquivariantThreeHopGINE(nn.Module):
         features = transform_node_feats(features)
         # features = features.to(device)  # Ensure this function is defined
         # # Initial node feature transformation
-        # features = features.to(device)
+        features = features.to(device)
         h = self.linear_0(features)
 
         # Handle edge weights
