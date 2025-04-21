@@ -535,10 +535,10 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Soft type similarity [0, 1]
     # Replace this line:
-    # type_mask = torch.sigmoid(type_sim_matrix / temperature)
+    type_mask = torch.sigmoid(type_sim_matrix / temperature)
 
     # With this:
-    type_mask = (type_sim_matrix > 0.9).float()  # or even == 1.0 if your features are one-hot
+    # type_mask = (type_sim_matrix > 0.9).float()  # or even == 1.0 if your features are one-hot
 
     # Optional: drop near-diagonal values
     diag = torch.eye(type_mask.shape[0], device=z.device)
