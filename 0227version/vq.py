@@ -539,7 +539,7 @@ class ContrastiveLoss(nn.Module):
         similarity_matrix = torch.mm(z, z.T)
         norms = z.norm(dim=1, keepdim=True)
         similarity_matrix = similarity_matrix / (norms @ norms.T + 1e-8)
-
+        print(f"similarity matrix: {similarity_matrix}")
         # Soft type similarity mask with learnable sigmoid base
         type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
         print(f"type_mask {type_mask}")
@@ -547,7 +547,7 @@ class ContrastiveLoss(nn.Module):
         pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
         neg_loss = torch.mean(F.relu(similarity_matrix + self.margin) * (1 - type_mask))
         loss = pos_loss + neg_loss
-
+        print(f"nega loss: {neg_loss}, pos loss: {pos_loss}")
         # Optional orthogonality regularization
         orthogonality_reg = torch.trace(torch.mm(z.T, z) -
                                         torch.eye(z.shape[1], device=z.device)) / z.shape[1]
