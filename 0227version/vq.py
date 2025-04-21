@@ -525,9 +525,9 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     """
     # Normalize latent representations
 
-    z.retain_grad()
-    z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
-    z_normalized.retain_grad()
+    # z.retain_grad()
+    # z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
+    # z_normalized.retain_grad()
 
     # Normalize atom type features
     atom_types_normalized = F.normalize(atom_types, p=2, dim=1)
@@ -560,10 +560,6 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.0001 * orthogonality_reg
-    # print(f"loss {loss}, orthogonality reg {orthogonality_reg * 0.0001}")
-    print(z.requires_grad)  # should be True
-    print(final_loss.requires_grad)  # should be True
-    print(z.grad)  # or check model.parameters()
 
     return final_loss
 
