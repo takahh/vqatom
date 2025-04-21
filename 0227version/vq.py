@@ -546,6 +546,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Combine losses with balanced weighting
     loss = pos_loss + neg_loss
+    loss = neg_loss
 
     # Soft orthogonality regularization
     orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
