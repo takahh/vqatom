@@ -525,19 +525,11 @@ def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     """
     # Normalize latent representations
 
-    print(z.is_leaf)  # Should be False if created by operations
-    print(z.requires_grad)  # Should be True
-    print(z.grad_fn)  # Should not be None
-    # z.retain_grad()
-    print(f"z {z}")
     layer_norm_0 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
     z = layer_norm_0(z)
     z = F.normalize(z, p=2, dim=1)
 
     # z = F.normalize(z, p=2, dim=1, eps=1e-8)
-    print(z.is_leaf)  # Should be False if created by operations
-    print(z.requires_grad)  # Should be True
-    print(z.grad_fn)  # Should not be None
 
     # z_normalized.retain_grad()
 
@@ -580,9 +572,6 @@ def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.0001 * orthogonality_reg
 
-    print(z.is_leaf)  # Should be False if created by operations
-    print(z.requires_grad)  # Should be True
-    print(z.grad_fn)  # Should not be NoneK
     return final_loss
 
 
@@ -1239,11 +1228,6 @@ class VectorQuantize(nn.Module):
         init_feat.to("cuda")
         latents.to("cuda")
         quantized.to("cuda")
-        print("000")
-        print(latents.is_leaf)  # Should be False if created by operations
-        print(latents.requires_grad)  # Should be True
-        print(latents.grad_fn)  # Should not be None
-
         # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
         # latents = latents / latents_norm
 
@@ -1273,11 +1257,6 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
 
-        print("001")
-        print(latents_for_sil.is_leaf)  # Should be False if created by operations
-        print(latents_for_sil.requires_grad)  # Should be True
-        print(latents_for_sil.grad_fn)  # Should not be None
-
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         # print(equivalent_gtroup_list[:10])
@@ -1292,10 +1271,7 @@ class VectorQuantize(nn.Module):
         # ringy_div_loss = torch.tensor(1)
         feat_div_loss = compute_contrastive_loss(latents_for_sil, init_feat)
 
-        print("002")
-        print(latents_for_sil.is_leaf)  # Should be False if created by operations
-        print(latents_for_sil.requires_grad)  # Should be True
-        print(latents_for_sil.grad_fn)  # Should not be None
+        # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
