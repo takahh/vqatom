@@ -168,6 +168,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln0 = nn.LayerNorm(args.hidden_dim)
         self.ln1 = nn.LayerNorm(args.hidden_dim)
         self.ln2 = nn.LayerNorm(args.hidden_dim)
+        self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
 
     def reset_kmeans(self):
         """Reset k-means clustering for vector quantization."""
@@ -261,7 +262,7 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
         # h = self.gine3(h, edge_index=edge_index)
         h = self.ln2(h)
-
+        h = self.linear_1(h)
         # Vector Quantization
         init_feat = features.clone()
         quantize_output = self.vq(

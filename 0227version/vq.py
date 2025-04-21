@@ -524,8 +524,6 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     torch.Tensor: Contrastive loss value
     """
     # Normalize latent representations
-
-    print(z.grad)  # or check model.parameters()
     z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
     z.retain_grad()
 
@@ -552,7 +550,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Combine losses with balanced weighting
     loss = pos_loss + neg_loss
-    loss = neg_loss
+    # loss = neg_loss
 
     # Soft orthogonality regularization
     orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
