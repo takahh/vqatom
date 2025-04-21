@@ -1,3 +1,5 @@
+from distutils.fancy_getopt import neg_alias_re
+
 import torch
 import torch.distributed as distributed
 import torch.nn.functional as F
@@ -541,8 +543,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     neg_loss = torch.mean(F.relu(similarity_matrix + margin) * (1 - type_mask))
     print(f"div pos loss {pos_loss}, div neg loss {neg_loss}")
     # Combine losses with balanced weighting
-    loss = pos_loss + neg_loss
-    # loss = pos_loss
+    # loss = pos_loss + neg_loss
+    loss = neg_loss
 
     # Soft orthogonality regularization
     orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
