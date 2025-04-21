@@ -509,70 +509,51 @@ import torch.nn.functional as F
 
 import torch
 import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
-    """
-    Improved contrastive loss with more stable normalization
 
-    Args:
-    z (torch.Tensor): Latent vectors [batch_size, latent_dim]
-    atom_types (torch.Tensor): Atom type feature vectors [batch_size, feat_dim]
-    margin (float): Margin for pushing apart dissimilar samples
-    temperature (float): Temperature scaling for softening similarities
+class ContrastiveLoss(nn.Module):
+    def __init__(self, latent_dim, atom_feat_dim, margin=0.05, temperature=0.1, init_sigmoid_base=0.5):
+        super().__init__()
+        self.margin = margin
+        self.temperature = temperature
+        self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
+        self.layer_norm_z = nn.LayerNorm(latent_dim)
+        self.layer_norm_atom = nn.LayerNorm(atom_feat_dim)
 
-    Returns:
-    torch.Tensor: Contrastive loss value
-    """
-    # Normalize latent representations
+    def forward(self, z, atom_types):
+        # Normalize latent representations
+        z = self.layer_norm_z(z)
+        z = F.normalize(z, p=2, dim=1)
 
-    layer_norm_0 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
-    z = layer_norm_0(z)
-    z = F.normalize(z, p=2, dim=1)
+        # Normalize atom type features
+        atom_types = self.layer_norm_atom(atom_types)
+        atom_types = F.normalize(atom_types, p=2, dim=1)
 
-    # z = F.normalize(z, p=2, dim=1, eps=1e-8)
+        # Type similarity
+        type_similarity_matrix = torch.mm(atom_types, atom_types.T)
 
-    # z_normalized.retain_grad()
+        # Latent similarity
+        similarity_matrix = torch.mm(z, z.T)
+        norms = z.norm(dim=1, keepdim=True)
+        similarity_matrix = similarity_matrix / (norms @ norms.T + 1e-8)
 
-    # Normalize atom type features
-    # atom_types = F.normalize(atom_types, p=2, dim=1)
-    layer_norm_1 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
-    atom_types = layer_norm_1(atom_types)
+        # Soft type similarity mask with learnable sigmoid base
+        type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
 
-    atom_types = F.normalize(atom_types, p=2, dim=1)
-    # 特徴の類似度
-    type_similarity_matrix = torch.mm(atom_types, atom_types.T)
+        # Contrastive loss
+        pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
+        neg_loss = torch.mean(F.relu(similarity_matrix + self.margin) * (1 - type_mask))
+        loss = pos_loss + neg_loss
 
-    # 潜在変数ベクトルの距離
-    similarity_matrix = torch.mm(z, z.T)
-    norms = z.norm(dim=1, keepdim=True)
-    similarity_matrix = similarity_matrix / (norms @ norms.T + 1e-8)
+        # Optional orthogonality regularization
+        orthogonality_reg = torch.trace(torch.mm(z.T, z) -
+                                        torch.eye(z.shape[1], device=z.device)) / z.shape[1]
+        final_loss = loss + 0.0001 * orthogonality_reg
 
-    # similarity_matrix = torch.mm(z, z.T)
-
-    print(f"type_similarity_matrix {type_similarity_matrix}")
-    # Soft type similarity mask with temperature scaling
-    type_mask = torch.sigmoid(type_similarity_matrix / temperature)
-    print(f"type_mask {type_mask}")
-    print(f"similarity_matrix {similarity_matrix}")
-
-    # Positive pairs: minimize distance for similar types
-    pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
-
-    # Negative pairs: enforce margin for dissimilar types
-    neg_loss = torch.mean(F.relu(similarity_matrix + margin) * (1 - type_mask))
-
-    # Combine losses with balanced weighting
-    loss = pos_loss + neg_loss
-    # loss = neg_loss
-
-    # Soft orthogonality regularization
-    orthogonality_reg = torch.trace(torch.mm(z.T, z) -
-                                    torch.eye(z.shape[1], device=z.device)) / z.shape[1]
-
-    # Final loss combining contrastive and orthogonality components
-    final_loss = loss + 0.0001 * orthogonality_reg
-
-    return final_loss
+        return final_loss
 
 
 import torch.nn.functional as F
@@ -1090,6 +1071,7 @@ class VectorQuantize(nn.Module):
 
         self.accept_image_fmap = accept_image_fmap
         self.channel_last = channel_last
+        self.compute_contrastive_loss = ContrastiveLoss(dim, 136)
 
     @property
     def codebook(self):
@@ -1269,7 +1251,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss = compute_contrastive_loss(latents_for_sil, init_feat)
+        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
