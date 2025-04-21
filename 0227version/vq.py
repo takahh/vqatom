@@ -525,6 +525,9 @@ def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     """
     # Normalize latent representations
 
+    print(z.is_leaf)  # Should be False if created by operations
+    print(z.requires_grad)  # Should be True
+    print(z.grad_fn)  # Should not be None
     # z.retain_grad()
     print(f"z {z}")
     layer_norm_0 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
