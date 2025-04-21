@@ -547,8 +547,10 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     loss = neg_loss
 
     # Soft orthogonality regularization
-    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
-                                    torch.eye(z.shape[1], device=z.device)) / z.shape[1]
+    # orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
+    #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
+    I = torch.eye(z.shape[1], device=z.device, dtype=z.dtype)
+    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) - I) / z.shape[1]
 
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.0001 * orthogonality_reg
