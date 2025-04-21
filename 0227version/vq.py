@@ -539,7 +539,7 @@ class ContrastiveLoss(nn.Module):
         similarity_matrix = torch.mm(z, z.T)
         norms = z.norm(dim=1, keepdim=True)
         similarity_matrix = similarity_matrix / (norms @ norms.T + 1e-8)
-        print(f"similarity matrix: {similarity_matrix}")
+        print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
         # Soft type similarity mask with learnable sigmoid base
         type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
         print(f"type_mask {type_mask}")
