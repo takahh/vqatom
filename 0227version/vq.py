@@ -1297,14 +1297,10 @@ class VectorQuantize(nn.Module):
         # print(f"0 quantized Gradients: {quantized}")
         # print(f"0 encoder_outputs Gradients: {encoder_outputs}")
 
-        # Commitment loss with continuous relaxation
-        commitment_loss = (
-            # Encourage encoder outputs to be close to selected codebook vectors
-                F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean') +
-
-                # Encourage codebook vectors to be close to encoder outputs
-                F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
-        )
+        # Encourage encoder outputs to be close to selected codebook vectors
+        latent_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
+        # Encourage codebook vectors to be close to encoder outputs
+        codebook_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
 
         # print(f"1 quantized Gradients: {quantized}")
         # print(f"1 encoder_outputs Gradients: {encoder_outputs}")
@@ -1318,6 +1314,8 @@ class VectorQuantize(nn.Module):
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
         # Combine losses with tunable weights
+        commitment_loss = latent_loss + codebook_loss
+        print(f"latent_loss: {latent_loss}, codebook_loss: {codebook_loss}")
         """
         commitment_loss: 0.001366406329907477
         entropy_loss: 8.031081199645996"""
