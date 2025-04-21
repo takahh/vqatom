@@ -527,10 +527,10 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     print(z.grad)  # or check model.parameters()
     z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
+    z.retain_grad()
 
     # Normalize atom type features
     atom_types_normalized = F.normalize(atom_types, p=2, dim=1)
-    atom_types_normalized.retain_grad()
 
     # 特徴の類似度
     type_similarity_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
