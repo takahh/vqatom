@@ -1040,7 +1040,7 @@ class VectorQuantize(nn.Module):
             commitment_weight=0.01,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
-            lamb_div=0.0001,           # using
+            lamb_div=0.01,           # using
             lamb_equiv_atom=1,
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
@@ -1239,6 +1239,10 @@ class VectorQuantize(nn.Module):
         init_feat.to("cuda")
         latents.to("cuda")
         quantized.to("cuda")
+        print("000")
+        print(latents.is_leaf)  # Should be False if created by operations
+        print(latents.requires_grad)  # Should be True
+        print(latents.grad_fn)  # Should not be None
 
         # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
         # latents = latents / latents_norm
@@ -1268,19 +1272,30 @@ class VectorQuantize(nn.Module):
 
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
+
+        print("001")
+        print(latents_for_sil.is_leaf)  # Should be False if created by operations
+        print(latents_for_sil.requires_grad)  # Should be True
+        print(latents_for_sil.grad_fn)  # Should not be None
+
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
         # print(equivalent_gtroup_list[:10])
                                                         # cluster_indices, embed_ind, equivalence_groups, logger
         # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
         # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        atom_type_div_loss = torch.tensor(1)
-        bond_num_div_loss = torch.tensor(1)
-        charge_div_loss = torch.tensor(1)
-        elec_state_div_loss = torch.tensor(1)
-        aroma_div_loss = torch.tensor(1)
-        ringy_div_loss = torch.tensor(1)
+        # atom_type_div_loss = torch.tensor(1)
+        # bond_num_div_loss = torch.tensor(1)
+        # charge_div_loss = torch.tensor(1)
+        # elec_state_div_loss = torch.tensor(1)
+        # aroma_div_loss = torch.tensor(1)
+        # ringy_div_loss = torch.tensor(1)
         feat_div_loss = compute_contrastive_loss(latents_for_sil, init_feat)
+
+        print("002")
+        print(latents_for_sil.is_leaf)  # Should be False if created by operations
+        print(latents_for_sil.requires_grad)  # Should be True
+        print(latents_for_sil.grad_fn)  # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
 
         # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
