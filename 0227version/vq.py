@@ -536,7 +536,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     type_similarity_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
 
     # 潜在変数ベクトルの距離
-    similarity_matrix = torch.mm(z_normalized, z_normalized.T)
+    similarity_matrix = torch.mm(z, z.T)
 
     print(f"type_similarity_matrix {type_similarity_matrix}")
     # Soft type similarity mask with temperature scaling
