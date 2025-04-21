@@ -524,6 +524,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     torch.Tensor: Contrastive loss value
     """
     # Normalize latent representations
+
+    print(z.grad)  # or check model.parameters()
     z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
 
     # Normalize atom type features
@@ -535,6 +537,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     # Compute cosine similarity matrix for latent representations
     similarity_matrix = torch.mm(z_normalized, z_normalized.T)
 
+    print(f"type_similarity_matrix {type_similarity_matrix}")
     # Soft type similarity mask with temperature scaling
     type_mask = torch.sigmoid(type_similarity_matrix / temperature)
     print(f"type_similarity_matrix {type_similarity_matrix}")
