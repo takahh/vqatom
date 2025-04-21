@@ -517,7 +517,7 @@ import torch.nn.functional as F
 class ContrastiveLoss(nn.Module):
     def __init__(self, latent_dim, atom_feat_dim, margin=0.05, temperature=0.1, init_sigmoid_base=0.5):
         super().__init__()
-        self.margin = margin
+        self.margin = nn.Parameter(torch.tensor(margin))
         self.temperature = temperature
         self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
         self.layer_norm_z = nn.LayerNorm(latent_dim)
@@ -542,7 +542,7 @@ class ContrastiveLoss(nn.Module):
 
         # Soft type similarity mask with learnable sigmoid base
         type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
-
+        print(f"type_mask {type_mask}")
         # Contrastive loss
         pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
         neg_loss = torch.mean(F.relu(similarity_matrix + self.margin) * (1 - type_mask))
