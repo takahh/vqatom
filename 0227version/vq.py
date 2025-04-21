@@ -559,7 +559,6 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     # print(f"loss {loss}, orthogonality reg {orthogonality_reg * 0.0001}")
     print(z.requires_grad)  # should be True
     print(final_loss.requires_grad)  # should be True
-    loss.backward()
     print(z.grad)  # or check model.parameters()
 
     return final_loss
