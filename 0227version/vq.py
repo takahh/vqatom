@@ -526,11 +526,11 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, atom_types):
         # Normalize latent representations
         z = self.layer_norm_z(z)
-        z = F.normalize(z, p=2, dim=1)
+        # z = F.normalize(z, p=2, dim=1)
 
         # Normalize atom type features
         atom_types = self.layer_norm_atom(atom_types)
-        atom_types = F.normalize(atom_types, p=2, dim=1)
+        # atom_types = F.normalize(atom_types, p=2, dim=1)
 
         # Type similarity
         type_similarity_matrix = torch.mm(atom_types, atom_types.T)
