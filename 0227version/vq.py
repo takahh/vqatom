@@ -537,7 +537,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Soft type similarity mask with temperature scaling
     type_mask = torch.sigmoid(type_similarity_matrix / temperature)
-    print(f"type_mask {type_mask}")
+    print(f"type_similarity_matrix {type_similarity_matrix}")
+    print(f"similarity_matrix {similarity_matrix}")
 
     # Positive pairs: minimize distance for similar types
     pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
