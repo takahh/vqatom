@@ -124,7 +124,7 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()  # Ensure this function is defined elsewhere
         self.feat_embed = AtomEmbedding()
         # Initial linear layer for node features
-        self.linear_0 = nn.Linear(7, args.hidden_dim)
+        self.linear_0 = nn.Linear(136, args.hidden_dim)
 
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
@@ -214,8 +214,8 @@ class EquivariantThreeHopGINE(nn.Module):
         # self.bond_weight = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=True).to(device)
 
         feat_before_transform = features.detach()
-        # features = self.feat_embed(features).to(device) # Ensure this function is defined
-        features = transform_node_feats(features)
+        features = self.feat_embed(features).to(device) # Ensure this function is defined
+        # features = transform_node_feats(features)
         # features = features.to(device)  # Ensure this function is defined
         # # Initial node feature transformation
         features = features.to(device)
