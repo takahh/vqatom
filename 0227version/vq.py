@@ -507,56 +507,58 @@ def feat_elem_divergence_loss(embed_ind, atom_types, num_codebooks=1500, tempera
 import torch
 import torch.nn.functional as F
 
+import torch
+import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
+def stable_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     """
-    Improved contrastive loss with more stable normalization
+    Contrastive loss with soft type similarity masking and stable gradient flow.
 
     Args:
-    z (torch.Tensor): Latent vectors [batch_size, latent_dim]
-    atom_types (torch.Tensor): Atom type feature vectors [batch_size, feat_dim]
-    margin (float): Margin for pushing apart dissimilar samples
-    temperature (float): Temperature scaling for softening similarities
+        z (torch.Tensor): Latent vectors [batch_size, latent_dim]
+        atom_types (torch.Tensor): Atom type vectors [batch_size, feat_dim]
+        margin (float): Margin for dissimilar pairs
+        temperature (float): Temperature for similarity scaling
 
     Returns:
-    torch.Tensor: Contrastive loss value
+        torch.Tensor: Loss scalar
     """
-    # Normalize latent representations
-    z_normalized = F.normalize(z, p=2, dim=1)
+    batch_size = z.size(0)
 
-    # Normalize atom type features
+    # Normalize inputs
+    z_normalized = F.normalize(z, p=2, dim=1)
     atom_types_normalized = F.normalize(atom_types, p=2, dim=1)
 
-    # Compute cosine similarity matrix for atom types
-    type_similarity_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
+    # Similarity matrices
+    sim_matrix = torch.mm(z_normalized, z_normalized.T)  # [B, B]
+    type_sim_matrix = torch.mm(atom_types_normalized, atom_types_normalized.T)
 
-    # Compute cosine similarity matrix for latent representations
-    similarity_matrix = torch.mm(z_normalized, z_normalized.T)
+    # Soft type similarity [0, 1]
+    type_mask = torch.sigmoid(type_sim_matrix / temperature)
 
-    # Soft type similarity mask with temperature scaling
-    type_mask = torch.sigmoid(type_similarity_matrix / temperature)
+    # Remove diagonal (self-comparisons)
+    diag_mask = ~torch.eye(batch_size, dtype=torch.bool, device=z.device)
 
-    # Positive pairs: minimize distance for similar types
-    pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
+    sim_matrix = sim_matrix[diag_mask].view(batch_size, -1)
+    type_mask = type_mask[diag_mask].view(batch_size, -1)
 
-    # Negative pairs: enforce margin for dissimilar types
-    neg_loss = torch.mean(F.relu(similarity_matrix + margin) * (1 - type_mask))
-    print(f"div pos loss {pos_loss}, div neg loss {neg_loss}")
-    # Combine losses with balanced weighting
-    # loss = pos_loss + neg_loss
-    loss = neg_loss
+    # Positive pairs: similar types → want sim ≈ 1
+    pos_loss = torch.mean((1 - sim_matrix) * type_mask)
 
-    # Soft orthogonality regularization
-    # orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) -
-    #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
+    # Negative pairs: dissimilar types → want sim + margin ≤ 0
+    neg_loss = torch.mean(F.relu(sim_matrix + margin) * (1 - type_mask))
+
+    # Combine losses
+    contrastive_loss = pos_loss + neg_loss
+
+    # Soft orthogonality regularization (optional)
     I = torch.eye(z.shape[1], device=z.device, dtype=z.dtype)
-    orthogonality_reg = torch.trace(torch.mm(z_normalized.T, z_normalized) - I) / z.shape[1]
+    orthogonality = torch.trace(torch.mm(z_normalized.T, z_normalized) - I) / z.shape[1]
 
-    # Final loss combining contrastive and orthogonality components
-    final_loss = loss + 0.0001 * orthogonality_reg
-    # print(f"loss {loss}, orthogonality reg {orthogonality_reg * 0.0001}")
+    final_loss = contrastive_loss + 0.0001 * orthogonality
 
     return final_loss
+
 
 import torch.nn.functional as F
 
