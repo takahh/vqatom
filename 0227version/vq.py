@@ -515,7 +515,7 @@ import torch.nn.functional as F
 
 
 class ContrastiveLoss(nn.Module):
-    def __init__(self, latent_dim, atom_feat_dim, margin=0.05, temperature=0.1, init_sigmoid_base=0.5):
+    def __init__(self, latent_dim, atom_feat_dim, margin=0.5, temperature=0.1, init_sigmoid_base=0.5):
         super().__init__()
         self.margin = nn.Parameter(torch.tensor(margin))
         self.temperature = temperature
