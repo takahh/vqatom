@@ -528,6 +528,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     # z.retain_grad()
     print(f"z {z}")
     z = F.normalize(z, p=2, dim=1, eps=1e-8)
+    print(f"z {z}")
     # z_normalized.retain_grad()
 
     # Normalize atom type features
