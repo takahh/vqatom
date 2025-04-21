@@ -510,7 +510,7 @@ import torch.nn.functional as F
 import torch
 import torch.nn.functional as F
 
-def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
+def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     """
     Improved contrastive loss with more stable normalization
 
