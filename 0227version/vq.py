@@ -529,6 +529,8 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     print(f"z {z}")
     layer_norm_0 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
     z = layer_norm_0(z)
+    z = F.normalize(z, p=2, dim=1)
+
     # z = F.normalize(z, p=2, dim=1, eps=1e-8)
     print(f"z {z}")
     # z_normalized.retain_grad()
