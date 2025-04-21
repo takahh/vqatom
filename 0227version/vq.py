@@ -521,7 +521,7 @@ class ContrastiveLoss(nn.Module):
         self.temperature = temperature
         self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
         self.layer_norm_z = nn.LayerNorm(latent_dim)
-        self.layer_norm_atom = nn.LayerNorm(atom_feat_dim)
+        self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
     def forward(self, z, atom_types):
         # Normalize latent representations
