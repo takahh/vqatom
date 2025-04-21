@@ -532,7 +532,10 @@ def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     z = F.normalize(z, p=2, dim=1)
 
     # z = F.normalize(z, p=2, dim=1, eps=1e-8)
-    print(f"z {z}")
+    print(z.is_leaf)  # Should be False if created by operations
+    print(z.requires_grad)  # Should be True
+    print(z.grad_fn)  # Should not be None
+
     # z_normalized.retain_grad()
 
     # Normalize atom type features
@@ -574,6 +577,9 @@ def compute_contrastive_loss(z, atom_types, margin=0.05, temperature=0.1):
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.0001 * orthogonality_reg
 
+    print(z.is_leaf)  # Should be False if created by operations
+    print(z.requires_grad)  # Should be True
+    print(z.grad_fn)  # Should not be NoneK
     return final_loss
 
 
