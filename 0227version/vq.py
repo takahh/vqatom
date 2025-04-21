@@ -539,7 +539,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Negative pairs: enforce margin for dissimilar types
     neg_loss = torch.mean(F.relu(similarity_matrix + margin) * (1 - type_mask))
-
+    print(f"div pos loss {pos_loss}, div neg loss {neg_loss}")
     # Combine losses with balanced weighting
     # loss = pos_loss + neg_loss
     loss = pos_loss
@@ -1396,6 +1396,7 @@ class VectorQuantize(nn.Module):
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
+        print(f"commit loss {self.commitment_weight * commit_loss}, div {self.lamb_div * feat_div_loss}, sil loss {self.lamb_sil * sil_loss}")
         if epoch < 10:
             loss = (self.lamb_div * feat_div_loss)
         else:
