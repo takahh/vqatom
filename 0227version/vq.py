@@ -556,6 +556,11 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     orthogonality = torch.trace(torch.mm(z_normalized.T, z_normalized) - I) / z.shape[1]
 
     final_loss = contrastive_loss + 0.0001 * orthogonality
+    print("sim_matrix", sim_matrix.min().item(), sim_matrix.max().item())
+    print("type_mask", type_mask.min().item(), type_mask.max().item())
+    print("pos_loss", pos_loss.item())
+    print("neg_loss", neg_loss.item())
+    print("final_loss", final_loss.item())
 
     return final_loss
 
