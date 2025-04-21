@@ -524,7 +524,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     torch.Tensor: Contrastive loss value
     """
     # Normalize latent representations
-    z_normalized = F.normalize(z, p=2, dim=1)
+    z_normalized = F.normalize(z, p=2, dim=1, eps=1e-8)
 
     # Normalize atom type features
     atom_types_normalized = F.normalize(atom_types, p=2, dim=1)
@@ -537,6 +537,7 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # Soft type similarity mask with temperature scaling
     type_mask = torch.sigmoid(type_similarity_matrix / temperature)
+    print(f"type_mask {type_mask}")
 
     # Positive pairs: minimize distance for similar types
     pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
@@ -555,6 +556,10 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
     # Final loss combining contrastive and orthogonality components
     final_loss = loss + 0.0001 * orthogonality_reg
     # print(f"loss {loss}, orthogonality reg {orthogonality_reg * 0.0001}")
+    print(z.requires_grad)  # should be True
+    print(final_loss.requires_grad)  # should be True
+    loss.backward()
+    print(z.grad)  # or check model.parameters()
 
     return final_loss
 
