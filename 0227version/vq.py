@@ -527,12 +527,16 @@ def compute_contrastive_loss(z, atom_types, margin=1.0, temperature=0.1):
 
     # z.retain_grad()
     print(f"z {z}")
-    z = F.normalize(z, p=2, dim=1, eps=1e-8)
+    layer_norm_0 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
+    z = layer_norm_0(z)
+    # z = F.normalize(z, p=2, dim=1, eps=1e-8)
     print(f"z {z}")
     # z_normalized.retain_grad()
 
     # Normalize atom type features
-    atom_types = F.normalize(atom_types, p=2, dim=1)
+    # atom_types = F.normalize(atom_types, p=2, dim=1)
+    layer_norm_1 = nn.LayerNorm(atom_types.size(1)).to(atom_types.device)
+    atom_types = layer_norm_1(atom_types)
 
     # 特徴の類似度
     type_similarity_matrix = torch.mm(atom_types, atom_types.T)
