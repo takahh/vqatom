@@ -221,7 +221,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # # Initial node feature transformation
         features = features.to(device)
         h = self.linear_0(features)
-
+        init_feat = h
         # Handle edge weights
         edge_weight = data.edata.get(
             'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
@@ -264,7 +264,6 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.ln2(h)
         h = self.linear_1(h)
         # Vector Quantization
-        init_feat = features.clone()
         quantize_output = self.vq(
             h, init_feat, logger, epoch
         )
