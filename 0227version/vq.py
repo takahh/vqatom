@@ -523,7 +523,7 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, z, atom_types):
+    def forward(self, z, atom_types, epoch):
         # Normalize latent representations
         # z = self.layer_norm_z(z)
         z = F.normalize(z, p=2, dim=1)
@@ -569,7 +569,10 @@ class ContrastiveLoss(nn.Module):
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
         print(f"loss {loss}, repel loss: {repel_loss}")
-        final_loss = loss + 0.1 * repel_loss
+        if epoch < 10:
+            final_loss = loss + 0.1 * repel_loss
+        else:
+            final_loss = loss
         # final_loss = loss + 0.0001 * orthogonality_reg
 
         return final_loss
@@ -1222,7 +1225,7 @@ class VectorQuantize(nn.Module):
 
 
         # embed_ind, codebook, init_feat, latents, quantize, logger
-    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5):
+    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Normalize embeddings (optional: remove if not necessary)
         embed_ind.to("cuda")
         codebook.to("cuda")
@@ -1270,7 +1273,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat)
+        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
@@ -1389,7 +1392,7 @@ class VectorQuantize(nn.Module):
 
         # print(f"embed_ind 0: {embed_ind}")
         spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
-                                                                   logger)
+                                                                   logger, epoch)
         # print(f"embed_ind: {embed_ind}")
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
