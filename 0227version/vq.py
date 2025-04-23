@@ -536,7 +536,12 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = torch.mm(atom_types, atom_types.T)
         min_val = torch.min(type_similarity_matrix) + 10e-5
         max_val = torch.max(type_similarity_matrix)
-        type_similarity_matrix = (type_similarity_matrix - min_val) / (max_val - min_val + 10e-5)
+
+        eps = 1e-8
+        range_val = (max_val - min_val).clamp(min=eps)
+        type_similarity_matrix = (type_similarity_matrix - min_val) / range_val
+
+        # type_similarity_matrix = (type_similarity_matrix - min_val) / (max_val - min_val + 10e-5)
 
         # Latent similarity
         similarity_matrix = torch.mm(z, z.T)
