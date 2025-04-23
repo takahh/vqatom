@@ -545,6 +545,9 @@ class ContrastiveLoss(nn.Module):
 
         # Latent similarity
         similarity_matrix = torch.mm(z, z.T)
+
+        repel_loss = ((similarity_matrix - torch.eye(z.size(0), device=z.device)) ** 2).mean()
+
         minval = torch.min(similarity_matrix)
         maxval = torch.max(similarity_matrix)
         similarity_matrix = (similarity_matrix - minval) / (maxval - minval + 10e-5)
@@ -565,7 +568,7 @@ class ContrastiveLoss(nn.Module):
         # Optional orthogonality regularization
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
-        final_loss = loss
+        final_loss = loss + 0.001 * repel_loss
         # final_loss = loss + 0.0001 * orthogonality_reg
 
         return final_loss
