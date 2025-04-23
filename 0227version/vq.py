@@ -1273,7 +1273,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch
+        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
