@@ -568,6 +568,7 @@ class ContrastiveLoss(nn.Module):
         # Optional orthogonality regularization
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
+        print(f"loss {loss}, repel loss: {repel_loss}")
         final_loss = loss + 0.001 * repel_loss
         # final_loss = loss + 0.0001 * orthogonality_reg
 
