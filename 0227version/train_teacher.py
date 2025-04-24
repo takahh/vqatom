@@ -146,7 +146,7 @@ def get_args():
 
     """Optimization"""
     parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
-    parser.add_argument("--learning_rate", type=float, default=0.0001) # default=0.0001)
+    parser.add_argument("--learning_rate", type=float, default=0.001) # default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=0.0005)
     parser.add_argument(
         "--max_epoch", type=int, default=5, help="Evaluate once per how many epochs"
@@ -297,7 +297,7 @@ def run(args):
         # model.load_state_dict(torch.load(f"/vqatom/data/vqatom_best_models/model_{thiskey}_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     # criterion = torch.nn.NLLLoss()
     # evaluator = get_evaluator(conf["dataset"])
