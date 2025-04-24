@@ -1327,7 +1327,8 @@ class VectorQuantize(nn.Module):
         """
         commitment_loss: 0.001366406329907477
         entropy_loss: 8.031081199645996"""
-        total_loss = commitment_loss + 0.00001 * entropy_loss
+        total_loss = commitment_loss + 0.01 * entropy_loss
+        # total_loss = commitment_loss + 0.00001 * entropy_loss
 
         return total_loss
 
@@ -1428,7 +1429,8 @@ class VectorQuantize(nn.Module):
             # loss = (self.commitment_weight * commit_loss)
         else:
             print(f"epoch is more than 10 !!")
-            loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_sil * sil_loss)
+            loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+            # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_sil * sil_loss)
         # if is_multiheaded:
         #     print("multiheaded ====================")
         #     if self.separate_codebook_per_head:
