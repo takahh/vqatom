@@ -562,15 +562,15 @@ class ContrastiveLoss(nn.Module):
         pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
         # neg_loss = torch.mean(F.relu(similarity_matrix - self.margin) * (1 - type_mask))
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * (1 - type_mask))
-        # loss = pos_loss + neg_loss
-        loss = neg_loss
+        loss = pos_loss + neg_loss
+        # loss = neg_loss
         print(f"nega loss: {neg_loss}, pos loss: {pos_loss}")
         # Optional orthogonality regularization
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
         print(f"loss {loss}, repel loss: {repel_loss}")
         # if epoch < 5:
-        final_loss = loss + 0.1 * repel_loss
+        final_loss = loss + 0.00001 * repel_loss
         # else:
         #     final_loss = loss
         # final_loss = loss + 0.0001 * orthogonality_reg
