@@ -569,10 +569,10 @@ class ContrastiveLoss(nn.Module):
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
         print(f"loss {loss}, repel loss: {repel_loss}")
-        if epoch < 5:
-            final_loss = loss + 0.1 * repel_loss
-        else:
-            final_loss = loss
+        # if epoch < 5:
+        final_loss = loss + 0.1 * repel_loss
+        # else:
+        #     final_loss = loss
         # final_loss = loss + 0.0001 * orthogonality_reg
 
         return final_loss
@@ -1423,13 +1423,13 @@ class VectorQuantize(nn.Module):
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
         print(f"commit loss {self.commitment_weight * commit_loss}, div {self.lamb_div * feat_div_loss}, sil loss {self.lamb_sil * sil_loss}")
-        if epoch < 5:
-            print(f"epoch is less than 10")
-            loss = (self.lamb_div * feat_div_loss)
+        # if epoch < 5:
+        #     print(f"epoch is less than 10")
+        loss = (self.lamb_div * feat_div_loss)
             # loss = (self.commitment_weight * commit_loss)
-        else:
-            print(f"epoch is more than 10 !!")
-            loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        # else:
+        #     print(f"epoch is more than 10 !!")
+        #     loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
             # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_sil * sil_loss)
         # if is_multiheaded:
         #     print("multiheaded ====================")
