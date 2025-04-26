@@ -398,7 +398,7 @@ def run_inductive(
         test_loss_list = []
         quantized = None
         if conf['train_or_infer'] == "analysis":
-            start_num = 0
+            start_num = 1
         else:
             start_num = 10
         print("HEREHERE_)))))))))))))))))))")
