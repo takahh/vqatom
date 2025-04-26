@@ -109,6 +109,8 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     with torch.no_grad():
         _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
+    print("sample_list_test -----------------")
+    print(sample_list_test)
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
     test_loss = test_loss.to(device)
