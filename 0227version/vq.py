@@ -1423,13 +1423,13 @@ class VectorQuantize(nn.Module):
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
         print(f"commit loss {self.commitment_weight * commit_loss}, div {self.lamb_div * feat_div_loss}, sil loss {self.lamb_sil * sil_loss}")
-        if epoch < 5:
-            print(f"epoch is less than 10")
-            loss = (self.lamb_div * feat_div_loss)
-            # loss = (self.commitment_weight * commit_loss)
-        else:
-            print(f"epoch is more than 10 !!")
-            loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        # if epoch < 5:
+        #     print(f"epoch is less than 10")
+        #     loss = (self.lamb_div * feat_div_loss)
+        #     # loss = (self.commitment_weight * commit_loss)
+        # else:
+        #     print(f"epoch is more than 10 !!")
+        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
             # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_sil * sil_loss)
         # if is_multiheaded:
         #     print("multiheaded ====================")
