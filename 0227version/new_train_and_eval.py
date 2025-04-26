@@ -401,6 +401,7 @@ def run_inductive(
             start_num = 0
         else:
             start_num = 10
+        print("HEREHERE_)))))))))))))))))))")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
             # print(f"adj_batch: {adj_batch[0].shape}")
