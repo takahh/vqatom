@@ -599,26 +599,26 @@ class SAGE(nn.Module):
             # ここから SAGE.forward と同じにする
             # ------------------------------
             h = batch_feats.clone()
-            print("h.shape +++++++++++++++++++")
-            print(h.shape)
-            print(f"input_nodes {input_nodes[:10]}, {input_nodes[-10:]}")
+            # print("h.shape +++++++++++++++++++")
+            # print(h.shape)
+            # print(f"input_nodes {input_nodes[:10]}, {input_nodes[-10:]}")
             init_feat = h.clone()
             device = h.device
             # print("----INFER ------")
             global_node_ids = set()
             for block in blocks:
                 src, dst = block.all_edges()
-                print(f"src {src[:20]} len {src.shape}")
+                # print(f"src {src[:20]} len {src.shape}")
                 global_node_ids.update(src.tolist())  # Converting to a list is okay here for set operations
                 global_node_ids.update(dst.tolist())
 
             global_node_ids = sorted(global_node_ids)
             global_to_local = {global_id: local_id for local_id, global_id in enumerate(global_node_ids)}
-            print("global_to_local (first 20 items):")
-            print(list(global_to_local.items())[:20])
+            # print("global_to_local (first 20 items):")
+            # print(list(global_to_local.items())[:20])
             local_to_global = {local_id: global_id for global_id, local_id in global_to_local.items()}
-            print("local_to_global (first 20 items):")
-            print(list(local_to_global.items())[:20])
+            # print("local_to_global (first 20 items):")
+            # print(list(local_to_global.items())[:20])
 
             idx_tensor = torch.tensor(global_node_ids, dtype=torch.int64, device=device)
             # h = h[idx_tensor]
@@ -653,19 +653,19 @@ class SAGE(nn.Module):
                     sample_bond_to_edge = [local_src, local_dst]
                     sample_bond_order = block.edata["bond_order"].to(torch.float32).to(device)
             new_nodes = torch.unique(torch.cat([total_src, total_dst]))
-            print(f"new_nodes {new_nodes[:10]}, {new_nodes[-10:]}")
-            print(f"total new nodes count {new_nodes.shape}")
+            # print(f"new_nodes {new_nodes[:10]}, {new_nodes[-10:]}")
+            # print(f"total new nodes count {new_nodes.shape}")
             new_nodes_global = torch.tensor([local_to_global[i.item()] for i in new_nodes], dtype=torch.int64, device=device)
-            print(f"new_nodes_global {new_nodes_global[:10]}, {new_nodes_global[-10:]}")
-            print(f"total new nodes count {new_nodes_global.shape}")
+            # print(f"new_nodes_global {new_nodes_global[:10]}, {new_nodes_global[-10:]}")
+            # print(f"total new nodes count {new_nodes_global.shape}")
             g = dgl.DGLGraph().to(device)
             g.add_nodes(new_node_count_total)
 
             num_nodes_in_g = g.num_nodes()
             h_shape = h.shape[0]
 
-            print(f"🔹 Number of nodes in g: {num_nodes_in_g}")
-            print(f"🔹 Shape of h: {h_shape}")
+            # print(f"🔹 Number of nodes in g: {num_nodes_in_g}")
+            # print(f"🔹 Shape of h: {h_shape}")
 
             if remapped_bond_orders:
                 for (src, dst), bond_order in zip(remapped_edge_list, remapped_bond_orders):

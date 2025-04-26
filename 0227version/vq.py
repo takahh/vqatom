@@ -552,12 +552,12 @@ class ContrastiveLoss(nn.Module):
         maxval = torch.max(similarity_matrix)
         similarity_matrix = (similarity_matrix - minval) / (maxval - minval + 10e-5)
 
-        print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
-        print(f"similarity_matrix matrix: {similarity_matrix}")
+        # print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
+        # print(f"similarity_matrix matrix: {similarity_matrix}")
         # Soft type similarity mask with learnable sigmoid base
         # type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
         type_mask = type_similarity_matrix
-        print(f"type_mask {type_mask}")
+        # print(f"type_mask {type_mask}")
         # Contrastive loss
         pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
         # neg_loss = torch.mean(F.relu(similarity_matrix - self.margin) * (1 - type_mask))
@@ -684,8 +684,8 @@ class EuclideanCodebook(nn.Module):
         # else:
         #     self.register_buffer('embed', embed)
 
-        print("self.embed.grad_fn in Eu init")  # Must be True
-        print(self.embed.grad_fn)  # Must be True
+        # print("self.embed.grad_fn in Eu init")  # Must be True
+        # print(self.embed.grad_fn)  # Must be True
 
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))

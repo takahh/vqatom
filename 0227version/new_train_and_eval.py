@@ -109,8 +109,8 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     with torch.no_grad():
         _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
-    print("sample_list_test -----------------")
-    print(sample_list_test)
+    # print("sample_list_test -----------------")
+    # print(sample_list_test)
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
     test_loss = test_loss.to(device)
@@ -342,16 +342,16 @@ def run_inductive(
                 for i in range(0, len(glist), chunk_size):
                     print(f"chunk {i}")
 
-                    print(f"Allocated memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    print(f"Cached memory:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+                    # print(f"Allocated memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+                    # print(f"Cached memory:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-                        print("batched_feats.shape")
-                        print(batched_feats.shape)
+                        # print("batched_feats.shape")
+                        # print(batched_feats.shape)
                     # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
@@ -401,8 +401,8 @@ def run_inductive(
             start_num = 0
         else:
             start_num = 10
-        print("HEREHERE_)))))))))))))))))))")
-        print("Length of dataloader:", len(dataloader))  # If it's a list
+        # print("HEREHERE_)))))))))))))))))))")
+        # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
             # print(f"adj_batch: {adj_batch[0].shape}")
