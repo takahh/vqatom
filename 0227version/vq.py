@@ -1314,23 +1314,23 @@ class VectorQuantize(nn.Module):
         # print(f"1 encoder_outputs Gradients: {encoder_outputs}")
         # print(f"commitment_loss: {commitment_loss}")
         # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
-        entropy_loss = -torch.mean(
-            torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
-        )
+        # entropy_loss = -torch.mean(
+        #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
+        # )
         # print(f"entropy_loss: {entropy_loss}")
         # entropy_loss = torch.mean(
         #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
         # )
         # Combine losses with tunable weights
-        commitment_loss = latent_loss + codebook_loss
+        # commitment_loss = latent_loss + codebook_loss
         print(f"latent_loss: {latent_loss}, codebook_loss: {codebook_loss}")
         """
         commitment_loss: 0.001366406329907477
         entropy_loss: 8.031081199645996"""
-        total_loss = commitment_loss + 0.01 * entropy_loss
+        # total_loss = commitment_loss + 0.01 * entropy_loss
         # total_loss = commitment_loss + 0.00001 * entropy_loss
 
-        return total_loss
+        return latent_loss, codebook_loss
 
     import torch
     import torch.nn.functional as F
@@ -1410,7 +1410,7 @@ class VectorQuantize(nn.Module):
           commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
         /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
-        commit_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
         # codebook_loss = self.commitment_loss(x.detach().squeeze(), quantize.squeeze())
         # commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
         # codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
@@ -1429,9 +1429,11 @@ class VectorQuantize(nn.Module):
         #     # loss = (self.commitment_weight * commit_loss)
         # else:
         #     print(f"epoch is more than 10 !!")
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
-            # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss + self.lamb_sil * sil_loss)
-        # if is_multiheaded:
+        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+
+        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+                + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
+
         #     print("multiheaded ====================")
         #     if self.separate_codebook_per_head:
         #         quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
