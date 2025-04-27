@@ -66,7 +66,6 @@ def get_args():
     # --------------
     # Dataset
     # --------------
-
     parser.add_argument("--train_size", type=int, default=5939)
     parser.add_argument("--val_size", type=int, default=1484)
     parser.add_argument("--test_size", type=int, default=1484)
