@@ -332,8 +332,6 @@ def run_inductive(
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                # print(idx)
-                # if idx == 5:
                 if idx == 1:
                     break
                 # print(f"idx {idx}")

@@ -1434,14 +1434,6 @@ class VectorQuantize(nn.Module):
         loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
                 + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
 
-        #     print("multiheaded ====================")
-        #     if self.separate_codebook_per_head:
-        #         quantize = rearrange(quantize, 'h b n d -> b n (h d)', h=heads)
-        #         embed_ind = rearrange(embed_ind, 'h b n -> b n h', h=heads)
-        #     else:
-        #         quantize = rearrange(quantize, '1 (b h) n d -> b n (h d)', h=heads)
-        #         embed_ind = rearrange(embed_ind, '1 (b h) n -> b n h', h=heads)
-
         # quantize = self.project_out(quantize)
 
         if need_transpose:
