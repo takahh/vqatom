@@ -1152,6 +1152,7 @@ class VectorQuantize(nn.Module):
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
         batch_size = embeddings.size(0)
+        embeddings = embeddings.float()
 
         # Get soft cluster assignments with temperature control
         if embed_ind.dim() == 1:
@@ -1166,15 +1167,17 @@ class VectorQuantize(nn.Module):
         )
 
         # Compute cluster centroids using hard assignments for stability
-        cluster_sums = hard_assignments.T @ embeddings  # (K, D)
+        # cluster_sums = hard_assignments.T @ embeddings  # (K, D)
+        cluster_sums = hard_assignments.T @ embeddings.float()
+
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
-        print("NaN or Inf in embeddings:", torch.isnan(embeddings).any(), torch.isinf(embeddings).any())
-        print("NaN or Inf in hard_assignments:", torch.isnan(hard_assignments).any(),
-              torch.isinf(hard_assignments).any())
-        print("Max/min embeddings:", embeddings.max(), embeddings.min())
-        print("Max/min hard_assignments:", hard_assignments.max(), hard_assignments.min())
+        # print("NaN or Inf in embeddings:", torch.isnan(embeddings).any(), torch.isinf(embeddings).any())
+        # print("NaN or Inf in hard_assignments:", torch.isnan(hard_assignments).any(),
+        #       torch.isinf(hard_assignments).any())
+        # print("Max/min embeddings:", embeddings.max(), embeddings.min())
+        # print("Max/min hard_assignments:", hard_assignments.max(), hard_assignments.min())
 
         # Compute distances to assigned cluster (a)
         assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
