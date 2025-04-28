@@ -1182,7 +1182,7 @@ class VectorQuantize(nn.Module):
         embeddings_bf = embeddings.to(torch.bfloat16)
         cluster_sums = hard_assignments_bf.T @ embeddings_bf
 
-        # print(cluster_sums)
+        print(cluster_sums)
 
         print("cluster_sums has NaN:", torch.isnan(cluster_sums).any().item())
         print("cluster_sums has Inf:", torch.isinf(cluster_sums).any().item())
