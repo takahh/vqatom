@@ -1177,7 +1177,10 @@ class VectorQuantize(nn.Module):
         # Compute cluster centroids using hard assignments for stability
         # cluster_sums = hard_assignments.T @ embeddings  # (K, D)
         cluster_sums = hard_assignments.T @ embeddings.float()
+        print(cluster_sums)
 
+        print("cluster_sums has NaN:", torch.isnan(cluster_sums).any().item())
+        print("cluster_sums has Inf:", torch.isinf(cluster_sums).any().item())
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
