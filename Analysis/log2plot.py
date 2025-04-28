@@ -14,7 +14,7 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log0424", 'r') as file:
+    with open("/Users/taka/Downloads/3000_512_success/outputs/log", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = file.readlines()
         for i in range(0, len(lines), 3):
