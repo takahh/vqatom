@@ -1170,6 +1170,11 @@ class VectorQuantize(nn.Module):
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
+        print("NaN or Inf in embeddings:", torch.isnan(embeddings).any(), torch.isinf(embeddings).any())
+        print("NaN or Inf in hard_assignments:", torch.isnan(hard_assignments).any(),
+              torch.isinf(hard_assignments).any())
+        print("Max/min embeddings:", embeddings.max(), embeddings.min())
+        print("Max/min hard_assignments:", hard_assignments.max(), hard_assignments.min())
 
         # Compute distances to assigned cluster (a)
         assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
@@ -1188,10 +1193,6 @@ class VectorQuantize(nn.Module):
 
         # Get the nearest different cluster
         b, _ = torch.min(masked_distances, dim=1)  # (N,)
-        print("NaN in embeddings:", torch.isnan(embeddings).any())
-        print("NaN in centroids:", torch.isnan(centroids).any())
-        print("Inf in embeddings:", torch.isinf(embeddings).any())
-        print("Inf in centroids:", torch.isinf(centroids).any())
 
         # Calculate silhouette score with a margin to encourage separation
         max_dist = torch.max(a, b) + 1e-6
