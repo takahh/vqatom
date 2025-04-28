@@ -1165,23 +1165,22 @@ class VectorQuantize(nn.Module):
         hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
             1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
         )
+        print("Embedding has NaN:", torch.isnan(embeddings).any().item())
+        print("Embedding has Inf:", torch.isinf(embeddings).any().item())
+        print("Max embedding:", embeddings.max().item())
+        print("Min embedding:", embeddings.min().item())
+
+        print("Hard_assignments unique values:", hard_assignments.unique())
+        print("Hard_assignments has NaN:", torch.isnan(hard_assignments).any().item())
+        print("Hard_assignments has Inf:", torch.isinf(hard_assignments).any().item())
 
         # Compute cluster centroids using hard assignments for stability
         # cluster_sums = hard_assignments.T @ embeddings  # (K, D)
         cluster_sums = hard_assignments.T @ embeddings.float()
-        print("NaN or Inf in cluster_sums:", torch.isnan(cluster_sums).any(), torch.isinf(cluster_sums).any())
 
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
-        print("NaN or Inf in cluster_sizes:", torch.isnan(cluster_sizes).any(), torch.isinf(cluster_sizes).any())
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
-        print("NaN or Inf in cluster_sizes:", torch.isnan(cluster_sizes).any(), torch.isinf(cluster_sizes).any())
         centroids = cluster_sums / cluster_sizes  # (K, D)
-        print("NaN or Inf in embeddings:", torch.isnan(embeddings).any(), torch.isinf(embeddings).any())
-        print("NaN or Inf in hard_assignments:", torch.isnan(hard_assignments).any(),
-              torch.isinf(hard_assignments).any())
-        print("Max/min embeddings:", embeddings.max(), embeddings.min())
-        print("Max/min hard_assignments:", hard_assignments.max(), hard_assignments.min())
-
         # Compute distances to assigned cluster (a)
         assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
         assigned_centroids = centroids[assigned_clusters]  # (N, D)
