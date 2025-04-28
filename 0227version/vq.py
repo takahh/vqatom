@@ -1183,15 +1183,19 @@ class VectorQuantize(nn.Module):
 
         # Calculate distances to all centroids
         all_distances = torch.cdist(embeddings, centroids)  # (N, K)
-        masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
+        # masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
+        masked_distances = all_distances + (1.0 - mask) * float('inf')
 
         # Get the nearest different cluster
         b, _ = torch.min(masked_distances, dim=1)  # (N,)
 
         # Calculate silhouette score with a margin to encourage separation
         max_dist = torch.max(a, b) + 1e-6
+        # silhouette = (b - a) / (max_dist - margin)
+        max_dist = (max_dist - margin).clamp(min=1e-6)
+        silhouette = (b - a) / max_dist
         print(f" ********* max_dist: {max_dist[:5]}, margin: {margin}, (max_dist - margin) {(max_dist - margin)[:5]} ")
-        silhouette = (b - a) / (max_dist - margin)
+
         # Apply a smoothing function to make the loss more gradient-friendly
         loss = 1 - torch.mean(torch.tanh(silhouette))
 
