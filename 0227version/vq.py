@@ -1183,8 +1183,8 @@ class VectorQuantize(nn.Module):
 
         # Calculate distances to all centroids
         all_distances = torch.cdist(embeddings, centroids)  # (N, K)
-        # masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
-        masked_distances = all_distances + (1.0 - mask) * float('inf')
+        masked_distances = all_distances * mask + (1 - mask) * 1e3  # Set assigned cluster distance high
+        # masked_distances = all_distances + (1.0 - mask) * float('inf')
 
         # Get the nearest different cluster
         b, _ = torch.min(masked_distances, dim=1)  # (N,)
