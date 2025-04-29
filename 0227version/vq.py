@@ -1030,7 +1030,7 @@ class VectorQuantize(nn.Module):
             lamb_div_elec_state=1,
             lamb_div_charge=1,
             commitment_weight=0.01,  # using
-            lamb_sil=0.01,           # using
+            lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
             lamb_div=0.01,           # using
             lamb_equiv_atom=1,
@@ -1152,7 +1152,6 @@ class VectorQuantize(nn.Module):
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
         batch_size = embeddings.size(0)
-        embeddings = embeddings.float()
 
         # Get soft cluster assignments with temperature control
         if embed_ind.dim() == 1:
@@ -1165,30 +1164,13 @@ class VectorQuantize(nn.Module):
         hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
             1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
         )
-        # print("Embedding has NaN:", torch.isnan(embeddings).any().item())
-        # print("Embedding has Inf:", torch.isinf(embeddings).any().item())
-        # print("Max embedding:", embeddings.max().item())
-        # print("Min embedding:", embeddings.min().item())
-        #
-        # print("Hard_assignments unique values:", hard_assignments.unique())
-        # print("Hard_assignments has NaN:", torch.isnan(hard_assignments).any().item())
-        # print("Hard_assignments has Inf:", torch.isinf(hard_assignments).any().item())
 
         # Compute cluster centroids using hard assignments for stability
-        # cluster_sums = hard_assignments.T @ embeddings  # (K, D)
-        # cluster_sums = hard_assignments.T @ embeddings.float()
-        # cluster_sums = (hard_assignments.float().T) @ (embeddings.float())
-        hard_assignments_bf = hard_assignments.to(torch.bfloat16)
-        embeddings_bf = embeddings.to(torch.bfloat16)
-        cluster_sums = hard_assignments_bf.T @ embeddings_bf
-
-        print(cluster_sums)
-
-        # print("cluster_sums has NaN:", torch.isnan(cluster_sums).any().item())
-        # print("cluster_sums has Inf:", torch.isinf(cluster_sums).any().item())
+        cluster_sums = hard_assignments.T @ embeddings  # (K, D)
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
+
         # Compute distances to assigned cluster (a)
         assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
         assigned_centroids = centroids[assigned_clusters]  # (N, D)
@@ -1201,19 +1183,14 @@ class VectorQuantize(nn.Module):
 
         # Calculate distances to all centroids
         all_distances = torch.cdist(embeddings, centroids)  # (N, K)
-        masked_distances = all_distances * mask + (1 - mask) * 1e3  # Set assigned cluster distance high
-        # masked_distances = all_distances + (1.0 - mask) * float('inf')
+        masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
 
         # Get the nearest different cluster
         b, _ = torch.min(masked_distances, dim=1)  # (N,)
 
         # Calculate silhouette score with a margin to encourage separation
         max_dist = torch.max(a, b) + 1e-6
-        # silhouette = (b - a) / (max_dist - margin)
-        max_dist = (max_dist - margin).clamp(min=1e-6)
-        silhouette = (b - a) / max_dist
-        # print(f" ********* max_dist: {max_dist[:5]}, margin: {margin}, (max_dist - margin) {(max_dist - margin)[:5]} ")
-
+        silhouette = (b - a) / max_dist - margin
         # Apply a smoothing function to make the loss more gradient-friendly
         loss = 1 - torch.mean(torch.tanh(silhouette))
 
@@ -1446,8 +1423,6 @@ class VectorQuantize(nn.Module):
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
         print(f"commit loss {self.commitment_weight * commit_loss}, div {self.lamb_div * feat_div_loss}, sil loss {self.lamb_sil * sil_loss}")
-        print(f"commit loss {self.commitment_weight}, div {self.lamb_div}, sil loss {self.lamb_sil}")
-        print(f"commit loss {commit_loss}, div {feat_div_loss}, sil loss {sil_loss}")
         # if epoch < 5:
         #     print(f"epoch is less than 10")
         #     loss = (self.lamb_div * feat_div_loss)
@@ -1456,8 +1431,6 @@ class VectorQuantize(nn.Module):
         #     print(f"epoch is more than 10 !!")
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
 
-        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
-        #         + self.lamb_cb * codebook_loss)
         loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
                 + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
 
