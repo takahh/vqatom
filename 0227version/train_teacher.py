@@ -256,10 +256,6 @@ def run(args):
     #     percent=args.percent
     # )
     # # logger.info(f"Total {g.number_of_nodes()} nodes.")
-    # # logger.info(f"Total {g.number_of_edges()} edges.")
-
-    # feats = g.ndata["feat"]
-    # args.feat_dim = g.ndata["feat"].shape[1]
     args.feat_dim = args.hidden_dim
     args.label_dim = 1
 
