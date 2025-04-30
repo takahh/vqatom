@@ -1407,13 +1407,6 @@ class VectorQuantize(nn.Module):
         /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
-        # codebook_loss = self.commitment_loss(x.detach().squeeze(), quantize.squeeze())
-        # commit_loss = F.mse_loss(quantize.detach().squeeze(), x.squeeze())
-        # codebook_loss = F.mse_loss(quantize.squeeze(), x.detach().squeeze())
-        # print(f"feat_div_loss: {self.lamb_div * feat_div_loss}")
-        # # print(f"codebook_loss: {self.lamb_cb * codebook_loss}")
-        # print(f"commit_loss: {self.commitment_weight * commit_loss}")
-        # print(f"sil loss: {self.lamb_sil * sil_loss}")
         """
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
