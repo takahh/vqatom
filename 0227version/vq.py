@@ -1401,10 +1401,6 @@ class VectorQuantize(nn.Module):
             embed_ind = rearrange(embed_ind, 'b 1 -> b')
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        """  div_loss_list = 
-        [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss,
-         aroma_div_loss, ringy_div_loss, h_num_div_loss]
-        """
         """
         /vqatom/0227version/vq.py:1457: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
