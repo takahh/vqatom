@@ -271,7 +271,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, feat_div_loss,
          x, cb_loss, sil_loss) = quantize_output
-        # print(f"emb_ind {emb_ind} ----------------------")
+        print(f"emb_ind {emb_ind} ----------------------")
         detached_quantize = quantize.detach()
         # Loss components list
         losslist = [feat_div_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item()]
