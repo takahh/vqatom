@@ -558,7 +558,7 @@ class ContrastiveLoss(nn.Module):
         print(similarity_matrix - minval)
         print("maxval - minval")
         print(maxval - minval)
-        similarity_matrix = (similarity_matrix - minval) / (maxval - minval)
+        similarity_matrix = (similarity_matrix - minval) / (maxval - minval + eps)
 
         # print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
         # print(f"similarity_matrix matrix: {similarity_matrix}")
