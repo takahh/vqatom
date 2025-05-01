@@ -529,49 +529,50 @@ class ContrastiveLoss(nn.Module):
         # Add small noise to z to avoid early collapse
         z = z + 0.01 * torch.randn_like(z)
 
-        # Normalize z for cosine similarity
-        z_norm = z / (z.norm(p=2, dim=1, keepdim=True).clamp(min=eps))
-
-        # Cosine similarity matrix
+        # Temporarily cast to float32 for stable cosine similarity
+        z_fp32 = z.float()
+        z_norm = F.normalize(z_fp32, p=2, dim=1, eps=eps)
         similarity_matrix = torch.mm(z_norm, z_norm.T)
         similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
 
-        # Normalize atom types
-        atom_types = atom_types / (atom_types.norm(p=2, dim=1, keepdim=True).clamp(min=eps))
-        type_similarity_matrix = torch.mm(atom_types, atom_types.T)
+        # Normalize atom types for cosine similarity
+        atom_types_fp32 = atom_types.float()
+        atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
+        type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
 
-        # Normalize type similarity to [0, 1]
-        t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
-        t_range = (t_max - t_min).clamp(min=eps)
-        type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
-
-        # Normalize similarity matrix to [0, 1]
+        # Normalize similarity matrices to [0, 1]
         s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
         s_range = (s_max - s_min).clamp(min=eps)
         similarity_matrix = (similarity_matrix - s_min) / s_range
 
+        t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
+        t_range = (t_max - t_min).clamp(min=eps)
+        type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
+
         # Repel loss to prevent collapse
-        identity = torch.eye(z.size(0), device=z.device)
+        identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
         repel_loss = ((similarity_matrix - identity) ** 2).mean()
 
         # Contrastive loss
         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
         neg_mask = F.relu(type_similarity_matrix - 0.7)
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * neg_mask)
-        loss = pos_loss + neg_loss + eps  # add eps to avoid zero
-        # loss = neg_loss + eps  # add eps to avoid zero
+        loss = pos_loss + neg_loss + eps
 
-        # Logging safely
+        # Logging
         logger.info(
             f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
         print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
         print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
+        print("z std:", z_fp32.std().item(), "mean norm:", z_fp32.norm(dim=1).mean().item())
+
+        # Final loss (with repel term early in training)
         if epoch < 3:
             final_loss = loss + 0.1 * repel_loss
         else:
-            # final_loss = loss
             final_loss = loss + 0.1 * repel_loss
+
         return final_loss
 
 
