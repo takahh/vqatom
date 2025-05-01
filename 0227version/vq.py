@@ -523,7 +523,7 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, z, atom_types, epoch):
+    def forward(self, z, atom_types, epoch, logger):
         # Normalize latent representations
         # z = self.layer_norm_z(z)
         z = F.normalize(z, p=2, dim=1)
@@ -565,7 +565,8 @@ class ContrastiveLoss(nn.Module):
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * (F.relu(type_mask - 0.7)))
         loss = pos_loss + neg_loss
         # loss = neg_loss
-        print(f"nega loss: {neg_loss}, pos loss: {pos_loss}")
+        logger.info(f"nega loss: {neg_loss}")
+        print(f"nega loss: {neg_loss}, positive loss: {pos_loss}")
         # Optional orthogonality regularization
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
@@ -1274,7 +1275,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch)
+        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
