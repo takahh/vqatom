@@ -555,6 +555,7 @@ class ContrastiveLoss(nn.Module):
         print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
         print("z std:", z_fp32.std().item(), "mean norm:", z_fp32.norm(dim=1).mean().item())
 
+
         return final_loss
 
 
@@ -1361,6 +1362,9 @@ class VectorQuantize(nn.Module):
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
 
+        quantize_unique = torch.unique(quantize, dim=0)
+        num_unique = quantize_unique.shape[0]
+        print(f"Number of unique cb vectors: {num_unique}")
         # commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
         #               / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
 
