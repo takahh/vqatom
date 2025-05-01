@@ -581,10 +581,10 @@ class ContrastiveLoss(nn.Module):
         #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
         print(f"loss {loss}, repel loss: {repel_loss}")
         print(f"loss {loss}, 0.00001 * repel loss: {0.00001 * repel_loss}")
-        # if epoch < 3:
-        #     final_loss = repel_loss
-        # else:
-        final_loss = loss + 0.00001 * repel_loss
+        if epoch < 3:
+            final_loss = repel_loss
+        else:
+            final_loss = loss + 0.00001 * repel_loss
         # final_loss = loss + 0.0001 * orthogonality_reg
 
         return final_loss
