@@ -553,7 +553,7 @@ class ContrastiveLoss(nn.Module):
         minval = torch.min(similarity_matrix)
         maxval = torch.max(similarity_matrix)
         print(f"minval: {minval}, maxval {maxval}")
-        similarity_matrix = (similarity_matrix - minval) / (maxval - minval + 10e-5)
+        similarity_matrix = (similarity_matrix - minval) / torch.clamp(maxval - minval, min=10e-5)
 
         # print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
         # print(f"similarity_matrix matrix: {similarity_matrix}")
