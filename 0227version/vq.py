@@ -567,7 +567,7 @@ class ContrastiveLoss(nn.Module):
         print(f"nega loss: {neg_loss}, positive loss: {pos_loss}")
         print(f"loss {loss}, repel loss: {repel_loss}")
 
-        final_loss = loss + 0.1 * repel_loss
+        final_loss = loss + 0.01 * repel_loss
         return final_loss
 
 
