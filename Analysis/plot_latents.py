@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-path = "/Users/taka/Downloads/3000_512_success/"
+path = "/Users/taka/Downloads/0227version 6/"
 # path = "/Users/taka/Downloads/"
 # LMIN = 2.5
 # LMAX = 7.5
@@ -139,13 +139,13 @@ def getdata(filename):
 
 def main():
     arr_list = []
-    DIMENSION = 512
+    DIMENSION = 128
     BATCH = 8000
-    EPOCH = 14
+    EPOCH = 8
     EPOCH2 = EPOCH + 1
 
-    MODE = "tsne"
-    # MODE = "umap"
+    # MODE = "tsne"
+    MODE = "umap"
     for epoch in range(EPOCH, EPOCH2):
         arr = None
         print(f"epoch {epoch}")
