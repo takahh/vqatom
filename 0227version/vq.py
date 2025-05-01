@@ -544,9 +544,12 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
 
         # Normalize latent similarity to [0, 1]
-        s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
-        s_range = (s_max - s_min).clamp(min=eps)
-        similarity_matrix = (similarity_matrix - s_min) / s_range
+        # s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+        # s_range = (s_max - s_min).clamp(min=eps)
+        # similarity_matrix = (similarity_matrix - s_min) / s_range
+
+        similarity_matrix = (similarity_matrix - similarity_matrix.mean()) / (similarity_matrix.std() + eps)
+        similarity_matrix = torch.clamp(similarity_matrix * 0.5 + 0.5, 0, 1)
 
         # Repel loss (optional regularization)
         identity = torch.eye(z.size(0), device=z.device)
