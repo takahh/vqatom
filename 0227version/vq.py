@@ -524,75 +524,47 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
     def forward(self, z, atom_types, epoch, logger):
-        # Normalize latent representations
-        # z = self.layer_norm_z(z)
-        # z = F.normalize(z, p=2, dim=1)
-        z_norm = z / (z.norm(p=2, dim=1, keepdim=True) + 1e-6)
-        # Only for similarity in loss
+        eps = 1e-6
 
-        # Keep original z for clustering, VQ, downstream tasks
+        # Normalize z only for similarity calculation
+        z_norm = z / (z.norm(p=2, dim=1, keepdim=True) + eps)
 
-        # Normalize atom type features
-        # atom_types = self.layer_norm_atom(atom_types)
-        atom_types = F.normalize(atom_types, p=2, dim=1)
-
-        # Type similarity
-        type_similarity_matrix = torch.mm(atom_types, atom_types.T)
-        min_val = torch.min(type_similarity_matrix) + 10e-5
-        max_val = torch.max(type_similarity_matrix)
-
-        eps = 1e-8
-        range_val = (max_val - min_val).clamp(min=eps)
-        # change values between 0 and 1
-        type_similarity_matrix = (type_similarity_matrix - min_val) / range_val
-
-        # type_similarity_matrix = (type_similarity_matrix - min_val) / (max_val - min_val + 10e-5)
-
-        # Latent similarity
-        # similarity_matrix = torch.mm(z, z.T)
+        # Cosine similarity matrix (clamped to avoid perfect 1.0s)
         similarity_matrix = torch.mm(z_norm, z_norm.T)
+        similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
 
-        print(f"similarity matrix: {similarity_matrix[:5, :5]}")
+        # Type similarity matrix
+        atom_types = F.normalize(atom_types, p=2, dim=1)
+        type_similarity_matrix = torch.mm(atom_types, atom_types.T)
+        type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
 
-        repel_loss = ((similarity_matrix - torch.eye(z.size(0), device=z.device)) ** 2).mean()
+        # Normalize type similarity to [0, 1]
+        t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
+        t_range = (t_max - t_min).clamp(min=eps)
+        type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
 
-        minval = torch.min(similarity_matrix)
-        maxval = torch.max(similarity_matrix)
-        print(f"minval: {minval}, maxval {maxval}")
-        # similarity_matrix = (similarity_matrix - minval) / torch.clamp(maxval - minval, min=10e-5)
-        print("similarity_matrix - minval")
-        print(similarity_matrix - minval)
-        print("maxval - minval")
-        print(maxval - minval)
-        similarity_matrix = (similarity_matrix - minval) / (maxval - minval + eps)
+        # Normalize latent similarity to [0, 1]
+        s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+        s_range = (s_max - s_min).clamp(min=eps)
+        similarity_matrix = (similarity_matrix - s_min) / s_range
 
-        # print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
-        # print(f"similarity_matrix matrix: {similarity_matrix}")
-        # Soft type similarity mask with learnable sigmoid base
-        # type_mask = torch.sigmoid(type_similarity_matrix - self.sigmoid_base)
-        type_mask = type_similarity_matrix
-        # print(f"type_mask {type_mask}")
+        # Repel loss (optional regularization)
+        identity = torch.eye(z.size(0), device=z.device)
+        repel_loss = ((similarity_matrix - identity) ** 2).mean()
+
         # Contrastive loss
-        pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
-        # neg_loss = torch.mean(F.relu(similarity_matrix - self.margin) * (1 - type_mask))
-        neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * (F.relu(type_mask - 0.7)))
+        pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
+        neg_mask = F.relu(type_similarity_matrix - 0.7)
+        neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * neg_mask)
         loss = pos_loss + neg_loss
-        # loss = neg_loss
+
         logger.info(f"nega loss: {neg_loss}")
-        print(f"similarity matrix: {similarity_matrix}")
+        print(f"similarity matrix: {similarity_matrix[:5, :5]}")
         print(f"type_similarity_matrix: {type_similarity_matrix[:5, :5]}")
         print(f"nega loss: {neg_loss}, positive loss: {pos_loss}")
-        # Optional orthogonality regularization
-        # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
-        #                                 torch.eye(z.shape[1], device=z.device)) / z.shape[1]
         print(f"loss {loss}, repel loss: {repel_loss}")
-        print(f"loss {loss}, 0.00001 * repel loss: {0.00001 * repel_loss}")
-        # if epoch < 3:
-        #     final_loss = repel_loss
-        # else:
-        final_loss = loss + 0.00001 * repel_loss
-        # final_loss = loss + 0.0001 * orthogonality_reg
 
+        final_loss = loss + 0.00001 * repel_loss
         return final_loss
 
 
