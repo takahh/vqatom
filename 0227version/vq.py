@@ -567,8 +567,10 @@ class ContrastiveLoss(nn.Module):
             f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
         print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
         print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
-
-        final_loss = loss + 0.1 * repel_loss
+        if epoch < 3:
+            final_loss = loss + 0.1 * repel_loss
+        else:
+            final_loss = loss
         return final_loss
 
 
