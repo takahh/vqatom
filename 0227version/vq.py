@@ -559,7 +559,8 @@ class ContrastiveLoss(nn.Module):
         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
         neg_mask = F.relu(type_similarity_matrix - 0.7)
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * neg_mask)
-        loss = pos_loss + neg_loss + eps  # add eps to avoid zero
+        # loss = pos_loss + neg_loss + eps  # add eps to avoid zero
+        loss = neg_loss + eps  # add eps to avoid zero
 
         # Logging safely
         logger.info(
