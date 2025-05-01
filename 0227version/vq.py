@@ -546,11 +546,13 @@ class ContrastiveLoss(nn.Module):
 
         # Latent similarity
         similarity_matrix = torch.mm(z, z.T)
+        print(f"similarity matrix: {similarity_matrix[:5, :5]}")
 
         repel_loss = ((similarity_matrix - torch.eye(z.size(0), device=z.device)) ** 2).mean()
 
         minval = torch.min(similarity_matrix)
         maxval = torch.max(similarity_matrix)
+        print(f"minval: {minval}, maxval {maxval}")
         similarity_matrix = (similarity_matrix - minval) / (maxval - minval + 10e-5)
 
         # print(f"type_similarity_matrix matrix: {type_similarity_matrix}")
