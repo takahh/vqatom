@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+# from archive.train_and_eval import train
+
 
 def plot(type):
     # Data extraction
@@ -14,31 +16,33 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/3000_512_success/outputs/log", 'r') as file:
+    with open("/Users/taka/Downloads/log_05011", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
-        lines = file.readlines()
+        lines = [x for x in file.readlines() if "repel" not in x]
         for i in range(0, len(lines), 3):
             # Extract epoch
-            epoch_match = lines[i].split('epoch ')[1].split(':')[0]
-            epochs.append(int(epoch_match))
+            # if "repel" in lines[i]:
+            #     continue
+
+            # epoch_match = lines[i].split('epoch ')[1].split(':')[0]
+            # epochs.append(int(epoch_match))
 
             # Extract losses from both lines
             line1_parts = lines[i].split(' ')
             line2_parts = lines[i + 1].split(' ')
             line3_parts = lines[i + 2].split(' ')
-            print(line1_parts)
-            print(line2_parts)
-            print(line3_parts)
 
             # Extract specific losses
-            train_loss.append(float(line1_parts[5].replace(',', '')))
-            test_loss.append(float(line1_parts[7].strip()))
+            # train_loss.append(float(line1_parts[5].replace(',', '')))
+            test_loss.append(float(line1_parts[7].strip().replace(",", "")))
 
             # Feature divergence loss
             feat_div_loss_train.append(float(line2_parts[7].replace(',', '')))
             feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
 
             # CB loss
+            print("line2_parts")
+            print(line2_parts)
             cb_loss_train.append(float(line2_parts[17].split(',')[0]))
             cb_loss_test.append(float(line3_parts[17].split(',')[0]))
             # Silhouette losses (from two consecutive lines)
@@ -47,10 +51,11 @@ def plot(type):
 
     # Create the plot
     plt.figure(figsize=(12, 8))
-
+    epochs = list(range(len(test_loss)))
+    print(epochs)
     # Plot different loss metrics
     if type == 0:
-        plt.plot(epochs, train_loss, label='Train Loss', marker='o')
+        # plt.plot(epochs, train_loss, label='Train Loss', marker='o')
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
         plt.title('Loss Across Epochs', fontsize=16)
     elif type == 1:
