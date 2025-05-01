@@ -529,8 +529,8 @@ class ContrastiveLoss(nn.Module):
         z = F.normalize(z, p=2, dim=1)
 
         # Normalize atom type features
-        atom_types = self.layer_norm_atom(atom_types)
-        # atom_types = F.normalize(atom_types, p=2, dim=1)
+        # atom_types = self.layer_norm_atom(atom_types)
+        atom_types = F.normalize(atom_types, p=2, dim=1)
 
         # Type similarity
         type_similarity_matrix = torch.mm(atom_types, atom_types.T)
@@ -539,6 +539,7 @@ class ContrastiveLoss(nn.Module):
 
         eps = 1e-8
         range_val = (max_val - min_val).clamp(min=eps)
+        # change values between 0 and 1
         type_similarity_matrix = (type_similarity_matrix - min_val) / range_val
 
         # type_similarity_matrix = (type_similarity_matrix - min_val) / (max_val - min_val + 10e-5)
@@ -561,7 +562,7 @@ class ContrastiveLoss(nn.Module):
         # Contrastive loss
         pos_loss = torch.mean((1 - similarity_matrix) * type_mask)
         # neg_loss = torch.mean(F.relu(similarity_matrix - self.margin) * (1 - type_mask))
-        neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * (1 - type_mask))
+        neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * (F.relu(0.7 - type_mask)))
         loss = pos_loss + neg_loss
         # loss = neg_loss
         print(f"nega loss: {neg_loss}, pos loss: {pos_loss}")
