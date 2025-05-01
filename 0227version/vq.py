@@ -1419,10 +1419,10 @@ class VectorQuantize(nn.Module):
         #     # loss = (self.commitment_weight * commit_loss)
         # else:
         #     print(f"epoch is more than 10 !!")
-        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
-
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
-                + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
+        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        #
+        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
 
         # quantize = self.project_out(quantize)
 
