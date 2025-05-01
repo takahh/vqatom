@@ -568,7 +568,8 @@ class ContrastiveLoss(nn.Module):
         loss = pos_loss + neg_loss
         # loss = neg_loss
         logger.info(f"nega loss: {neg_loss}")
-        print(f"similarity matrix: {similarity_matrix[:5, :5]}, type_similarity_matrix: {type_similarity_matrix[:5, :5]}")
+        print(f"similarity matrix: {similarity_matrix}")
+        print(f"type_similarity_matrix: {type_similarity_matrix[:5, :5]}")
         print(f"nega loss: {neg_loss}, positive loss: {pos_loss}")
         # Optional orthogonality regularization
         # orthogonality_reg = torch.trace(torch.mm(z.T, z) -
