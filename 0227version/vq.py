@@ -526,7 +526,11 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, atom_types, epoch, logger):
         # Normalize latent representations
         # z = self.layer_norm_z(z)
-        z = F.normalize(z, p=2, dim=1)
+        # z = F.normalize(z, p=2, dim=1)
+        z_norm = z / (z.norm(p=2, dim=1, keepdim=True) + 1e-6)
+        # Only for similarity in loss
+
+        # Keep original z for clustering, VQ, downstream tasks
 
         # Normalize atom type features
         # atom_types = self.layer_norm_atom(atom_types)
@@ -545,7 +549,9 @@ class ContrastiveLoss(nn.Module):
         # type_similarity_matrix = (type_similarity_matrix - min_val) / (max_val - min_val + 10e-5)
 
         # Latent similarity
-        similarity_matrix = torch.mm(z, z.T)
+        # similarity_matrix = torch.mm(z, z.T)
+        similarity_matrix = torch.mm(z_norm, z_norm.T)
+
         print(f"similarity matrix: {similarity_matrix[:5, :5]}")
 
         repel_loss = ((similarity_matrix - torch.eye(z.size(0), device=z.device)) ** 2).mean()
