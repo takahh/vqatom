@@ -1436,6 +1436,10 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
+
+        unique_vectors = torch.unique(quantize, dim=0)
+        num_unique = unique_vectors.shape[0]
+        print(f"Number of unique quantized vectors: {num_unique}")
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
