@@ -788,6 +788,11 @@ class EuclideanCodebook(nn.Module):
             embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
             device = flatten.device
             embed_ind = embed_ind.to(device)
+
+            quantize_unique = torch.unique(quantize, dim=0)
+            num_unique = quantize_unique.shape[0]
+            print(f"Number of unique cb vectors: {num_unique}")
+
             embed_onehot = embed_onehot.to(device)
             # Compute the sum of assigned embeddings
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
