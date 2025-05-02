@@ -1167,7 +1167,6 @@ class VectorQuantize(nn.Module):
         hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
             1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
         )
-
         # Compute cluster centroids using hard assignments for stability
         cluster_sums = hard_assignments.T @ embeddings  # (K, D)
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
