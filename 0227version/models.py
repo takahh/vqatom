@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from dgl import batch
 from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
@@ -7,12 +6,11 @@ from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
 from train_teacher import get_args
 from vq import VectorQuantize
 import dgl
-from old_train_and_eval import transform_node_feats
+from archive.old_train_and_eval import transform_node_feats
 # from train_and_eval import filter_small_graphs_from_blocks
 from scipy.sparse.csgraph import connected_components
 import torch
 import torch.nn as nn
-import dgl.nn as dglnn
 
 
 class BondWeightLayer(nn.Module):
@@ -45,14 +43,10 @@ def init_weights(m):
         nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
         if m.bias is not None:
             nn.init.zeros_(m.bias)
-import torch
+
+
 import torch.nn as nn
-import torch
-from e3nn.o3 import Irreps, TensorProduct
 from e3nn.o3 import Linear
-from torch_geometric.utils import to_dense_adj
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GINEConv, global_mean_pool
 from torch_geometric.data import Data
