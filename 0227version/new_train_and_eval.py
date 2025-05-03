@@ -380,7 +380,8 @@ def run_inductive(
 
             cb_new_unique = torch.unique(cb_new, dim=0)
             num_unique = cb_new_unique.shape[0]
-            print(f"Number of unique cb vectors: {num_unique}")
+            unique_cb_fraction = float(num_unique) / float(cb_new.shape[0])
+            print(f"unique_cb_fraction: {unique_cb_fraction}")
         # --------------------------------
         # Save model
         # --------------------------------

@@ -20,9 +20,9 @@ from rdkit import Chem
 print(Chem.__file__)
 
 
-CANVAS_WIDTH = 3300
-CANVAS_HEIGHT = 2500
-FONTSIZE = 30
+CANVAS_WIDTH = 2000
+CANVAS_HEIGHT = 1500
+FONTSIZE = 20
 EPOCH = 1
 PATH = "/Users/taka/Downloads/3000_128/"
 
@@ -232,9 +232,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(1500, 900)
+        drawer = Draw.MolDraw2DCairo(1000, 600)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 2  # Increase font size for readability
+        options.atomLabelFontSize = 1  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -260,32 +260,59 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
     import matplotlib.pyplot as plt
     import numpy as np  # In case you use it to handle axes shape
+    import matplotlib.pyplot as plt
+    # Concatenate horizontally
+    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
 
-    # Assuming `images` is a list of image arrays
-    num_images = len(images)
-    cols = 4
-    rows = (num_images + cols - 1) // cols
+    ncols = 4
+    nrows = (len(images) + ncols - 1) // ncols
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 3, nrows * 2), dpi=200)
 
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 1, rows * 1), dpi=350)
+    axs = axs.flatten()
 
-    # Ensure axes is an array
-    if not isinstance(axes, np.ndarray):
-        axes = np.array([axes])
-    axes = axes.flatten()
+    for i, ax in enumerate(axs):
+        ax.axis("off")
+        if i < len(images):
+            ax.imshow(images[i])
+        else:
+            ax.set_visible(False)  # Hide unused axes cleanly
 
-    for i, img in enumerate(images):
-        axes[i].imshow(img)
-        # axes[i].set_title(f"Molecule {i + 1}", fontsize=4)
-        axes[i].axis("off")
+    # Remove all spacing and padding
+    plt.subplots_adjust(wspace=0, hspace=0, left=0, right=1, top=1, bottom=0)
 
-    # Hide unused axes
-    for j in range(i + 1, len(axes)):
-        axes[j].axis("off")
+    plt.margins(0)
+    plt.gca().xaxis.set_major_locator(plt.NullLocator())
+    plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-    # Minimize space between plots
-    plt.subplots_adjust(wspace=0.0, hspace=0.0)
+    plt.show()
 
-    plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
+    #
+    # # Assuming `images` is a list of image arrays
+    # num_images = len(images)
+    # cols = 4
+    # rows = (num_images + cols - 1) // cols
+    #
+    # fig, axes = plt.subplots(rows, cols, figsize=(cols * 1, rows * 1), dpi=350)
+    #
+    # # Ensure axes is an array
+    # if not isinstance(axes, np.ndarray):
+    #     axes = np.array([axes])
+    # axes = axes.flatten()
+    #
+    # for i, img in enumerate(images):
+    #     axes[i].imshow(img)
+    #     # axes[i].set_title(f"Molecule {i + 1}", fontsize=4)
+    #     axes[i].axis("off")
+    #
+    # # Hide unused axes
+    # for j in range(i + 1, len(axes)):
+    #     axes[j].axis("off")
+    #
+    # # Minimize space between plots
+    # plt.subplots_adjust(wspace=0.0, hspace=0.0)
+    #
+    # plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
 
 
 import torch
