@@ -377,7 +377,6 @@ def run_inductive(
                     #     f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
                     #     f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
                     #     )
-
             cb_new_unique = torch.unique(cb_new, dim=0)
             num_unique = cb_new_unique.shape[0]
             unique_cb_fraction = float(num_unique) / float(cb_new.shape[0])
