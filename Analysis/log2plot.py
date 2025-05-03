@@ -16,21 +16,30 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log_0503", 'r') as file:
+    with open("/Users/taka/Downloads/log0504", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = [x for x in file.readlines() if "repel" not in x]
         for i in range(0, len(lines), 3):
             # Extract epoch
-            # if "repel" in lines[i]:
-            #     continue
+            if "repel" in lines[i] or "fraction" in lines[i]:
+                continue
 
             # epoch_match = lines[i].split('epoch ')[1].split(':')[0]
             # epochs.append(int(epoch_match))
 
             # Extract losses from both lines
             line1_parts = lines[i].split(' ')
-            line2_parts = lines[i + 1].split(' ')
-            line3_parts = lines[i + 2].split(' ')
+            try:
+                line2_parts = lines[i + 1].split(' ')
+                line3_parts = lines[i + 2].split(' ')
+            except IndexError:
+                pass
+            if "unique_cb_fraction:" in line1_parts:
+                continue
+            if "unique_cb_fraction:" in line2_parts:
+                continue
+            if "unique_cb_fraction:" in line3_parts:
+                continue
 
             # Extract specific losses
             # train_loss.append(float(line1_parts[5].replace(',', '')))
@@ -41,8 +50,6 @@ def plot(type):
             feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
 
             # CB loss
-            print("line2_parts")
-            print(line2_parts)
             cb_loss_train.append(float(line2_parts[17].split(',')[0]))
             cb_loss_test.append(float(line3_parts[17].split(',')[0]))
             # Silhouette losses (from two consecutive lines)
