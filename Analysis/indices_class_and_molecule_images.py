@@ -24,7 +24,7 @@ CANVAS_WIDTH = 3300
 CANVAS_HEIGHT = 2500
 FONTSIZE = 30
 EPOCH = 1
-PATH = "/Users/taka/Downloads/2000_128/"
+PATH = "/Users/taka/Downloads/3000_128/"
 
 
 def getdata(filename):
@@ -234,7 +234,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Create a drawing canvas.
         drawer = Draw.MolDraw2DCairo(1500, 900)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 5  # Increase font size for readability
+        options.atomLabelFontSize = 2  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -258,30 +258,34 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     #     plt.show()
 
     import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
+    import numpy as np  # In case you use it to handle axes shape
 
     # Assuming `images` is a list of image arrays
     num_images = len(images)
-    cols = 4  # Number of columns you want
-    rows = (num_images + cols - 1) // cols  # Calculate the number of rows needed
+    cols = 4
+    rows = (num_images + cols - 1) // cols
 
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 2, rows * 2), dpi=350)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 1, rows * 1), dpi=350)
 
-    # Flatten axes array in case it's 2D
+    # Ensure axes is an array
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
     axes = axes.flatten()
 
     for i, img in enumerate(images):
         axes[i].imshow(img)
-        axes[i].set_title(f"Molecule {i + 1}", fontsize=8)
+        # axes[i].set_title(f"Molecule {i + 1}", fontsize=4)
         axes[i].axis("off")
 
-    # Hide any unused subplots
+    # Hide unused axes
     for j in range(i + 1, len(axes)):
         axes[j].axis("off")
 
-    plt.tight_layout()
-    # plt.show()
-    plt.savefig("./similar_mols.png")
+    # Minimize space between plots
+    plt.subplots_adjust(wspace=0.0, hspace=0.0)
 
+    plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
 
 
 import torch
