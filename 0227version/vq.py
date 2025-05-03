@@ -570,7 +570,7 @@ class ContrastiveLoss(nn.Module):
         print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
 
         # Final loss with stronger repel term early on
-        repel_weight = 0.5 if epoch < 10 else 0.1
+        repel_weight = 0.8 if epoch < 10 else 0.1
         final_loss = contrastive_loss + repel_weight * repel_loss
 
         return final_loss
@@ -1423,7 +1423,8 @@ class VectorQuantize(nn.Module):
         #     # loss = (self.commitment_weight * commit_loss)
         # else:
         #     print(f"epoch is more than 10 !!")
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        loss = self.lamb_div * feat_div_loss
+        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
         #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
