@@ -1,15 +1,8 @@
-import torch
-import torch.nn.functional as F
-from dgl import batch
-from dgl.nn import GraphConv, SAGEConv, APPNPConv, GATConv
+from dgl.nn import GraphConv, APPNPConv, GATConv
 
 from train_teacher import get_args
-from vq import VectorQuantize
-import dgl
-from archive.old_train_and_eval import transform_node_feats
+from old_train_and_eval import transform_node_feats
 # from train_and_eval import filter_small_graphs_from_blocks
-from scipy.sparse.csgraph import connected_components
-import torch
 import torch.nn as nn
 
 
@@ -45,15 +38,10 @@ def init_weights(m):
             nn.init.zeros_(m.bias)
 
 
-import torch.nn as nn
-from e3nn.o3 import Linear
 import torch.nn.functional as F
-from torch_geometric.nn import GINEConv, global_mean_pool
-from torch_geometric.data import Data
+from torch_geometric.nn import GINEConv
 
-import torch
 import torch.nn as nn
-from torch_geometric.nn import GINConv
 from vq import VectorQuantize  # Ensure correct import
 
 
@@ -73,7 +61,7 @@ class BondWeightLayer(nn.Module):
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
 
-import torch
+
 import torch.nn as nn
 
 class AtomEmbedding(nn.Module):
@@ -440,7 +428,6 @@ class GCN(nn.Module):
 
 import dgl
 import torch
-from scipy.sparse.csgraph import connected_components
 
 
 def filetr_src_and_dst(src, dst):
