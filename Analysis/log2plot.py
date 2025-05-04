@@ -16,13 +16,11 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log0504_2", 'r') as file:
+    with open("/Users/taka/Downloads/log0505", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
-        lines = [x for x in file.readlines() if "repel" not in x]
+        lines = file.readlines()
+        lines = [x for x in lines if "repel" not in x and 'unique' not in x and 'nega' not in x]
         for i in range(0, len(lines), 3):
-            # Extract epoch
-            if "repel" in lines[i] or "fraction" in lines[i]:
-                continue
 
             # epoch_match = lines[i].split('epoch ')[1].split(':')[0]
             # epochs.append(int(epoch_match))
@@ -33,7 +31,7 @@ def plot(type):
                 line2_parts = lines[i + 1].split(' ')
                 line3_parts = lines[i + 2].split(' ')
             except IndexError:
-                pass
+                continue
             if "unique_cb_fraction:" in line1_parts:
                 continue
             if "unique_cb_fraction:" in line2_parts:
@@ -50,8 +48,11 @@ def plot(type):
             feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
 
             # CB loss
-            cb_loss_train.append(float(line2_parts[17].split(',')[0]))
-            cb_loss_test.append(float(line3_parts[17].split(',')[0]))
+            try:
+                cb_loss_train.append(float(line2_parts[17].split(',')[0]))
+                cb_loss_test.append(float(line3_parts[17].split(',')[0]))
+            except IndexError:
+                continue
             # Silhouette losses (from two consecutive lines)
             sil_loss_train.append(float(line2_parts[-1].replace(',', '')))
             sil_loss_test.append(float(line3_parts[-1].replace(',', '')))
@@ -59,7 +60,6 @@ def plot(type):
     # Create the plot
     plt.figure(figsize=(12, 8))
     epochs = list(range(len(test_loss)))
-    print(epochs)
     # Plot different loss metrics
     if type == 0:
         # plt.plot(epochs, train_loss, label='Train Loss', marker='o')
@@ -92,4 +92,5 @@ def plot(type):
     print("Plot has been saved as 'training_metrics_plot.png'")
 
 for type in range(0, 4):
+# for type in range(0, 1):
     plot(type)
