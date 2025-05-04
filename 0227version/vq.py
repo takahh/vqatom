@@ -570,7 +570,7 @@ class ContrastiveLoss(nn.Module):
         print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
 
         # Final loss with stronger repel term early on
-        repel_weight = 0.8 if epoch < 10 else 0.1
+        repel_weight = 10 if epoch < 10 else 0.1
         final_loss = contrastive_loss + repel_weight * repel_loss
 
         return final_loss
