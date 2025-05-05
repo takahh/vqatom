@@ -16,7 +16,7 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log05061", 'r') as file:
+    with open("/Users/taka/Downloads/log05063", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "repel" not in x and 'unique' not in x and 'nega' not in x]
