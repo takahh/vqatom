@@ -574,7 +574,7 @@ class ContrastiveLoss(nn.Module):
         repel_weight = 1.0 if epoch < 10 else 0.1
         final_loss = contrastive_loss + repel_weight * repel_loss
 
-        return final_loss
+        return final_loss, neg_loss
 
 
 import torch.nn.functional as F
@@ -1276,7 +1276,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
+        feat_div_loss, div_posi_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
@@ -1292,7 +1292,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss, feat_div_loss)
+        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_posi_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -1398,7 +1398,7 @@ class VectorQuantize(nn.Module):
         codebook = self._codebook.embed
 
         # print(f"embed_ind 0: {embed_ind}")
-        spread_loss, embed_ind, sil_loss, feat_div_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
+        spread_loss, embed_ind, sil_loss, feat_div_loss, div_posi_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
                                                                    logger, epoch)
         # print(f"embed_ind: {embed_ind}")
         if len(embed_ind.shape) == 3:
@@ -1417,7 +1417,7 @@ class VectorQuantize(nn.Module):
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        print(f"commit loss {self.commitment_weight * commit_loss}, div {self.lamb_div * feat_div_loss}, sil loss {self.lamb_sil * sil_loss}")
+        print(f"commit loss {self.commitment_weight * commit_loss}, div posi {self.lamb_div * div_posi_loss}, sil loss {self.lamb_sil * sil_loss}")
         # if epoch < 5:
         #     print(f"epoch is less than 10")
         #     loss = (self.lamb_div * feat_div_loss)
