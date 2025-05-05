@@ -435,14 +435,14 @@ def run_inductive(
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             print(
-                f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
+                f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
             )
 
             print(
-                  f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
+                  f"train - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
                   f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
                   f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
                   f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
@@ -450,7 +450,7 @@ def run_inductive(
 
             # Log training losses
             logger.info(
-                f"train - feat_div loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
+                f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
@@ -458,7 +458,7 @@ def run_inductive(
 
             # Log testing losses
             logger.info(
-                f"train - feat_div loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
+                f"train - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
                   f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
                   f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
                   f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
