@@ -24,7 +24,7 @@ CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/4000_128 12/"
+PATH = "/Users/taka/Downloads/4000_128 13/"
 
 
 def getdata(filename):

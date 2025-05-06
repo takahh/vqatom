@@ -526,9 +526,9 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, atom_types, epoch, logger):
         eps = 1e-6
 
-        # Add stronger noise early in training to break symmetry
-        if epoch < 5:
-            z = z + 0.1 * torch.randn_like(z)
+        # # Add stronger noise early in training to break symmetry
+        # if epoch < 5:
+        #     z = z + 0.1 * torch.randn_like(z)
 
         # Normalize z to control magnitude and prevent similarity collapse
         z = F.normalize(z, p=2, dim=1, eps=eps)
@@ -558,8 +558,8 @@ class ContrastiveLoss(nn.Module):
 
         # Contrastive loss: positive & negative based on type similarity
         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
-        neg_mask = F.relu(type_similarity_matrix - 0.7)
-        neg_loss = torch.mean(F.relu(similarity_matrix - 0.7) * neg_mask)
+        neg_mask = F.relu(type_similarity_matrix - 0.9)
+        neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
         contrastive_loss = pos_loss + neg_loss + eps
 
         # Logging
