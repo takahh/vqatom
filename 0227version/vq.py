@@ -558,16 +558,16 @@ class ContrastiveLoss(nn.Module):
 
         # Contrastive loss: positive & negative based on type similarity
         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
-        neg_mask = F.relu(type_similarity_matrix - 0.9)
+        neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
         contrastive_loss = pos_loss + neg_loss + eps
 
         # Logging
         logger.info(
             f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
-        print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
-        print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
-        print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
+        # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
+        # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
+        # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
 
         # Final loss with stronger repel term early on
         repel_weight = 0.8 if epoch < 10 else 0.1
