@@ -16,7 +16,7 @@ def plot(type):
     train_loss = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log05067", 'r') as file:
+    with open("/Users/taka/Downloads/log050610", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "repel" not in x and 'unique' not in x]
@@ -66,8 +66,10 @@ def plot(type):
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
         plt.title('Loss Across Epochs', fontsize=16)
     elif type == 1:
+        print(feat_div_loss_train)
+        print(feat_div_loss_test)
         plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
-        plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Train', marker='_')
+        plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Test', marker='_')
         plt.title('feat_div_loss Across Epochs', fontsize=16)
     elif type == 2:
         print(epochs, cb_loss_train)
