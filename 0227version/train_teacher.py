@@ -287,7 +287,7 @@ def run(args):
                            '2000_64': 75, '2000_128': 10, '2000_256': 73, '2500_256': 80, '1000_512': 49, '1500_512': 80,'2000_512': 80,
                            '2500_512': 50, '1000_1024': 53, '1500_1024': 49, '2000_1024': 29, '2500_1024': 20, '3000_1024': 15, '3000_128': 10,
                            '3000_256': 88, '3000_512': 30, '3500_256': 35, '3500_512': 35, '3500_1024': 17, '4000_128': 4, '4000_256': 11,
-                           '5000_128': 5, '5000_256': 1}
+                           '5000_128': 5, '5000_256': 11}
         model.load_state_dict(torch.load(f"/vqatom/0227version/model_epoch_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         # model.load_state_dict(torch.load(f"/vqatom/data/vqatom_best_models/model_{thiskey}_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
