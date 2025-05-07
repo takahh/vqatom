@@ -548,8 +548,8 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
 
         # Repel loss to prevent collapse (similarity to identity matrix)
-        identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
-        repel_loss = ((similarity_matrix - identity) ** 2).mean()
+        off_diag = similarity_matrix[~torch.eye(z.size(0), dtype=bool, device=z.device)]
+        repel_loss = (off_diag ** 2).mean()
 
         # Contrastive loss: positive & negative based on type similarity
         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
