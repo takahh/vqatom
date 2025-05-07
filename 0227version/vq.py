@@ -512,68 +512,120 @@ import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-
-class ContrastiveLoss(nn.Module):
-    def __init__(self, latent_dim, atom_feat_dim, margin=0.5, temperature=0.1, init_sigmoid_base=0.5):
+class ContrastiveLoss(nn.Module):  # new suggest from chatgpt
+    def __init__(self, latent_dim, atom_feat_dim, pos_margin=0.1, neg_margin=0.5, repel_weight_early=0.8, repel_weight_late=0.1):
         super().__init__()
-        self.margin = nn.Parameter(torch.tensor(margin))
-        self.temperature = temperature
-        self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
-        self.layer_norm_z = nn.LayerNorm(latent_dim)
-        self.layer_norm_atom = nn.LayerNorm(latent_dim)
+        self.pos_margin = pos_margin  # Margin for positive pairs
+        self.neg_margin = neg_margin  # Margin threshold for negatives
+        self.repel_weight_early = repel_weight_early
+        self.repel_weight_late = repel_weight_late
 
     def forward(self, z, atom_types, epoch, logger):
         eps = 1e-6
 
-        # # Add stronger noise early in training to break symmetry
-        # if epoch < 5:
-        #     z = z + 0.1 * torch.randn_like(z)
-
-        # Normalize z to control magnitude and prevent similarity collapse
+        # Normalize embeddings
         z = F.normalize(z, p=2, dim=1, eps=eps)
+        atom_types = atom_types.float()
+        atom_types = F.normalize(atom_types, p=2, dim=1, eps=eps)
 
-        # Compute cosine similarity matrix
-        similarity_matrix = torch.mm(z, z.T)
-        similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
+        # Cosine similarity between all latent vectors
+        sim_matrix = torch.mm(z, z.T)  # Values in [-1, 1]
+        identity = torch.eye(z.size(0), device=z.device)
 
-        # Normalize atom types for cosine similarity
-        atom_types_fp32 = atom_types.float()
-        atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
-        type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
-        type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
+        # Atom type similarity (cosine sim)
+        type_sim_matrix = torch.mm(atom_types, atom_types.T)
 
-        # Normalize similarity matrices to [0, 1]
-        s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
-        s_range = (s_max - s_min).clamp(min=eps)
-        similarity_matrix = (similarity_matrix - s_min) / s_range
+        # Positive and negative masks
+        pos_mask = (type_sim_matrix > 0.9).float() - identity  # similar types, not self
+        neg_mask = (type_sim_matrix < 0.3).float()  # dissimilar types
 
-        t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
-        t_range = (t_max - t_min).clamp(min=eps)
-        type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
+        # Positive loss: penalize under-similar positives
+        pos_loss = torch.sum(F.relu(self.pos_margin - sim_matrix) * pos_mask)
+        pos_count = pos_mask.sum().clamp(min=1.0)
+        pos_loss = pos_loss / pos_count
 
-        # Repel loss to prevent collapse
-        identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
-        repel_loss = ((similarity_matrix - identity) ** 2).mean()
+        # Negative loss: penalize over-similar negatives
+        neg_loss = torch.sum(F.relu(sim_matrix - self.neg_margin) * neg_mask)
+        neg_count = neg_mask.sum().clamp(min=1.0)
+        neg_loss = neg_loss / neg_count
 
-        # Contrastive loss: positive & negative based on type similarity
-        pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
-        neg_mask = F.relu(type_similarity_matrix - 0.8)
-        neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
-        contrastive_loss = pos_loss + neg_loss + eps
+        # Repel loss to avoid collapse
+        repel_loss = ((sim_matrix - identity) ** 2).mean()
 
-        # Logging
-        logger.info(
-            f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
-        # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
-        # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
-        # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
+        # Log
+        logger.info(f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
 
-        # Final loss with stronger repel term early on
-        repel_weight = 0.8 if epoch < 10 else 0.1
-        final_loss = contrastive_loss + repel_weight * repel_loss
+        # Combine
+        repel_weight = self.repel_weight_early if epoch < 10 else self.repel_weight_late
+        total_loss = pos_loss + neg_loss + repel_weight * repel_loss
 
-        return final_loss, neg_loss
+        return total_loss, neg_loss
+
+#
+# class ContrastiveLoss(nn.Module):
+#     def __init__(self, latent_dim, atom_feat_dim, margin=0.5, temperature=0.1, init_sigmoid_base=0.5):
+#         super().__init__()
+#         self.margin = nn.Parameter(torch.tensor(margin))
+#         self.temperature = temperature
+#         self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
+#         self.layer_norm_z = nn.LayerNorm(latent_dim)
+#         self.layer_norm_atom = nn.LayerNorm(latent_dim)
+#
+#     def forward(self, z, atom_types, epoch, logger):
+#         eps = 1e-6
+#
+#         # # Add stronger noise early in training to break symmetry
+#         # if epoch < 5:
+#         #     z = z + 0.1 * torch.randn_like(z)
+#
+#         # Normalize z to control magnitude and prevent similarity collapse
+#         z = F.normalize(z, p=2, dim=1, eps=eps)
+#
+#         # Compute cosine similarity matrix
+#         similarity_matrix = torch.mm(z, z.T)
+#         similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
+#
+#         # Normalize atom types for cosine similarity
+#         atom_types_fp32 = atom_types.float()
+#         atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
+#         type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
+#         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
+#
+#         # Normalize similarity matrices to [0, 1]
+#         s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+#         s_range = (s_max - s_min).clamp(min=eps)
+#         similarity_matrix = (similarity_matrix - s_min) / s_range
+#
+#         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
+#         t_range = (t_max - t_min).clamp(min=eps)
+#         type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
+#
+#         # Repel loss to prevent collapse
+#         identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
+#         repel_loss = ((similarity_matrix - identity) ** 2).mean()
+#
+#         # Contrastive loss: positive & negative based on type similarity
+#         pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
+#         neg_mask = F.relu(type_similarity_matrix - 0.8)
+#         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
+#         contrastive_loss = pos_loss + neg_loss + eps
+#
+#         # Logging
+#         logger.info(
+#             f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
+#         # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
+#         # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
+#         # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
+#
+#         # Final loss with stronger repel term early on
+#         repel_weight = 0.8 if epoch < 10 else 0.1
+#         final_loss = contrastive_loss + repel_weight * repel_loss
+#
+#         return final_loss, neg_loss
 
 
 import torch.nn.functional as F
