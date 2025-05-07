@@ -562,7 +562,8 @@ class ContrastiveLoss(nn.Module):
             f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
 
         # Final loss with stronger repel term early on
-        repel_weight = 0.8 if epoch < 10 else 0.1
+        # repel_weight = 0.8 if epoch < 10 else 0.1
+        repel_weight = 0.8
         final_loss = contrastive_loss + repel_weight * repel_loss
 
         return final_loss, neg_loss
