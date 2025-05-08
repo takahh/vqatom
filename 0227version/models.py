@@ -125,10 +125,16 @@ class EquivariantThreeHopGINE(nn.Module):
             # nn.ReLU(),
             nn.Linear(hidden_feats, out_feats)
         )
+        nn4 = nn.Sequential(
+            nn.Linear(hidden_feats, hidden_feats),
+            # nn.ReLU(),
+            nn.Linear(hidden_feats, out_feats)
+        )
 
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
         self.gine3 = GINEConv(nn3, edge_dim=1)
+        self.gine4 = GINEConv(nn4, edge_dim=1)
         # self.gine1 = GINEConv(nn1, edge_dim=1)
         # self.gine2 = GINEConv(nn2, edge_dim=1)
         # self.gine3 = GINEConv(nn3, edge_dim=1)
@@ -151,6 +157,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln0 = nn.LayerNorm(args.hidden_dim)
         self.ln1 = nn.LayerNorm(args.hidden_dim)
         self.ln2 = nn.LayerNorm(args.hidden_dim)
+        self.ln3 = nn.LayerNorm(args.hidden_dim)
         self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
         # self.dropout_0 = nn.Dropout(p=0.2)
         # self.dropout_1 = nn.Dropout(p=0.2)
@@ -194,6 +201,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.gine1 = self.gine1.to(device)
         self.gine2 = self.gine2.to(device)
         self.gine3 = self.gine3.to(device)
+        self.gine4 = self.gine4.to(device)
         self.vq = self.vq.to(device)
 
         self.bond_weight = self.bond_weight.to(device)
@@ -251,6 +259,13 @@ class EquivariantThreeHopGINE(nn.Module):
         # h = self.gine3(h, edge_index=edge_index)
         h = self.ln2(h)
         # h = self.dropout_2(h)
+
+        # # GINE Layer 3
+        h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
+        # h = self.gine3(h, edge_index=edge_index)
+        h = self.ln3(h)
+        # h = self.dropout_2(h)
+
         h = self.linear_1(h)
         # Vector Quantization
         quantize_output = self.vq(
