@@ -572,9 +572,12 @@ class ContrastiveLoss(nn.Module):
         # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
         # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
         # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
-
+        #
+        # May07 23-16-43: nega loss: 0.0035, pos loss: 0.0522, repel: 0.7744
+        # May07 23-16-44: nega loss: 0.0033, pos loss: 0.0508, repel: 0.7709
         # Final loss with stronger repel term early on
-        repel_weight = 0.5 if epoch < 10 else 0.1
+        repel_weight = 0.5
+        # repel_weight = 0.5 if epoch < 10 else 0.1
         final_loss = contrastive_loss + repel_weight * repel_loss
 
         return final_loss, neg_loss
@@ -1428,6 +1431,10 @@ class VectorQuantize(nn.Module):
         # else:
         #     print(f"epoch is more than 10 !!")
         # loss = self.lamb_div * feat_div_loss
+        #
+        #     commitment_weight=0.01,  # using
+        #     lamb_div=0.01,           # using
+        # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
         loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
