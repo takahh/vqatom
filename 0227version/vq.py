@@ -815,7 +815,7 @@ class EuclideanCodebook(nn.Module):
 
             quantize_unique = torch.unique(quantize, dim=0)
             num_unique = quantize_unique.shape[0]
-            # print(f"Number of unique cb vectors: {num_unique}")
+            print(f"Number of unique cb vectors: {num_unique}")
 
             embed_onehot = embed_onehot.to(device)
             # Compute the sum of assigned embeddings
