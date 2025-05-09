@@ -25,7 +25,6 @@ FONTSIZE = 20
 EPOCH = 1
 PATH = "/Users/taka/Downloads/15000_128 4/"
 
-
 def getdata(filename):
     # filename = "out_emb_list.npz"
     if "mol" in filename and "latents" not in filename:
