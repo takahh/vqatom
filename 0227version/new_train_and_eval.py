@@ -433,7 +433,10 @@ def run_inductive(
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}"
-                f"unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},")
+                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},"
+                        )
             print(
                 f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
