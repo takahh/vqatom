@@ -74,9 +74,9 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     # scaler = torch.cuda.amp.GradScaler()
     scaler = torch.cuda.amp.GradScaler(init_scale=1e2)  # Try lower scale like 1e1
     optimizer.zero_grad()
-    with torch.cuda.amp.autocast():
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train = model(g, feats, epoch,
-                                                                                                        logger)  # g is blocks
+    with (torch.cuda.amp.autocast()):
+        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique \
+        = model(g, feats, epoch, logger)  # g is blocks
     # cb is self.embed
     model.vq._codebook.embed.data.copy_(cb)
     loss = loss.to(device)
@@ -97,7 +97,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad()
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
-    return loss, loss_list3, latent_list, latents
+    return loss, loss_list3, latent_list, latents, num_unique
 
 
 def evaluate(model, g, feats, epoch, logger, g_base):
@@ -322,6 +322,7 @@ def run_inductive(
         loss_list_list_train = [[]] * 11
         loss_list_list_test = [[]] * 11
         loss_list = []
+        cb_unique_num_list = []
         model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
@@ -351,9 +352,10 @@ def run_inductive(
                         # print("batched_feats.shape")
                         # print(batched_feats.shape)
                     # batched_feats = batched_graph.ndata["feat"]
-                    loss, loss_list_train, latent_train, latents = train_sage(
+                    loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
+                    cb_unique_num_list.append(cb_num_unique.cpu().detach().numpy())
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
                     del batched_graph, batched_feats, chunk
@@ -377,10 +379,7 @@ def run_inductive(
                     #     f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
                     #     f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
                     #     )
-            cb_new_unique = torch.unique(cb_new, dim=0)
-            num_unique = cb_new_unique.shape[0]
-            unique_cb_fraction = float(num_unique) / float(cb_new.shape[0])
-            logger.info(f"unique_cb_fraction: {unique_cb_fraction}")
+
             # print(f"RUINNING EDITED LINE !!!!!!!!!!")
         # --------------------------------
         # Save model
@@ -433,12 +432,14 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
-            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
+            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}"
+                f"unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},")
             print(
                 f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
+                f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
             )
 
             print(
