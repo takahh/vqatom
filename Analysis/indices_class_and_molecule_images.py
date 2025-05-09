@@ -19,12 +19,11 @@ print(rdkit.__version__)
 from rdkit import Chem
 print(Chem.__file__)
 
-
 CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/15000_128 3/"
+PATH = "/Users/taka/Downloads/15000_128 4/"
 
 
 def getdata(filename):
