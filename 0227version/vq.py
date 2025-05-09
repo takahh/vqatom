@@ -848,7 +848,7 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
-
+            print(f"Eu unique {num_unique}")
             return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
         else:
             return quantize, embed_ind, dist, self.embed, flatten, init_cb
