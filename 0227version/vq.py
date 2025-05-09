@@ -849,7 +849,9 @@ class EuclideanCodebook(nn.Module):
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
 
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
+            return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
+        else:
+            return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
@@ -1374,7 +1376,10 @@ class VectorQuantize(nn.Module):
 
         # print(f"x: {x}")
         # print(f"init_feat: {init_feat}")
-        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
+        if self.training:
+            quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
+        else:
+            quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
         """
         quantize: データの数だけ存在する、離散化されたクラスタ中心
@@ -1460,4 +1465,7 @@ class VectorQuantize(nn.Module):
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique
+        if self.training:
+            return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique
+        else:
+            return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
