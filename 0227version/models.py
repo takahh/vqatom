@@ -185,6 +185,7 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         data = data.to(device)
+        num_unique = None
 
         src_one_way, dst_one_way = data.edges()
         # ------------------------
