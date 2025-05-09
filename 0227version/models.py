@@ -412,7 +412,6 @@ class GCN(nn.Module):
         h_list.append(h)
         h = self.linear(h)
         loss = feature_rec_loss + edge_rec_loss + commit_loss
-
         return h_list, h, loss, dist, codebook, [feature_rec_loss, edge_rec_loss, commit_loss]
 
 
