@@ -437,10 +437,10 @@ def run_inductive(
                 f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},"
                         )
-            print("loss_list_list_train[0] ---------------")
-            print(loss_list_list_train[0])
-            print("cb_unique_num_list")
-            print(cb_unique_num_list)
+            logger.info("loss_list_list_train[0] ---------------")
+            logger.info(loss_list_list_train[0])
+            logger.info("cb_unique_num_list")
+            logger.info(cb_unique_num_list)
             print(
                 f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
