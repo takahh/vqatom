@@ -848,7 +848,7 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
-            print(f"Eu unique {num_unique}")
+            print(f"Eu unique {num_unique}") ## this is ok
             return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
         else:
             return quantize, embed_ind, dist, self.embed, flatten, init_cb
@@ -1395,8 +1395,8 @@ class VectorQuantize(nn.Module):
         if self.training:
             quantize = x_tmp + (quantize - x_tmp)
 
-        quantize_unique = torch.unique(quantize, dim=0)
-        num_unique = quantize_unique.shape[0]
+        # quantize_unique = torch.unique(quantize, dim=0)
+        # num_unique = quantize_unique.shape[0]
         # print(f"Number of unique cb vectors: {num_unique}")
         # commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
         #               / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
