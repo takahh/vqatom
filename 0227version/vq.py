@@ -567,8 +567,8 @@ class ContrastiveLoss(nn.Module):
         contrastive_loss = 100 * neg_loss
 
         # Logging
-        logger.info(
-            f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
+        # logger.info(
+        #     f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
         # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
         # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
         # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
