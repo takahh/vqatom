@@ -300,6 +300,7 @@ class EquivariantThreeHopGINE(nn.Module):
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
         if self.training:
+            print(f"model unique {num_unique}")
             return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
         else:
             return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
