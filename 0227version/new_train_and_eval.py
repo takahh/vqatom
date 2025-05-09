@@ -97,7 +97,6 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad()
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
-    print(f"trainsage unique {num_unique}")
     return loss, loss_list3, latent_list, latents, num_unique
 
 
@@ -356,7 +355,6 @@ def run_inductive(
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
                     # model.reset_kmeans()
-                    print(f"run_ind unique {cb_num_unique}")
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
