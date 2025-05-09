@@ -5,7 +5,7 @@ from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-path = "/Users/taka/Downloads/0227version 6/"
+path = "/Users/taka/Downloads/15000_128_alldata/"
 # path = "/Users/taka/Downloads/"
 # LMIN = 2.5
 # LMAX = 7.5
@@ -65,6 +65,29 @@ def plot_graph(cb_arr, latent_arr, mode, epoch, param, cb_size, batch_size, para
             # plt.colorbar(label='Density')
             plt.title(title)
             plt.scatter(embedding[:cb_size, 0], embedding[:cb_size, 1], s=3, c='purple', alpha=0.4)
+            plt.show()
+            plt.figure()
+            # Define bin edges to control the size of the bins
+            x_min = min(min(cb_list[i][:, 0]), min(latent_list[i][:, 0]))
+            x_max = max(max(cb_list[i][:, 0]), max(latent_list[i][:, 0]))
+            y_min = min(min(cb_list[i][:, 1]), min(latent_list[i][:, 1]))
+            y_max = max(max(cb_list[i][:, 1]), max(latent_list[i][:, 1]))
+            x_range = (x_min, x_max)  # Range for the x-axis
+            y_range = (y_min, y_max)  # Range for the y-axis
+            n_bins = 100  # Number of bins for both axes
+
+            # cb_size = 1201
+
+            plt.hist2d(
+                latent_list[i][:, 0], latent_list[i][:, 1],
+                bins=[np.linspace(*x_range, n_bins), np.linspace(*y_range, n_bins)],
+                cmap=heatmap_colors[i]
+            )
+            # Overlay scatter plot
+            # plt.scatter(cb_list[i][:, 0], cb_list[i][:, 1], s=1, c="red", alpha=1)
+
+            # plt.colorbar(label='Density')
+            plt.title(title)
             plt.show()
             # plt.savefig(f"./plot_epoch{epoch}")
 
@@ -141,11 +164,11 @@ def main():
     arr_list = []
     DIMENSION = 128
     BATCH = 8000
-    EPOCH = 8
+    EPOCH = 15
     EPOCH2 = EPOCH + 1
 
-    # MODE = "tsne"
-    MODE = "umap"
+    MODE = "tsne"
+    # MODE = "umap"
     for epoch in range(EPOCH, EPOCH2):
         arr = None
         print(f"epoch {epoch}")
