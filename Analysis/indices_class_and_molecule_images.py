@@ -23,7 +23,7 @@ CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/15000_128 4/"
+PATH = "/Users/taka/Downloads/15000_128 6/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -113,12 +113,13 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     # Identify connected components (molecules)
     n_components, labels = connected_components(csgraph=adj_matrix_base, directed=False)
-
+    print("n_components")
+    print(n_components)
     classes = np.array(classes)
 
     images = []
     # for i in range(n_components - 1):
-    for i in range(20):
+    for i in range(75):
     # for i in [16, 17]:
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
@@ -230,9 +231,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(1000, 550)
+        drawer = Draw.MolDraw2DCairo(2000, 1100)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 1  # Increase font size for readability
+        options.atomLabelFontSize = 0.5  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -265,7 +266,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     ncols = 4
     nrows = (len(images) + ncols - 1) // ncols
-    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2.4, nrows * 1.4), dpi=200)
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2.4, nrows * 1.4), dpi=300)
 
     axs = axs.flatten()
 
@@ -283,8 +284,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-    # plt.show()
-    plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
+    plt.show()
+    # plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
 
     #
     # # Assuming `images` is a list of image arrays
@@ -428,7 +429,7 @@ def main():
     # adj_shape = arr_input["adj_shape"]
     # Reconstruct the sparse adjacency matrix
     # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    limit_num = 391
+    limit_num = 1385
     print(arr_latents.shape)
     arr_latents = arr_latents[0:limit_num]
     subset_latents = arr_latents[0:limit_num, 0:limit_num]
