@@ -231,7 +231,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(2000, 1100)
+        drawer = Draw.MolDraw2DCairo(1500, 825)
         options = drawer.drawOptions()
         options.atomLabelFontSize = 0.5  # Increase font size for readability
 
@@ -284,8 +284,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-    plt.show()
-    # plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
+    # plt.show()
+    plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
 
     #
     # # Assuming `images` is a list of image arrays
