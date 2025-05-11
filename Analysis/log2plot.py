@@ -14,12 +14,14 @@ def plot(type):
     sil_loss_train = []
     sil_loss_test = []
     train_loss = []
+    unique_cb_mean_list = []
     test_loss = []
 
-    with open("/Users/taka/Downloads/log15000", 'r') as file:
+    with open("/Users/taka/Downloads/15000_128_alldata/outputs/log", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = file.readlines()
-        lines = [x for x in lines if "repel" not in x and 'unique' not in x]
+        lines = [x for x in lines if "repel" not in x]
+        # lines = [x for x in lines if "repel" not in x and 'unique' not in x]
         for i in range(0, len(lines), 3):
 
             # epoch_match = lines[i].split('epoch ')[1].split(':')[0]
@@ -42,10 +44,16 @@ def plot(type):
             # Extract specific losses
             # train_loss.append(float(line1_parts[5].replace(',', '')))
             test_loss.append(float(line1_parts[7].strip().replace(",", "")))
-
+            # May09 03-40-04: epoch 5: loss 0.008738568, test_loss 0.008522105, unique_cb_vecs mean:  596.065625,unique_cb_vecs min:  177.000000,unique_cb_vecs max:  999.000000,
+            print(line3_parts)
+            unique_cb_mean_list.append(float(line1_parts[11].split(',')[0]))
             # Feature divergence loss
             feat_div_loss_train.append(float(line2_parts[7].replace(',', '')))
-            feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
+            print(line3_parts)
+            try:
+                feat_div_loss_test.append(float(line3_parts[9].replace(',', '')))
+            except ValueError:
+                feat_div_loss_test.append(float(0))
 
             # CB loss
             try:
@@ -76,10 +84,14 @@ def plot(type):
         plt.plot(epochs, cb_loss_train, label='CB Loss Train', marker='v')
         plt.plot(epochs, cb_loss_test, label='CB Loss Test', marker='x')
         plt.title('CB loss Across Epochs', fontsize=16)
-    else:
+    elif type == 3:
         plt.plot(epochs, sil_loss_train, label='Silhouette Loss Train', marker='d')
         plt.plot(epochs, sil_loss_test, label='Silhouette Loss Test', marker='p')
         plt.title('Sil loss Across Epochs', fontsize=16)
+    else:
+        plt.plot(epochs, unique_cb_mean_list, label='Unique CB mean', marker='d')
+        plt.title('Unique CB vector counts', fontsize=16)
+
 
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
@@ -94,6 +106,6 @@ def plot(type):
 
     print("Plot has been saved as 'training_metrics_plot.png'")
 
-for type in range(0, 4):
+for type in range(0, 5):
 # for type in range(0, 1):
     plot(type)
