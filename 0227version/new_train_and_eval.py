@@ -106,8 +106,9 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     model.eval()
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
-    with torch.no_grad():
-        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test = model(g, feats, epoch, logger, g_base)  # g is blocks
+    with (torch.no_grad()):
+        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
+        num_unique = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     # print("sample_list_test -----------------")
     # print(sample_list_test)
@@ -116,7 +117,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     test_loss = test_loss.to(device)
     del logits
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized
+    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique
 
 
 class MoleculeGraphDataset(Dataset):
@@ -323,6 +324,7 @@ def run_inductive(
         loss_list_list_test = [[]] * 11
         loss_list = []
         cb_unique_num_list = []
+        cb_unique_num_list_test = []
         model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
@@ -421,8 +423,9 @@ def run_inductive(
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, logger, g_base
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized = evaluate(
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique = evaluate(
                     model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
+                cb_unique_num_list_test.append(cb_num_unique)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
                 torch.cuda.synchronize()
@@ -468,6 +471,20 @@ def run_inductive(
                   f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             )
         if conf['train_or_infer'] != "train":
+
+            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
+                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},"
+                        )
+
+            # Log testing losses
+            logger.info(
+                f"train - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
+                  f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
+                  f"train - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
+                  f"train - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
+            )
             import os
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             os.makedirs(kw, exist_ok=True)

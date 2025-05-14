@@ -273,12 +273,12 @@ class EquivariantThreeHopGINE(nn.Module):
             h, init_feat, logger, epoch
         )
         # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
-        if self.training:
-            (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-             x, cb_loss, sil_loss, num_unique) = quantize_output
-        else:
-            (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-             x, cb_loss, sil_loss) = quantize_output
+        # if self.training:
+        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
+         x, cb_loss, sil_loss, num_unique) = quantize_output
+        # else:
+        #     (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
+        #      x, cb_loss, sil_loss) = quantize_output
         # print(f"emb_ind {emb_ind} ----------------------")
         detached_quantize = quantize.detach()
         # Loss components list
@@ -299,10 +299,10 @@ class EquivariantThreeHopGINE(nn.Module):
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
 
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
-        if self.training:
-            return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
-        else:
-            return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
+        # if self.training:
+        return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
+        # else:
+        #     return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
 
 class MLP(nn.Module):
     def __init__(

@@ -803,34 +803,34 @@ class EuclideanCodebook(nn.Module):
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
 
-        if self.training:  # mine
-            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-            temperature = 0.1  # Softmax temperature
-            # Soft assignment instead of one-hot (fixes gradient flow)
-            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-            embed_onehot = embed_probs  # Fully differentiable soft assignment
-            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-            device = flatten.device
-            embed_ind = embed_ind.to(device)
+        # if self.training:  # mine
+        distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
+        temperature = 0.1  # Softmax temperature
+        # Soft assignment instead of one-hot (fixes gradient flow)
+        embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
+        embed_onehot = embed_probs  # Fully differentiable soft assignment
+        embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+        device = flatten.device
+        embed_ind = embed_ind.to(device)
 
-            quantize_unique = torch.unique(quantize, dim=0)
-            num_unique = quantize_unique.shape[0]
-            print(f"Number of unique cb vectors: {num_unique}, cb size is {quantize.shape[0]}")
+        quantize_unique = torch.unique(quantize, dim=0)
+        num_unique = quantize_unique.shape[0]
+        print(f"Number of unique cb vectors: {num_unique}, cb size is {quantize.shape[0]}")
 
-            embed_onehot = embed_onehot.to(device)
-            # Compute the sum of assigned embeddings
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-            with torch.no_grad():
-                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-            # Compute normalized cluster sizes
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-            # Normalize the codebook embeddings
-            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-            self.embed.data.copy_(embed_normalized)
-            # Expire unused codes (optional step)
-            self.expire_codes_(x)
-            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
-            torch.cuda.empty_cache()  # Frees unused GPU memory
+        embed_onehot = embed_onehot.to(device)
+        # Compute the sum of assigned embeddings
+        embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+        with torch.no_grad():
+            self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+        # Compute normalized cluster sizes
+        cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+        # Normalize the codebook embeddings
+        embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+        self.embed.data.copy_(embed_normalized)
+        # Expire unused codes (optional step)
+        self.expire_codes_(x)
+        del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+        torch.cuda.empty_cache()  # Frees unused GPU memory
 
         #  ORIGINAL VQGRAPH version
         # if self.training:
@@ -848,9 +848,9 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
-            return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
-        else:
-            return quantize, embed_ind, dist, self.embed, flatten, init_cb
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
+        # else:
+        #     return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
 
 class CosineSimCodebook(nn.Module):
@@ -1375,10 +1375,10 @@ class VectorQuantize(nn.Module):
 
         # print(f"x: {x}")
         # print(f"init_feat: {init_feat}")
-        if self.training:
-            quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
-        else:
-            quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
+        # if self.training:
+        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
+        # else:
+        #     quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
         # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
         """
         quantize: データの数だけ存在する、離散化されたクラスタ中心
@@ -1391,8 +1391,8 @@ class VectorQuantize(nn.Module):
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
 
-        if self.training:
-            quantize = x_tmp + (quantize - x_tmp)
+        # if self.training:
+        quantize = x_tmp + (quantize - x_tmp)
 
         # quantize_unique = torch.unique(quantize, dim=0)
         # num_unique = quantize_unique.shape[0]
@@ -1463,7 +1463,7 @@ class VectorQuantize(nn.Module):
         """
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        if self.training:
-            return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique
-        else:
-            return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
+        # if self.training:
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique
+        # else:
+        #     return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
