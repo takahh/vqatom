@@ -90,7 +90,8 @@ def is_bidirectional(src, dst):
     return True
 
 
-def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base, limit):
+def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, classes, arr_src, arr_dst, arr_bond_order, adj_matrix_base,
+                                              limit, range_id):
     import numpy as np
     import matplotlib.pyplot as plt
     from rdkit import Chem
@@ -119,7 +120,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     images = []
     # for i in range(n_components - 1):
-    for i in range(75):
+    range_dict = {0:[0, 15], 1:[15, 30], 2:[30, 45], 3:[45, 60], 4:[60, 75]}
+    range_num = range_dict[range_id]
+    for i in range(range_num[0], range_num[1]):
     # for i in [16, 17]:
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
@@ -233,7 +236,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Create a drawing canvas.
         drawer = Draw.MolDraw2DCairo(1500, 825)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 0.5  # Increase font size for readability
+        options.atomLabelFontSize = 0.7  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -264,9 +267,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
     import matplotlib.pyplot as plt
 
-    ncols = 4
+    ncols = 2
     nrows = (len(images) + ncols - 1) // ncols
-    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2.4, nrows * 1.4), dpi=300)
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=300)
 
     axs = axs.flatten()
 
@@ -285,7 +288,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
     # plt.show()
-    plt.savefig("./similar_mols.png", bbox_inches='tight', pad_inches=0.0)
+    plt.savefig(f"./similar_mols_{range_id}.png", bbox_inches='tight', pad_inches=0.0)
 
     #
     # # Assuming `images` is a list of image arrays
@@ -439,7 +442,9 @@ def main():
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
-    visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src, arr_dst, arr_bond_order, subset_adj_base_matrix, limit_num)
+    for i in range(5):
+        visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src,
+                                                  arr_dst, arr_bond_order, subset_adj_base_matrix, limit_num, i)
 
 
 if __name__ == '__main__':

@@ -282,13 +282,9 @@ def run(args):
     if conf["train_or_infer"] != "train":
         thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         print(f"thiskey is {thiskey}")
-        best_epoch_dict = {'1000_64': 73, '1000_128': 10, '1000_256': 74, '1500_64': 80, '1500_128': 80, '1500_256': 72,
-                           '2000_64': 75, '2000_128': 10, '2000_256': 73, '2500_256': 80, '1000_512': 49, '1500_512': 80,'2000_512': 80,
-                           '2500_512': 50, '1000_1024': 53, '1500_1024': 49, '2000_1024': 29, '2500_1024': 20, '3000_1024': 15, '3000_128': 10,
-                           '3000_256': 88, '3000_512': 30, '3500_256': 35, '3500_512': 35, '3500_1024': 17, '4000_128': 11, '4000_256': 11,
-                           '5000_128': 5, '5000_256': 1, '6000_128': 10, '10000_128': 1, '15000_128': 15}
+        best_epoch_dict = {'5000_128': 15, '10000_128': 15, '15000_128': 12, '5000_64': 15, '10000_64': 19, '15000_64': 12}
         # model.load_state_dict(torch.load(f"/vqatom/0227version/model_epoch_{best_epoch_dict[thiskey]}.pth", weights_only=False))
-        model.load_state_dict(torch.load(f"/vqatom/data/vqatom_best_models/model_{thiskey}_{best_epoch_dict[thiskey]}.pth", weights_only=False))
+        model.load_state_dict(torch.load(f"/vqatom/data/vqatom_best_models/{thiskey}_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
