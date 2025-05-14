@@ -310,7 +310,7 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    if conf['train_or_infer'] == "train":
+    if conf['train_or_infer'] == "train" or "infer":
         datapath = DATAPATH
     else:
         datapath = DATAPATH_INFER
