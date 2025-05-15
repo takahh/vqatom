@@ -16,14 +16,14 @@ def calc_wcss(latents, centroid):
         wcss += np.dot(diff, diff)  # ||x - c||²
     return wcss
 
-exp_list = ['1000_64', '1000_128', '1000_256', '1500_64', '1500_128', '1500_256', '2000_64', '2000_128', '2000_256']
-non_list = ['2500_64', '2500_128', '3000_64', '3000_128', '3500_64', '3500_128']
+exp_list = ['15000_64', '10000_64', '5000_64', '15000_128', '10000_128', '5000_128']
+non_list = []
 
 def run():
     used_exp_list = []
     wcss_list = []
-    for dim in [64, 128, 256, 512, 1024]:
-        for cb_size in [1000, 1500, 2000, 2500, 3000, 3500]:
+    for dim in [64, 128]:
+        for cb_size in [5000, 10000, 15000]:
             exp_name = f"{cb_size}_{dim}"
             if exp_name in non_list:
                 continue
