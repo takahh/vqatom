@@ -350,7 +350,8 @@ def run(args):
             model,
             optimizer,
             args.accumulation_steps,
-            logger
+            logger,
+            thiskey
         )
         # score_lst = [score_test_tran, score_test_ind]
     #

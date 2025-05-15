@@ -302,7 +302,8 @@ def run_inductive(
         model,
         optimizer,
         accumulation_steps,
-        logger
+        logger,
+        thiskey # e.g. 3000_16
 ):
     import gc
     import torch
