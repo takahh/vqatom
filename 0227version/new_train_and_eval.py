@@ -472,7 +472,7 @@ def run_inductive(
             )
         if conf['train_or_infer'] != "train":
 
-            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
+            logger.info(f"epoch {epoch}:"
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},"
