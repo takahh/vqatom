@@ -17,7 +17,7 @@ def plot(type):
     unique_cb_mean_list = []
     test_loss = []
 
-    with open("/Users/taka/Documents/vqatom_train_output/5000_64/outputs/log", 'r') as file:
+    with open("/Users/taka/Documents/vqatom_train_output/5000_32/outputs/log", 'r') as file:
     # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "repel" not in x]
