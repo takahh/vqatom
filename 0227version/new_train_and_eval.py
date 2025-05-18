@@ -400,8 +400,12 @@ def run_inductive(
         # --------------------------------
         test_loss_list = []
         quantized = None
+        print("Type of dataloader:", type(dataloader))
+        dataloader = list(dataloader)
+        print("Length of dataloader after conversion to list:", len(dataloader))
+
         if conf['train_or_infer'] == "analysis":
-            start_num = 1
+            start_num = 0
         else:
             start_num = 10
         print("HEREHERE_)))))))))))))))))))")
