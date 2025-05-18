@@ -163,8 +163,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
-        print(f"mask {mask.shape}")
-        print(f"limit {limit}")
+        print(f"mask[:limit] {mask[:limit].shape}")
+        print(f"arr_bond_order {arr_bond_order.shape}")
         mol_bond = arr_bond_order[mask[:limit]]
         component_indices_int = component_indices.tolist()
         component_indices_int = [int(i) for i in component_indices_int]
