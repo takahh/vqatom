@@ -316,6 +316,8 @@ def run_inductive(
         datapath = DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    print(dataset)
+    print(dataloader)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     for epoch in range(1, conf["max_epoch"] + 1):
