@@ -404,7 +404,7 @@ def run_inductive(
             start_num = 0
         else:
             start_num = 10
-        # print("HEREHERE_)))))))))))))))))))")
+        print("HEREHERE_)))))))))))))))))))")
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
