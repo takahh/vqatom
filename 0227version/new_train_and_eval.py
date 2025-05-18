@@ -429,6 +429,7 @@ def run_inductive(
                 test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique = evaluate(
                     model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 cb_unique_num_list_test.append(cb_num_unique)
+                print(cb_unique_num_list_test)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
                 torch.cuda.synchronize()
@@ -497,7 +498,7 @@ def run_inductive(
             np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
             np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
             np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-            print(f"sample_list_test[3] {sample_list_test[3].shape}")
+            # print(f"sample_list_test[3] {sample_list_test[3].shape}")
             # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
             # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
             # np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
