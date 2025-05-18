@@ -23,7 +23,7 @@ CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/15000_128 6/"
+PATH = "/Users/taka/Downloads/25000_16/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -163,6 +163,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mask = np.isin(arr_src, component_indices) & np.isin(arr_dst, component_indices)
         mol_src = arr_src[mask]
         mol_dst = arr_dst[mask]
+        print(f"mask {mask.shape}")
+        print(f"limit {limit}")
         mol_bond = arr_bond_order[mask[:limit]]
         component_indices_int = component_indices.tolist()
         component_indices_int = [int(i) for i in component_indices_int]
