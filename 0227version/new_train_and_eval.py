@@ -310,7 +310,6 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    print(conf['train_or_infer'] == "train" or "infer")
     if conf['train_or_infer'] == "train" or conf['train_or_infer'] == "infer":
         datapath = DATAPATH
     else:
@@ -420,7 +419,7 @@ def run_inductive(
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            if conf['train_or_infer'] == "infer":
+            if conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "analysis":
                 end_num = 1
             else:
                 end_num = len(glist)
@@ -458,7 +457,6 @@ def run_inductive(
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
             )
-
             print(
                   f"train - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
                   f"train - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "

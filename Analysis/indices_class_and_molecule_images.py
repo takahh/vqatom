@@ -165,7 +165,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_dst = arr_dst[mask]
         print(f"mask[:limit] {mask[:limit].shape}")
         print(f"arr_bond_order {arr_bond_order.shape}")
-        mol_bond = arr_bond_order[mask[:limit]]
+        try:
+            mol_bond = arr_bond_order[mask[:limit]]
+        except IndexError:
+            mol_bond = arr_bond_order[mask[:arr_bond_order.shape[0]]]
         component_indices_int = component_indices.tolist()
         component_indices_int = [int(i) for i in component_indices_int]
         mol_embed_id = [classes[i] for i in component_indices_int]  # ✅ Works for Python lists
