@@ -1041,6 +1041,7 @@ class VectorQuantize(nn.Module):
             lamb_div_elec_state=1,
             lamb_div_charge=1,
             commitment_weight=0.01,  # using
+            codebook_weight=0.01,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
             lamb_div=0.01,           # using
@@ -1063,6 +1064,7 @@ class VectorQuantize(nn.Module):
 
         self.eps = eps
         self.commitment_weight = commitment_weight
+        self.codebook_weight = codebook_weight
 
         has_codebook_orthogonal_loss = margin_weight > 0
 
@@ -1439,7 +1441,7 @@ class VectorQuantize(nn.Module):
         #     commitment_weight=0.01,  # using
         #     lamb_div=0.01,           # using
         # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        loss = (self.commitment_weight * commit_loss + self.codebook_weight * codebook_loss + self.lamb_div * feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
         #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)

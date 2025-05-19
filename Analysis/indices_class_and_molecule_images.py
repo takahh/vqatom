@@ -23,7 +23,7 @@ CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/25000_16/"
+PATH = "/Users/taka/Downloads/25000_16 3/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
