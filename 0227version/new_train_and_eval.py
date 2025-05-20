@@ -119,7 +119,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     test_loss = test_loss.to(device)
     del logits
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique
+    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique, emb_ind
 
 
 class MoleculeGraphDataset(Dataset):
@@ -428,8 +428,8 @@ def run_inductive(
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, logger, g_base
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique = evaluate(
-                    model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
+                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 cb_unique_num_list_test.append(cb_num_unique)
                 print(cb_unique_num_list_test)
                 model.reset_kmeans()
@@ -440,6 +440,7 @@ def run_inductive(
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 ind_chunk = sample_list_test[0].cpu()
+                print("ind_chunk")
                 print(ind_chunk)
 
         if conf['train_or_infer'] == "train":
