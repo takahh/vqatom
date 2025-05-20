@@ -103,7 +103,7 @@ def plot(type, num_pair):
             except IndexError:
                 pass
             try:
-                feat_div_loss_test.append(float(line3_parts[9].replace(',', '')))
+                feat_div_loss_test.append(float(line3_parts[7].replace(',', '')))
             except ValueError:
                 pass
             except IndexError:
@@ -131,7 +131,7 @@ def plot(type, num_pair):
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
         plt.title('Loss Across Epochs', fontsize=16)
     elif type == 1:
-        # print(feat_div_loss_train)
+        print(feat_div_loss_test)
         plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
         if len(feat_div_loss_test) < 5:
             pass

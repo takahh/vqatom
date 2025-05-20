@@ -472,7 +472,7 @@ def run_inductive(
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
-                f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
+                f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
             )
 
             # Log testing losses
