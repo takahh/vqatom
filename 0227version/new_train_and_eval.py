@@ -335,29 +335,17 @@ def run_inductive(
             # Iterate through batches
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-
-                if idx == 1:
-                    break
-                # print(f"idx {idx}")
+                print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    print(f"chunk {i}")
-
-                    # print(f"Allocated memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-                    # print(f"Cached memory:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
-                        # print("batched_feats.shape")
-                        # print(batched_feats.shape)
-                    # batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
                         model, batched_graph, batched_feats, optimizer, epoch, logger)
-                    # model.reset_kmeans()
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
@@ -408,9 +396,10 @@ def run_inductive(
 
         if conf['train_or_infer'] == "analysis":
             start_num = 0
+        elif conf['train_or_infer'] == "train":
+            start_num = 10
         else:
             start_num = 10
-        print("HEREHERE_)))))))))))))))))))")
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")

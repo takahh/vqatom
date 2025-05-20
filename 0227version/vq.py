@@ -1103,7 +1103,6 @@ class VectorQuantize(nn.Module):
         )
 
         self.codebook_size = codebook_size
-
         self.accept_image_fmap = accept_image_fmap
         self.channel_last = channel_last
         self.compute_contrastive_loss = ContrastiveLoss(dim, 136)
