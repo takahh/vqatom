@@ -416,10 +416,10 @@ def run_inductive(
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            if conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "analysis":
-                end_num = 1
-            else:
+            if conf['train_or_infer'] != 'analysis':
                 end_num = len(glist)
+            else:
+                end_num = 1
             for i in range(0, end_num, chunk_size):
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
