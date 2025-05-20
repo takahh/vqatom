@@ -21,9 +21,8 @@ print(Chem.__file__)
 
 CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
-FONTSIZE = 20
 EPOCH = 1
-PATH = "/Users/taka/Downloads/25000_16 3/"
+PATH = "/Users/taka/Documents/25000_16_fixed/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -239,9 +238,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(1500, 825)
+        drawer = Draw.MolDraw2DCairo(1300, 525)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 0.7  # Increase font size for readability
+        options.atomLabelFontSize = 20  # Increase font size for readability
+        options.annotationFontScale = 10  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -274,7 +274,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     ncols = 2
     nrows = (len(images) + ncols - 1) // ncols
-    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=300)
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=500)
 
     axs = axs.flatten()
 
@@ -292,8 +292,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-    # plt.show()
-    plt.savefig(f"./similar_mols_{range_id}.png", bbox_inches='tight', pad_inches=0.0)
+    plt.show()
+    # plt.savefig(f"./similar_mols_{range_id}.png", bbox_inches='tight', pad_inches=0.0)
 
     #
     # # Assuming `images` is a list of image arrays

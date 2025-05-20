@@ -50,7 +50,7 @@ def plot(type, num_pair):
     test_loss = []
 
     with open(f"/Users/taka/Documents/vqatom_train_output/{num_pair}/outputs/log", 'r') as file:
-    # with open('/Users/taka/Documents/vqatom_results/2500_1024/outputs/log', 'r') as file:
+    # with open('/Users/taka/Downloads/25000_16_include_codebookloss/outputs/log', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "repel" not in x]
         # lines = [x for x in lines if "repel" not in x and 'unique' not in x]
@@ -74,7 +74,7 @@ def plot(type, num_pair):
                 continue
 
             # Extract specific losses
-            # train_loss.append(float(line1_parts[5].replace(',', '')))
+            train_loss.append(float(line1_parts[5].replace(',', '')))
             try:
                 test_loss.append(float(line1_parts[7].strip().replace(",", "")))
             except ValueError:
@@ -127,7 +127,7 @@ def plot(type, num_pair):
     epochs = list(range(len(test_loss)))
     # Plot different loss metrics
     if type == 0:
-        # plt.plot(epochs, train_loss, label='Train Loss', marker='o')
+        plt.plot(epochs, train_loss, label='Train Loss', marker='o')
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
         plt.title('Loss Across Epochs', fontsize=16)
     elif type == 1:

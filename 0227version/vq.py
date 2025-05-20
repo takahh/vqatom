@@ -580,7 +580,7 @@ class ContrastiveLoss(nn.Module):
         # repel_weight = 0.5 if epoch < 10 else 0.1
         final_loss = contrastive_loss + repel_weight * repel_loss
 
-        return final_loss, neg_loss
+        return final_loss, neg_loss, repel_loss
 
 
 import torch.nn.functional as F
@@ -1285,7 +1285,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss, div_nega_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
+        feat_div_loss, div_nega_loss, repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
@@ -1301,7 +1301,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss)
+        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -1410,7 +1410,7 @@ class VectorQuantize(nn.Module):
         codebook = self._codebook.embed
 
         # print(f"embed_ind 0: {embed_ind}")
-        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
+        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
                                                                    logger, epoch)
         # print(f"embed_ind: {embed_ind}")
         if len(embed_ind.shape) == 3:
@@ -1441,7 +1441,7 @@ class VectorQuantize(nn.Module):
         #     commitment_weight=0.01,  # using
         #     lamb_div=0.01,           # using
         # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
-        loss = (self.commitment_weight * commit_loss + self.codebook_weight * codebook_loss + self.lamb_div * feat_div_loss)
+        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
         #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
@@ -1466,6 +1466,6 @@ class VectorQuantize(nn.Module):
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
         # if self.training:
-        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique, repel_loss
         # else:
         #     return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss

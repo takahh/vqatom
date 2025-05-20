@@ -275,14 +275,14 @@ class EquivariantThreeHopGINE(nn.Module):
         # quantize, embed_ind, loss, dist, embed, commit_loss, latents, spread_loss, x, sil_loss, commit_loss
         # if self.training:
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-         x, cb_loss, sil_loss, num_unique) = quantize_output
+         x, cb_loss, sil_loss, num_unique, repel_loss) = quantize_output
         # else:
         #     (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
         #      x, cb_loss, sil_loss) = quantize_output
         # print(f"emb_ind {emb_ind} ----------------------")
         detached_quantize = quantize.detach()
         # Loss components list
-        losslist = [div_nega_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item()]
+        losslist = [div_nega_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item(), repel_loss.item()]
 
         if batched_graph_base:
             # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
