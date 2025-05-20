@@ -432,7 +432,6 @@ def run_inductive(
                 test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
                 cb_unique_num_list_test.append(cb_num_unique)
-                print(cb_unique_num_list_test)
                 model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
                 torch.cuda.synchronize()
@@ -442,6 +441,8 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
+                print("ind_chunk")
+                print(ind_chunk)
 
         # count ind
         count = Counter(ind_list)
