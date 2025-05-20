@@ -393,6 +393,7 @@ def run_inductive(
         # Test
         # --------------------------------
         test_loss_list = []
+        ind_list = []
         quantized = None
         print("Type of dataloader:", type(dataloader))
         dataloader = list(dataloader)
@@ -439,9 +440,13 @@ def run_inductive(
                 gc.collect()
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
-                ind_chunk = sample_list_test[0].cpu()
-                print("ind_chunk")
-                print(ind_chunk)
+                ind_chunk = sample_list_test[0].cpu().tolist()
+                ind_list.append(ind_chunk)
+
+        # count ind
+        count = Counter(ind_list)
+        print("count")
+        print(count)
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
