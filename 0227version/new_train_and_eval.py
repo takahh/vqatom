@@ -14,6 +14,8 @@ import dgl
 import logging
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse import csr_matrix
+from collections import Counter
+
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
 
@@ -335,6 +337,8 @@ def run_inductive(
             # Iterate through batches
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                if idx == 5:
+                    break
                 print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
@@ -393,18 +397,21 @@ def run_inductive(
         print("Type of dataloader:", type(dataloader))
         dataloader = list(dataloader)
         print("Length of dataloader after conversion to list:", len(dataloader))
-
+        cbsize = conf['codebook_size']
         if conf['train_or_infer'] == "analysis":
             start_num = 0
+            end_num = 1
         elif conf['train_or_infer'] == "train":
             start_num = 10
+            end_num = 11
         else:
             start_num = 10
+            end_num = 15
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
             # print(f"adj_batch: {adj_batch[0].shape}")
-            if idx == 11:
+            if idx == end_num:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
@@ -432,6 +439,9 @@ def run_inductive(
                 gc.collect()
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
+                ind_chunk = sample_list_test[0].cpu()
+                print(ind_chunk)
+
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
