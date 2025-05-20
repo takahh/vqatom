@@ -474,7 +474,6 @@ def run_inductive(
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
             )
-
             # Log testing losses
             logger.info(
                 f"test - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
