@@ -119,7 +119,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     test_loss = test_loss.to(device)
     del logits
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique, emb_ind
+    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique
 
 
 class MoleculeGraphDataset(Dataset):
