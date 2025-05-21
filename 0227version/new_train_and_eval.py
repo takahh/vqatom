@@ -407,7 +407,7 @@ def run_inductive(
             end_num = 11
         else:
             start_num = 10
-            end_num = 11
+            end_num = 15
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
@@ -421,8 +421,6 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
-                if i > 300:
-                    break
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
@@ -447,21 +445,12 @@ def run_inductive(
         # count ind
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
-
-        # Sort by keys (ascending)
-        sorted_count = dict(sorted(count.items()))
-
-        # Print sorted counts
-        print("Sorted count:")
-        for k, v in sorted_count.items():
-            print(f"{k}: {v}")
-
         # Count nonzero and zero values
         num_zero = count[0.0] if 0.0 in count else 0
         num_nonzero = len([k for k in count if k != 0.0])
 
-        print(f"\nNumber of zero values: {num_zero}")
-        print(f"Number of nonzero values: {num_nonzero}")
+        logger.info(f"\nNumber of zero values: {num_zero}")
+        logger.info(f"Number of nonzero values: {num_nonzero}")
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
