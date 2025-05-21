@@ -445,7 +445,8 @@ def run_inductive(
                 ind_list.append(ind_chunk)
 
         # count ind
-        count = Counter(ind_list)
+        flat = [item for sublist in ind_list for item in sublist]
+        count = Counter(flat)
         print("count")
         print(count)
 
