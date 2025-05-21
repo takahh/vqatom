@@ -407,7 +407,7 @@ def run_inductive(
             end_num = 11
         else:
             start_num = 10
-            end_num = 15
+            end_num = 11
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
@@ -421,6 +421,8 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
+                if i > 1000:
+                    break
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
