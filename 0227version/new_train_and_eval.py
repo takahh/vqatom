@@ -447,7 +447,7 @@ def run_inductive(
         count = Counter(flat)
         # Count nonzero and zero values
         num_zero = count[0.0] if 0.0 in count else 0
-        num_nonzero = len([k for k in count if k != 0.0])
+        num_nonzero = sum(v for k, v in count.items() if k != 0.0)
 
         logger.info(f"\nNumber of zero values: {num_zero}, ")
         logger.info(f"Number of nonzero values: {num_nonzero}")
