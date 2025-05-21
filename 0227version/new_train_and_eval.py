@@ -421,7 +421,7 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
-                if i > 1000:
+                if i > 300:
                     break
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
