@@ -196,8 +196,8 @@ def convert_to_dgl(adj_batch, attr_batch):
             adj_matrices = adj_batch[i].view(75, 100, 100)
             attr_matrices = attr_batch[i].view(75, 100, 7)
         else:
-            adj_matrices = adj_batch[i].view(1000, 100, 100)
-            attr_matrices = attr_batch[i].view(1000, 100, 7)
+            adj_matrices = adj_batch[i].view(-1, 100, 100)
+            attr_matrices = attr_batch[i].view(-1, 100, 7)
 
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
@@ -441,8 +441,6 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
-                print("ind_chunk")
-                print(ind_chunk)
 
         # count ind
         count = Counter(ind_list)
