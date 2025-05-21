@@ -449,7 +449,7 @@ def run_inductive(
         num_zero = count[0.0] if 0.0 in count else 0
         num_nonzero = len([k for k in count if k != 0.0])
 
-        logger.info(f"\nNumber of zero values: {num_zero}")
+        logger.info(f"\nNumber of zero values: {num_zero}, ")
         logger.info(f"Number of nonzero values: {num_nonzero}")
 
         if conf['train_or_infer'] == "train":
