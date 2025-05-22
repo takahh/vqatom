@@ -424,7 +424,7 @@ def run_inductive(
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
                 # print physically unique CB vectors
-                unique_vectors = torch.unique(quantized, dim=0)
+                unique_vectors = torch.unique(model.vq._codebook.embed, dim=0)
                 num_unique_vectors = unique_vectors.size(0)
                 print("num_unique_vectors ^^^^^^^^^^^^^^^^^")
                 print(num_unique_vectors)
