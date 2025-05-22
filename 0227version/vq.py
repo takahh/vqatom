@@ -802,6 +802,7 @@ class EuclideanCodebook(nn.Module):
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
+        device = flatten.device
 
         if self.training:  # mine
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
@@ -810,15 +811,14 @@ class EuclideanCodebook(nn.Module):
             embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
             embed_onehot = embed_probs  # Fully differentiable soft assignment
             embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
+            embed_onehot = embed_onehot.to(device)
 
-        device = flatten.device
         embed_ind = embed_ind.to(device)
 
         quantize_unique = torch.unique(quantize, dim=0)
         num_unique = quantize_unique.shape[0]
         print(f"Number of unique cb vectors: {num_unique}, cb size is {quantize.shape[0]}")
 
-        embed_onehot = embed_onehot.to(device)
         if self.training:
             # Compute the sum of assigned embeddings
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
