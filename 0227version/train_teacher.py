@@ -1,7 +1,7 @@
 import argparse
 import numpy as np
 import torch
-import sys
+import random
 import torch.optim as optim
 import torch.nn.functional as F
 from pathlib import Path
@@ -15,10 +15,14 @@ from utils import (
     graph_split,
     feature_prop,
 )
+
 torch.use_deterministic_algorithms(True)
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
-
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
