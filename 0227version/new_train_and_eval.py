@@ -424,8 +424,10 @@ def run_inductive(
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
                 # print physically unique CB vectors
-                print("quantized.shape %%%%%%%%%%%%%%%%%%%%")
-                print(quantized.shape)
+                unique_vectors = torch.unique(quantized, dim=0)
+                num_unique_vectors = unique_vectors.size(0)
+                print("num_unique_vectors ^^^^^^^^^^^^^^^^^")
+                print(num_unique_vectors)
 
         # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]
