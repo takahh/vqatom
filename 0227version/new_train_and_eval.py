@@ -415,6 +415,20 @@ def run_inductive(
             # print(f"adj_batch: {adj_batch[0].shape}")
             if idx == end_num:
                 break
+
+            #################
+            #################
+            import copy
+            # Save one version
+            base_1, ext_1 = convert_to_dgl(adj_batch, attr_batch)
+            base_2, ext_2 = convert_to_dgl(adj_batch, attr_batch)
+            # Compare
+            for g1, g2 in zip(base_1, base_2):
+                assert torch.allclose(g1.adj().to_dense(), g2.adj().to_dense()), "Graphs differ!"
+                assert torch.allclose(g1.ndata["feat"], g2.ndata["feat"]), "Node features differ!"
+            #################
+            #################
+
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             if conf['train_or_infer'] != 'analysis':
