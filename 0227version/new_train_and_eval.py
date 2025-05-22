@@ -445,20 +445,25 @@ def run_inductive(
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
 
-        # Flatten and count
+        # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
 
         # Sort by key
         sorted_count = dict(sorted(count.items()))
         print("sorted_count")
-        print(sorted_count[:100])
+        print(dict(list(sorted_count.items())[:100]))
 
-        # Count values
-        num_zero = count[0.0] if 0.0 in count else 0
-        num_unique_nonzero = len([k for k in count if k != 0.0])
-        logger.info(f"\nNumber of zero values: {num_zero}, ")
-        logger.info(f"Number of nonzero values: {num_unique_nonzero}")
+        # Count keys
+        num_zero_keys = 1 if 0.0 in count else 0
+        num_nonzero_keys = len([k for k in count if k != 0.0])
+
+        # Setup logger
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger()
+
+        logger.info(f"\nNumber of zero keys: {num_zero_keys}")
+        logger.info(f"Number of nonzero keys: {num_nonzero_keys}")
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
