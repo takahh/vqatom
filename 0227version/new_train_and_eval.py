@@ -325,12 +325,14 @@ def run_inductive(
         loss_list = []
         cb_unique_num_list = []
         cb_unique_num_list_test = []
-        model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
+
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
         # --------------------------------
         if conf["train_or_infer"] == "train":
+            # make initted FALSE at the beginning in every epoch in train
+            model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             # Iterate through batches
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
