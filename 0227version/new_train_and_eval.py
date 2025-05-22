@@ -144,32 +144,27 @@ class MoleculeGraphDataset(Dataset):
     #
         return torch.tensor(adj_matrix, dtype=torch.float32), torch.tensor(attr_matrix, dtype=torch.float32)
 
-
 def collate_fn(batch):
-    """Pads adjacency matrices and attributes while handling size mismatches."""
     adj_matrices, attr_matrices = zip(*batch)
 
-    # Find max number of nodes in this batch
-    # max_nodes = max(adj.shape[0] for adj in adj_matrices)
+    max_nodes = max(adj.shape[0] for adj in adj_matrices)
+    num_features = attr_matrices[0].shape[1]
 
-    # # Pad adjacency matrices to ensure square shape (max_nodes, max_nodes)
-    # padded_adj = []
-    # for adj in adj_matrices:
-    #     pad_size = max_nodes - adj.shape[0]
-    #     padded_adj.append(torch.nn.functional.pad(adj, (0, pad_size, 0, pad_size)))  # Pad both dimensions
+    padded_adj = [
+        torch.nn.functional.pad(adj, (0, max_nodes - adj.shape[0], 0, max_nodes - adj.shape[0]))
+        for adj in adj_matrices
+    ]
+    padded_attr = [
+        torch.nn.functional.pad(attr, (0, 0, 0, max_nodes - attr.shape[0]))
+        for attr in attr_matrices
+    ]
 
-    # padded_adj = torch.stack(padded_adj)  # Now safely stack
+    return torch.stack(padded_adj), torch.stack(padded_attr)
 
-    # Pad attribute matrices (features) to (max_nodes, num_features)
-    # num_features = attr_matrices[0].shape[1]  # Keep number of features same
-    # padded_attr = []
-    # for attr in attr_matrices:
-    #     pad_size = max_nodes - attr.shape[0]
-    #     padded_attr.append(torch.nn.functional.pad(attr, (0, 0, 0, pad_size)))  # Pad rows only
-    #
-    # padded_attr = torch.stack(padded_attr)  # Now safely stack
-
-    return adj_matrices, attr_matrices
+# def collate_fn(batch):
+#     """Pads adjacency matrices and attributes while handling size mismatches."""
+#     adj_matrices, attr_matrices = zip(*batch)
+#     return adj_matrices, attr_matrices
 
 
 import dgl
