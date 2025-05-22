@@ -451,7 +451,7 @@ def run_inductive(
 
         # Sort by key
         sorted_count = dict(sorted(count.items()))
-        print(sorted_count)
+        # print(sorted_count)
 
         # Count keys
         num_zero_keys = 1 if 0.0 in count else 0
