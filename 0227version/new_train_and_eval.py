@@ -423,11 +423,6 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
-                # print physically unique CB vectors
-                unique_vectors = torch.unique(model.vq._codebook.embed[0], dim=0)
-                num_unique_vectors = unique_vectors.size(0)
-                print("num_unique_vectors ^^^^^^^^^^^^^^^^^")
-                print(num_unique_vectors)
 
         # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]
@@ -448,6 +443,11 @@ def run_inductive(
         missing_keys = all_keys - observed_keys
         num_missing_keys = len(missing_keys)
         num_observed = len(observed_keys)
+
+        # print physically unique CB vectors
+        unique_vectors = torch.unique(model.vq._codebook.embed[0], dim=0)
+        num_unique_vectors = unique_vectors.size(0)
+        logger.info(f"{num_unique_vectors} is num_unique_vectors")
 
         print(f"Number of observed keys: {num_observed}")
         print(f"Number of zero keys: {num_zero_keys}")
