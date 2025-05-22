@@ -164,9 +164,8 @@ class MoleculeGraphDataset(Dataset):
 def collate_fn(batch):
     """Pads adjacency matrices and attributes while handling size mismatches."""
     adj_matrices, attr_matrices = zip(*batch)
-    print("adj_matrices")
-    print(adj_matrices)
-    print(adj_matrices[0].shape)
+    for item in adj_matrices:
+        print(item.shape)
     return adj_matrices, attr_matrices
 
 
