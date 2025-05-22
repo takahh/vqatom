@@ -445,6 +445,9 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 ind_chunk = sample_list_test[0].cpu().tolist()
                 ind_list.append(ind_chunk)
+                # print physically unique CB vectors
+                print("quantized.shape %%%%%%%%%%%%%%%%%%%%")
+                print(quantized.shape)
 
         # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]
@@ -472,10 +475,6 @@ def run_inductive(
         logger.info(f"Number of observed keys: {num_observed}")
         logger.info(f"Number of zero keys: {num_zero_keys}")
         logger.info(f"Number of nonzero keys: {num_missing_keys}")
-
-        # print physically unique CB vectors
-        print("quantized.shape")
-        print(quantized.shape)
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
