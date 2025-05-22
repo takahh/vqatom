@@ -818,15 +818,17 @@ class EuclideanCodebook(nn.Module):
         print(f"Number of unique cb vectors: {num_unique}, cb size is {quantize.shape[0]}")
 
         embed_onehot = embed_onehot.to(device)
-        # Compute the sum of assigned embeddings
-        embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-        with torch.no_grad():
-            self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-        # Compute normalized cluster sizes
-        cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-        # Normalize the codebook embeddings
-        embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-        self.embed.data.copy_(embed_normalized)
+        if self.training:
+            # Compute the sum of assigned embeddings
+            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            with torch.no_grad():
+                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+            # Compute normalized cluster sizes
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+            # Normalize the codebook embeddings
+            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            self.embed.data.copy_(embed_normalized)
+
         # Expire unused codes (optional step)
         self.expire_codes_(x)
         del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
