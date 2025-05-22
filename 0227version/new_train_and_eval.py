@@ -465,12 +465,12 @@ def run_inductive(
         num_missing_keys = len(missing_keys)
         num_observed = len(observed_keys)
 
-        print(f"\nNumber of observed keys: {num_observed}")
-        print(f"\nNumber of zero keys: {num_zero_keys}")
+        print(f"Number of observed keys: {num_observed}")
+        print(f"Number of zero keys: {num_zero_keys}")
         print(f"Number of nonzero keys: {num_missing_keys}")
         logger.info(f"Number of observed keys: {num_observed}")
-        logger.info(f"\nNumber of zero keys: {num_zero_keys}")
-        logger.info(f"\nNumber of nonzero keys: {num_nonzero_keys}")
+        logger.info(f"Number of zero keys: {num_zero_keys}")
+        logger.info(f"Number of nonzero keys: {num_missing_keys}")
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
