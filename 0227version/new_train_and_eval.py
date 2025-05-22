@@ -409,6 +409,8 @@ def run_inductive(
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
+
+            print("Initted: in run_ind_ test", model.vq.codebook.initted.item())  # Should be 1.0
             # print(f"adj_batch: {adj_batch[0].shape}")
             if idx == end_num:
                 break

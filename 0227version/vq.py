@@ -1087,6 +1087,8 @@ class VectorQuantize(nn.Module):
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
 
         codebook_class = EuclideanCodebook if not use_cosine_sim else CosineSimCodebook
+        print("codebook_class ==============")
+        print(codebook_class)
         self._codebook = codebook_class(
             dim=codebook_dim,
             num_codebooks=heads if separate_codebook_per_head else 1,
