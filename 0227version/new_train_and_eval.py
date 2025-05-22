@@ -451,17 +451,26 @@ def run_inductive(
 
         # Sort by key
         sorted_count = dict(sorted(count.items()))
+        print(sorted_count)
 
         # Count keys
         num_zero_keys = 1 if 0.0 in count else 0
         num_nonzero_keys = len([k for k in count if k != 0.0])
 
-        # Setup logger
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger()
+        VOCAB_SIZE = conf["codebook_size"]
 
+        all_keys = set(range(VOCAB_SIZE))
+        observed_keys = set(count.keys())
+        missing_keys = all_keys - observed_keys
+        num_missing_keys = len(missing_keys)
+        num_observed = len(observed_keys)
+
+        print(f"\nNumber of observed keys: {num_observed}")
+        print(f"\nNumber of zero keys: {num_zero_keys}")
+        print(f"Number of nonzero keys: {num_missing_keys}")
+        logger.info(f"Number of observed keys: {num_observed}")
         logger.info(f"\nNumber of zero keys: {num_zero_keys}")
-        logger.info(f"Number of nonzero keys: {num_nonzero_keys}")
+        logger.info(f"\nNumber of nonzero keys: {num_nonzero_keys}")
 
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
