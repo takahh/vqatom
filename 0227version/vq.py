@@ -830,9 +830,9 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
             self.embed.data.copy_(embed_normalized)
 
-        # Expire unused codes (optional step)
-        self.expire_codes_(x)
-        del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+            # Expire unused codes (optional step)
+            self.expire_codes_(x)
+            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
         torch.cuda.empty_cache()  # Frees unused GPU memory
 
         #  ORIGINAL VQGRAPH version
