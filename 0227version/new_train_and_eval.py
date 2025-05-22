@@ -363,18 +363,6 @@ def run_inductive(
                         # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                         np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
-                    """
-                    losslist = [div_ele_loss.item(), bond_num_div_loss.item(), aroma_div_loss.item(), ringy_div_loss.item(),
-                 h_num_div_loss.item(), charge_div_loss.item(), elec_state_div_loss.item(), spread_loss,
-                 pair_loss, sil_loss, equivalent_atom_loss.item(), commit_loss.item()]"""
-                    """[spread_loss.item(), commit_loss.item(), equidist_cb_loss.item()]"""
-                    # print(
-                    #     f"train - spread loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 7f}, "
-                    #     f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 7f}, "
-                    #     f"train - equidist cb loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 7f},"
-                    #     )
-
-            # print(f"RUINNING EDITED LINE !!!!!!!!!!")
         # --------------------------------
         # Save model
         # --------------------------------
@@ -394,10 +382,6 @@ def run_inductive(
         test_loss_list = []
         ind_list = []
         quantized = None
-        print("Type of dataloader:", type(dataloader))
-        # dataloader_l = list(dataloader)
-        # print("Length of dataloader after conversion to list:", len(dataloader))
-        # cbsize = conf['codebook_size']
         if conf['train_or_infer'] == "analysis":
             start_num = 0
             end_num = 1
@@ -406,14 +390,10 @@ def run_inductive(
             end_num = 11
         else:
             start_num = 10
-            # end_num = 15
-            end_num = 11
+            end_num = 15
         # print("Length of dataloader:", len(dataloader))  # If it's a list
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
-
-            print("Initted: in run_ind_ test", model.vq._codebook.initted.item())  # Should be 1.0
-            # print(f"adj_batch: {adj_batch[0].shape}")
             if idx == end_num:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
@@ -423,8 +403,6 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
-                if i > 200:
-                    break
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
