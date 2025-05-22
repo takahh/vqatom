@@ -473,6 +473,10 @@ def run_inductive(
         logger.info(f"Number of zero keys: {num_zero_keys}")
         logger.info(f"Number of nonzero keys: {num_missing_keys}")
 
+        # print physically unique CB vectors
+        print("quantized.shape")
+        print(quantized.shape)
+
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
