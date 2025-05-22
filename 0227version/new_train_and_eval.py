@@ -393,9 +393,9 @@ def run_inductive(
         ind_list = []
         quantized = None
         print("Type of dataloader:", type(dataloader))
-        dataloader = list(dataloader)
-        print("Length of dataloader after conversion to list:", len(dataloader))
-        cbsize = conf['codebook_size']
+        # dataloader_l = list(dataloader)
+        # print("Length of dataloader after conversion to list:", len(dataloader))
+        # cbsize = conf['codebook_size']
         if conf['train_or_infer'] == "analysis":
             start_num = 0
             end_num = 1
