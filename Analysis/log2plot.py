@@ -15,6 +15,7 @@ def plot_cb_best(data):
         sample_size = int(sample_size)
         batch_size = int(batch_size)
         grouped[batch_size].append((sample_size, value))
+        print(key, value)
 
     # Plot
     plt.figure(figsize=(10, 6))
@@ -48,22 +49,25 @@ def plot(type, num_pair):
     train_loss = []
     unique_cb_mean_list = []
     test_loss = []
+    effective_cb_size_list = []
 
-    with open(f"/Users/taka/Documents/vqatom_train_output/{num_pair}/outputs/log", 'r') as file:
-    # with open('/Users/taka/Downloads/25000_16_include_codebookloss/outputs/log', 'r') as file:
+    with open(f"/Users/taka/Downloads/30000_32", 'r') as file:
+    # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
-        lines = [x for x in lines if "repel" not in x]
+        lines = [x for x in lines if "-" in x.split(" ")[1]]
+
         # lines = [x for x in lines if "repel" not in x and 'unique' not in x]
-        for i in range(0, len(lines), 3):
+        for i in range(0, len(lines), 7):
 
             # epoch_match = lines[i].split('epoch ')[1].split(':')[0]
             # epochs.append(int(epoch_match))
 
             # Extract losses from both lines
-            line1_parts = lines[i].split(' ')
             try:
-                line2_parts = lines[i + 1].split(' ')
-                line3_parts = lines[i + 2].split(' ')
+                line0_parts = lines[i + 1].split(',')
+                line1_parts = lines[i + 4].split(' ')
+                line2_parts = lines[i + 5].split(' ')
+                line3_parts = lines[i + 6].split(' ')
             except IndexError:
                 continue
             if "unique_cb_fraction:" in line1_parts:
@@ -121,6 +125,7 @@ def plot(type, num_pair):
             except ValueError:
                 pass
             sil_loss_test.append(float(line3_parts[-1].replace(',', '')))
+            effective_cb_size_list.append(float(line0_parts[0].split(" ")[6].strip()))
 
     # Create the plot
     plt.figure(figsize=(12, 8))
@@ -131,7 +136,7 @@ def plot(type, num_pair):
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
         plt.title('Loss Across Epochs', fontsize=16)
     elif type == 1:
-        print(feat_div_loss_test)
+        # print(feat_div_loss_test)
         plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
         if len(feat_div_loss_test) < 5:
             pass
@@ -150,11 +155,15 @@ def plot(type, num_pair):
         epochs = list(range(len(sil_loss_test)))
         plt.plot(epochs, sil_loss_test, label='Silhouette Loss Test', marker='p')
         plt.title('Sil loss Across Epochs', fontsize=16)
-    else:
+    elif type == 4:
         epochs = list(range(len(unique_cb_mean_list)))
         plt.plot(epochs, unique_cb_mean_list, label='Unique CB mean', marker='d')
         plt.title('Unique CB vector counts', fontsize=16)
         best_unique_cb_num_dict[num_pair] = max(unique_cb_mean_list)
+    else:
+        epochs = list(range(len(effective_cb_size_list)))
+        plt.plot(epochs, effective_cb_size_list, label='Effective CB size', marker='d')
+        plt.title('Effective CB size', fontsize=16)
 
     plt.xlabel('Epoch', fontsize=12)
     plt.ylabel('Loss', fontsize=12)
@@ -174,11 +183,10 @@ def plot(type, num_pair):
 # exp_list = ['15000_64', '10000_64', '5000_64', '20000_64', '15000_128', '10000_128', '5000_128', '15000_32', '20000_32',
 #             '10000_32', '5000_32',  '20000_16', '15000_16', '10000_16', '25000_16', '30000_16', '20000_8', '25000_8',
 #             '30000_8', '25000_32', '30000_32']
-exp_list = ['25000_16']
+exp_list = ['25000_8', '25000_16', '25000_32']
 
 for exp in exp_list:
-    for type in range(0, 5):
+    for type in range(0, 6):
     # for type in range(0, 1):
         cb_dict = plot(type, exp)
-print(cb_dict)
 plot_cb_best(cb_dict)

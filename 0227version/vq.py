@@ -1428,12 +1428,12 @@ class VectorQuantize(nn.Module):
           commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
         /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
+        latent_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
         """
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        print(f"commit loss {self.commitment_weight * commit_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
+        print(f"commit loss {self.commitment_weight * latent_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
         # if epoch < 5:
         #     print(f"epoch is less than 10")
         #     loss = (self.lamb_div * feat_div_loss)
@@ -1445,7 +1445,7 @@ class VectorQuantize(nn.Module):
         #     commitment_weight=0.01,  # using
         #     lamb_div=0.01,           # using
         # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
-        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        loss = (self.commitment_weight * latent_loss + self.commitment_weight * codebook_loss + self.lamb_div * feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
         #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
