@@ -312,22 +312,27 @@ def kmeans(
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
     samples = samples.to("cuda")
     means = means.to("cuda")
-
     for k in range(1, num_clusters):
-
         if use_cosine_sim:
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
             dists = torch.cdist(samples, means[:, :k], p=2)
-
-        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        print("distances:", dists)
-        print("Any NaN in distances:", torch.isnan(dists).any())
-        print("Any Inf in distances:", torch.isinf(dists).any())
-
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+        min_dists = dists.min(dim=-1).values  # (head, num_samples)
+        # Ensure min_dists is non-negative
+        min_dists = torch.clamp(min_dists, min=0.0)
+        # Square the distances to follow KMeans++ logic (optional but common)
+        probs = min_dists ** 2
+        probs_sum = probs.sum(dim=-1, keepdim=True)  # (head, 1)
+        # Avoid division by zero, NaN, or Inf
+        probs_safe = torch.where(
+            (probs_sum <= 1e-8) | torch.isnan(probs_sum) | torch.isinf(probs_sum),
+            torch.full_like(probs, fill_value=1.0 / probs.shape[-1]),
+            probs / (probs_sum + 1e-8)  # avoid division by zero
+        )
+        # Optional: clamp any remaining negatives due to float error
+        probs_safe = torch.clamp(probs_safe, min=0.0)
+        next_centroid_idx = torch.multinomial(probs_safe, 1)  # (head, 1)
+        means[:, k] = samples.gather(1, next_centroid_idx.unsqueeze(-1).expand(-1, -1, samples.size(-1))).squeeze(1)
 
     # Iterative optimization
     for _ in range(num_iters):
