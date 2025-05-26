@@ -34,8 +34,26 @@ def plot_cb_best(data):
     plt.show()
 
 
+def get_cbmax_from_log(pair_name):
+    effective_cb_size_list = []
+    cb_num_mean_list = []
+    if pair_name == '30000_32':
+        filepath = f'/Users/taka/Documents/vqatom_train_output/log_bothloss_{pair_name}'
+    else:
+        filepath = f'/Users/taka/Documents/vqatom_train_output/{pair_name}/outputs/log'
+    with open(filepath, 'r') as file:
+        for line in file:
+            if "observed" in line:
+                effective_cb_size_list.append(float(line.split(" ")[-1].strip()))
+            elif "unique_cb_vecs mean" in line:
+                cb_num_mean_list.append(float(line.split()[10].split(',')[0]))
+    return max(effective_cb_size_list), max(cb_num_mean_list)
+
+
 best_unique_cb_num_list = []
 best_unique_cb_num_dict = {}
+effective_cb_size_list = []
+effective_cb_size_dict = {}
 
 def plot(type, num_pair):
     # Data extraction
@@ -51,7 +69,7 @@ def plot(type, num_pair):
     test_loss = []
     effective_cb_size_list = []
 
-    with open(f"/Users/taka/Downloads/30000_32", 'r') as file:
+    with open(f"/Users/taka/Downloads/log21", 'r') as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "-" in x.split(" ")[1]]
@@ -175,7 +193,7 @@ def plot(type, num_pair):
     # # Save the plot
     # plt.savefig('training_metrics_plot.png')
     plt.close()
-    return best_unique_cb_num_dict
+    return best_unique_cb_num_dict, effective_cb_size_dict
 
     # print("Plot has been saved as 'training_metrics_plot.png'")
 
@@ -183,10 +201,13 @@ def plot(type, num_pair):
 # exp_list = ['15000_64', '10000_64', '5000_64', '20000_64', '15000_128', '10000_128', '5000_128', '15000_32', '20000_32',
 #             '10000_32', '5000_32',  '20000_16', '15000_16', '10000_16', '25000_16', '30000_16', '20000_8', '25000_8',
 #             '30000_8', '25000_32', '30000_32']
-exp_list = ['25000_8', '25000_16', '25000_32']
+exp_list = ['25000_8', '25000_16', '25000_32', '20000_8', '20000_16', '20000_32', '30000_8', '30000_16', '30000_32']
 
 for exp in exp_list:
-    for type in range(0, 6):
-    # for type in range(0, 1):
-        cb_dict = plot(type, exp)
+    if exp != '30000_32':
+        for type in range(0, 6):
+        # for type in range(0, 1):
+            cb_dict = plot(type, exp)
+    else:
+        cb_dict[exp] = get_cbmax_from_log(exp)
 plot_cb_best(cb_dict)
