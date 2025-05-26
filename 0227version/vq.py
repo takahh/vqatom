@@ -321,16 +321,11 @@ def kmeans(
             dists = torch.cdist(samples, means[:, :k], p=2)
 
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
+        print("distances:", dists)
+        print("Any NaN in distances:", torch.isnan(dists).any())
+        print("Any Inf in distances:", torch.isinf(dists).any())
+
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-
-        print("probs:", probs)
-        print("Any NaN:", torch.isnan(probs).any())
-        print("Any < 0:", (probs < 0).any())
-        print("Any inf:", torch.isinf(probs).any())
-        total = probs.sum()
-        print("Sum of probs:", total)
-        assert total > 0, "Sum of probs is zero"
-
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
         means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
