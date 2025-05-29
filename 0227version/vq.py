@@ -1247,17 +1247,37 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x: torch.Tensor, *, chunk_size: int = 512):
-        if x.dim() == 2:  # [N, D]
-            x_cpu = x.detach().cpu()
-            N, D = x_cpu.shape
-            dist_matrix = torch.cdist(x_cpu, x_cpu, p=2)  # [N, N]
-            mask = ~torch.eye(N, dtype=torch.bool)
+    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 512):
+        if x.dim() == 2:
+            # [N, D]
+            N, D = x.shape
+            dist_matrix = torch.cdist(x, x, p=2)
+            mask = ~torch.eye(N, dtype=torch.bool, device=dist_matrix.device)
             dist_no_diag = dist_matrix[mask].view(N, N - 1)
-            return dist_no_diag.to(x.device)
-        elif x.dim() == 3:  # [B, N, D]
-            # Optional: add CPU fallback here too
-            raise NotImplementedError("Batch-mode distance on CPU not yet supported.")
+            return dist_no_diag
+
+        elif x.dim() == 3:
+            # [B, N, D]
+            B, N, D = x.shape
+            # Check if on CPU
+            if x.device.type == 'cpu':
+                # Loop over batch dimension to handle each batch separately
+                dist_list = []
+                for b in range(B):
+                    xb = x[b]  # [N, D]
+                    dist = torch.cdist(xb, xb, p=2)
+                    mask = ~torch.eye(N, dtype=torch.bool, device=dist.device)
+                    dist_no_diag = dist[mask].view(N, N - 1)
+                    dist_list.append(dist_no_diag)
+                return torch.stack(dist_list, dim=0)  # [B, N, N-1]
+            else:
+                # GPU batched version (faster)
+                dist_matrix = torch.cdist(x, x, p=2)  # [B, N, N]
+                eye = torch.eye(N, device=x.device).bool()
+                mask = ~eye.unsqueeze(0)  # [1, N, N]
+                dist_no_diag = dist_matrix[mask].view(B, N, N - 1)
+                return dist_no_diag
+
         else:
             raise ValueError(f"Expected 2D or 3D tensor, got shape {x.shape}")
 
