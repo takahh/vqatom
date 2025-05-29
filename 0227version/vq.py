@@ -1247,7 +1247,7 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 256):
+    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
         if x.dim() == 2:
             # [N, D]
             N = x.size(0)
@@ -1259,12 +1259,14 @@ class VectorQuantize(nn.Module):
             # [B, N, D]
             B, N, D = x.shape
             results = []
+            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)  # moved outside for reuse
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
                 xb = x[start:end]  # [chunk, N, D]
                 dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
-                mask = ~torch.eye(N, dtype=torch.bool, device=xb.device)
-                dist_no_diag = dist[:, mask].view(end - start, N, N - 1)
+                dist_no_diag = torch.empty((end - start, N, N - 1), device=x.device)
+                for i in range(end - start):
+                    dist_no_diag[i] = dist[i][mask].view(N, N - 1)
                 results.append(dist_no_diag)
             return torch.cat(results, dim=0)
 
