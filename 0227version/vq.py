@@ -1248,15 +1248,20 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
     def pairwise_distances_no_diag(self, x: torch.Tensor, *, chunk_size: int = 512):
-        B, N, _ = x.shape  # assuming x is [B, N, D]
-        dist_chunk = self.compute_pairwise_distances(x)  # shape [B, N, N]
-
-        # Build mask to remove diagonals
-        mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # shape [1, N, N]
-
-        # Apply the mask
-        dist_chunk_no_diag = dist_chunk[mask].view(B, N, N - 1)
-        return dist_chunk_no_diag
+        if x.dim() == 2:  # [N, D]
+            N, D = x.shape
+            dist_matrix = torch.cdist(x, x, p=2)  # [N, N]
+            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)
+            dist_no_diag = dist_matrix[mask].view(N, N - 1)
+            return dist_no_diag
+        elif x.dim() == 3:  # [B, N, D]
+            B, N, D = x.shape
+            dist_matrix = torch.cdist(x, x, p=2)  # [B, N, N]
+            mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
+            dist_no_diag = dist_matrix[mask].view(B, N, N - 1)
+            return dist_no_diag
+        else:
+            raise ValueError(f"Expected 2D or 3D tensor, got shape {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Move tensors to CUDA (if not already)
