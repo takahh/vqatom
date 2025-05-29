@@ -1249,26 +1249,29 @@ class VectorQuantize(nn.Module):
 
     def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
         if x.dim() == 2:
-            # [N, D]
             N = x.size(0)
             dist_matrix = torch.cdist(x, x, p=2)
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)
-            return dist_matrix[mask].view(N, N - 1)
+            dist_matrix.fill_diagonal_(float('inf'))  # no need to create a mask
+            return dist_matrix
 
         elif x.dim() == 3:
-            # [B, N, D]
             B, N, D = x.shape
             results = []
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)  # moved outside for reuse
+
+            # Construct 1 mask and reuse
+            mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
+
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
                 xb = x[start:end]  # [chunk, N, D]
                 dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
-                dist_no_diag = torch.empty((end - start, N, N - 1), device=x.device)
-                for i in range(end - start):
-                    dist_no_diag[i] = dist[i][mask].view(N, N - 1)
-                results.append(dist_no_diag)
-            return torch.cat(results, dim=0)
+                dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
+
+                # Do not reshape — just keep as is or flatten masked part
+                dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
+                results.append(dist_flat)
+
+            return torch.cat(results, dim=0)  # [B, N, N - 1]
 
         else:
             raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
