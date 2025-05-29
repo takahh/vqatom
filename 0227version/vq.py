@@ -1262,12 +1262,19 @@ class VectorQuantize(nn.Module):
 
         # # Pairwise distances
         dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
-        #
-        # # Remove diagonal
-        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
-        #
-        # # Debug: Log distance statistics
+        ## Assume dist_matrix is a square matrix of shape (B, B)
+        B = dist_matrix.size(0)
+
+        # Create a mask that excludes diagonal elements
+        mask = ~torch.eye(B, dtype=torch.bool, device=dist_matrix.device)
+
+        # Apply the mask and reshape to (B, B-1)
+        dist_matrix_no_diag = dist_matrix[mask].view(B, B - 1)
+
+        # Optional: Debug log
+        print(f"dist_matrix_no_diag shape: {dist_matrix_no_diag.shape}")
+        print(f"min: {dist_matrix_no_diag.min().item()}, max: {dist_matrix_no_diag.max().item()}, mean: {dist_matrix_no_diag.mean().item()}")
+
         # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
         #
         # Margin loss: Encourage distances >= min_distance
