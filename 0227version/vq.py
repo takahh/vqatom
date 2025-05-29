@@ -1249,17 +1249,15 @@ class VectorQuantize(nn.Module):
 
     def pairwise_distances_no_diag(self, x: torch.Tensor, *, chunk_size: int = 512):
         if x.dim() == 2:  # [N, D]
-            N, D = x.shape
-            dist_matrix = torch.cdist(x, x, p=2)  # [N, N]
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)
+            x_cpu = x.detach().cpu()
+            N, D = x_cpu.shape
+            dist_matrix = torch.cdist(x_cpu, x_cpu, p=2)  # [N, N]
+            mask = ~torch.eye(N, dtype=torch.bool)
             dist_no_diag = dist_matrix[mask].view(N, N - 1)
-            return dist_no_diag
+            return dist_no_diag.to(x.device)
         elif x.dim() == 3:  # [B, N, D]
-            B, N, D = x.shape
-            dist_matrix = torch.cdist(x, x, p=2)  # [B, N, N]
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
-            dist_no_diag = dist_matrix[mask].view(B, N, N - 1)
-            return dist_no_diag
+            # Optional: add CPU fallback here too
+            raise NotImplementedError("Batch-mode distance on CPU not yet supported.")
         else:
             raise ValueError(f"Expected 2D or 3D tensor, got shape {x.shape}")
 
