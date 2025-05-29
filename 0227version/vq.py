@@ -1247,7 +1247,7 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(x, chunk_size=1024):
+    def pairwise_distances_no_diag(self, x, chunk_size=1024):
         B = x.size(0)
         dist_list = []
 
