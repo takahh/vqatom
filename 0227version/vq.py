@@ -1247,23 +1247,16 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x, chunk_size=1024):
-        B = x.size(0)
-        dist_list = []
+    def pairwise_distances_no_diag(self, x: torch.Tensor, *, chunk_size: int = 512):
+        B, N, _ = x.shape  # assuming x is [B, N, D]
+        dist_chunk = self.compute_pairwise_distances(x)  # shape [B, N, N]
 
-        for i in range(0, B, chunk_size):
-            end = min(i + chunk_size, B)
-            x_chunk = x[i:end]  # (chunk_size, D)
-            dist_chunk = torch.cdist(x_chunk, x, p=2)  # (chunk_size, B)
+        # Build mask to remove diagonals
+        mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # shape [1, N, N]
 
-            # Remove diagonal entries
-            row_indices = torch.arange(i, end, device=x.device).unsqueeze(1)
-            mask = row_indices != torch.arange(B, device=x.device).unsqueeze(0)  # (chunk_size, B)
-            dist_chunk_no_diag = dist_chunk[mask].view(end - i, B - 1)
-
-            dist_list.append(dist_chunk_no_diag)
-
-        return torch.cat(dist_list, dim=0)  # (B, B - 1)
+        # Apply the mask
+        dist_chunk_no_diag = dist_chunk[mask].view(B, N, N - 1)
+        return dist_chunk_no_diag
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Move tensors to CUDA (if not already)
