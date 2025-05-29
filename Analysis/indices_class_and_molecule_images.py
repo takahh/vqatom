@@ -22,7 +22,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 EPOCH = 1
-PATH = "/Users/taka/Documents/25000_16_fixed/"
+PATH = "/Users/taka/Documents/25000_16/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"

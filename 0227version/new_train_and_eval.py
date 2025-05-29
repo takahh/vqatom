@@ -514,16 +514,19 @@ def run_inductive(
             import os
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             os.makedirs(kw, exist_ok=True)
-            np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-            np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
-            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
-            np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
-            np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
-            np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-            # print(f"sample_list_test[3] {sample_list_test[3].shape}")
-            # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
-            # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
-            # np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
+            if conf['train_or_infer'] == "train":
+                pass
+            else:
+                np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
+                np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
+                np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
+                np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
+                np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
+                np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
+                # print(f"sample_list_test[3] {sample_list_test[3].shape}")
+                # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
+                # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
+                # np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
             # np.savez(f"./sample_hop_type_{epoch}", None)
             # print("sample_list_test[6]")

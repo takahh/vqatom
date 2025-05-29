@@ -1,7 +1,9 @@
 import matplotlib.pyplot as plt
 
 
-exp_list = ['20000_8', '20000_16', '20000_32', '25000_8', '25000_16', '25000_32', '30000_8', '30000_16', '30000_32']
+exp_list = ['20000_8', '20000_16', '20000_32', '25000_4', '25000_8', '25000_16', '25000_32', '30000_4',
+            '30000_8', '30000_16', '30000_32', '35000_4', '35000_8', '35000_16',
+            '35000_32', '40000_8', '40000_16', '40000_32']
 # exp_list = ['30000_32']
 
 
@@ -11,18 +13,18 @@ def get_cbmax_from_log(pair_name):
     effective_cb_rate_list = []
     filepath = f'/Users/taka/Documents/vqatom_train_output/{pair_name}/outputs/log'
 
-    # if pair_name == '30000_32':
-    #     filepath = f'/Users/taka/Documents/vqatom_train_output/log_bothloss_{pair_name}'
-    # else:
-    #     import os
-    #     print(pair_name)
-    #     filepath = f'/Users/taka/Documents/vqatom_train_output/bothloss_{pair_name}/outputs/log'
-    #     filepath2 = f'/Users/taka/Documents/vqatom_train_output/bothloss_{pair_name}/0227version/outputs/log'
-    #     try:
-    #         if os.path.getsize(filepath) < 1024:
-    #             filepath = filepath2
-    #     except FileNotFoundError:
-    #         filepath = filepath2
+    if pair_name == '30000_32':
+        filepath = f'/Users/taka/Documents/vqatom_train_output/log_bothloss_{pair_name}'
+    else:
+        import os
+        print(pair_name)
+        filepath = f'/Users/taka/Documents/vqatom_train_output/bothloss_{pair_name}/outputs/log'
+        filepath2 = f'/Users/taka/Documents/vqatom_train_output/bothloss_{pair_name}/0227version/outputs/log'
+        try:
+            if os.path.getsize(filepath) < 1024:
+                filepath = filepath2
+        except FileNotFoundError:
+            filepath = filepath2
     with open(filepath, 'r') as file:
         for line in file:
             if "observed" in line:

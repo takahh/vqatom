@@ -159,6 +159,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln2 = nn.LayerNorm(args.hidden_dim)
         self.ln3 = nn.LayerNorm(args.hidden_dim)
         self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
+        self.train_or_infer = args.train_or_infer
         # self.dropout_0 = nn.Dropout(p=0.2)
         # self.dropout_1 = nn.Dropout(p=0.2)
         # self.dropout_2 = nn.Dropout(p=0.2)
@@ -285,15 +286,18 @@ class EquivariantThreeHopGINE(nn.Module):
         losslist = [div_nega_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item(), repel_loss.item()]
 
         if batched_graph_base:
-            # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
-            latents = h
-            sample_adj_base = batched_graph_base.adj().to_dense()
-            sample_bond_info = batched_graph_base.edata["weight"]
-            # print(f"emb_ind shape {emb_ind.shape}")
-            # print(f"features shape {features.shape}")
-            # print(f"src shape {src.shape}")
-            # print(f"dst shape {dst.shape}")
-            sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
+            if self.train_or_infer == "train":
+                sample_list = []
+            else:
+                # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
+                latents = h
+                sample_adj_base = batched_graph_base.adj().to_dense()
+                sample_bond_info = batched_graph_base.edata["weight"]
+                # print(f"emb_ind shape {emb_ind.shape}")
+                # print(f"features shape {features.shape}")
+                # print(f"src shape {src.shape}")
+                # print(f"dst shape {dst.shape}")
+                sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
