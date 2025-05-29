@@ -1274,7 +1274,7 @@ class VectorQuantize(nn.Module):
         quantized = quantized.to("cuda")
 
         # Compute efficient pairwise distances between codebook entries without diagonals
-        dist_matrix_no_diag = self.pairwise_distances_no_diag(codebook, chunk_size=512)
+        dist_matrix_no_diag = self.pairwise_distances_no_diag(self, codebook, chunk_size=512)
 
         # ... continue with spread loss, silhouette loss, etc.
         # e.g., spread_loss = some_fn(dist_matrix_no_diag)
