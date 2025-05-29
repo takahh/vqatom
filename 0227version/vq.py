@@ -1247,29 +1247,39 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
+    def pairwise_distances_no_diag(x, chunk_size=1024):
+        B = x.size(0)
+        dist_list = []
 
+        for i in range(0, B, chunk_size):
+            end = min(i + chunk_size, B)
+            x_chunk = x[i:end]  # (chunk_size, D)
+            dist_chunk = torch.cdist(x_chunk, x, p=2)  # (chunk_size, B)
 
-        # embed_ind, codebook, init_feat, latents, quantize, logger
+            # Remove diagonal entries
+            row_indices = torch.arange(i, end, device=x.device).unsqueeze(1)
+            mask = row_indices != torch.arange(B, device=x.device).unsqueeze(0)  # (chunk_size, B)
+            dist_chunk_no_diag = dist_chunk[mask].view(end - i, B - 1)
+
+            dist_list.append(dist_chunk_no_diag)
+
+        return torch.cat(dist_list, dim=0)  # (B, B - 1)
+
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
-        # Normalize embeddings (optional: remove if not necessary)
-        embed_ind.to("cuda")
-        codebook.to("cuda")
-        init_feat.to("cuda")
-        latents.to("cuda")
-        quantized.to("cuda")
-        # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
-        # latents = latents / latents_norm
+        # Move tensors to CUDA (if not already)
+        embed_ind = embed_ind.to("cuda")
+        codebook = codebook.to("cuda")
+        init_feat = init_feat.to("cuda")
+        latents = latents.to("cuda")
+        quantized = quantized.to("cuda")
 
-        # # Pairwise distances
-        dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
-        ## Assume dist_matrix is a square matrix of shape (B, B)
-        B = dist_matrix.size(0)
+        # Compute efficient pairwise distances between codebook entries without diagonals
+        dist_matrix_no_diag = self.pairwise_distances_no_diag(codebook, chunk_size=512)
 
-        # Create a mask that excludes diagonal elements
-        mask = ~torch.eye(B, dtype=torch.bool, device=dist_matrix.device)
+        # ... continue with spread loss, silhouette loss, etc.
+        # e.g., spread_loss = some_fn(dist_matrix_no_diag)
 
-        # Apply the mask and reshape to (B, B-1)
-        dist_matrix_no_diag = dist_matrix[mask].view(B, B - 1)
+        # return spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss
 
         # Optional: Debug log
         print(f"dist_matrix_no_diag shape: {dist_matrix_no_diag.shape}")
