@@ -1247,39 +1247,29 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 512):
+    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 256):
         if x.dim() == 2:
             # [N, D]
-            N, D = x.shape
+            N = x.size(0)
             dist_matrix = torch.cdist(x, x, p=2)
-            mask = ~torch.eye(N, dtype=torch.bool, device=dist_matrix.device)
-            dist_no_diag = dist_matrix[mask].view(N, N - 1)
-            return dist_no_diag
+            mask = ~torch.eye(N, dtype=torch.bool, device=x.device)
+            return dist_matrix[mask].view(N, N - 1)
 
         elif x.dim() == 3:
             # [B, N, D]
             B, N, D = x.shape
-            # Check if on CPU
-            if x.device.type == 'cpu':
-                # Loop over batch dimension to handle each batch separately
-                dist_list = []
-                for b in range(B):
-                    xb = x[b]  # [N, D]
-                    dist = torch.cdist(xb, xb, p=2)
-                    mask = ~torch.eye(N, dtype=torch.bool, device=dist.device)
-                    dist_no_diag = dist[mask].view(N, N - 1)
-                    dist_list.append(dist_no_diag)
-                return torch.stack(dist_list, dim=0)  # [B, N, N-1]
-            else:
-                # GPU batched version (faster)
-                dist_matrix = torch.cdist(x, x, p=2)  # [B, N, N]
-                eye = torch.eye(N, device=x.device).bool()
-                mask = ~eye.unsqueeze(0)  # [1, N, N]
-                dist_no_diag = dist_matrix[mask].view(B, N, N - 1)
-                return dist_no_diag
+            results = []
+            for start in range(0, B, chunk_size):
+                end = min(start + chunk_size, B)
+                xb = x[start:end]  # [chunk, N, D]
+                dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
+                mask = ~torch.eye(N, dtype=torch.bool, device=xb.device)
+                dist_no_diag = dist[:, mask].view(end - start, N, N - 1)
+                results.append(dist_no_diag)
+            return torch.cat(results, dim=0)
 
         else:
-            raise ValueError(f"Expected 2D or 3D tensor, got shape {x.shape}")
+            raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Move tensors to CUDA (if not already)
@@ -1290,7 +1280,7 @@ class VectorQuantize(nn.Module):
         quantized = quantized.to("cuda")
 
         # Compute efficient pairwise distances between codebook entries without diagonals
-        dist_matrix_no_diag = self.pairwise_distances_no_diag(x=codebook, chunk_size=512)
+        dist_matrix_no_diag = self.pairwise_distances_no_diag(x=codebook, chunk_size=128)
 
         # ... continue with spread loss, silhouette loss, etc.
         # e.g., spread_loss = some_fn(dist_matrix_no_diag)
