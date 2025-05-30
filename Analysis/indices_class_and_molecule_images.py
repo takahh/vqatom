@@ -270,7 +270,7 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
     # Concatenate horizontally
     import matplotlib.pyplot as plt
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as
 
     ncols = 2
     nrows = (len(images) + ncols - 1) // ncols

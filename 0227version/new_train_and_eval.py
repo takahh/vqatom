@@ -421,8 +421,11 @@ def run_inductive(
                 gc.collect()
                 torch.cuda.empty_cache()
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
-                ind_chunk = sample_list_test[0].cpu().tolist()
-                ind_list.append(ind_chunk)
+                try:
+                    ind_chunk = sample_list_test[0].cpu().tolist()
+                    ind_list.append(ind_chunk)
+                except IndexError:
+                    pass
 
         # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]

@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 exp_list = ['20000_8', '20000_16', '20000_32', '25000_4', '25000_8', '25000_16', '25000_32', '30000_4',
             '30000_8', '30000_16', '30000_32', '35000_4', '35000_8', '35000_16',
-            '35000_32', '40000_8', '40000_16', '40000_32']
+            '35000_32', '40000_8', '40000_16', '40000_32', '45000_8', '45000_16', '45000_32']
 # exp_list = ['30000_32']
 
 
@@ -39,6 +39,7 @@ def get_cbmax_from_log(pair_name):
     max_eff_cb = max(effective_cb_size_list)
     # ebb cb max 時のエポックを取り出す
     idx_eff_cb = effective_cb_size_list.index(max_eff_cb)
+    print(f"best epoch : {idx_eff_cb} (0 start")
     # ebb cb max 時のエポックでの cb_num_mean の値をget
     max_cb_mean = cb_num_mean_list[idx_eff_cb]
     max_cb_rate = effective_cb_rate_list[idx_eff_cb]

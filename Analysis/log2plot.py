@@ -69,7 +69,7 @@ def plot(type, num_pair):
     test_loss = []
     effective_cb_size_list = []
 
-    with open(f"/Users/taka/Downloads/log04", 'r') as file:
+    with open(f"/Users/taka/Downloads/log019", 'r') as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
         lines = [x for x in lines if "-" in x.split(" ")[1]]
@@ -147,6 +147,7 @@ def plot(type, num_pair):
 
     # Create the plot
     plt.figure(figsize=(12, 8))
+
     epochs = list(range(len(test_loss)))
     # Plot different loss metrics
     if type == 0:
