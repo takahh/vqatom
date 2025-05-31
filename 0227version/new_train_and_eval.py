@@ -381,6 +381,7 @@ def run_inductive(
         # --------------------------------
         test_loss_list = []
         ind_list = []
+        latent_list = []
         quantized = None
         if conf['train_or_infer'] == "analysis":
             start_num = 0
@@ -424,6 +425,9 @@ def run_inductive(
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
                     ind_list.append(ind_chunk)
+                    latent_chunk = sample_list_test[2].cpu().tolist()
+                    latent_list.append(latent_chunk)
+
                 except IndexError:
                     pass
 
@@ -523,6 +527,7 @@ def run_inductive(
                 np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
                 np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
                 np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
+                np.savez(f"./{kw}/latents_all_{epoch}", latent_list)
                 np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())

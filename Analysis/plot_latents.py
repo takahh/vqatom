@@ -9,6 +9,7 @@ DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
 EPOCH_START = 2
+SAMPLE_LATENT = 5000
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
 
@@ -18,39 +19,46 @@ def load_npz_array(filename):
     arr = np.load(filename, allow_pickle=True)["arr_0"]
     return np.squeeze(arr)
 
-
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
-    """Plot 2D visualization using t-SNE."""
     title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=5000)
     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
 
     cb_emb = embedding[:cb_size]
     latent_emb = embedding[cb_size:cb_size + batch_size]
-    padding = 5  # adjust this to control zoom tightness
-    x_range = (cb_emb[:, 0].min() - padding, cb_emb[:, 0].max() + padding)
-    y_range = (cb_emb[:, 1].min() - padding, cb_emb[:, 1].max() + padding)
+    x_range = np.percentile(cb_emb[:, 0], [44, 56])
+    y_range = np.percentile(cb_emb[:, 1], [44, 56])
+
+    # Mask both latent and cb to zoom-in range
+    latent_mask = (
+        (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+        (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
+    )
+    cb_mask = (
+        (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+        (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+    )
+    zoomed_latent = latent_emb[latent_mask]
+    zoomed_cb = cb_emb[cb_mask]
 
     bins = 100
-
     for i in range(2):
         plt.figure(figsize=(10, 8))
         plt.hist2d(
-            latent_emb[:, 0], latent_emb[:, 1],
+            zoomed_latent[:, 0], zoomed_latent[:, 1],
             bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
             cmap="Blues"
         )
         plt.xlim(x_range)
         plt.ylim(y_range)
 
-        plt.title(title)
         if i == 0:
-            plt.scatter(cb_emb[:, 0], cb_emb[:, 1], s=3, c='purple', alpha=0.4)
+            plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=3, c='purple', alpha=0.6)
+        plt.title(title + " (Zoomed)")
+        plt.colorbar(label='Density')
         plt.show()
 
-
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
-    """Plot 2D visualization using UMAP."""
     reducer = umap.UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -61,29 +69,37 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
 
     latent_emb = reducer.transform(latent_arr)
     cb_emb = reducer.transform(cb_arr)
-    padding = 5  # adjust this to control zoom tightness
-    x_range = (cb_emb[:, 0].min() - padding, cb_emb[:, 0].max() + padding)
-    y_range = (cb_emb[:, 1].min() - padding, cb_emb[:, 1].max() + padding)
+    x_range = np.percentile(cb_emb[:, 0], [2, 98])
+    y_range = np.percentile(cb_emb[:, 1], [2, 98])
 
-    # x_range = (latent_emb[:, 0].min(), latent_emb[:, 0].max())
-    # y_range = (latent_emb[:, 1].min(), latent_emb[:, 1].max())
+    latent_mask = (
+        (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+        (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
+    )
+    cb_mask = (
+        (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+        (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+    )
+
+    zoomed_latent = latent_emb[latent_mask]
+    zoomed_cb = cb_emb[cb_mask]
+
     bins = 200
-
     title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
 
     for i in range(2):
         plt.figure()
         plt.hist2d(
-            latent_emb[:, 0], latent_emb[:, 1],
+            zoomed_latent[:, 0], zoomed_latent[:, 1],
             bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
             cmap="Blues"
         )
         plt.xlim(x_range)
         plt.ylim(y_range)
 
-        plt.title(title)
         if i == 0:
-            plt.scatter(cb_emb[:, 0], cb_emb[:, 1], s=1, c='red', alpha=1)
+            plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
+        plt.title(title + " (Zoomed)")
         plt.colorbar(label='Density')
         plt.show()
 
@@ -94,7 +110,10 @@ def process_epoch(epoch):
     latent_file = f"{DATA_PATH}latents_{epoch}.npz"
 
     cb_arr = load_npz_array(codebook_file)
-    latent_arr = load_npz_array(latent_file)[:2000]
+    latent_arr = load_npz_array(latent_file)
+    print(latent_arr.shape)
+    latent_arr = latent_arr[:SAMPLE_LATENT]
+    print(latent_arr.shape)
 
     cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
     cb_size = cb_arr.shape[0]
