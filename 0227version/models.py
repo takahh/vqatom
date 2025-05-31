@@ -291,7 +291,13 @@ class EquivariantThreeHopGINE(nn.Module):
             else:
                 # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
                 latents = h
-                sample_adj_base = batched_graph_base.adj().to_dense()
+                # sample_adj_base = batched_graph_base.adj().to_dense()
+
+                num_nodes = batched_graph_base.num_nodes()
+                src, dst = batched_graph_base.edges()
+                sample_adj_base = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=src.device)
+                sample_adj_base[src, dst] = 1.0
+
                 sample_bond_info = batched_graph_base.edata["weight"]
                 # print(f"emb_ind shape {emb_ind.shape}")
                 # print(f"features shape {features.shape}")
