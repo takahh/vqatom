@@ -10,7 +10,7 @@ DATA_PATH = "/Users/taka/Downloads/40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 5000
+SAMPLE_LATENT = 10000
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
 
