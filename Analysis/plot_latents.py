@@ -5,10 +5,11 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
+DATA_PATH = "/Users/taka/Downloads/40000_16/"
+# DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
-EPOCH_START = 2
+EPOCH_START = 1
 SAMPLE_LATENT = 5000
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -16,7 +17,9 @@ MODE = "tsne"  # Choose between "tsne" and "umap"
 
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
-    arr = np.load(filename, allow_pickle=True)["arr_0"]
+    arr = np.load(filename, allow_pickle=True)
+    print(arr.files)
+    arr = arr["arr_0"]
     return np.squeeze(arr)
 
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
@@ -111,6 +114,7 @@ def process_epoch(epoch):
 
     cb_arr = load_npz_array(codebook_file)
     latent_arr = load_npz_array(latent_file)
+    print(latent_file)
     print(latent_arr.shape)
     latent_arr = latent_arr[:SAMPLE_LATENT]
     print(latent_arr.shape)

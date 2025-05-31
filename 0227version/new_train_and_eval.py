@@ -427,9 +427,12 @@ def run_inductive(
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
-
                 except IndexError:
                     pass
+
+            if args.get_umap_data:
+                cb_new = model.vq._codebook.embed
+                np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
 
         # Flatten the list
         flat = [item for sublist in ind_list for item in sublist]
