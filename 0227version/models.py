@@ -291,7 +291,7 @@ class EquivariantThreeHopGINE(nn.Module):
             else:
                 # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
                 latents = h
-                sample_adj_base = dgl.to_dense_adj(batched_graph_base)  # batched version
+                adj_tensor = dgl.transform.to_dense_adj(batched_graph_base)
                 # sample_adj_base = batched_graph_base.adj().to_dense()
                 sample_bond_info = batched_graph_base.edata["weight"]
                 # print(f"emb_ind shape {emb_ind.shape}")
