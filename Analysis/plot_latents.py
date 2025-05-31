@@ -18,9 +18,18 @@ MODE = "tsne"  # Choose between "tsne" and "umap"
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
     arr = np.load(filename, allow_pickle=True)
-    print(arr.files)
     arr = arr["arr_0"]
     return np.squeeze(arr)
+
+def load_npz_array_multi(filename):
+    """Load and return the array from a .npz file."""
+    arr0 = np.load(filename, allow_pickle=True)
+    arr_all = []
+    for names in arr0.files:
+        arr = arr0[names].tolist()
+        arr_all.extend(arr)
+    final_arr = np.array(arr_all)
+    return np.squeeze(final_arr)
 
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
     title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
@@ -113,11 +122,11 @@ def process_epoch(epoch):
     latent_file = f"{DATA_PATH}latents_{epoch}.npz"
 
     cb_arr = load_npz_array(codebook_file)
-    latent_arr = load_npz_array(latent_file)
-    print(latent_file)
+    latent_arr = load_npz_array_multi(latent_file)
+    print("latent_arr.shape")
     print(latent_arr.shape)
     latent_arr = latent_arr[:SAMPLE_LATENT]
-    print(latent_arr.shape)
+    print(cb_arr.shape)
 
     cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
     cb_size = cb_arr.shape[0]

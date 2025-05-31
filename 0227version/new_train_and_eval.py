@@ -430,6 +430,7 @@ def run_inductive(
                 except IndexError:
                     pass
 
+            args = get_args()
             if args.get_umap_data:
                 cb_new = model.vq._codebook.embed
                 np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
