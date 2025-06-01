@@ -798,7 +798,14 @@ class EuclideanCodebook(nn.Module):
         # Initialize codebook vectors (Ensure it does not detach)
         if self.training and epoch == 1:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
-        embed = self.embed  # ✅ DO NOT detach embed
+        args = get_args()
+        import numpy as np
+        if args['train_or_not'] == "use_nonredun_cb_infer":
+            embed = np.load('../data/kmeans_centers.npy')
+            embed = torch.from_numpy(embed).float().to(x.device)
+        # Replace `device` with something like torch.device("cuda") if you're using a GPU
+        else:
+            embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
         # Compute Distance Without Breaking Gradients
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
