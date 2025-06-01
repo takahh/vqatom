@@ -426,6 +426,7 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
+                    print(ind_chunk)
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)

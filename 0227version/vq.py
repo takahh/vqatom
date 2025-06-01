@@ -1474,7 +1474,6 @@ class VectorQuantize(nn.Module):
         spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = (
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch))
 
-        print(f"embed_ind 0 {embed_ind.shape}")
         args = get_args()
         if args.train_or_infer == 'use_nonredun_cb_infer':
             pass
@@ -1485,7 +1484,6 @@ class VectorQuantize(nn.Module):
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
             elif embed_ind.ndim != 1:
                 raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        print(f"embed_ind 1 {embed_ind.shape}")
         """
         /vqatom/0227version/vq.py:1457: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
           commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
@@ -1533,7 +1531,6 @@ class VectorQuantize(nn.Module):
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
         # if self.training:
-        print(f"embed_ind {embed_ind[0, :3]}  ")
         return (quantize, embed_ind, loss, dist, embed, latent_loss, latents, div_nega_loss, x, latent_loss, sil_loss,
                 num_unique, repel_loss, cb_repel_loss)
         # else:
