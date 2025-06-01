@@ -309,12 +309,13 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    if conf['train_or_infer'] == "train" or conf['train_or_infer'] == "infer":
+    if conf['train_or_infer'] == "train" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
         datapath = DATAPATH
     else:
         datapath = DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    print("datapath")
     print(datapath)
     print(dataloader)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
