@@ -803,6 +803,7 @@ class EuclideanCodebook(nn.Module):
         if args['train_or_not'] == "use_nonredun_cb_infer":
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).float().to(x.device)
+            print("Replaced with clustered cb vecs !!!!!!")
         # Replace `device` with something like torch.device("cuda") if you're using a GPU
         else:
             embed = self.embed  # ✅ DO NOT detach embed
