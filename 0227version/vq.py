@@ -811,6 +811,7 @@ class EuclideanCodebook(nn.Module):
         # Compute Distance Without Breaking Gradients
         print(flatten.unsqueeze(2).shape)
         print(embed.unsqueeze(1).shape)
+        print(self.embed.shape)
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
         # Compute soft assignment
