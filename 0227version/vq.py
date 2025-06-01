@@ -832,7 +832,7 @@ class EuclideanCodebook(nn.Module):
         print("embed_ind.shape")
         print(embed_ind.shape)
         print("embed_ind")
-        print(embed_ind)
+        print(embed_ind[0, :5])
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
         device = flatten.device
