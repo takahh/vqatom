@@ -286,7 +286,7 @@ class EquivariantThreeHopGINE(nn.Module):
         losslist = [div_nega_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
 
-        if batched_graph_base:
+        if batched_graph_base:  # from --- train_sage --
             if self.train_or_infer == "train":
                 sample_list = []
             else:
@@ -305,7 +305,7 @@ class EquivariantThreeHopGINE(nn.Module):
                 # print(f"src shape {src.shape}")
                 # print(f"dst shape {dst.shape}")
                 sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
-        else:
+        else:   # -- from evaluate ---
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
 

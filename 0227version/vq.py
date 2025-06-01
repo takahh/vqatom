@@ -795,20 +795,25 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
-        # Initialize codebook vectors (Ensure it does not detach)
+        # ---------------------------------
+        # Initialize codebook with kmeans
+        # ---------------------------------
         if self.training and epoch == 1:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         args = get_args()
         import numpy as np
         if args.train_or_infer == "use_nonredun_cb_infer":
+            # -------------------
+            # use saved codebook
+            # -------------------
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
             print("Replaced with clustered cb vecs !!!!!!")
         # Replace `device` with something like torch.device("cuda") if you're using a GPU
         else:
             embed = self.embed  # ✅ DO NOT detach embed
-        init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
-        # Compute Distance Without Breaking Gradients
+        init_cb = self.embed.clone().contiguous()
+        # Compute Distance between latents and codebook
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
         # Compute soft assignment
@@ -824,11 +829,15 @@ class EuclideanCodebook(nn.Module):
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
+        print("embed_ind.shape")
+        print(embed_ind.shape)
+        print("embed_ind")
+        print(embed_ind)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
         device = flatten.device
 
-        if self.training:  # mine
+        if self.training:  #
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
             temperature = 0.1  # Softmax temperature
             # Soft assignment instead of one-hot (fixes gradient flow)
