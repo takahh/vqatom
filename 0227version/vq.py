@@ -539,8 +539,6 @@ class ContrastiveLoss(nn.Module):
         eps = 1e-6
 
         def calc_similarity_matrix(z):
-            print("z.shape")
-            print(z.shape)
             # Normalize z to control magnitude and prevent similarity collapse
             z = F.normalize(z, p=2, dim=1, eps=eps)
             # Compute cosine similarity matrix
@@ -564,7 +562,7 @@ class ContrastiveLoss(nn.Module):
         # ----------------------------
         # codebook to similarity matrix
         # ----------------------------
-        cb_similarity_matrix = calc_similarity_matrix(codebook)
+        cb_similarity_matrix = calc_similarity_matrix(codebook[0])
 
         # ----------------------------------
         # node features to type simi matrix
