@@ -393,6 +393,7 @@ def run_inductive(
             start_num = 10
             end_num = 15
         print("Length of dataloader:", len(dataloader))  # If
+        print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
             if idx == end_num:
