@@ -829,10 +829,6 @@ class EuclideanCodebook(nn.Module):
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
         # **Fix Shape for batched_embedding()**
         embed_ind = embed_ind.view(1, -1, 1)
-        print("embed_ind.shape")
-        print(embed_ind.shape)
-        print("embed_ind")
-        print(embed_ind[0, :5])
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
         device = flatten.device
@@ -884,6 +880,7 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
+        print(f"embed_ind {embed_ind[0, :3]}")
         return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
         # else:
         #     return quantize, embed_ind, dist, self.embed, flatten, init_cb
