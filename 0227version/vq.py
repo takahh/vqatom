@@ -1527,7 +1527,7 @@ class VectorQuantize(nn.Module):
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
         # if self.training:
-        print(f"embed_ind {embed_ind[0, :3]}")
+        print(f"embed_ind {embed_ind[0, :3]}  ")
         return (quantize, embed_ind, loss, dist, embed, latent_loss, latents, div_nega_loss, x, latent_loss, sil_loss,
                 num_unique, repel_loss, cb_repel_loss)
         # else:
