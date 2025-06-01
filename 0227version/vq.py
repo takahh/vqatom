@@ -800,7 +800,7 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         args = get_args()
         import numpy as np
-        if args['train_or_not'] == "use_nonredun_cb_infer":
+        if args.train_or_infer == "use_nonredun_cb_infer":
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).float().to(x.device)
             print("Replaced with clustered cb vecs !!!!!!")
