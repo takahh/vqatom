@@ -819,7 +819,7 @@ class EuclideanCodebook(nn.Module):
         # Convert to hard assignments
         embed_ind_hard_idx = dist.argmax(dim=-1)
         # Access embeddings correctly with shape (1, 1000, 64)
-        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
+        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=embed.shape[1]).float()
         # Apply STE trick
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
         # **Compute Soft Indices (Weighted Sum)**
