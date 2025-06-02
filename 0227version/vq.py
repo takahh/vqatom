@@ -808,7 +808,6 @@ class EuclideanCodebook(nn.Module):
             # -------------------
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
-            print("Replaced with clustered cb vecs !!!!!!")
         # Replace `device` with something like torch.device("cuda") if you're using a GPU
         else:
             embed = self.embed  # ✅ DO NOT detach embed
@@ -1119,8 +1118,6 @@ class VectorQuantize(nn.Module):
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
 
         codebook_class = EuclideanCodebook if not use_cosine_sim else CosineSimCodebook
-        print("codebook_class ==============")
-        print(codebook_class)
         self._codebook = codebook_class(
             dim=codebook_dim,
             num_codebooks=heads if separate_codebook_per_head else 1,

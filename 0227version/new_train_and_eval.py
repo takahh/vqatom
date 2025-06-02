@@ -315,9 +315,6 @@ def run_inductive(
         datapath = DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-    print("datapath")
-    print(datapath)
-    print(dataloader)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     for epoch in range(1, conf["max_epoch"] + 1):
@@ -393,7 +390,6 @@ def run_inductive(
         else:
             start_num = 10
             end_num = 15
-        print("Length of dataloader:", len(dataloader))  # If
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST ---------------")
@@ -426,7 +422,6 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
-                    print(ind_chunk)
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
