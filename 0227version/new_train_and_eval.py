@@ -441,6 +441,7 @@ def run_inductive(
                 np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
 
         # Flatten the list
+        args = get_args()
         if args.train_or_infer == 'use_nonredun_cb_infer':
             ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
