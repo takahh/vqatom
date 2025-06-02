@@ -444,9 +444,10 @@ def run_inductive(
         args = get_args()
         if args.train_or_infer == 'use_nonredun_cb_infer':
             ind_list = [item for sublist in ind_list for item in sublist]
+        print(ind_list[:5])
         flat = [item for sublist in ind_list for item in sublist]
         print("flat")
-        print(flat)
+        print(flat[:5])
         count = Counter(flat)
 
         # Sort by key
