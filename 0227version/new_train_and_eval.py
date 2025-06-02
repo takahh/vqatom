@@ -402,6 +402,10 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
+                ########## REMOVE SOON ######################
+                if i > 2:
+                    break
+                ########## REMOVE SOON ######################
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
@@ -427,6 +431,9 @@ def run_inductive(
                     latent_list.append(latent_chunk)
                 except IndexError:
                     pass
+            ########## REMOVE SOON ##########
+            break
+            ########## REMOVE SOON ######################
 
             args = get_args()
             if args.get_umap_data:
