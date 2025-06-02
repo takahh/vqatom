@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/40000_16/"
+DATA_PATH = "/Users/taka/Documents/40000_16_centroids/"
 # DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
@@ -15,10 +15,9 @@ EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
 
 
-def load_npz_array(filename):
+def load_npy_array(filename):
     """Load and return the array from a .npz file."""
     arr = np.load(filename, allow_pickle=True)
-    arr = arr["arr_0"]
     return np.squeeze(arr)
 
 def load_npz_array_multi(filename):
@@ -118,10 +117,11 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
-    codebook_file = f"{DATA_PATH}init_codebook_{epoch}.npz"
-    latent_file = f"{DATA_PATH}latents_{epoch}.npz"
+    # codebook_file = f"{DATA_PATH}quantized_{epoch}.npz"
+    codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
+    latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
-    cb_arr = load_npz_array(codebook_file)
+    cb_arr = load_npy_array(codebook_file)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
