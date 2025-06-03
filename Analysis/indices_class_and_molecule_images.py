@@ -5,8 +5,9 @@ print(rdkit.__version__)
 from rdkit import Chem
 print(Chem.__file__)
 
-CANVAS_WIDTH = 2000
-CANVAS_HEIGHT = 1500
+CANVAS_WIDTH = 850
+CANVAS_HEIGHT = 400
+DPI = 950
 EPOCH = 1
 PATH = "/Users/taka/Documents/40000_16_forimages/"
 
@@ -224,11 +225,12 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         mol_for_drawing = rdMolDraw2D.PrepareMolForDrawing(mol, kekulize=False)
 
         # Create a drawing canvas.
-        drawer = Draw.MolDraw2DCairo(2000, 1025)
+        drawer = Draw.MolDraw2DCairo(CANVAS_WIDTH, CANVAS_HEIGHT)
         options = drawer.drawOptions()
-        options.fontScale = 20  # for older versions
+        options.fixedFontSize = 20  # default is ~0.5; increase this value
+        # options.fontScale = 20  # for older versions
         # options.atomLabelFontSize = 20  # Increase font size for readability
-        options.annotationFontScale = 10  # Increase font size for readability
+        options.annotationFontScale = 30  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
@@ -259,8 +261,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
 
     ncols = 2
-    nrows = (len(images) + ncols - 1) // ncols
-    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=500)
+    nrows = (len(images)//2 + ncols - 1) // ncols
+    fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=DPI)
 
     axs = axs.flatten()
 
