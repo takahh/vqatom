@@ -9,7 +9,7 @@ CANVAS_WIDTH = 850
 CANVAS_HEIGHT = 400
 DPI = 950
 EPOCH = 1
-PATH = "/Users/taka/Documents/40000_16_forimages/"
+PATH = "/Users/taka/Documents/40000_16_centroids_forimages/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -388,13 +388,10 @@ def main():
     bond_order_file = f"{path}sample_bond_num_{EPOCH}.npz"
     src_file = f"{path}sample_src_{EPOCH}.npz"
     dst_file = f"{path}sample_dst_{EPOCH}.npz"
-
     arr_indices = getdata(indices_file)   # indices of the input
-    print(arr_indices[:100])
     arr_latents = getdata(latent_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
-    # arr_feat = restore_node_feats(arr_feat)
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
@@ -403,29 +400,7 @@ def main():
     print(f"arr_dst {arr_dst.shape}")
     print(f"arr_bond_order {arr_bond_order.shape}")
     print(f"arr_feat {arr_feat}")
-    # -------------------------------------
-    # rebuild attr matrix
-    # -------------------------------------
-    # attr_data = arr_input["attr_data"]
-    # attr_indices = arr_input["attr_indices"]
-    # attr_indptr = arr_input["attr_indptr"]
-    # attr_shape = arr_input["attr_shape"]
-    # attr_matrix = csr_matrix((attr_data, attr_indices, attr_indptr), shape=attr_shape)
-    # ic(node_indices[0])
-    # subset_attr_matrix = attr_matrix[node_indices[0]:node_indices[0] + 200, :].toarray()
-    # subset_attr_matrix = attr_matrix.toarray()
-
-    # -------------------------------------
-    # rebuild adj matrix
-    # -------------------------------------
-    # Assuming you have these arrays from your input
-    # adj_data = arr_input["adj_data"]
-    # adj_indices = arr_input["adj_indices"]
-    # adj_indptr = arr_input["adj_indptr"]
-    # adj_shape = arr_input["adj_shape"]
-    # Reconstruct the sparse adjacency matrix
-    # adj_matrix = csr_matrix((adj_data, adj_indices, adj_indptr), shape=adj_shape)
-    limit_num = 1385
+    limit_num = 2500
     print(arr_latents.shape)
     arr_latents = arr_latents[0:limit_num]
     subset_latents = arr_latents[0:limit_num, 0:limit_num]
