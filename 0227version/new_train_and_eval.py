@@ -182,7 +182,6 @@ def convert_to_dgl(adj_batch, attr_batch):
     """
     base_graphs = []
     extended_graphs = []
-    print(f"len(adj_batch) {len(adj_batch)} ======================")
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # if i == 1:
         #     break
@@ -403,6 +402,7 @@ def run_inductive(
                 end_num = 1
             for i in range(0, end_num, chunk_size):
                 print(f"CHUNK No. {i} --------------")
+                print(f"len(glist) {len(glist)} ===============")
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
