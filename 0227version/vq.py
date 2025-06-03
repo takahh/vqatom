@@ -801,10 +801,11 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         args = get_args()
         import numpy as np
-        if args.train_or_infer == "use_nonredun_cb_infer":
+        if args.train_or_infer == "use_nonredun_cb_infer" or args.train_or_infer == "analysis":
             # -------------------
             # use saved codebook
             # -------------------
+            print('using saved cb centroids !!!!!!!!')
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
         # Replace `device` with something like torch.device("cuda") if you're using a GPU

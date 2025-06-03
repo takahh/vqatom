@@ -10,14 +10,16 @@ DATA_PATH = "/Users/taka/Documents/40000_16_centroids/"
 DIMENSION = 16
 BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 10000
+SAMPLE_LATENT = 100000
+ZOOM = 47  # 0 - 50
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
 
 
-def load_npy_array(filename):
+def load_npz_array(filename):
     """Load and return the array from a .npz file."""
     arr = np.load(filename, allow_pickle=True)
+    arr = arr["arr_0"]
     return np.squeeze(arr)
 
 def load_npz_array_multi(filename):
@@ -35,39 +37,40 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=5000)
     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
 
-    cb_emb = embedding[:cb_size]
-    latent_emb = embedding[cb_size:cb_size + batch_size]
-    x_range = np.percentile(cb_emb[:, 0], [44, 56])
-    y_range = np.percentile(cb_emb[:, 1], [44, 56])
+    for zoom in [10, 5, 2]:
+        cb_emb = embedding[:cb_size]
+        latent_emb = embedding[cb_size:cb_size + batch_size]
+        x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
+        y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
-    # Mask both latent and cb to zoom-in range
-    latent_mask = (
-        (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-        (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-    )
-    cb_mask = (
-        (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-        (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-    )
-    zoomed_latent = latent_emb[latent_mask]
-    zoomed_cb = cb_emb[cb_mask]
-
-    bins = 100
-    for i in range(2):
-        plt.figure(figsize=(10, 8))
-        plt.hist2d(
-            zoomed_latent[:, 0], zoomed_latent[:, 1],
-            bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-            cmap="Blues"
+        # Mask both latent and cb to zoom-in range
+        latent_mask = (
+            (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+            (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
         )
-        plt.xlim(x_range)
-        plt.ylim(y_range)
+        cb_mask = (
+            (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+            (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+        )
+        zoomed_latent = latent_emb[latent_mask]
+        zoomed_cb = cb_emb[cb_mask]
 
-        if i == 0:
-            plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=3, c='purple', alpha=0.6)
-        plt.title(title + " (Zoomed)")
-        plt.colorbar(label='Density')
-        plt.show()
+        bins = 100
+        for i in range(2):
+            plt.figure(figsize=(10, 8))
+            plt.hist2d(
+                zoomed_latent[:, 0], zoomed_latent[:, 1],
+                bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                cmap="Blues"
+            )
+            plt.xlim(x_range)
+            plt.ylim(y_range)
+
+            if i == 0:
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=3, c='purple', alpha=0.6)
+            plt.title(title + f" (Zoomed {zoom}, sample {SAMPLE_LATENT})")
+            plt.colorbar(label='Density')
+            plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
     reducer = umap.UMAP(
@@ -119,9 +122,10 @@ def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
     # codebook_file = f"{DATA_PATH}quantized_{epoch}.npz"
     codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
+    codebook_file = '/Users/taka/Documents/best_codebook_40000_16/init_codebook_1.npz'
     latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
-    cb_arr = load_npy_array(codebook_file)
+    cb_arr = load_npz_array(codebook_file)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
