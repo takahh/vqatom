@@ -405,6 +405,8 @@ def run_inductive(
                 print(f"len(glist) {len(glist)} ===============")
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+
+                print(f"len(chunk) {len(chunk)} ===============")
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
                 # Ensure node features are correctly extracted
