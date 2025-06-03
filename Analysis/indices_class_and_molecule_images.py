@@ -1,19 +1,5 @@
-import numpy as np
-from rdkit.Chem import Draw
-from requests.packages import target
-from scipy.sparse import csr_matrix
-# np.set_printoptions(threshold=np.inf)
-from rdkit import Chem
-from scipy.sparse.csgraph import connected_components
-import numpy as np
-from icecream import ic
-import matplotlib.pyplot as plt
-from rdkit.Geometry import Point2D
-from rdkit.Chem.Draw import rdMolDraw2D
 
-# Convert the binary drawing to an image
-from PIL import Image
-from io import BytesIO
+from rdkit.Geometry import Point2D
 import rdkit
 print(rdkit.__version__)
 from rdkit import Chem
@@ -22,7 +8,7 @@ print(Chem.__file__)
 CANVAS_WIDTH = 2000
 CANVAS_HEIGHT = 1500
 EPOCH = 1
-PATH = "/Users/taka/Documents/25000_16/"
+PATH = "/Users/taka/Documents/40000_16_forimages/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -240,7 +226,8 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Create a drawing canvas.
         drawer = Draw.MolDraw2DCairo(2000, 1025)
         options = drawer.drawOptions()
-        options.atomLabelFontSize = 20  # Increase font size for readability
+        options.fontScale = 20  # for older versions
+        # options.atomLabelFontSize = 20  # Increase font size for readability
         options.annotationFontScale = 10  # Increase font size for readability
 
         # Assign custom labels.
@@ -270,7 +257,6 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
     # Concatenate horizontally
     import matplotlib.pyplot as plt
-    import matplotlib.pyplot as
 
     ncols = 2
     nrows = (len(images) + ncols - 1) // ncols
