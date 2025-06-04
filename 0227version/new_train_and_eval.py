@@ -442,8 +442,8 @@ def run_inductive(
             ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
-        flat = torch.tensor(flat)  # or just torch.tensor(flat)
-        unique_sorted_indices = torch.unique(flat, sorted=True)
+        flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
+        unique_sorted_indices = torch.unique(flat, sorted=True).long()
         used_cb_vectors_all_epochs = model.vq._codebook.embed[unique_sorted_indices]
 
         # Sort by key
