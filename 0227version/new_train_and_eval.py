@@ -394,7 +394,7 @@ def run_inductive(
             end_num = 15
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
-            print("TEST ---------------")
+            print("TEST --------------- {idx}")
             if idx == end_num:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
