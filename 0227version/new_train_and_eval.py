@@ -444,6 +444,8 @@ def run_inductive(
         count = Counter(flat)
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
         unique_sorted_indices = torch.unique(flat, sorted=True).long()
+        print("max index:", unique_sorted_indices.max().item())
+        print("embed size:", model.vq._codebook.embed.shape)
         used_cb_vectors_all_epochs = model.vq._codebook.embed[unique_sorted_indices]
 
         # Sort by key
