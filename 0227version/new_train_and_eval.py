@@ -544,7 +544,7 @@ def run_inductive(
                 np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.cpu())
+                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
                 # print(f"sample_list_test[3] {sample_list_test[3].shape}")
                 # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
                 # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
