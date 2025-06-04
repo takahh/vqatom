@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/40000_16_centroids/"
+DATA_PATH = "/Users/taka/Documents/used_cb_40000_16/used_cb_40000_16/"
 # DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
@@ -120,9 +120,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
-    # codebook_file = f"{DATA_PATH}quantized_{epoch}.npz"
-    codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
-    codebook_file = '/Users/taka/Documents/best_codebook_40000_16/init_codebook_1.npz'
+    codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
+    # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
+    # codebook_file = '/Users/taka/Documents/best_codebook_40000_16/init_codebook_1.npz'
     latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
     cb_arr = load_npz_array(codebook_file)
