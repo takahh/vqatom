@@ -106,10 +106,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
 
     images = []
     # for i in range(n_components - 1):
-    range_dict = {0:[0, 15], 1:[15, 30], 2:[30, 45], 3:[45, 60], 4:[60, 75]}
+    range_dict = {0:[0, 7], 1:[8, 16], 2:[16, 24], 3:[24, 32], 4:[32, 40], 5:[40, 48], 6:[48, 56], 7:[56, 64], 8:[64, 72], 9:[72, 75]}
     range_num = range_dict[range_id]
     for i in range(range_num[0], range_num[1]):
-    # for i in [16, 17]:
         print(f"$$$$$$$$$$$$$$$$$$$. {i}")
         # Get node indices for this molecule
         component_indices = np.where(labels == i)[0]
@@ -261,7 +260,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     import matplotlib.pyplot as plt
 
     ncols = 2
-    nrows = (len(images)//2 + ncols - 1) // ncols
+    nrows = (len(images) + ncols - 1) // ncols
+    print(f"len(images) {len(images)}")
+    print(f"nrows {nrows}")
     fig, axs = plt.subplots(nrows, ncols, figsize=(ncols * 2, nrows * 1), dpi=DPI)
 
     axs = axs.flatten()
@@ -410,7 +411,7 @@ def main():
     # -------------------------------------
     # split the matrix into molecules
     # -------------------------------------
-    for i in range(5):
+    for i in range(9):
         visualize_molecules_with_classes_on_atoms(subset_latents, subset_attr_matrix, node_indices, arr_src,
                                                   arr_dst, arr_bond_order, subset_adj_base_matrix, limit_num, i)
 

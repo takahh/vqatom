@@ -386,7 +386,10 @@ def run_inductive(
         elif conf['train_or_infer'] == "train":
             start_num = 10
             end_num = 11
-        else:
+        elif conf['train_or_infer'] == "use_nonredun_cb_infer":
+            start_num = 0
+            end_num = 16
+        else: # conf['train_or_infer'] == infer
             start_num = 10
             end_num = 15
         print(f"start num {start_num}, end num {end_num}")
@@ -401,12 +404,8 @@ def run_inductive(
             else:
                 end_num = 1
             for i in range(0, end_num, chunk_size):
-                print(f"CHUNK No. {i} --------------")
-                print(f"len(glist) {len(glist)} ===============")
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
-
-                print(f"len(chunk) {len(chunk)} ===============")
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
                 # Ensure node features are correctly extracted
@@ -443,6 +442,8 @@ def run_inductive(
             ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
+        unique_sorted_indices = torch.unique(flat, sorted=True)
+        used_cb_vectors_all_epochs = model.vq._codebook.embed[unique_sorted_indices]
 
         # Sort by key
         sorted_count = dict(sorted(count.items()))
@@ -540,6 +541,7 @@ def run_inductive(
                 np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
+                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.cpu())
                 # print(f"sample_list_test[3] {sample_list_test[3].shape}")
                 # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
                 # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])

@@ -808,6 +808,7 @@ class EuclideanCodebook(nn.Module):
             print('using saved cb centroids !!!!!!!!')
             embed = np.load('../data/kmeans_centers.npy')
             embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
+            self.embed = embed
         # Replace `device` with something like torch.device("cuda") if you're using a GPU
         else:
             embed = self.embed  # ✅ DO NOT detach embed
@@ -879,7 +880,7 @@ class EuclideanCodebook(nn.Module):
         #     embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
         #     self.embed.data.copy_(embed_normalized)
         #     self.expire_codes_(x)
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, embed
         # else:
         #     return quantize, embed_ind, dist, self.embed, flatten, init_cb
 
