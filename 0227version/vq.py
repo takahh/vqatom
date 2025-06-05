@@ -1267,6 +1267,15 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
     def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
+        def pairwise_l2_dist(x):
+            # x: [B, N, D]
+            # Returns: [B, N, N]
+            B, N, D = x.shape
+            x_norm = (x ** 2).sum(dim=2, keepdim=True)  # [B, N, 1]
+            dist = x_norm + x_norm.transpose(1, 2) - 2.0 * torch.bmm(x, x.transpose(1, 2))
+            dist = torch.clamp(dist, min=0.0)  # prevent negative distances due to numerical error
+            return dist.sqrt()
+
         if x.dim() == 2:
             N = x.size(0)
             dist_matrix = torch.cdist(x, x, p=2)
@@ -1283,14 +1292,9 @@ class VectorQuantize(nn.Module):
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
                 xb = x[start:end]  # [chunk, N, D]
-                print("x min:", x.min().item())
-                print("x max:", x.max().item())
-                print("x mean:", x.mean().item())
-                print("x std:", x.std().item())
-                print("any NaN in x?", torch.isnan(x).any().item())
-                print("any Inf in x?", torch.isinf(x).any().item())
 
-                dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
+                # dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
+                dist = pairwise_l2_dist(xb)
                 dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
 
                 assert not torch.isnan(dist).any(), "NaNs found in dist"
