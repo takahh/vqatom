@@ -806,7 +806,7 @@ class EuclideanCodebook(nn.Module):
             # use saved codebook
             # -------------------
             print('using saved cb centroids !!!!!!!!')
-            embed = np.load('../data/used_cb_vectors_after_clustering.npz')['arr_0']
+            embed = np.load('../data/used_cb_vectors_no_clustering.npz')['arr_0']
             embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
             self.embed = nn.Parameter(embed)
 
