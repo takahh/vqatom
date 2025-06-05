@@ -1286,11 +1286,11 @@ class VectorQuantize(nn.Module):
                 dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
                 dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
 
-                # Do not reshape — just keep as is or flatten masked part
-                print("mask.expand(end - start, -1, -1).shape")
-                print(mask.expand(end - start, -1, -1).shape)
-                print("dist.shape")
-                print(dist.shape)
+                expected_elements = (end - start) * N * (N - 1)
+                actual_elements = mask.expand(end - start, -1, -1).sum().item()
+                print(f"Expected {expected_elements} elements, got {actual_elements}")
+                assert actual_elements == expected_elements
+
                 dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
                 results.append(dist_flat)
 
