@@ -1287,6 +1287,10 @@ class VectorQuantize(nn.Module):
                 dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
 
                 # Do not reshape — just keep as is or flatten masked part
+                print("mask.expand(end - start, -1, -1).shape")
+                print(mask.expand(end - start, -1, -1).shape)
+                print("dist.shape")
+                print(dist.shape)
                 dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
                 results.append(dist_flat)
 
