@@ -801,18 +801,18 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         args = get_args()
         import numpy as np
-        # if args.train_or_infer == "use_nonredun_cb_infer" or args.train_or_infer == "analysis":
-        #     # -------------------
-        #     # use saved codebook
-        #     # -------------------
-        #     print('using saved cb centroids !!!!!!!!')
-        #     embed = np.load('../data/kmeans_best.npy')
-        #     embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
-        #     self.embed = nn.Parameter(embed)
-        #
-        # # Replace `device` with something like torch.device("cuda") if you're using a GPU
-        # else:
-        embed = self.embed  # ✅ DO NOT detach embed
+        if args.train_or_infer == "use_nonredun_cb_infer" or args.train_or_infer == "analysis":
+            # -------------------
+            # use saved codebook
+            # -------------------
+            print('using saved cb centroids !!!!!!!!')
+            embed = np.load('../data/used_cb_vectors_after_clustering.npz')['arr_0']
+            embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
+            self.embed = nn.Parameter(embed)
+
+        # Replace `device` with something like torch.device("cuda") if you're using a GPU
+        else:
+            embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()
         # Compute Distance between latents and codebook
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
