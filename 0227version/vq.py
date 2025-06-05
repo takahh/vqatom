@@ -1266,47 +1266,69 @@ class VectorQuantize(nn.Module):
 
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
-        def pairwise_l2_dist(x):
-            # x: [B, N, D]
-            # Returns: [B, N, N]
-            B, N, D = x.shape
-            x_norm = (x ** 2).sum(dim=2, keepdim=True)  # [B, N, 1]
-            dist = x_norm + x_norm.transpose(1, 2) - 2.0 * torch.bmm(x, x.transpose(1, 2))
-            dist = torch.clamp(dist, min=0.0)  # prevent negative distances due to numerical error
-            return dist.sqrt()
+    def pairwise_distances_no_diag(self, x, chunk_size=128):
+        """
+        x: [B, N, D] tensor (e.g., codebook)
+        Returns: [B, N, N-1] distances with diagonal removed
+        """
+        B, N, D = x.shape
+        x_norm = (x ** 2).sum(dim=2, keepdim=True)  # [B, N, 1]
+        dist = x_norm + x_norm.transpose(1, 2) - 2.0 * torch.bmm(x, x.transpose(1, 2))  # [B, N, N]
+        dist = torch.clamp(dist, min=1e-6)  # Prevent sqrt of 0 or negative
 
-        if x.dim() == 2:
-            N = x.size(0)
-            dist_matrix = torch.cdist(x, x, p=2)
-            dist_matrix.fill_diagonal_(float('inf'))  # no need to create a mask
-            return dist_matrix
+        dist = torch.sqrt(dist)
 
-        elif x.dim() == 3:
-            B, N, D = x.shape
-            results = []
+        # Remove diagonal
+        mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
+        dist_no_diag = dist[mask.expand(B, -1, -1)].view(B, N, N - 1)
 
-            # Construct 1 mask and reuse
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
+        # Final check
+        assert not torch.isnan(dist_no_diag).any(), "NaNs found in dist_no_diag"
+        assert not torch.isinf(dist_no_diag).any(), "Infs found in dist_no_diag"
 
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                xb = x[start:end]  # [chunk, N, D]
-
-                # dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
-                dist = pairwise_l2_dist(xb)
-                dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
-
-                assert not torch.isnan(dist).any(), "NaNs found in dist"
-                assert not torch.isinf(dist).any(), "Infs found in dist"
-
-                dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
-                results.append(dist_flat)
-
-            return torch.cat(results, dim=0)  # [B, N, N - 1]
-
-        else:
-            raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
+        return dist_no_diag
+    #
+    # def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
+    #     def pairwise_l2_dist(x):
+    #         # x: [B, N, D]
+    #         # Returns: [B, N, N]
+    #         B, N, D = x.shape
+    #         x_norm = (x ** 2).sum(dim=2, keepdim=True)  # [B, N, 1]
+    #         dist = x_norm + x_norm.transpose(1, 2) - 2.0 * torch.bmm(x, x.transpose(1, 2))
+    #         dist = torch.clamp(dist, min=0.0)  # prevent negative distances due to numerical error
+    #         return dist.sqrt()
+    #
+    #     if x.dim() == 2:
+    #         N = x.size(0)
+    #         dist_matrix = torch.cdist(x, x, p=2)
+    #         dist_matrix.fill_diagonal_(float('inf'))  # no need to create a mask
+    #         return dist_matrix
+    #
+    #     elif x.dim() == 3:
+    #         B, N, D = x.shape
+    #         results = []
+    #
+    #         # Construct 1 mask and reuse
+    #         mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
+    #
+    #         for start in range(0, B, chunk_size):
+    #             end = min(start + chunk_size, B)
+    #             xb = x[start:end]  # [chunk, N, D]
+    #
+    #             # dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
+    #             dist = pairwise_l2_dist(xb)
+    #             dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
+    #
+    #             assert not torch.isnan(dist).any(), "NaNs found in dist"
+    #             assert not torch.isinf(dist).any(), "Infs found in dist"
+    #
+    #             dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
+    #             results.append(dist_flat)
+    #
+    #         return torch.cat(results, dim=0)  # [B, N, N - 1]
+    #
+    #     else:
+    #         raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Move tensors to CUDA (if not already)
