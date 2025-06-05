@@ -1283,6 +1283,13 @@ class VectorQuantize(nn.Module):
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
                 xb = x[start:end]  # [chunk, N, D]
+                print("x min:", x.min().item())
+                print("x max:", x.max().item())
+                print("x mean:", x.mean().item())
+                print("x std:", x.std().item())
+                print("any NaN in x?", torch.isnan(x).any().item())
+                print("any Inf in x?", torch.isinf(x).any().item())
+
                 dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
                 dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
 
