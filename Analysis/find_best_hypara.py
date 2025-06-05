@@ -46,12 +46,21 @@ def get_cbmax_from_log(pair_name):
     return max_eff_cb, max_cb_mean, max_cb_rate
 
 
-
 def plot(data, name):
     plt.figure()
     plt.plot(exp_list, data)
     plt.title(name)
-    plt.xticks(rotation=90)  # Rotate x-axis labels by 45 degrees
+    plt.xticks(rotation=90)  # Rotate x-axis labels by 90 degrees
+    plt.xlabel("Codebook Size_Dimension")
+    plt.ylabel("Count")
+
+    # Get the positions of the x-ticks
+    xticks = plt.gca().get_xticks()
+
+    # Add vertical lines at each x-tick
+    for tick in xticks:
+        plt.axvline(x=tick, color='gray', linestyle='--', alpha=0.5)  # You can adjust color and style
+
     plt.tight_layout()
     plt.show()
 

@@ -1,3 +1,4 @@
+import os
 
 from rdkit.Geometry import Point2D
 import rdkit
@@ -9,7 +10,7 @@ CANVAS_WIDTH = 850
 CANVAS_HEIGHT = 400
 DPI = 950
 EPOCH = 1
-PATH = "/Users/taka/Documents/40000_16_centroids_forimages/"
+PATH = "/Users/taka/Documents/forimages_no_clustering/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
@@ -281,8 +282,9 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-    plt.show()
-    # plt.savefig(f"./similar_mols_{range_id}.png", bbox_inches='tight', pad_inches=0.0)
+    # plt.show()
+    os.makedirs(f"{PATH}/images/", exist_ok=True)
+    plt.savefig(f"{PATH}/images/{range_id}.png", bbox_inches='tight', pad_inches=0.0)
 
     #
     # # Assuming `images` is a list of image arrays
