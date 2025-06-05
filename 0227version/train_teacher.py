@@ -295,7 +295,6 @@ def run(args):
         # model.load_state_dict(torch.load(f"/vqatom/0227version/model_epoch_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         model.load_state_dict(torch.load(f"/vqatom/data/vqatom_best_models/{thiskey}_{best_epoch_dict[thiskey]}.pth", weights_only=False))
         print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
-        print("Initted: in run", model.vq._codebook.initted.item())  # Should be 1.0
 
     optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

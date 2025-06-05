@@ -390,8 +390,8 @@ def run_inductive(
             start_num = 0
             end_num = 16
         else: # conf['train_or_infer'] == infer
-            start_num = 10
-            end_num = 15
+            start_num = 0
+            end_num = 16
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
             print("TEST --------------- {idx}")
