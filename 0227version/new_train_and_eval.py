@@ -442,6 +442,11 @@ def run_inductive(
             ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
+        import json
+        # Save to JSON
+        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+        with open(f"./{kw}/ind_frequencies.json", 'w') as f:
+            json.dump(dict(count), f)
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
         unique_sorted_indices = torch.unique(flat, sorted=True).long()
         print("max index:", unique_sorted_indices.max().item())
