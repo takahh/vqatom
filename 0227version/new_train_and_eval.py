@@ -444,9 +444,6 @@ def run_inductive(
         count = Counter(flat)
         import json
         # Save to JSON
-        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-        with open(f"./{kw}/ind_frequencies.json", 'w') as f:
-            json.dump(dict(count), f)
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
         unique_sorted_indices = torch.unique(flat, sorted=True).long()
         used_cb_vectors_all_epochs = model.vq._codebook.embed[0][unique_sorted_indices]
@@ -555,6 +552,10 @@ def run_inductive(
                 # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
                 # np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
+
+            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+            with open(f"./{kw}/ind_frequencies.json", 'w') as f:
+                json.dump(dict(count), f)
             # np.savez(f"./sample_hop_type_{epoch}", None)
             # print("sample_list_test[6]")
             # print(sample_list_test[6])
