@@ -1312,9 +1312,6 @@ class VectorQuantize(nn.Module):
         # return spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss
 
         # Optional: Debug log
-        print(f"dist_matrix_no_diag shape: {dist_matrix_no_diag.shape}")
-        print(f"min: {dist_matrix_no_diag.min().item()}, max: {dist_matrix_no_diag.max().item()}, mean: {dist_matrix_no_diag.mean().item()}")
-
         # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
         #
         # Margin loss: Encourage distances >= min_distance
@@ -1395,7 +1392,6 @@ class VectorQuantize(nn.Module):
         # )
         # Combine losses with tunable weights
         # commitment_loss = latent_loss + codebook_loss
-        print(f"latent_loss: {latent_loss}, codebook_loss: {codebook_loss}")
         """
         commitment_loss: 0.001366406329907477
         entropy_loss: 8.031081199645996"""
@@ -1493,7 +1489,7 @@ class VectorQuantize(nn.Module):
         # feat_div_loss: 0.0001748909562593326 * 100
         commit_loss: 0.00524178147315979     * 0.01  """
         # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        print(f"commit loss {self.commitment_weight * latent_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
+        # print(f"commit loss {self.commitment_weight * latent_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
         # if epoch < 5:
         #     print(f"epoch is less than 10")
         #     loss = (self.lamb_div * feat_div_loss)

@@ -391,10 +391,10 @@ def run_inductive(
             end_num = 16
         else: # conf['train_or_infer'] == infer
             start_num = 0
-            end_num = 16
+            end_num = 1
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
-            print("TEST --------------- {idx}")
+            print(f"TEST --------------- {idx}")
             if idx == end_num:
                 break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
@@ -449,8 +449,6 @@ def run_inductive(
             json.dump(dict(count), f)
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
         unique_sorted_indices = torch.unique(flat, sorted=True).long()
-        print("max index:", unique_sorted_indices.max().item())
-        print("embed size:", model.vq._codebook.embed.shape)
         used_cb_vectors_all_epochs = model.vq._codebook.embed[0][unique_sorted_indices]
 
         # Sort by key
