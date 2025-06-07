@@ -799,7 +799,7 @@ class EuclideanCodebook(nn.Module):
 
         # Replace `device` with something like torch.device("cuda") if you're using a GPU
         # else:
-        #     embed = self.embed  # ✅ DO NOT detach embed
+        embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()
         # Compute Distance between latents and codebook
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
