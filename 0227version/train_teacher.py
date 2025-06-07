@@ -283,9 +283,7 @@ def run(args):
     model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
     # model = Model(conf)
 
-    # if conf["train_or_infer"] == "infer":
-    #     model.load_state_dict(torch.load("./model_epoch_200.pth", weights_only=False))
-
+    # the model is loaded after initialization, so the model.embed is updated with the saved one.
     if conf["train_or_infer"] != "train":
         thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         print(f"thiskey is {thiskey}")

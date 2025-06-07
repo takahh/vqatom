@@ -5,13 +5,14 @@ import numpy as np
 
 
 # Set global font size
+FSIZE = 23
 plt.rcParams.update({
-    'font.size': 16,           # base font size
-    'axes.labelsize': 15,      # x/y labels
-    'axes.titlesize': 17,      # title
-    'xtick.labelsize': 15,     # x-axis tick labels
-    'ytick.labelsize': 15,     # y-axis tick labels
-    'legend.fontsize': 15,     # legend text
+    'font.size': FSIZE,           # base font size
+    'axes.labelsize': FSIZE,      # x/y labels
+    'axes.titlesize': FSIZE,      # title
+    'xtick.labelsize': FSIZE,     # x-axis tick labels
+    'ytick.labelsize': FSIZE,     # y-axis tick labels
+    'legend.fontsize': FSIZE,     # legend text
 })
 
 
@@ -81,6 +82,7 @@ def plot(type, num_pair):
     unique_cb_mean_list = []
     test_loss = []
     effective_cb_size_list = []
+    plt.rcParams.update({'font.size': 24})  # set general font size to 14
 
     with open(f"//Users/taka/Documents/vqatom_train_output/bothloss_40000_16/outputs/log", 'r') as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
@@ -177,7 +179,7 @@ def plot(type, num_pair):
     if type == 0:
         plt.plot(epochs, train_loss, label='Train Loss', marker='o')
         plt.plot(epochs, test_loss, label='Test Loss', marker='s')
-        plt.title('Loss Across Epochs', fontsize=16)
+        plt.title('Loss Across Epochs', fontsize=FSIZE)
     elif type == 1:
         # print(feat_div_loss_test)
         plt.plot(epochs, feat_div_loss_train, label='Feature Div Loss Train', marker='^')
@@ -185,36 +187,37 @@ def plot(type, num_pair):
             pass
         else:
             plt.plot(epochs, feat_div_loss_test, label='Feature Div Loss Test', marker='_')
-        plt.title('feat_div_loss Across Epochs', fontsize=16)
+        plt.title('feat_div_loss Across Epochs', fontsize=FSIZE)
     elif type == 2:
         epochs = list(range(len(cb_loss_train)))
         plt.plot(epochs, cb_loss_train, label='CB Loss Train', marker='v')
         epochs = list(range(len(cb_loss_test)))
         plt.plot(epochs, cb_loss_test, label='CB Loss Test', marker='x')
-        plt.title('CB loss Across Epochs', fontsize=16)
+        plt.title('CB loss Across Epochs', fontsize=FSIZE)
     elif type == 3:
         epochs = list(range(len(repel_loss_train)))
-        plt.plot(epochs, repel_loss_train, label='Silhouette Loss Train', marker='d')
+        plt.plot(epochs, repel_loss_train, label='Repel Loss Train', marker='d')
         epochs = list(range(len(repel_loss_test)))
-        plt.plot(epochs, repel_loss_test, label='Silhouette Loss Test', marker='p')
-        plt.title('Repel loss Across Epochs', fontsize=16)
+        plt.plot(epochs, repel_loss_test, label='Repel Loss Test', marker='p')
+        plt.title('Repel loss Across Epochs', fontsize=FSIZE)
     elif type == 4:
         epochs = list(range(len(unique_cb_mean_list)))
         plt.plot(epochs, unique_cb_mean_list, label='Unique CB mean', marker='d')
-        plt.title('Unique CB vector counts', fontsize=16)
+        plt.title('Unique CB vector counts', fontsize=FSIZE)
         best_unique_cb_num_dict[num_pair] = max(unique_cb_mean_list)
     else:
         epochs = list(range(len(effective_cb_size_list)))
         plt.plot(epochs, effective_cb_size_list, label='Effective CB size', marker='d')
-        plt.title('Effective CB size', fontsize=16)
+        plt.title('Effective CB size', fontsize=FSIZE)
     print(effective_cb_size_list)
-    plt.xlabel('Epoch', fontsize=15)
-    plt.ylabel('Loss', fontsize=15)
-    plt.legend()
+    plt.xlabel('Epoch', labelpad=10, fontsize=FSIZE)
+    plt.ylabel('Loss', labelpad=10, fontsize=FSIZE)
+    plt.legend(fontsize=17)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.yscale('log')  # Using log scale due to small values
+    plt.rcParams.update({'font.size': FSIZE})  # set general font size to 14
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"/Users/taka/Documents/{type}")
     # # Save the plot
     # plt.savefig('training_metrics_plot.png')
     plt.close()
@@ -235,4 +238,4 @@ for exp in exp_list:
             cb_dict = plot(type, exp)
     else:
         cb_dict[exp] = get_cbmax_from_log(exp)
-plot_cb_best(cb_dict)
+# plot_cb_best(cb_dict)
