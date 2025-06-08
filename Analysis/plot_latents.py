@@ -5,12 +5,12 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/used_cb_40000_16/used_cb_40000_16/"
+DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
 # DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 100000
+SAMPLE_LATENT = 200000
 ZOOM = 47  # 0 - 50
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -61,13 +61,13 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
             plt.hist2d(
                 zoomed_latent[:, 0], zoomed_latent[:, 1],
                 bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                cmap="Blues"
+                cmap="cividis"
             )
             plt.xlim(x_range)
             plt.ylim(y_range)
 
             if i == 0:
-                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=3, c='purple', alpha=0.6)
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + f" (Zoomed {zoom}, sample {SAMPLE_LATENT})")
             plt.colorbar(label='Density')
             plt.show()

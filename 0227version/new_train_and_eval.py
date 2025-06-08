@@ -431,7 +431,9 @@ def run_inductive(
                 cb_new = model.vq._codebook.embed
                 np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
 
-        # Flatten the list
+        # -------------------------------------------
+        # Count Codebook Frequency and used Codebook
+        # -------------------------------------------
         args = get_args()
         if args.train_or_infer == 'use_nonredun_cb_infer':
             ind_list = [item for sublist in ind_list for item in sublist]
@@ -439,32 +441,19 @@ def run_inductive(
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
         import json
-        # Save to JSON
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
         unique_sorted_indices = torch.unique(flat, sorted=True).long()
         used_cb_vectors_all_epochs = model.vq._codebook.embed[0][unique_sorted_indices]
-
-        # Sort by key
-        sorted_count = dict(sorted(count.items()))
-        print("working on Count...")
-
-        # Count keys
         num_zero_keys = 1 if 0.0 in count else 0
-        num_nonzero_keys = len([k for k in count if k != 0.0])
-
         VOCAB_SIZE = conf["codebook_size"]
-
         all_keys = set(range(VOCAB_SIZE))
         observed_keys = set(count.keys())
         missing_keys = all_keys - observed_keys
         num_missing_keys = len(missing_keys)
         num_observed = len(observed_keys)
-
-        # print physically unique CB vectors
         unique_vectors = torch.unique(model.vq._codebook.embed[0], dim=0)
         num_unique_vectors = unique_vectors.size(0)
         logger.info(f"{num_unique_vectors} is num_unique_vectors")
-
         print(f"Number of observed keys: {num_observed}")
         print(f"Number of zero keys: {num_zero_keys}")
         print(f"Number of nonzero keys: {num_missing_keys}")
@@ -472,6 +461,9 @@ def run_inductive(
         logger.info(f"Number of zero keys: {num_zero_keys}")
         logger.info(f"Number of nonzero keys: {num_missing_keys}")
 
+        # -------------------------------
+        # Save loss information and else
+        # -------------------------------
         if conf['train_or_infer'] == "train":
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
@@ -494,7 +486,6 @@ def run_inductive(
                   f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
                   f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
             )
-
             # Log training losses
             logger.info(
                 f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
@@ -512,13 +503,11 @@ def run_inductive(
                   f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
             )
         if conf['train_or_infer'] != "train":
-
             logger.info(f"epoch {epoch}:"
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
                 f"unique_cb_vecs min: {min(cb_unique_num_list_test): 9f},"
                 f"unique_cb_vecs max: {max(cb_unique_num_list_test): 9f},"
                         )
-
             # Log testing losses
             logger.info(
                 f"test - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
@@ -538,22 +527,13 @@ def run_inductive(
                 np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
                 np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
                 np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
-                # np.savez(f"./{kw}/latents_all_{epoch}", latent_list)
                 np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
                 np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
-                # print(f"sample_list_test[3] {sample_list_test[3].shape}")
-                # np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu()[:3500])
-                # np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu()[:14200])
-                # np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu()[:14200])
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
 
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             with open(f"./{kw}/ind_frequencies.json", 'w') as f:
                 json.dump(dict(count), f)
-            # np.savez(f"./sample_hop_type_{epoch}", None)
-            # print("sample_list_test[6]")
-            # print(sample_list_test[6])
             np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
-            # np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu()[:3500])
