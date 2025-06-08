@@ -10,7 +10,7 @@ DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
 DIMENSION = 16
 BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 200000
+SAMPLE_LATENT = 200
 ZOOM = 47  # 0 - 50
 EPOCH_END = EPOCH_START + 1
 MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -58,11 +58,12 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
         bins = 100
         for i in range(2):
             plt.figure(figsize=(10, 8))
-            plt.hist2d(
-                zoomed_latent[:, 0], zoomed_latent[:, 1],
-                bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                cmap="cividis"
-            )
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
+            # plt.hist2d(
+            #     zoomed_latent[:, 0], zoomed_latent[:, 1],
+            #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+            #     cmap="Greys"
+            # )
             plt.xlim(x_range)
             plt.ylim(y_range)
 
