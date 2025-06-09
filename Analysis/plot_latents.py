@@ -8,13 +8,11 @@ np.set_printoptions(threshold=np.inf)
 DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
 # DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
-BATCH_SIZE = 8000
+# BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 200
-ZOOM = 47  # 0 - 50
+SAMPLE_LATENT = 3000000
 EPOCH_END = EPOCH_START + 1
-MODE = "tsne"  # Choose between "tsne" and "umap"
-
+MODE = "umap"  # Choose between "tsne" and "umap"
 
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
@@ -32,14 +30,15 @@ def load_npz_array_multi(filename):
     final_arr = np.array(arr_all)
     return np.squeeze(final_arr)
 
-def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
+def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
     title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
-    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=5000)
+    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
+    print("fitting start")
     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
-
-    for zoom in [10, 5, 2]:
+    print("fitting done")
+    for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
         cb_emb = embedding[:cb_size]
-        latent_emb = embedding[cb_size:cb_size + batch_size]
+        latent_emb = embedding[cb_size:cb_size]
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
@@ -74,6 +73,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size, batch_size):
             plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
+    print("reducer setup")
     reducer = umap.UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -81,9 +81,11 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         n_epochs=5000,
         random_state=42
     ).fit(latent_arr)
-
+    print("reducer setup done")
     latent_emb = reducer.transform(latent_arr)
+    print("latent transform done")
     cb_emb = reducer.transform(cb_arr)
+    print("cb transform done")
     x_range = np.percentile(cb_emb[:, 0], [2, 98])
     y_range = np.percentile(cb_emb[:, 1], [2, 98])
 
@@ -137,7 +139,7 @@ def process_epoch(epoch):
     cb_size = cb_arr.shape[0]
 
     if MODE == "tsne":
-        plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size, batch_size=BATCH_SIZE)
+        plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
         plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size)
 

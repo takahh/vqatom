@@ -6,10 +6,11 @@ print(rdkit.__version__)
 from rdkit import Chem
 print(Chem.__file__)
 
-CANVAS_WIDTH = 950
-CANVAS_HEIGHT = 400
+CANVAS_WIDTH = 1200
+CANVAS_HEIGHT = 500
 DPI = 600
 EPOCH = 1
+FONT = 25
 PATH = "/Users/taka/Documents/final_forimages/40000_16/"
 
 def getdata(filename):
@@ -227,10 +228,10 @@ def visualize_molecules_with_classes_on_atoms(subset_latents, feature_matrix, cl
         # Create a drawing canvas.
         drawer = Draw.MolDraw2DCairo(CANVAS_WIDTH, CANVAS_HEIGHT)
         options = drawer.drawOptions()
-        options.fixedFontSize = 23  # default is ~0.5; increase this value
+        options.fixedFontSize = FONT  # default is ~0.5; increase this value
         # options.fontScale = 20  # for older versions
         # options.atomLabelFontSize = 20  # Increase font size for readability
-        options.annotationFontScale = 40  # Increase font size for readability
+        options.annotationFontScale = FONT  # Increase font size for readability
 
         # Assign custom labels.
         for idx, label in atom_labels.items():
