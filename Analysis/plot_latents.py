@@ -12,7 +12,8 @@ DIMENSION = 16
 EPOCH_START = 1
 SAMPLE_LATENT = 3000000
 EPOCH_END = EPOCH_START + 1
-MODE = "umap"  # Choose between "tsne" and "umap"
+# MODE = "umap"  # Choose between "tsne" and "umap"
+MODE = "tsne"  # Choose between "tsne" and "umap"
 
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
@@ -41,6 +42,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
         latent_emb = embedding[cb_size:cb_size]
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
+        zoom = float(50/int(zoom))
 
         # Mask both latent and cb to zoom-in range
         latent_mask = (

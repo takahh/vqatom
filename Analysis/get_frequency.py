@@ -14,12 +14,12 @@ items_sorted = sorted(items, key=lambda x: x[1], reverse=True)  # reverse=True f
 # Unpack the sorted items
 sorted_keys, sorted_freqs = zip(*items_sorted)
 plt.rcParams.update({'font.size': 20})  # ← change 14 to whatever size you want
-
 plt.figure(figsize=(12, 6))
 plt.hist(sorted_freqs, bins=100, color='green', edgecolor='black', log=True)
-plt.xlabel("Frequency")
-plt.ylabel("Number of Codebook Vectors (log scale)")
-plt.title("Histogram of Frequencies")
+plt.grid(True, which="both", linestyle='--', linewidth=0.5)
+plt.xlabel("Number of Times Each Codebook Vector is Used", labelpad=10)
+plt.ylabel("Number of Codebook Vectors\n (Log Scale)", labelpad=10)
+plt.title("Distribution of Codebook Vector Usage Frequencies", pad=10)
 plt.tight_layout()
 plt.savefig("/Users/taka/Documents/freq_per_cb.png")
 plt.show()
