@@ -123,6 +123,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + " (Zoomed)")
             plt.savefig(f"/umap_result_{zoom_to_show}_{i}.png")
+            plt.close()
 
 
 def process_epoch(epoch):
