@@ -89,8 +89,15 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         random_state=42
     ).fit(latent_arr)
 
+    # Filter exact duplicates BEFORE UMAP
+    _, idx = np.unique(latent_arr, axis=0, return_index=True)
+    latent_arr_unique = latent_arr[np.sort(idx)]
+    cb_arr_unique = cb_arr[np.sort(idx)]  # Only if needed for color/labeling
+
+    print(f"[INFO] UMAP input reduced to {latent_arr_unique.shape[0]} rows after deduplication.")
+
     latent_emb = reducer.transform(latent_arr)
-    cb_emb = reducer.transform(cb_arr)
+    cb_emb = reducer.transform(cb_arr_unique)
 
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
