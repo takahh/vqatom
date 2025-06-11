@@ -85,6 +85,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import pairwise_distances
 from cuml.manifold import UMAP  # cuML's UMAP
+import numpy as np
+import matplotlib.pyplot as plt
+from cuml.manifold import UMAP as cuUMAP
+from sklearn.metrics import pairwise_distances  # For distance matrix on CPU
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
     try:
@@ -96,20 +100,26 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=1
         cb_arr = cb_arr[idx]
         print(f"[INFO] Unique points after deduplication: {latent_arr.shape[0]}")
 
-        # Step 2: Remove rows with no nonzero-distance neighbors
+        # Step 2: Remove rows with all zero-distance neighbors
         dist_matrix = pairwise_distances(latent_arr)
-        np.fill_diagonal(dist_matrix, np.inf)
+        np.fill_diagonal(dist_matrix, np.inf)  # Ignore self-distances
         zero_dist_rows = np.all(dist_matrix == 0, axis=1)
+
         if np.any(zero_dist_rows):
             print(f"[WARN] Removing {np.sum(zero_dist_rows)} rows with no nonzero-distance neighbors.")
             latent_arr = latent_arr[~zero_dist_rows]
             cb_arr = cb_arr[~zero_dist_rows]
 
+        print(f"[INFO] Points after filtering zero-distance neighbors: {latent_arr.shape[0]}")
+
         # Step 3: Run cuML UMAP
-        umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
+        umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
         emb = umap.fit_transform(latent_arr)
 
-        # Step 4: Plot
+        print(f"[INFO] UMAP embedding shape: {emb.shape}")
+        print(f"[INFO] Color array shape: {cb_arr.shape}")
+
+        # Step 4: Plot the result
         plt.figure(figsize=(8, 6))
         plt.scatter(emb[:, 0], emb[:, 1], c=cb_arr, s=cb_size, cmap='viridis', alpha=0.8)
         plt.colorbar()
@@ -118,10 +128,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=1
         plt.savefig(f"umap_epoch_{epoch}.png")
         plt.close()
 
-        print(f"[INFO] UMAP plot saved for epoch {epoch}.")
-
     except Exception as e:
         print(f"[FATAL] UMAP plotting failed: {e}")
+
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
