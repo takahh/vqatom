@@ -120,7 +120,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
             plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
         plt.title(title + " (Zoomed)")
         plt.colorbar(label='Density')
-        plt.show()
+        plt.savefig(f"{DATA_PATH}/{i}.png")
 
 
 def process_epoch(epoch):
