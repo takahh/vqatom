@@ -5,7 +5,7 @@ from sklearn.datasets import load_digits
 import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/data/"
+DATA_PATH = "/40000_16/"
 # DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
 DIMENSION = 16
 # BATCH_SIZE = 8000
