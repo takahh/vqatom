@@ -114,7 +114,6 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
 
     for i in range(2):
         plt.figure()
-        plt.scatter()
         plt.xlim(x_range)
         plt.ylim(y_range)
         plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
