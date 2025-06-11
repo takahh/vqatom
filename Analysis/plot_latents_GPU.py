@@ -3,6 +3,8 @@ import cupy as cp
 import numpy as np
 from sklearn.datasets import load_digits
 import matplotlib.pyplot as plt
+from sklearn.metrics import pairwise_distances
+
 np.set_printoptions(threshold=np.inf)
 
 DATA_PATH = "/40000_16/"
