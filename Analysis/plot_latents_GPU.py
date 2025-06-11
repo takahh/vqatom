@@ -76,24 +76,21 @@ def load_npz_array_multi(filename):
 #             plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
-    print("reducer setup")
+    print("Checking latent array")
+    unique_rows = np.unique(latent_arr, axis=0).shape[0]
+    if unique_rows < latent_arr.shape[0]:
+        print(f"[WARN] Only {unique_rows} unique rows. Adding noise to latent_arr")
+        latent_arr += np.random.normal(scale=1e-4, size=latent_arr.shape)
 
-    reducer = UMAP(n_neighbors=n_neighbors,
-                   n_components=2,
-                   min_dist=min_dist,
-                   random_state=42).fit(latent_arr)
-    # reducer = umap.UMAP(
-    #     n_neighbors=n_neighbors,
-    #     min_dist=min_dist,
-    #     n_components=2,
-    #     n_epochs=5000,
-    #     random_state=42
-    # ).fit(latent_arr)
-    print("reducer setup done")
+    reducer = UMAP(
+        n_neighbors=n_neighbors,
+        n_components=2,
+        min_dist=min_dist,
+        random_state=42
+    ).fit(latent_arr)
+
     latent_emb = reducer.transform(latent_arr)
-    print("latent transform done")
     cb_emb = reducer.transform(cb_arr)
-    print("cb transform done")
 
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
