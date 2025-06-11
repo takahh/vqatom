@@ -1,218 +1,102 @@
+import os
 import numpy as np
-
-np.set_printoptions(threshold=np.inf)
-
-DATA_PATH = "/40000_16/"
-# DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
-DIMENSION = 16
-# BATCH_SIZE = 8000
-EPOCH_START = 1
-SAMPLE_LATENT = 3000000
-SAMPLE_LATENT = 3000
-EPOCH_END = EPOCH_START + 1
-MODE = "umap"  # Choose between "tsne" and "umap"
-# MODE = "tsne"  # Choose between "tsne" and "umap"
-
-def load_npz_array(filename):
-    """Load and return the array from a .npz file."""
-    arr = np.load(filename, allow_pickle=True)
-    arr = arr["arr_0"]
-    return np.squeeze(arr)
-
-def load_npz_array_multi(filename):
-    """Load and return the array from a .npz file."""
-    arr0 = np.load(filename, allow_pickle=True)
-    arr_all = []
-    for names in arr0.files:
-        arr = arr0[names].tolist()
-        arr_all.extend(arr)
-    final_arr = np.array(arr_all)
-    return np.squeeze(final_arr)
-
-# def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
-#     title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
-#     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
-#     print("fitting start")
-#     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
-#     print("fitting done")
-#     for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
-#         cb_emb = embedding[:cb_size]
-#         latent_emb = embedding[cb_size:cb_size]
-#         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
-#         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-#         zoom = float(50/int(zoom))
-#
-#         # Mask both latent and cb to zoom-in range
-#         latent_mask = (
-#             (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-#             (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-#         )
-#         cb_mask = (
-#             (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-#             (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-#         )
-#         zoomed_latent = latent_emb[latent_mask]
-#         zoomed_cb = cb_emb[cb_mask]
-#
-#         bins = 100
-#         for i in range(2):
-#             plt.figure(figsize=(10, 8))
-#             plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
-#             # plt.hist2d(
-#             #     zoomed_latent[:, 0], zoomed_latent[:, 1],
-#             #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-#             #     cmap="Greys"
-#             # )
-#             plt.xlim(x_range)
-#             plt.ylim(y_range)
-#
-#             if i == 0:
-#                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
-#             plt.title(title + f" (Zoomed {zoom}, sample {SAMPLE_LATENT})")
-#             plt.colorbar(label='Density')
-#             plt.show()
-import numpy as np
+import pickle
 import matplotlib.pyplot as plt
-from sklearn.metrics import pairwise_distances
-
-# Make sure you have these imports for cuML and CPU fallback
-try:
-    from cuml.manifold import UMAP as cuUMAP
-except ImportError:
-    cuUMAP = None
-
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import pairwise_distances
-from cuml.manifold import UMAP  # cuML's UMAP
-import numpy as np
-import matplotlib.pyplot as plt
-from cuml.manifold import UMAP as cuUMAP
-from sklearn.metrics import pairwise_distances  # For distance matrix on CPU
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import pairwise_distances
-from cuml.manifold import UMAP as cuUMAP
-
-import numpy as np
-from sklearn.metrics import pairwise_distances
-import matplotlib.pyplot as plt
-from cuml.manifold import UMAP as cuUMAP
-import numpy as np
-from sklearn.metrics import pairwise_distances
-import matplotlib.pyplot as plt
-from cuml.manifold import UMAP as cuUMAP
-import numpy as np
-import matplotlib.pyplot as plt
-from cuml.manifold import UMAP as cuUMAP
+from cuml.manifold import UMAP as cumlUMAP
+from umap import UMAP as cpuUMAP
+from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+import seaborn as sns
 
-def plot_umap(latent_arr, cb_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
+sns.set(style="white", rc={"figure.figsize": (8, 8)})
+
+def filter_zero_distance_neighbors(X, n_neighbors):
+    nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1, algorithm='auto').fit(X)
+    distances, _ = nbrs.kneighbors(X)
+    distances = distances[:, 1:]  # Exclude distance to self
+    mask = ~np.all(distances == 0, axis=1)
+    return X[mask], mask
+
+def run_dbscan_dedup(X, eps=1e-8):
+    scaled = StandardScaler().fit_transform(X)
+    db = DBSCAN(eps=eps, min_samples=2).fit(scaled)
+    labels = db.labels_
+
+    # keep first point of each cluster, remove rest
+    mask = labels == -1
+    for lbl in set(labels):
+        if lbl == -1:
+            continue
+        idx_lbl = np.where(labels == lbl)[0]
+        mask[idx_lbl[1:]] = False
+    print(f"[INFO] DBSCAN deduplicated: {np.sum(~mask)} near-duplicates removed")
+    return X[mask], mask
+
+def plot_latents(latent_arr, cb_arr, epoch, save_path):
+    n_neighbors = 15
+    min_dist = 0.1
+
+    print(f"[INFO] Starting UMAP for epoch {epoch}")
+
+    cb_arr_sample = cb_arr[:3000]
+    latent_sample = latent_arr[:19000]
+    combined_arr = np.concatenate([cb_arr_sample, latent_sample], axis=0)
+    labels = np.array([0] * len(cb_arr_sample) + [1] * len(latent_sample))
+
+    print(f"[INFO] Combined array shape: {combined_arr.shape}")
+
+    # Step 1: DBSCAN deduplication
+    combined_arr, mask_dbscan = run_dbscan_dedup(combined_arr)
+    labels = labels[mask_dbscan]
+
+    # Step 2: Remove rows with all zero-distance neighbors
+    combined_arr, mask_nbr = filter_zero_distance_neighbors(combined_arr, n_neighbors)
+    labels = labels[mask_nbr]
+
+    print(f"[INFO] Remaining after filtering zero-distance neighbors: {combined_arr.shape[0]}")
+
+    # Step 3: Try cuML UMAP
     try:
-        print(f"[INFO] Starting UMAP for epoch {epoch}")
-
-        # Combine and deduplicate
-        combined_arr = np.vstack([latent_arr, cb_arr])
-        print(f"[INFO] Combined array shape: {combined_arr.shape}")
-        combined_arr, idx = np.unique(combined_arr, axis=0, return_index=True)
-        print(f"[INFO] Unique points after deduplication: {combined_arr.shape[0]}")
-
-        # Use sklearn NearestNeighbors to identify rows with all-zero distances
-        nn = NearestNeighbors(n_neighbors=n_neighbors + 1, algorithm='auto', metric='euclidean')
-        nn.fit(combined_arr)
-        distances, _ = nn.kneighbors(combined_arr)
-
-        # Exclude self-distance and check if all neighbors are zero-distance
-        zero_dist_mask = np.all(distances[:, 1:] == 0, axis=1)
-        num_zero_rows = np.sum(zero_dist_mask)
-
-        if num_zero_rows > 0:
-            print(f"[WARN] Removing {num_zero_rows} rows with only zero-distance neighbors")
-            combined_arr = combined_arr[~zero_dist_mask]
-            idx = idx[~zero_dist_mask]
-
-        print(f"[INFO] Remaining after filtering zero-distance neighbors: {combined_arr.shape[0]}")
-
-        # Adjust n_neighbors if needed
-        if combined_arr.shape[0] <= n_neighbors:
-            n_neighbors = max(2, combined_arr.shape[0] - 1)
-            print(f"[WARN] Adjusted n_neighbors to {n_neighbors} due to limited samples")
-
-        # Run cuML UMAP
-        umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
+        umap = cumlUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42)
         emb = umap.fit_transform(combined_arr)
-        print(f"[INFO] UMAP embedding shape: {emb.shape}")
-
-        # Label reconstruction
-        labels = np.array([0] * latent_arr.shape[0] + [1] * cb_arr.shape[0])
-        labels = labels[idx]
-        labels = labels[~zero_dist_mask]  # apply same mask
-
-        # Plot
-        plt.figure(figsize=(8, 6))
-        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=labels, s=cb_size, cmap='coolwarm', alpha=0.8)
-        plt.colorbar(scatter, ticks=[0, 1], label='Source')
-        plt.title(f"UMAP Latents and CB (Epoch {epoch})")
-        plt.tight_layout()
-        plt.savefig(f"umap_epoch_{epoch}.png")
-        plt.close()
-
+        print("[INFO] cuML UMAP succeeded.")
     except Exception as e:
-        print(f"[FATAL] UMAP plotting failed: {e}")
+        print(f"[WARN] cuML UMAP failed: {e}")
+        print("[INFO] Falling back to CPU UMAP...")
+        umap = cpuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42)
+        emb = umap.fit_transform(combined_arr)
 
-def process_epoch(epoch):
-    """Load data and plot visualization for a single epoch."""
-    codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
-    # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
-    # codebook_file = '/Users/taka/Documents/best_codebook_40000_16/init_codebook_1.npz'
-    latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
-
-    cb_arr = load_npz_array(codebook_file)
-    latent_arr = load_npz_array_multi(latent_file)
-    print("latent_arr.shape")
-    print(latent_arr.shape)
-    latent_arr = latent_arr[:SAMPLE_LATENT]
-    print(cb_arr.shape)
-
-    cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
-    cb_size = cb_arr.shape[0]
-
-    if MODE == "tsne":
-        plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
-    elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size)
-
+    # Step 4: Plot
+    plt.figure(figsize=(8, 8))
+    palette = ["red", "blue"]
+    sns.scatterplot(x=emb[:, 0], y=emb[:, 1], hue=labels, palette=palette, s=5, alpha=0.7)
+    plt.title(f"UMAP at Epoch {epoch}")
+    plt.legend(title="Type", labels=["CB", "Latent"])
+    plt.axis("off")
+    os.makedirs(save_path, exist_ok=True)
+    plt.savefig(os.path.join(save_path, f"latent_plot_epoch{epoch}.png"))
+    plt.close()
+    print(f"[INFO] Plot saved to {save_path}/latent_plot_epoch{epoch}.png")
 
 def main():
-    for epoch in range(EPOCH_START, EPOCH_END):
+    for epoch in [1]:  # Add more if needed
         print(f"Processing epoch {epoch}")
-        process_epoch(epoch)
+        latent_path = f"latent_epoch{epoch}.pkl"
+        cb_path = f"cb_epoch{epoch}.pkl"
 
+        with open(latent_path, "rb") as f:
+            latent_arr = pickle.load(f)
 
-if __name__ == '__main__':
+        with open(cb_path, "rb") as f:
+            cb_arr = pickle.load(f)
+
+        print("latent_arr.shape")
+        print(latent_arr.shape)
+        print(cb_arr.shape)
+
+        save_path = "plots"
+        plot_latents(latent_arr, cb_arr, epoch, save_path)
+
+if __name__ == "__main__":
     main()
-
-# # ----------------------------------------
-#
-# # 1. Load sample data
-# X, y = load_digits(return_X_y=True)
-#
-# # 2. Move data to GPU
-# X_gpu = cp.asarray(X)
-#
-# # 3. Run UMAP on GPU
-# umap = UMAP(n_neighbors=15, n_components=2, random_state=42)
-# X_embedded_gpu = umap.fit_transform(X_gpu)
-#
-# # 4. Bring result back to CPU for plotting
-# X_embedded = cp.asnumpy(X_embedded_gpu)
-#
-# # 5. Plot the result
-# plt.figure(figsize=(8, 6))
-# scatter = plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=y, cmap='Spectral', s=10)
-# plt.colorbar(scatter, label='Digit Label')
-# plt.title("UMAP Projection of Digits Dataset")
-#
-# # 6. Save the plot to file
-# plt.savefig("umap_digits.png", dpi=300)
-# plt.show()
