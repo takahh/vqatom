@@ -1,10 +1,4 @@
-from cuml.manifold import UMAP
-import cupy as cp
 import numpy as np
-from sklearn.datasets import load_digits
-import matplotlib.pyplot as plt
-from sklearn.metrics import pairwise_distances
-from cuml.manifold import UMAP as cuUMAP
 
 np.set_printoptions(threshold=np.inf)
 
