@@ -98,6 +98,10 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 import matplotlib.pyplot as plt
 from cuml.manifold import UMAP as cuUMAP
+import numpy as np
+from sklearn.metrics import pairwise_distances
+import matplotlib.pyplot as plt
+from cuml.manifold import UMAP as cuUMAP
 
 def plot_umap(latent_arr, cb_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
     try:
