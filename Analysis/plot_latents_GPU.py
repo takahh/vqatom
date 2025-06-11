@@ -98,7 +98,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-        zoom_to_show = float(50/int(zoom))
+        zoom_to_show = f"{int(50 - zoom)}-{int(50 + zoom)}"
 
         latent_mask = (
             (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
