@@ -82,6 +82,23 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 
     # Convert to cuDF DataFrame for GPU
     df = cudf.DataFrame(combined_arr.astype(np.float32))
+    import numpy as np
+
+    # df should be a CuDF or numpy array at this stage
+    if hasattr(df, "to_numpy"):
+        arr = df.to_numpy()
+    else:
+        arr = df
+
+    # Check all-zero rows
+    zero_rows = np.where(np.all(arr == 0, axis=1))[0]
+    print(f"Zero rows: {len(zero_rows)}")
+
+    # Check duplicate rows
+    from sklearn.utils import murmurhash3_32
+    hashes = np.array([murmurhash3_32(row, seed=42) for row in arr])
+    _, counts = np.unique(hashes, return_counts=True)
+    print(f"Duplicates: {np.sum(counts > 1)}")
 
     umap = cumlUMAP(
         n_neighbors=n_neighbors,
