@@ -157,27 +157,27 @@ def main():
 if __name__ == '__main__':
     main()
 
-# ----------------------------------------
-
-# 1. Load sample data
-X, y = load_digits(return_X_y=True)
-
-# 2. Move data to GPU
-X_gpu = cp.asarray(X)
-
-# 3. Run UMAP on GPU
-umap = UMAP(n_neighbors=15, n_components=2, random_state=42)
-X_embedded_gpu = umap.fit_transform(X_gpu)
-
-# 4. Bring result back to CPU for plotting
-X_embedded = cp.asnumpy(X_embedded_gpu)
-
-# 5. Plot the result
-plt.figure(figsize=(8, 6))
-scatter = plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=y, cmap='Spectral', s=10)
-plt.colorbar(scatter, label='Digit Label')
-plt.title("UMAP Projection of Digits Dataset")
-
-# 6. Save the plot to file
-plt.savefig("umap_digits.png", dpi=300)
-plt.show()
+# # ----------------------------------------
+#
+# # 1. Load sample data
+# X, y = load_digits(return_X_y=True)
+#
+# # 2. Move data to GPU
+# X_gpu = cp.asarray(X)
+#
+# # 3. Run UMAP on GPU
+# umap = UMAP(n_neighbors=15, n_components=2, random_state=42)
+# X_embedded_gpu = umap.fit_transform(X_gpu)
+#
+# # 4. Bring result back to CPU for plotting
+# X_embedded = cp.asnumpy(X_embedded_gpu)
+#
+# # 5. Plot the result
+# plt.figure(figsize=(8, 6))
+# scatter = plt.scatter(X_embedded[:, 0], X_embedded[:, 1], c=y, cmap='Spectral', s=10)
+# plt.colorbar(scatter, label='Digit Label')
+# plt.title("UMAP Projection of Digits Dataset")
+#
+# # 6. Save the plot to file
+# plt.savefig("umap_digits.png", dpi=300)
+# plt.show()
