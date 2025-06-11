@@ -10,7 +10,34 @@ from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
 
+DATA_PATH = "/40000_16/"
+# DATA_PATH = "/Users/taka/Documents/vqatom_train_output/bothloss_40000_16/"
+DIMENSION = 16
+# BATCH_SIZE = 8000
+EPOCH_START = 1
+SAMPLE_LATENT = 3000000
+EPOCH_END = EPOCH_START + 1
+# MODE = "umap"  # Choose between "tsne" and "umap"
+MODE = "tsne"  # Choose between "tsne" and "umap"
+
 sns.set(style="white", rc={"figure.figsize": (8, 8)})
+
+
+def load_npz_array(filename):
+    """Load and return the array from a .npz file."""
+    arr = np.load(filename, allow_pickle=True)
+    arr = arr["arr_0"]
+    return np.squeeze(arr)
+
+def load_npz_array_multi(filename):
+    """Load and return the array from a .npz file."""
+    arr0 = np.load(filename, allow_pickle=True)
+    arr_all = []
+    for names in arr0.files:
+        arr = arr0[names].tolist()
+        arr_all.extend(arr)
+    final_arr = np.array(arr_all)
+    return np.squeeze(final_arr)
 
 def filter_zero_distance_neighbors(X, n_neighbors):
     nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(X)
@@ -88,5 +115,32 @@ def main():
 
         plot_latents(latent_arr, cb_arr, epoch, save_path="plots")
 
-if __name__ == "__main__":
+
+def process_epoch(epoch):
+    """Load data and plot visualization for a single epoch."""
+    codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
+    # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
+    # codebook_file = '/Users/taka/Documents/best_codebook_40000_16/init_codebook_1.npz'
+    latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
+
+    cb_arr = load_npz_array(codebook_file)
+    latent_arr = load_npz_array_multi(latent_file)
+    print("latent_arr.shape")
+    print(latent_arr.shape)
+    latent_arr = latent_arr[:SAMPLE_LATENT]
+    print(cb_arr.shape)
+
+    cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
+    cb_size = cb_arr.shape[0]
+
+    plot_latents(latent_arr, cb_arr, epoch, save_path="plots")
+
+
+def main():
+    for epoch in range(EPOCH_START, EPOCH_END):
+        print(f"Processing epoch {epoch}")
+        process_epoch(epoch)
+
+
+if __name__ == '__main__':
     main()
