@@ -88,39 +88,42 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
     print("latent transform done")
     cb_emb = reducer.transform(cb_arr)
     print("cb transform done")
-    x_range = np.percentile(cb_emb[:, 0], [2, 98])
-    y_range = np.percentile(cb_emb[:, 1], [2, 98])
 
-    latent_mask = (
-        (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-        (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-    )
-    cb_mask = (
-        (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-        (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-    )
+    for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
+        zoom_pct = f"{int(50 - zoom)}_{int(50 + zoom)}"
+        x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
+        y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
-    zoomed_latent = latent_emb[latent_mask]
-    zoomed_cb = cb_emb[cb_mask]
-
-    bins = 200
-    title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
-
-    for i in range(2):
-        plt.figure()
-        plt.hist2d(
-            zoomed_latent[:, 0], zoomed_latent[:, 1],
-            bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-            cmap="Blues"
+        latent_mask = (
+            (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+            (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
         )
-        plt.xlim(x_range)
-        plt.ylim(y_range)
+        cb_mask = (
+            (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+            (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+        )
 
-        if i == 0:
-            plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
-        plt.title(title + " (Zoomed)")
-        plt.colorbar(label='Density')
-        plt.savefig(f"{DATA_PATH}/{i}.png")
+        zoomed_latent = latent_emb[latent_mask]
+        zoomed_cb = cb_emb[cb_mask]
+
+        bins = 200
+        title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
+
+        for i in range(2):
+            plt.figure()
+            plt.hist2d(
+                zoomed_latent[:, 0], zoomed_latent[:, 1],
+                bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                cmap="Blues"
+            )
+            plt.xlim(x_range)
+            plt.ylim(y_range)
+
+            if i == 0:
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
+            plt.title(title + " (Zoomed)")
+            plt.colorbar(label='Density')
+            plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
 
 
 def process_epoch(epoch):
