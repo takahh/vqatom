@@ -80,7 +80,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         n_components=2,
-        n_epochs=5000,
+        n_epochs=250,
         random_state=42
     ).fit(latent_arr)
     print("reducer setup done")
