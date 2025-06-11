@@ -53,6 +53,21 @@ def check_duplicates(arr):
     _, counts = np.unique(rounded, axis=0, return_counts=True)
     return np.sum(counts > 1)
 
+import os
+import cupy as cp
+import numpy as np
+import cudf
+import seaborn as sns
+import matplotlib.pyplot as plt
+from cuml.manifold import UMAP as cumlUMAP
+
+from sklearn.metrics import pairwise_distances
+
+def filter_close_points(arr, epsilon=1e-6):
+    """Remove rows that are too close to all others."""
+    dists = pairwise_distances(arr, metric="euclidean")
+    mask = ~(np.all(dists < epsilon, axis=1))
+    return arr[mask]
 
 def plot_latents(latent_arr, cb_arr, epoch, save_path):
     n_neighbors, min_dist = 5, 0.1
@@ -74,23 +89,27 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 
     df = cudf.DataFrame(combined.astype(np.float32))
     arr = df.to_numpy()
+
+    # Drop zero rows and duplicates
     df = df[~(df == 0).all(axis=1)]
     df = df.drop_duplicates()
-    # df += 1e-4 * np.random.randn(*df.shape)
+
+    # Further filter: remove rows too close to all others
+    arr = df.to_numpy()
+    arr = filter_close_points(arr, epsilon=1e-6)
 
     print(f"Zero rows: {np.sum(np.all(arr == 0, axis=1))}")
     print(f"Duplicates: {check_duplicates(arr)}")
-    import cupy as cp
 
-    # Convert df to CuPy array
-    df_cp = cp.asarray(df.to_numpy())
-    noise = cp.random.normal(0, 1e-6, df_cp.shape).astype(cp.float32)
-
+    # Convert to GPU (CuPy) array and apply stronger jitter
+    df_cp = cp.asarray(arr)
+    noise = cp.random.normal(0, 1e-4, df_cp.shape).astype(cp.float32)
     df_jittered_cp = df_cp + noise
+
+    # Back to cuDF for cuML UMAP
     df_jittered = cudf.DataFrame.from_records(cp.asnumpy(df_jittered_cp))
 
     umap = cumlUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42, verbose=True)
-    # embedding = umap.fit_transform(df).to_numpy()
     embedding = umap.fit_transform(df_jittered).to_numpy()
 
     plt.figure(figsize=(8, 8))
