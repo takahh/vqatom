@@ -75,60 +75,47 @@ def load_npz_array_multi(filename):
 #             plt.colorbar(label='Density')
 #             plt.show()
 
-def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
-    print("Checking latent array")
-    unique_rows = np.unique(latent_arr, axis=0).shape[0]
-    if unique_rows < latent_arr.shape[0]:
-        print(f"[WARN] Only {unique_rows} unique rows. Adding noise to latent_arr")
-        latent_arr += np.random.normal(scale=1e-4, size=latent_arr.shape)
+def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
+    try:
+        print(f"[INFO] Starting UMAP for epoch {epoch} on {latent_arr.shape[0]} points.")
 
-    reducer = UMAP(
-        n_neighbors=n_neighbors,
-        n_components=2,
-        min_dist=min_dist,
-        random_state=42
-    ).fit(latent_arr)
+        # Step 1: Remove exact duplicates
+        _, idx = np.unique(latent_arr, axis=0, return_index=True)
+        latent_arr = latent_arr[np.sort(idx)]
+        cb_arr = cb_arr[np.sort(idx)]
+        print(f"[INFO] Unique points after deduplication: {latent_arr.shape[0]}")
 
-    # Filter exact duplicates BEFORE UMAP
-    _, idx = np.unique(latent_arr, axis=0, return_index=True)
-    latent_arr_unique = latent_arr[np.sort(idx)]
-    cb_arr_unique = cb_arr[np.sort(idx)]  # Only if needed for color/labeling
+        # Step 2 (optional): Remove rows with all zero-distance neighbors
+        dist_matrix = pairwise_distances(latent_arr)
+        np.fill_diagonal(dist_matrix, np.inf)
+        zero_dist_rows = np.all(dist_matrix == 0, axis=1)
 
-    print(f"[INFO] UMAP input reduced to {latent_arr_unique.shape[0]} rows after deduplication.")
+        if np.any(zero_dist_rows):
+            print(f"[WARN] Removing {np.sum(zero_dist_rows)} rows with no nonzero-distance neighbors.")
+            latent_arr = latent_arr[~zero_dist_rows]
+            cb_arr = cb_arr[~zero_dist_rows]
 
-    latent_emb = reducer.transform(latent_arr)
-    cb_emb = reducer.transform(cb_arr_unique)
+        # Step 3: Try cuML UMAP
+        try:
+            umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
+            emb = umap.fit_transform(latent_arr)
+        except RuntimeError as e:
+            print("[ERROR] cuML UMAP failed — falling back to CPU.")
+            print(f"[cuML ERROR] {e}")
+            umap = cpuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
+            emb = umap.fit_transform(latent_arr)
 
-    for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
-        x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
-        y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-        zoom_to_show = f"{int(50 - zoom)}-{int(50 + zoom)}"
+        # Step 4: Plot
+        plt.figure(figsize=(8, 6))
+        plt.scatter(emb[:, 0], emb[:, 1], c=cb_arr, s=cb_size, cmap='viridis', alpha=0.8)
+        plt.colorbar()
+        plt.title(f"UMAP Latents (Epoch {epoch})")
+        plt.tight_layout()
+        plt.savefig(f"umap_epoch_{epoch}.png")
+        plt.close()
 
-        latent_mask = (
-            (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-            (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-        )
-        cb_mask = (
-            (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-            (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-        )
-
-        zoomed_latent = latent_emb[latent_mask]
-        zoomed_cb = cb_emb[cb_mask]
-
-        title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, Zoom {zoom_to_show}"
-
-        for i in range(2):
-            plt.figure()
-            plt.xlim(x_range)
-            plt.ylim(y_range)
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
-            if i == 0:
-                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
-            plt.title(title + " (Zoomed)")
-            plt.savefig(f"/umap_result_{zoom_to_show}_{i}.png")
-            plt.close()
-
+    except Exception as final_error:
+        print(f"[FATAL] UMAP plotting failed: {final_error}")
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
