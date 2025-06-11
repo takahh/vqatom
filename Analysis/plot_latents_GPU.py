@@ -98,7 +98,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-        zoom = float(50/int(zoom))
+        zoom_to_show = float(50/int(zoom))
 
         latent_mask = (
             (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
@@ -112,7 +112,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         zoomed_latent = latent_emb[latent_mask]
         zoomed_cb = cb_emb[cb_mask]
 
-        title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, Zoom {zoom}"
+        title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, Zoom {zoom_to_show}"
 
         for i in range(2):
             plt.figure()
@@ -122,8 +122,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
             if i == 0:
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + " (Zoomed)")
-            plt.colorbar(label='Density')
-        plt.savefig(f"/umap_result_{zoom}.png")
+        plt.savefig(f"/umap_result_{zoom_to_show}.png")
 
 
 def process_epoch(epoch):
