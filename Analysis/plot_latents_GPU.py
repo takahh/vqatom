@@ -102,57 +102,56 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 import matplotlib.pyplot as plt
 from cuml.manifold import UMAP as cuUMAP
+import numpy as np
+import matplotlib.pyplot as plt
+from cuml.manifold import UMAP as cuUMAP
+from sklearn.neighbors import NearestNeighbors
 
 def plot_umap(latent_arr, cb_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
     try:
         print(f"[INFO] Starting UMAP for epoch {epoch}")
 
-        # Combine arrays vertically
+        # Combine and deduplicate
         combined_arr = np.vstack([latent_arr, cb_arr])
         print(f"[INFO] Combined array shape: {combined_arr.shape}")
-
-        # Remove duplicates
-        _, idx = np.unique(combined_arr, axis=0, return_index=True)
-        combined_arr = combined_arr[idx]
+        combined_arr, idx = np.unique(combined_arr, axis=0, return_index=True)
         print(f"[INFO] Unique points after deduplication: {combined_arr.shape[0]}")
 
-        # Compute pairwise distances
-        dist_matrix = pairwise_distances(combined_arr)
-        np.fill_diagonal(dist_matrix, np.inf)  # ignore self-distances
+        # Use sklearn NearestNeighbors to identify rows with all-zero distances
+        nn = NearestNeighbors(n_neighbors=n_neighbors + 1, algorithm='auto', metric='euclidean')
+        nn.fit(combined_arr)
+        distances, _ = nn.kneighbors(combined_arr)
 
-        # Remove points with no neighbors at non-zero distance
-        valid_points_mask = np.any(dist_matrix > 0, axis=1)
-        num_invalid = np.sum(~valid_points_mask)
-        if num_invalid > 0:
-            print(f"[WARN] Removing {num_invalid} points with no neighbors at non-zero distance.")
-            combined_arr = combined_arr[valid_points_mask]
-            idx = idx[valid_points_mask]  # keep idx consistent
+        # Exclude self-distance and check if all neighbors are zero-distance
+        zero_dist_mask = np.all(distances[:, 1:] == 0, axis=1)
+        num_zero_rows = np.sum(zero_dist_mask)
 
-        print(f"[INFO] Points after filtering no-neighbor points: {combined_arr.shape[0]}")
+        if num_zero_rows > 0:
+            print(f"[WARN] Removing {num_zero_rows} rows with only zero-distance neighbors")
+            combined_arr = combined_arr[~zero_dist_mask]
+            idx = idx[~zero_dist_mask]
+
+        print(f"[INFO] Remaining after filtering zero-distance neighbors: {combined_arr.shape[0]}")
 
         # Adjust n_neighbors if needed
-        effective_n_neighbors = min(n_neighbors, combined_arr.shape[0] - 1)
-        if effective_n_neighbors < n_neighbors:
-            print(f"[WARN] Adjusting n_neighbors from {n_neighbors} to {effective_n_neighbors}")
-            n_neighbors = effective_n_neighbors
+        if combined_arr.shape[0] <= n_neighbors:
+            n_neighbors = max(2, combined_arr.shape[0] - 1)
+            print(f"[WARN] Adjusted n_neighbors to {n_neighbors} due to limited samples")
 
         # Run cuML UMAP
         umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
         emb = umap.fit_transform(combined_arr)
         print(f"[INFO] UMAP embedding shape: {emb.shape}")
 
-        # Recreate labels for coloring
-        n_latent = latent_arr.shape[0]
-        n_cb = cb_arr.shape[0]
-        labels = np.array([0]*n_latent + [1]*n_cb)
-        labels = labels[idx]  # keep only unique points
-        labels = labels[valid_points_mask]  # only valid points
+        # Label reconstruction
+        labels = np.array([0] * latent_arr.shape[0] + [1] * cb_arr.shape[0])
+        labels = labels[idx]
+        labels = labels[~zero_dist_mask]  # apply same mask
 
         # Plot
         plt.figure(figsize=(8, 6))
         scatter = plt.scatter(emb[:, 0], emb[:, 1], c=labels, s=cb_size, cmap='coolwarm', alpha=0.8)
         plt.colorbar(scatter, ticks=[0, 1], label='Source')
-        plt.clim(-0.5, 1.5)
         plt.title(f"UMAP Latents and CB (Epoch {epoch})")
         plt.tight_layout()
         plt.savefig(f"umap_epoch_{epoch}.png")
@@ -160,7 +159,6 @@ def plot_umap(latent_arr, cb_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=1
 
     except Exception as e:
         print(f"[FATAL] UMAP plotting failed: {e}")
-
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
