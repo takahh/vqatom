@@ -111,16 +111,17 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
 
         for i in range(2):
             plt.figure()
-            plt.hist2d(
-                zoomed_latent[:, 0], zoomed_latent[:, 1],
-                bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                cmap="Blues"
-            )
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
+            # plt.hist2d(
+            #     zoomed_latent[:, 0], zoomed_latent[:, 1],
+            #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+            #     cmap="Blues"
+            # )
             plt.xlim(x_range)
             plt.ylim(y_range)
 
             if i == 0:
-                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + " (Zoomed)")
             plt.colorbar(label='Density')
             plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
