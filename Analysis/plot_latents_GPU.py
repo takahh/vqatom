@@ -123,7 +123,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
             if i == 0:
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + " (Zoomed)")
-            plt.colorbar(label='Density')
+            # plt.colorbar(label='Density')
             plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
 
 
