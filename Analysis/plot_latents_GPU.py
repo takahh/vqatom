@@ -90,6 +90,11 @@ except ImportError:
 from umap import UMAP as cpuUMAP
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import pairwise_distances
+from cuml.manifold import UMAP  # cuML's UMAP
+
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
     try:
         print(f"[INFO] Starting UMAP for epoch {epoch} on {latent_arr.shape[0]} points.")
@@ -100,34 +105,18 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=1
         cb_arr = cb_arr[idx]
         print(f"[INFO] Unique points after deduplication: {latent_arr.shape[0]}")
 
-        # Step 2 (optional): Remove rows with all zero-distance neighbors
+        # Step 2: Remove rows with no nonzero-distance neighbors
         dist_matrix = pairwise_distances(latent_arr)
         np.fill_diagonal(dist_matrix, np.inf)
         zero_dist_rows = np.all(dist_matrix == 0, axis=1)
-
         if np.any(zero_dist_rows):
             print(f"[WARN] Removing {np.sum(zero_dist_rows)} rows with no nonzero-distance neighbors.")
             latent_arr = latent_arr[~zero_dist_rows]
             cb_arr = cb_arr[~zero_dist_rows]
 
-        # Sanity check: ensure cb_arr length matches latent_arr length
-        assert latent_arr.shape[0] == cb_arr.shape[0], \
-            f"latent_arr and cb_arr length mismatch: {latent_arr.shape[0]} vs {cb_arr.shape[0]}"
-
-        # Step 3: Try cuML UMAP first (if available)
-        if cuUMAP is not None:
-            try:
-                umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
-                emb = umap.fit_transform(latent_arr)
-            except RuntimeError as e:
-                print("[ERROR] cuML UMAP failed — falling back to CPU.")
-                print(f"[cuML ERROR] {e}")
-                umap = cpuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
-                emb = umap.fit_transform(latent_arr)
-        else:
-            # cuML not available, use CPU UMAP
-            umap = cpuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
-            emb = umap.fit_transform(latent_arr)
+        # Step 3: Run cuML UMAP
+        umap = UMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
+        emb = umap.fit_transform(latent_arr)
 
         # Step 4: Plot
         plt.figure(figsize=(8, 6))
@@ -140,8 +129,8 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=1
 
         print(f"[INFO] UMAP plot saved for epoch {epoch}.")
 
-    except Exception as final_error:
-        print(f"[FATAL] UMAP plotting failed: {final_error}")
+    except Exception as e:
+        print(f"[FATAL] UMAP plotting failed: {e}")
 
 def process_epoch(epoch):
     """Load data and plot visualization for a single epoch."""
