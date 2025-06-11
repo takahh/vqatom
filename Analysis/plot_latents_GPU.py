@@ -61,7 +61,7 @@ def run_dbscan_dedup(X, eps=1e-8):
     return X[mask], mask
 
 def plot_latents(latent_arr, cb_arr, epoch, save_path):
-    n_neighbors = 15
+    n_neighbors = 5
     min_dist = 0.1
 
     print(f"[INFO] Starting UMAP for epoch {epoch}")
