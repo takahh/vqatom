@@ -80,9 +80,15 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 
     print(f"Zero rows: {np.sum(np.all(arr == 0, axis=1))}")
     print(f"Duplicates: {check_duplicates(arr)}")
+    import cupy as cp
 
-    noise = np.random.normal(0, 1e-6, df.shape)
-    df_jittered = df + noise
+    # Convert df to CuPy array
+    df_cp = cp.asarray(df.to_numpy())
+    noise = cp.random.normal(0, 1e-6, df_cp.shape).astype(cp.float32)
+
+    df_jittered_cp = df_cp + noise
+    df_jittered = cudf.DataFrame.from_records(cp.asnumpy(df_jittered_cp))
+
     umap = cumlUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42, verbose=True)
     # embedding = umap.fit_transform(df).to_numpy()
     embedding = umap.fit_transform(df_jittered).to_numpy()
