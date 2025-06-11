@@ -10,7 +10,7 @@ np.set_printoptions(threshold=np.inf)
 DIMENSION = 16
 # BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 3000000
+SAMPLE_LATENT = 30000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -74,7 +74,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             plt.colorbar(label='Density')
             plt.show()
 
-def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
+def plot_umap(cb_arr, latent_arr, latent_to_fit, epoch, n_neighbors, min_dist, cb_size):
     print("reducer setup")
     reducer = umap.UMAP(
         n_neighbors=n_neighbors,
@@ -82,7 +82,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         n_components=2,
         n_epochs=250,
         random_state=42
-    ).fit(latent_arr)
+    ).fit(latent_to_fit)
     print("reducer setup done")
     latent_emb = reducer.transform(latent_arr)
     print("latent transform done")
@@ -137,7 +137,7 @@ def process_epoch(epoch):
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
-    latent_arr = latent_arr[:SAMPLE_LATENT]
+    latent_arr_to_fit = latent_arr[:SAMPLE_LATENT]
     print(cb_arr.shape)
 
     cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
@@ -146,7 +146,7 @@ def process_epoch(epoch):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size)
+        plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size)
 
 
 def main():
