@@ -81,8 +81,11 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
     print(f"Zero rows: {np.sum(np.all(arr == 0, axis=1))}")
     print(f"Duplicates: {check_duplicates(arr)}")
 
+    noise = np.random.normal(0, 1e-6, df.shape)
+    df_jittered = df + noise
     umap = cumlUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42, verbose=True)
-    embedding = umap.fit_transform(df).to_numpy()
+    # embedding = umap.fit_transform(df).to_numpy()
+    embedding = umap.fit_transform(df_jittered).to_numpy()
 
     plt.figure(figsize=(8, 8))
     sns.scatterplot(x=embedding[:, 0], y=embedding[:, 1], hue=labels, palette=["red", "blue"], s=5, alpha=0.7)
