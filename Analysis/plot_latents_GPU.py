@@ -108,6 +108,22 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 
     # Back to cuDF for cuML UMAP
     df_jittered = cudf.DataFrame.from_records(cp.asnumpy(df_jittered_cp))
+    from sklearn.neighbors import NearestNeighbors
+
+    def filter_isolated_points(X, n_neighbors=5, epsilon=1e-6):
+        """
+        Remove rows that have fewer than n_neighbors neighbors with distance > epsilon.
+        """
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(X)
+        distances, _ = nbrs.kneighbors(X)
+        # Exclude self-distance (0.0) at index 0
+        valid = (distances[:, 1:] > epsilon).sum(axis=1) >= n_neighbors
+        print(f"[FILTER] Removing {np.sum(~valid)} isolated or nearly-identical points")
+        return X[valid]
+
+    # Before converting to GPU:
+    df_jittered = filter_close_points(df_jittered, epsilon=1e-6)
+    df_jittered = filter_isolated_points(df_jittered, n_neighbors=5, epsilon=1e-6)
 
     umap = cumlUMAP(n_neighbors=n_neighbors, min_dist=min_dist, n_components=2, random_state=42, verbose=True)
     embedding = umap.fit_transform(df_jittered).to_numpy()
