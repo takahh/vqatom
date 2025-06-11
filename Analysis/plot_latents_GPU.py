@@ -89,41 +89,62 @@ import numpy as np
 import matplotlib.pyplot as plt
 from cuml.manifold import UMAP as cuUMAP
 from sklearn.metrics import pairwise_distances  # For distance matrix on CPU
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import pairwise_distances
+from cuml.manifold import UMAP as cuUMAP
 
-def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
+
+def plot_umap(latent_arr, cb_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=10):
     try:
-        print(f"[INFO] Starting UMAP for epoch {epoch} on {latent_arr.shape[0]} points.")
+        print(f"[INFO] Starting UMAP for epoch {epoch}")
 
-        # Step 1: Remove exact duplicates
-        _, idx = np.unique(latent_arr, axis=0, return_index=True)
-        latent_arr = latent_arr[idx]
-        cb_arr = cb_arr[idx]
-        print(f"[INFO] Unique points after deduplication: {latent_arr.shape[0]}")
+        # Combine the arrays vertically
+        combined_arr = np.vstack([latent_arr, cb_arr])
+        print(f"[INFO] Combined array shape: {combined_arr.shape}")
 
-        # Step 2: Remove rows with all zero-distance neighbors
-        dist_matrix = pairwise_distances(latent_arr)
-        np.fill_diagonal(dist_matrix, np.inf)  # Ignore self-distances
+        # Remove duplicates from combined_arr
+        _, idx = np.unique(combined_arr, axis=0, return_index=True)
+        combined_arr = combined_arr[idx]
+        print(f"[INFO] Unique points after deduplication: {combined_arr.shape[0]}")
+
+        # Remove rows with zero-distance neighbors
+        dist_matrix = pairwise_distances(combined_arr)
+        np.fill_diagonal(dist_matrix, np.inf)
         zero_dist_rows = np.all(dist_matrix == 0, axis=1)
 
         if np.any(zero_dist_rows):
             print(f"[WARN] Removing {np.sum(zero_dist_rows)} rows with no nonzero-distance neighbors.")
-            latent_arr = latent_arr[~zero_dist_rows]
-            cb_arr = cb_arr[~zero_dist_rows]
+            combined_arr = combined_arr[~zero_dist_rows]
 
-        print(f"[INFO] Points after filtering zero-distance neighbors: {latent_arr.shape[0]}")
+        print(f"[INFO] Points after filtering zero-distance neighbors: {combined_arr.shape[0]}")
 
-        # Step 3: Run cuML UMAP
+        # Run cuML UMAP
         umap = cuUMAP(n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
-        emb = umap.fit_transform(latent_arr)
-
+        emb = umap.fit_transform(combined_arr)
         print(f"[INFO] UMAP embedding shape: {emb.shape}")
-        print(f"[INFO] Color array shape: {cb_arr.shape}")
 
-        # Step 4: Plot the result
+        # Create a color array for plotting
+        # Points from latent_arr get color 0, points from cb_arr get color 1
+        n_latent = latent_arr.shape[0]
+        n_cb = cb_arr.shape[0]
+
+        # Because of deduplication and filtering, some points are removed;
+        # we need to identify which points belong to which original array.
+        # Simplest way: mark points before deduplication and filtering, then keep those indices.
+        # Here is a workaround assuming no duplicates *between* latent_arr and cb_arr:
+
+        labels = np.array([0] * n_latent + [1] * n_cb)
+        labels = labels[idx]  # keep only the unique points
+        if np.any(zero_dist_rows):
+            labels = labels[~zero_dist_rows]  # also filter zero-dist rows
+
+        # Plot
         plt.figure(figsize=(8, 6))
-        plt.scatter(emb[:, 0], emb[:, 1], c=cb_arr, s=cb_size, cmap='viridis', alpha=0.8)
-        plt.colorbar()
-        plt.title(f"UMAP Latents (Epoch {epoch})")
+        scatter = plt.scatter(emb[:, 0], emb[:, 1], c=labels, s=cb_size, cmap='coolwarm', alpha=0.8)
+        plt.colorbar(scatter, ticks=[0, 1], label='Source')
+        plt.clim(-0.5, 1.5)
+        plt.title(f"UMAP Latents and CB (Epoch {epoch})")
         plt.tight_layout()
         plt.savefig(f"umap_epoch_{epoch}.png")
         plt.close()
