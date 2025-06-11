@@ -43,7 +43,7 @@ def filter_zero_distance_neighbors(X, n_neighbors):
     nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(X)
     distances, _ = nbrs.kneighbors(X)
     distances = distances[:, 1:]  # exclude distance to self
-    mask = ~np.all(distances == 0, axis=1)
+    mask = np.any(distances > 0, axis=1)
     return X[mask], mask
 
 def run_dbscan_dedup(X, eps=1e-8):
