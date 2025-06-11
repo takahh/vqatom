@@ -76,7 +76,7 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
     arr = df.to_numpy()
     df = df[~(df == 0).all(axis=1)]
     df = df.drop_duplicates()
-    df += 1e-4 * np.random.randn(*df.shape)
+    # df += 1e-4 * np.random.randn(*df.shape)
 
     print(f"Zero rows: {np.sum(np.all(arr == 0, axis=1))}")
     print(f"Duplicates: {check_duplicates(arr)}")
