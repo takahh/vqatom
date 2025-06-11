@@ -82,7 +82,6 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 
     # Convert to cuDF DataFrame for GPU
     df = cudf.DataFrame(combined_arr.astype(np.float32))
-    import numpy as np
 
     # df should be a CuDF or numpy array at this stage
     if hasattr(df, "to_numpy"):
