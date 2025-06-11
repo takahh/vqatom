@@ -97,7 +97,7 @@ def plot_latents(latent_arr, cb_arr, epoch, save_path):
 def process_epoch(epoch):
     cb_arr = load_npz_array(f"{DATA_PATH}used_cb_vectors.npz")
     latent_arr = load_npz_array_multi(f"{DATA_PATH}latents_all_{epoch}.npz")[:SAMPLE_LATENT]
-
+    print("loaded...")
     cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
     print(f"latent_arr.shape: {latent_arr.shape}\ncb_arr.shape: {cb_arr.shape}")
 
