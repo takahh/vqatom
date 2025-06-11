@@ -287,16 +287,16 @@ class EquivariantThreeHopGINE(nn.Module):
                     repel_loss.item()]
 
         if batched_graph_base:  # from --- train_sage --
-            if self.train_or_infer == "train":
-                sample_list = []
-            else:
-                latents = h
-                num_nodes = batched_graph_base.num_nodes()
-                src, dst = batched_graph_base.edges()
-                sample_adj_base = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=src.device)
-                sample_adj_base[src, dst] = 1.0
-                sample_bond_info = batched_graph_base.edata["weight"]
-                sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
+            # if self.train_or_infer == "train":
+            #     sample_list = []
+            # else:
+            latents = h
+            num_nodes = batched_graph_base.num_nodes()
+            src, dst = batched_graph_base.edges()
+            sample_adj_base = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=src.device)
+            sample_adj_base[src, dst] = 1.0
+            sample_bond_info = batched_graph_base.edata["weight"]
+            sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:   # -- from evaluate ---
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
