@@ -106,7 +106,6 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size):
         zoomed_latent = latent_emb[latent_mask]
         zoomed_cb = cb_emb[cb_mask]
 
-        bins = 200
         title = f"UMAP: n_neighbors {n_neighbors}, min_dist {min_dist}, zoom {zoom_pct}"
 
         for i in range(2):
