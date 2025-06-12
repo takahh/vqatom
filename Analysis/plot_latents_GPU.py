@@ -11,7 +11,8 @@ DIMENSION = 16
 N_NEIGHBORS = 30
 MIN_DIST = 0.1
 EPOCH_START = 1
-SAMPLE_LATENT = 300000
+SAMPLE_LATENT = 3000000
+PERPLEXITY = 30
 EPOCH_END = EPOCH_START + 1
 # MODE = "umap"  # Choose between "tsne" and "umap"
 MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -70,7 +71,7 @@ def plot_tsne(cb_arr, latent_arr, latent_to_fit, epoch, perplexity, cb_size):
 
             if i == 0:
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
-            plt.title(title + " (Zoomed)")
+            plt.title(title + f" Zoom {zoom_pct}")
             print(f"saving file to {DATA_PATH}/zoom_{zoom_pct}_{i}.png")
             plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
 
@@ -146,7 +147,7 @@ def process_epoch(epoch):
     print(cb_size)
 
     if MODE == "tsne":
-        plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=10, cb_size=cb_size)
+        plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=PERPLEXITY, cb_size=cb_size)
     elif MODE == "umap":
         plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=N_NEIGHBORS, min_dist=MIN_DIST, cb_size=cb_size)
 

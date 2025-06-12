@@ -1,30 +1,22 @@
-from collections import Counter
-import logging
+from sklearn.manifold import TSNE
+from sklearn.datasets import load_digits
+import matplotlib.pyplot as plt
 
-# Sample nested list
-ind_list = [
-    [0.0, 1.0, 2.0],
-    [2.0, 3.0, 0.0],
-    [1.0, 4.0, 0.0]
-]
+# Load sample dataset
+digits = load_digits()
+X = digits.data
+y = digits.target
 
-# Flatten the list
-flat = [item for sublist in ind_list for item in sublist]
-count = Counter(flat)
+# Different perplexities
+perplexities = [5, 30, 50]
 
-# Sort by key
-sorted_count = dict(sorted(count.items()))
-print("sorted_count")
-# Print only first 100 items
-print(dict(list(sorted_count.items())[:100]))
+plt.figure(figsize=(15, 4))
+for i, perp in enumerate(perplexities):
+    tsne = TSNE(n_components=2, perplexity=perp, random_state=0)
+    X_tsne = tsne.fit_transform(X)
 
-# Count values
-num_zero = count[0.0] if 0.0 in count else 0
-num_unique_nonzero = len([k for k in count if k != 0.0])
-
-# Setup logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger()
-
-logger.info(f"\nNumber of zero values: {num_zero}")
-logger.info(f"Number of nonzero unique values: {num_unique_nonzero}")
+    plt.subplot(1, 3, i + 1)
+    plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=y, cmap='tab10', s=10)
+    plt.title(f"Perplexity = {perp}")
+plt.tight_layout()
+plt.show()
