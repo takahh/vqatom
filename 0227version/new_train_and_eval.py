@@ -424,7 +424,7 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
-                    print(f"len(ind_chunk) = {len(ind_chunk)}")
+                    # print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
@@ -460,12 +460,12 @@ def run_inductive(
         unique_vectors = torch.unique(model.vq._codebook.embed[0], dim=0)
         num_unique_vectors = unique_vectors.size(0)
         logger.info(f"{num_unique_vectors} is num_unique_vectors")
-        print(f"Number of observed keys: {num_observed}")
+        print(f"Number of observed keys in the test set: {num_observed}")
         print(f"Number of zero keys: {num_zero_keys}")
-        print(f"Number of nonzero keys: {num_missing_keys}")
+        print(f"Number of unused keys: {num_missing_keys}")
         logger.info(f"Number of observed keys: {num_observed}")
         logger.info(f"Number of zero keys: {num_zero_keys}")
-        logger.info(f"Number of nonzero keys: {num_missing_keys}")
+        logger.info(f"Number of unused keys: {num_missing_keys}")
 
         # -------------------------------
         # Save loss information and else
