@@ -110,7 +110,7 @@ def plot_umap(cb_arr, latent_arr, latent_to_fit, epoch, n_neighbors, min_dist, c
 
         for i in range(2):
             plt.figure()
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=1, c='black')
             # plt.hist2d(
             #     zoomed_latent[:, 0], zoomed_latent[:, 1],
             #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
