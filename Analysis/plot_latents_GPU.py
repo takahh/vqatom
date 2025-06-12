@@ -33,17 +33,17 @@ def load_npz_array_multi(filename):
     return np.squeeze(final_arr)
 
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
-    title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
+    title = f"T-SNE: perplex {perplexity}, "
     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
     print("fitting start")
     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
     print("fitting done")
-    for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
+    for zoom in [50, 20, 15, 10, 7, 5, 3, 2, 1, 0.5, 0.2, 0.1]:
         cb_emb = embedding[:cb_size]
         latent_emb = embedding[cb_size:cb_size]
+        zoom_pct = f"{float(50 - zoom)}_{float(50 + zoom)}"
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-        zoom = float(50/int(zoom))
 
         # Mask both latent and cb to zoom-in range
         latent_mask = (
@@ -57,10 +57,9 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
         zoomed_latent = latent_emb[latent_mask]
         zoomed_cb = cb_emb[cb_mask]
 
-        bins = 100
         for i in range(2):
             plt.figure(figsize=(10, 8))
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=1, c='black')
             # plt.hist2d(
             #     zoomed_latent[:, 0], zoomed_latent[:, 1],
             #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
@@ -71,9 +70,9 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 
             if i == 0:
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
-            plt.title(title + f" (Zoomed {zoom}, sample {SAMPLE_LATENT})")
-            plt.colorbar(label='Density')
-            plt.show()
+            plt.title(title + " (Zoomed)")
+            print(f"saving file to {DATA_PATH}/zoom_{zoom_pct}_{i}.png")
+            plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
 
 def plot_umap(cb_arr, latent_arr, latent_to_fit, epoch, n_neighbors, min_dist, cb_size):
     print("reducer setup")
