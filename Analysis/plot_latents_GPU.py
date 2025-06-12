@@ -34,7 +34,7 @@ def load_npz_array_multi(filename):
 
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
     title = f"T-SNE: perplex {perplexity}, "
-    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
+    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, max_iter=250)
     print("fitting start")
     embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
     print("fitting done")
