@@ -11,7 +11,7 @@ DIMENSION = 16
 N_NEIGHBORS = 30
 MIN_DIST = 0.1
 EPOCH_START = 1
-SAMPLE_LATENT = 30000
+SAMPLE_LATENT = 300
 EPOCH_END = EPOCH_START + 1
 # MODE = "umap"  # Choose between "tsne" and "umap"
 MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -59,7 +59,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 
         for i in range(2):
             plt.figure(figsize=(10, 8))
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=1, c='black')
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=5, c='black')
             # plt.hist2d(
             #     zoomed_latent[:, 0], zoomed_latent[:, 1],
             #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
