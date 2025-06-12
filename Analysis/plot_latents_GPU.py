@@ -8,9 +8,10 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 DIMENSION = 16
-# BATCH_SIZE = 8000
+N_NEIGHBORS = 0.1
+MIN_DIST = 30
 EPOCH_START = 1
-SAMPLE_LATENT = 300000
+SAMPLE_LATENT = 30000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -146,7 +147,7 @@ def process_epoch(epoch):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size)
+        plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=N_NEIGHBORS, min_dist=MIN_DIST, cb_size=cb_size)
 
 
 def main():
