@@ -435,9 +435,9 @@ def run_inductive(
         # Count Codebook Frequency and used Codebook
         # -------------------------------------------
         args = get_args()
-        if args.train_or_infer == 'use_nonredun_cb_infer':
-            ind_list = [item for sublist in ind_list for item in sublist]
-            ind_list = [item for sublist in ind_list for item in sublist]
+        # if args.train_or_infer == 'use_nonredun_cb_infer':
+        ind_list = [item for sublist in ind_list for item in sublist]
+        ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
         count = Counter(flat)
         import json
