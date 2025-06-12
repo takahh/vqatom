@@ -142,6 +142,8 @@ def process_epoch(epoch):
 
     cb_arr = np.unique(cb_arr, axis=0).reshape(-1, DIMENSION)
     cb_size = cb_arr.shape[0]
+    print("cb_size")
+    print(cb_size)
 
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=10, cb_size=cb_size)
