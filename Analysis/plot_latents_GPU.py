@@ -32,11 +32,11 @@ def load_npz_array_multi(filename):
     final_arr = np.array(arr_all)
     return np.squeeze(final_arr)
 
-def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
+def plot_tsne(cb_arr, latent_arr, latent_to_fit, epoch, perplexity, cb_size):
     title = f"T-SNE: perplex {perplexity}, "
     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, max_iter=250)
     print("fitting start")
-    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
+    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent), axis=0))
     print("fitting done")
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2, 1, 0.5, 0.2, 0.1]:
         cb_emb = embedding[:cb_size]
@@ -144,7 +144,7 @@ def process_epoch(epoch):
     cb_size = cb_arr.shape[0]
 
     if MODE == "tsne":
-        plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
+        plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
         plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=N_NEIGHBORS, min_dist=MIN_DIST, cb_size=cb_size)
 
