@@ -1,6 +1,7 @@
 DATA_PATH = "/40000_16/"
 
 import numpy as np
+import umap
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 
