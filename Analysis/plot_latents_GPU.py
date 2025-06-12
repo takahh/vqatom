@@ -36,11 +36,11 @@ def plot_tsne(cb_arr, latent_arr, latent_to_fit, epoch, perplexity, cb_size):
     title = f"T-SNE: perplex {perplexity}, "
     tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, max_iter=250)
     print("fitting start")
-    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent), axis=0))
+    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
     print("fitting done")
     for zoom in [50, 20, 15, 10, 7, 5, 3, 2, 1, 0.5, 0.2, 0.1]:
         cb_emb = embedding[:cb_size]
-        latent_emb = embedding[cb_size:cb_size]
+        latent_emb = embedding[cb_size:]
         zoom_pct = f"{float(50 - zoom)}_{float(50 + zoom)}"
         x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
         y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
