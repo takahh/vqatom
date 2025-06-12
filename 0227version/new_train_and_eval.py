@@ -424,6 +424,7 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
+                    print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
@@ -439,10 +440,11 @@ def run_inductive(
         # Count Codebook Frequency and used Codebook
         # -------------------------------------------
         args = get_args()
-        # if args.train_or_infer == 'use_nonredun_cb_infer':
-        ind_list = [item for sublist in ind_list for item in sublist]
-        ind_list = [item for sublist in ind_list for item in sublist]
+        if args.train_or_infer == 'use_nonredun_cb_infer':
+            ind_list = [item for sublist in ind_list for item in sublist]
+            ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
+        print(f"len(flat) = {len(flat)}")
         count = Counter(flat)
         import json
         flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
