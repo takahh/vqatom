@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 DIMENSION = 16
-N_NEIGHBORS = 0.1
+N_NEIGHBORS = 0.5
 MIN_DIST = 30
 EPOCH_START = 1
 SAMPLE_LATENT = 30000
