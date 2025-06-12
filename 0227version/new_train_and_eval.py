@@ -439,11 +439,15 @@ def run_inductive(
         # Count Codebook Frequency and used Codebook
         # -------------------------------------------
         args = get_args()
+        print("ind list 0")
+        print(ind_list)
         if args.train_or_infer == 'use_nonredun_cb_infer':
             ind_list = [item for sublist in ind_list for item in sublist]
             ind_list = [item for sublist in ind_list for item in sublist]
         if conf['train_or_infer'] == 'train':
             ind_list = [item for sublist in ind_list for item in sublist]
+        print("ind list 1")
+        print(ind_list)
         flat = [item for sublist in ind_list for item in sublist]
         print(flat)
         count = Counter(flat)
