@@ -8,14 +8,14 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 DIMENSION = 16
-N_NEIGHBORS = 30
-MIN_DIST = 0.1
+N_NEIGHBORS = 10
+MIN_DIST = 0.01
 EPOCH_START = 1
-SAMPLE_LATENT = 8700000
+SAMPLE_LATENT = 87000
 PERPLEXITY = 1
 EPOCH_END = EPOCH_START + 1
-# MODE = "umap"  # Choose between "tsne" and "umap"
-MODE = "tsne"  # Choose between "tsne" and "umap"
+MODE = "umap"  # Choose between "tsne" and "umap"
+# MODE = "tsne"  # Choose between "tsne" and "umap"
 
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
