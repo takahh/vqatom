@@ -549,10 +549,26 @@ class ContrastiveLoss(nn.Module):
             similarity_matrix = (similarity_matrix - s_min) / s_range
             return similarity_matrix
 
-        def calc_repel_loss(x, sim_mat):
-            # Repel loss to prevent collapse
-            identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
-            repel_loss = ((sim_mat - identity) ** 2).mean()
+        # def calc_repel_loss(x, sim_mat):
+        #     # Repel loss to prevent collapse
+        #     identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
+        #     repel_loss = ((sim_mat - identity) ** 2).mean()
+        #     return repel_loss
+
+        def calc_repel_loss(sim_mat, sigma=0.3):
+            """
+            Applies strong repulsion for similar pairs, and weak/no repulsion for dissimilar ones.
+            Assumes sim_mat is a cosine similarity matrix computed from normalized vectors.
+            """
+            N = sim_mat.size(0)
+            identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
+
+            # Remove self-similarity
+            sim_mat = sim_mat * (1 - identity)
+
+            # Exponential repulsion for high similarity, flattens for low similarity
+            repel_loss = torch.exp(sim_mat / sigma).mean()
+
             return repel_loss
 
         # ----------------------------
@@ -579,7 +595,7 @@ class ContrastiveLoss(nn.Module):
         # ---------------
         # latent repel
         # ---------------
-        repel_loss = calc_repel_loss(l, similarity_matrix)
+        repel_loss = calc_repel_loss(similarity_matrix)
 
         # ---------------
         # codebook repel
