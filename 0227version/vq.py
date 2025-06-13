@@ -549,21 +549,22 @@ class ContrastiveLoss(nn.Module):
             similarity_matrix = (similarity_matrix - s_min) / s_range
             return similarity_matrix
 
-        # def calc_repel_loss(x, sim_mat):
-        #     # Repel loss to prevent collapse
-        #     identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
-        #     repel_loss = ((sim_mat - identity) ** 2).mean()
-        #     return repel_loss
-        def calc_repel_loss(sim_mat, sigma=0.3):
-            """Repel more strongly when similarity is low (i.e., far apart)."""
-            N = sim_mat.size(0)
-            identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
-            sim_mat = sim_mat * (1 - identity)
-
-            # Repel more when similarity is small
-            repel_loss = torch.exp(-sim_mat / sigma).mean()
-
+        def calc_repel_loss(x, sim_mat):
+            # Repel loss to prevent collapse
+            identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
+            repel_loss = ((sim_mat - identity) ** 2).mean()
             return repel_loss
+
+        # def calc_repel_loss(sim_mat, sigma=0.3):
+        #     """Repel more strongly when similarity is low (i.e., far apart)."""
+        #     N = sim_mat.size(0)
+        #     identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
+        #     sim_mat = sim_mat * (1 - identity)
+        #
+        #     # Repel more when similarity is small
+        #     repel_loss = torch.exp(-sim_mat / sigma).mean()
+        #
+        #     return repel_loss
 
         # ----------------------------
         # latent to similarity matrix
