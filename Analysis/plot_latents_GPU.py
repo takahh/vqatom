@@ -8,8 +8,9 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 DIMENSION = 16
-N_NEIGHBORS = 10
+N_NEIGHBORS = 15
 MIN_DIST = 0.01
+SPREAD = 2
 EPOCH_START = 1
 SAMPLE_LATENT = 87000
 PERPLEXITY = 1
@@ -82,6 +83,7 @@ def plot_umap(cb_arr, latent_arr, latent_to_fit, epoch, n_neighbors, min_dist, c
         min_dist=min_dist,
         n_components=2,
         n_epochs=250,
+        spread=SPREAD,
         random_state=42
     ).fit(latent_to_fit)
     print("reducer setup done")
