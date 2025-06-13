@@ -73,7 +73,7 @@ def plot_tsne(cb_arr, latent_arr, latent_to_fit, epoch, perplexity, cb_size):
                 plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
             plt.title(title + f" Zoom {zoom_pct}")
             print(f"saving file to {DATA_PATH}/zoom_{zoom_pct}_{i}.png")
-            plt.savefig(f"{DATA_PATH}/zoom_{zoom_pct}_{i}.png")
+            plt.savefig(f"{DATA_PATH}/perp_{perplexity}_zoom_{zoom_pct}_{i}.png")
 
 def plot_umap(cb_arr, latent_arr, latent_to_fit, epoch, n_neighbors, min_dist, cb_size):
     print("reducer setup")
@@ -147,7 +147,8 @@ def process_epoch(epoch):
     print(cb_size)
 
     if MODE == "tsne":
-        plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=PERPLEXITY, cb_size=cb_size)
+        for PERPLEXITY in [20, 30, 40, 50, 60]:
+            plot_tsne(cb_arr, latent_arr, latent_arr_to_fit, epoch, perplexity=PERPLEXITY, cb_size=cb_size)
     elif MODE == "umap":
         plot_umap(cb_arr, latent_arr, latent_arr_to_fit, epoch, n_neighbors=N_NEIGHBORS, min_dist=MIN_DIST, cb_size=cb_size)
 
