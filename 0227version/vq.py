@@ -590,7 +590,7 @@ class ContrastiveLoss(nn.Module):
         # ---------------
         # latent repel
         # ---------------
-        repel_loss = calc_repel_loss(similarity_matrix)
+        repel_loss = calc_repel_loss(l, similarity_matrix)
 
         # ---------------
         # codebook repel
