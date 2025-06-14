@@ -549,11 +549,17 @@ class ContrastiveLoss(nn.Module):
             similarity_matrix = (similarity_matrix - s_min) / s_range
             return similarity_matrix
 
-        def calc_repel_loss(x, sim_mat):
-            # Repel loss to prevent collapse
-            identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
-            # repel_loss = ((sim_mat - identity) ** 2).mean()
-            repel_loss = ((sim_mat - identity).abs()).mean()  # where p < 2, e.g., 1.5 or 1.0
+        def calc_repel_loss(sim_mat, sharpness=10.0, threshold=0.3):
+            """
+            Penalizes similarity above a certain threshold.
+            Encourages dissimilarity while ignoring far-apart vectors.
+            """
+            N = sim_mat.size(0)
+            identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
+            sim_mat = sim_mat * (1 - identity)  # zero out self-similarities
+
+            # Apply sigmoid penalty
+            repel_loss = torch.sigmoid(sharpness * (sim_mat - threshold)).mean()
             return repel_loss
 
         # def calc_repel_loss(sim_mat, sharpness=10.0):

@@ -11,7 +11,7 @@ DIMENSION = 16
 # BATCH_SIZE = 8000
 EPOCH_START = 1
 SAMPLE_LATENT = 30000
-EPOCH_END = EPOCH_START + 6
+EPOCH_END = EPOCH_START + 9
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
@@ -114,8 +114,10 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom):
         #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
         #     cmap="Blues"
         # )
-        plt.xlim(x_range)
-        plt.ylim(y_range)
+        # plt.xlim(x_range)
+        # plt.ylim(y_range)
+        plt.xlim(-30, 30)
+        plt.ylim(-30, 30)
 
         if i == 0:
             plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
