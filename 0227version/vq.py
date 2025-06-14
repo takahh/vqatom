@@ -552,8 +552,8 @@ class ContrastiveLoss(nn.Module):
         def calc_repel_loss(x, sim_mat):
             # Repel loss to prevent collapse
             identity = torch.eye(x.size(0), device=x.device, dtype=sim_mat.dtype)
-            repel_loss = ((sim_mat - identity) ** 2).mean()
-            # repel_loss = ((sim_mat - identity).abs()).mean()  # where p < 2, e.g., 1.5 or 1.0
+            # repel_loss = ((sim_mat - identity) ** 2).mean()
+            repel_loss = ((sim_mat - identity).abs()).mean()  # where p < 2, e.g., 1.5 or 1.0
             return repel_loss
 
         # def calc_repel_loss(sim_mat, sharpness=10.0):
