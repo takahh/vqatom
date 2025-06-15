@@ -556,7 +556,7 @@ class ContrastiveLoss(nn.Module):
             """
             N = sim_mat.size(0)
             print(f"sim_mat.shape {sim_mat.shape}")
-            print(f"N.shape {N.shape}")
+            print(f"N {N}")
             identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
             print(f"identity.shape {identity.shape}")
             sim_mat = sim_mat * (1 - identity)  # zero out self-similarities
