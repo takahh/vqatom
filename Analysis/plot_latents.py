@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 # DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
-DATA_PATH = "/Users/taka/Downloads/"
+DATA_PATH = "/Users/taka/Downloads/original/"
 DIMENSION = 16
 # BATCH_SIZE = 8000
-EPOCH_START = 1
+EPOCH_START = 2
 SAMPLE_LATENT = 30000
-EPOCH_END = EPOCH_START + 9
+EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
@@ -114,10 +114,10 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom):
         #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
         #     cmap="Blues"
         # )
-        # plt.xlim(x_range)
-        # plt.ylim(y_range)
-        plt.xlim(-30, 30)
-        plt.ylim(-30, 30)
+        plt.xlim(x_range)
+        plt.ylim(y_range)
+        # plt.xlim(-30, 30)
+        # plt.ylim(-30, 30)
 
         if i == 0:
             plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=2, c='red', alpha=0.6)
@@ -149,8 +149,8 @@ def process_epoch(epoch):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        # for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
-        for zoom in [50]:
+        for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
+        # for zoom in [50]:
             plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, min_dist=1.0, cb_size=cb_size, zoom=zoom)
 
 

@@ -84,9 +84,10 @@ def plot(type, num_pair):
     effective_cb_size_list = []
     plt.rcParams.update({'font.size': 24})  # set general font size to 14
 
-    with open(f"/Users/taka/Downloads/log_relu", 'r') as file:
+    with open(f"/Users/taka/Downloads/log_abs") as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
+        print(lines)
         lines = [x for x in lines if "-" in x.split(" ")[1]]
 
         # lines = [x for x in lines if "repel" not in x and 'unique' not in x]
