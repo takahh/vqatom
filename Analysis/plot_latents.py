@@ -130,7 +130,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
 
             plt.title(title + " (Zoomed)")
             plt.colorbar(label='Density')
-            plt.savefig(f"/{samples}_{i}.png")
+            plt.savefig(f"/{samples}_{i}_{SPREAD}.png")
             plt.show()
 
 
