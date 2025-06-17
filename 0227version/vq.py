@@ -570,8 +570,6 @@ class ContrastiveLoss(nn.Module):
         # ----------------------------
         # codebook to similarity matrix
         # ----------------------------
-        print("codebook.shape")
-        print(codebook.shape)
         cb_similarity_matrix = calc_similarity_matrix(codebook[0])
 
         # ----------------------------------
