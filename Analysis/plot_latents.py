@@ -118,14 +118,14 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
 
                 for i in range(2):
                     plt.figure()
-                    if i == 0:
-                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
                     # plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
                     plt.hist2d(
                         zoomed_latent[:, 0], zoomed_latent[:, 1],
                         bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
                         cmap="Blues"
                     )
+                    if i == 0:
+                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
                     plt.xlim(x_range)
                     plt.ylim(y_range)
                     # plt.xlim(-30, 30)
