@@ -80,7 +80,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
-    for SPREAD in [0.1, 0.2, 0.5]:
+    for N_NEIGHBORS in [3, 4, 5, 10]:
         for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
             print("reducer setup")
             reducer = umap.UMAP(
