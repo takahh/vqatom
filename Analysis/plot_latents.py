@@ -1,3 +1,4 @@
+import os
 from pickletools import markobject
 
 import numpy as np
@@ -131,7 +132,8 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
 
                 plt.title(title + " (Zoomed)")
                 plt.colorbar(label='Density')
-                plt.savefig(f"/{samples}_{i}_{SPREAD}_{zoom}.png")
+                os.mkdir(f"/{samples}", exist_ok=True)
+                plt.savefig(f"/{samples}/{N_NEIGHBORS}_{zoom}_{i}.png")
 
 
 def process_epoch(epoch, samples):
