@@ -124,6 +124,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                         bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
                         cmap="Blues"
                     )
+                    plt.colorbar(label='Density')
                     if i == 0:
                         plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
                     plt.xlim(x_range)
@@ -132,7 +133,6 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     # plt.ylim(-30, 30)
 
                     plt.title(title + " (Zoomed)")
-                    plt.colorbar(label='Density')
                     if not os.path.exists(f"/{samples}"):
                         os.mkdir(f"/{samples}")
                     plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
