@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
-# DATA_PATH = "/"
+# DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
+DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
