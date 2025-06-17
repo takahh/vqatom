@@ -8,15 +8,15 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-# DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
-DATA_PATH = "/"
+DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
+# DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 300000
+SAMPLE_LATENT = 3000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -82,7 +82,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
     for N_NEIGHBORS in [3, 4, 5, 10]:
-        for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
+        for zoom in [10, 5, 2]:
             for SPREAD in [0.3, 1, 2, 3]:
                 print("reducer setup")
                 reducer = umap.UMAP(
