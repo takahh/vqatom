@@ -562,25 +562,6 @@ class ContrastiveLoss(nn.Module):
             repel_loss = torch.sigmoid(sharpness * (sim_mat - threshold)).mean()
             return repel_loss
 
-        # def calc_repel_loss(sim_mat, sharpness=10.0):
-        #     """Smooth repulsion, steep at mid-range, flat at close proximity."""
-        #     N = sim_mat.size(0)
-        #     identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
-        #     sim_mat = sim_mat * (1 - identity)
-        #
-        #     repel_loss = (1 - torch.sigmoid(sharpness * sim_mat)).mean()
-        #     return repel_loss
-
-        # def calc_repel_loss(sim_mat, sigma=0.3):
-        #     """Repel more strongly when similarity is low (i.e., far apart)."""
-        #     N = sim_mat.size(0)
-        #     identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
-        #     sim_mat = sim_mat * (1 - identity)
-        #
-        #     # Repel more when similarity is small
-        #     repel_loss = torch.exp(-sim_mat / sigma).mean()
-        #
-        #     return repel_loss
 
         # ----------------------------
         # latent to similarity matrix
@@ -589,6 +570,8 @@ class ContrastiveLoss(nn.Module):
         # ----------------------------
         # codebook to similarity matrix
         # ----------------------------
+        print("codebook.shape")
+        print(codebook.shape)
         cb_similarity_matrix = calc_similarity_matrix(codebook[0])
 
         # ----------------------------------
@@ -612,7 +595,7 @@ class ContrastiveLoss(nn.Module):
         # ---------------
         # codebook repel
         # ---------------
-        # cb_repel_loss = calc_repel_loss(codebook, cb_similarity_matrix)
+        cb_repel_loss = calc_repel_loss(cb_similarity_matrix)
 
         # ---------------------
         # Contrastive loss
@@ -621,9 +604,10 @@ class ContrastiveLoss(nn.Module):
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
         contrastive_loss = 100 * neg_loss
         latent_repel_weight = 0.5
-        final_loss = contrastive_loss + latent_repel_weight * repel_loss
+        cb_repel_weight = 0.5
+        final_loss = contrastive_loss + latent_repel_weight * repel_loss + cb_repel_weight * cb_repel_loss
 
-        return final_loss, neg_loss, repel_loss
+        return final_loss, neg_loss, repel_loss, cb_repel_loss
 
 
 import torch.nn.functional as F
@@ -1357,7 +1341,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss, div_nega_loss, repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
+        feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
@@ -1373,7 +1357,7 @@ class VectorQuantize(nn.Module):
         # print(f"sil_loss {sil_loss}")
         # print(f"equivalent_atom_loss {equivalent_atom_loss}")
         # print(f"atom_type_div_loss {atom_type_div_loss}")
-        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss)
+        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -1481,7 +1465,7 @@ class VectorQuantize(nn.Module):
         codebook = self._codebook.embed
 
         # print(f"embed_ind 0: {embed_ind}")
-        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss = (
+        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = (
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch))
 
         args = get_args()
@@ -1542,6 +1526,6 @@ class VectorQuantize(nn.Module):
          x, init_cb, sil_loss, commit_loss) = quantize_output"""
         # if self.training:
         return (quantize, embed_ind, loss, dist, embed, latent_loss, latents, div_nega_loss, x, latent_loss, sil_loss,
-                num_unique, repel_loss)
+                num_unique, repel_loss, cb_repel_loss)
         # else:
         #     return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
