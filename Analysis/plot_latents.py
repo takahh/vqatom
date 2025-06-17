@@ -83,58 +83,59 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
     for N_NEIGHBORS in [3, 4, 5, 10]:
         for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
-            print("reducer setup")
-            reducer = umap.UMAP(
-                n_neighbors=N_NEIGHBORS,
-                min_dist=MIN_DIST,
-                spread=SPREAD,
-                n_components=2,
-                n_epochs=100,
-                random_state=42
-            ).fit(latent_arr)
-            print("reducer setup done")
-            latent_emb = reducer.transform(latent_arr)
-            print("latent transform done")
-            cb_emb = reducer.transform(cb_arr)
-            print("cb transform done")
-            x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
-            y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
+            for SPREAD in [0.3, 1, 2, 3]:
+                print("reducer setup")
+                reducer = umap.UMAP(
+                    n_neighbors=N_NEIGHBORS,
+                    min_dist=MIN_DIST,
+                    spread=SPREAD,
+                    n_components=2,
+                    n_epochs=100,
+                    random_state=42
+                ).fit(latent_arr)
+                print("reducer setup done")
+                latent_emb = reducer.transform(latent_arr)
+                print("latent transform done")
+                cb_emb = reducer.transform(cb_arr)
+                print("cb transform done")
+                x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
+                y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
-            latent_mask = (
-                (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-                (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-            )
-            cb_mask = (
-                (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-                (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-            )
+                latent_mask = (
+                    (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+                    (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
+                )
+                cb_mask = (
+                    (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+                    (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+                )
 
-            zoomed_latent = latent_emb[latent_mask]
-            zoomed_cb = cb_emb[cb_mask]
+                zoomed_latent = latent_emb[latent_mask]
+                zoomed_cb = cb_emb[cb_mask]
 
-            bins = 200
-            title = f"UMAP: n_neighbors {N_NEIGHBORS}, min_dist {MIN_DIST}, \n spread {SPREAD}, zoom {zoom} samples {samples}"
+                bins = 200
+                title = f"UMAP: n_neighbors {N_NEIGHBORS}, min_dist {MIN_DIST}, \n spread {SPREAD}, zoom {zoom} samples {samples}"
 
-            for i in range(2):
-                plt.figure()
-                if i == 0:
-                    plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
-                plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
-                # plt.hist2d(
-                #     zoomed_latent[:, 0], zoomed_latent[:, 1],
-                #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                #     cmap="Blues"
-                # )
-                plt.xlim(x_range)
-                plt.ylim(y_range)
-                # plt.xlim(-30, 30)
-                # plt.ylim(-30, 30)
+                for i in range(2):
+                    plt.figure()
+                    if i == 0:
+                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
+                    plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
+                    # plt.hist2d(
+                    #     zoomed_latent[:, 0], zoomed_latent[:, 1],
+                    #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                    #     cmap="Blues"
+                    # )
+                    plt.xlim(x_range)
+                    plt.ylim(y_range)
+                    # plt.xlim(-30, 30)
+                    # plt.ylim(-30, 30)
 
-                plt.title(title + " (Zoomed)")
-                plt.colorbar(label='Density')
-                if not os.path.exists(f"/{samples}"):
-                    os.mkdir(f"/{samples}")
-                plt.savefig(f"/{samples}/{N_NEIGHBORS}_{zoom}_{i}.png")
+                    plt.title(title + " (Zoomed)")
+                    plt.colorbar(label='Density')
+                    if not os.path.exists(f"/{samples}"):
+                        os.mkdir(f"/{samples}")
+                    plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
 
 
 def process_epoch(epoch, samples):
