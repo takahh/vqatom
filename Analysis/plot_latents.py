@@ -16,7 +16,7 @@ MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
 EPOCH_START = 1
-SAMPLE_LATENT = 3000
+SAMPLE_LATENT = 300000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -170,7 +170,7 @@ def process_epoch(epoch, samples):
 
 
 def main():
-    for samples in [30000, 300000, 600000, 1000000, 2000000]:
+    for samples in [30000, 100000, 300000, 1000000, 2000000]:
         for epoch in range(EPOCH_START, EPOCH_END):
             print(f"Processing epoch {epoch}")
             process_epoch(epoch, samples)
