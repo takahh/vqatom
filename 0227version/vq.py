@@ -790,6 +790,12 @@ class EuclideanCodebook(nn.Module):
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
+        # ------------------------------
+        # normalize
+        # ------------------------------
+        x = F.normalize(x, p=2, dim=1)  # latent vectors
+        # codebook = F.normalize(self.codebook, p=2, dim=1)  # codebook vectors
+
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # ---------------------------------
         # Initialize codebook with kmeans
@@ -1116,7 +1122,7 @@ class VectorQuantize(nn.Module):
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
 
-        codebook_class = EuclideanCodebook if not use_cosine_sim else CosineSimCodebook
+        codebook_class = EuclideanCodebook # if not use_cosine_sim else CosineSimCodebook
         self._codebook = codebook_class(
             dim=codebook_dim,
             num_codebooks=heads if separate_codebook_per_head else 1,
@@ -1167,68 +1173,31 @@ class VectorQuantize(nn.Module):
 
     import torch
 
-    # def compute_contrastive_loss(quantized, atom_types):
-    #     """
-    #     Compute contrastive loss efficiently while keeping gradients for backpropagation.
-    #     """
-    #     # Compute pairwise distances (keeps requires_grad)
-    #     pairwise_distances = torch.cdist(quantized, quantized, p=2)  # Shape: (N, N)
-    #
-    #     # Enable memory efficiency using automatic mixed precision
-    #     with torch.autocast(device_type="cuda", dtype=torch.float16):
-    #         # Create mask for positive pairs (same atom type)
-    #         same_type_mask = (atom_types.unsqueeze(0) == atom_types.unsqueeze(1)).to(pairwise_distances.dtype)
-    #
-    #         # Ensure only positive pairs contribute to loss
-    #         num_pairs = same_type_mask.sum() + 1e-6  # Keeps tensor learnable
-    #
-    #         # Compute loss while preserving gradients
-    #         positive_loss = (same_type_mask * pairwise_distances ** 2).sum() / num_pairs
-    #
-    #     return positive_loss  # Loss remains differentiable
-    import torch
-    import torch.nn.functional as F
-    import torch
-    import torch.nn.functional as F
-
     def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
         device = embeddings.device
         batch_size = embeddings.size(0)
-
         # Get soft cluster assignments with temperature control
         if embed_ind.dim() == 1:
             embed_ind = embed_ind.unsqueeze(1)  # (N, 1)
-
         logits = embed_ind.expand(-1, num_clusters)  # (N, K)
         cluster_assignments = F.softmax(logits / temperature, dim=-1)  # (N, K)
-
-        # Get hard assignments for centroid calculation
         hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
             1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
         )
-        # Compute cluster centroids using hard assignments for stability
         cluster_sums = hard_assignments.T @ embeddings  # (K, D)
         cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
         cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
         centroids = cluster_sums / cluster_sizes  # (K, D)
-
-        # Compute distances to assigned cluster (a)
         assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
         assigned_centroids = centroids[assigned_clusters]  # (N, D)
         a = torch.norm(embeddings - assigned_centroids, dim=1)  # (N,)
-
-        # Compute nearest different cluster distance (b)
-        # Create a mask to ignore the assigned cluster
         mask = torch.ones((batch_size, num_clusters), device=device)
         mask.scatter_(1, assigned_clusters.unsqueeze(1), 0)
-
         # Calculate distances to all centroids
         all_distances = torch.cdist(embeddings, centroids)  # (N, K)
         masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
-
         # Get the nearest different cluster
         b, _ = torch.min(masked_distances, dim=1)  # (N,)
-
         # Calculate silhouette score with a margin to encourage separation
         max_dist = torch.max(a, b) + 1e-6
         silhouette = (b - a) / max_dist - margin
@@ -1238,34 +1207,16 @@ class VectorQuantize(nn.Module):
         return loss
 
     def fast_find_equivalence_groups(self, latents):
-
         from collections import defaultdict
-        """
-        Finds equivalence groups where two vectors belong to the same group if they are identical.
-
-        Uses hashing for fast lookup instead of O(N^2) comparisons.
-
-        Args:
-            latents (torch.Tensor): Tensor of shape (N, D), where N is the number of vectors and D is the embedding dimension.
-
-        Returns:
-            equivalence_groups (list of list): A list of index groups where each sublist contains indices of identical vectors.
-        """
-        hash_map = defaultdict(list)  # Dictionary to store groups by unique vector
-
-        # Convert tensor rows into hashable tuples and store indices
+        hash_map = defaultdict(list)
         for idx, vector in enumerate(latents):
             key = tuple(vector.tolist())  # Convert tensor to a hashable tuple
             hash_map[key].append(idx)
-
-        # Extract only groups with more than one element
         equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
-
         return equivalence_groups
 
     def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
         if x.dim() == 2:
-            N = x.size(0)
             dist_matrix = torch.cdist(x, x, p=2)
             dist_matrix.fill_diagonal_(float('inf'))  # no need to create a mask
             return dist_matrix
@@ -1273,199 +1224,61 @@ class VectorQuantize(nn.Module):
         elif x.dim() == 3:
             B, N, D = x.shape
             results = []
-
-            # Construct 1 mask and reuse
             mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
-
             for start in range(0, B, chunk_size):
                 end = min(start + chunk_size, B)
                 xb = x[start:end]  # [chunk, N, D]
                 dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
-                dist = dist.masked_fill(~mask, float('inf'))  # mask diagonal once
-
-                # Do not reshape — just keep as is or flatten masked part
+                dist = dist.masked_fill(~mask, float('inf'))
                 dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
                 results.append(dist_flat)
-
             return torch.cat(results, dim=0)  # [B, N, N - 1]
-
         else:
             raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
-        # Move tensors to CUDA (if not already)
         embed_ind = embed_ind.to("cuda")
         codebook = codebook.to("cuda")
         init_feat = init_feat.to("cuda")
         latents = latents.to("cuda")
-        quantized = quantized.to("cuda")
-
-        # Compute efficient pairwise distances between codebook entries without diagonals
-        dist_matrix_no_diag = self.pairwise_distances_no_diag(x=codebook, chunk_size=64)
-
-        # ... continue with spread loss, silhouette loss, etc.
-        # e.g., spread_loss = some_fn(dist_matrix_no_diag)
-
-        # return spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss
-
-        # Optional: Debug log
-        # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
-        #
-        # Margin loss: Encourage distances >= min_distance
-        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
-        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
-
-        # Spread loss: Encourage diversity
         spread_loss = torch.var(codebook)
-
-        # Pair distance loss: Regularize distances
-        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
-
-        # sil loss
-        # def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
-
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
-        # print(equivalent_gtroup_list[:10])
-                                                        # cluster_indices, embed_ind, equivalence_groups, logger
-        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
-        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
-        # atom_type_div_loss = torch.tensor(1)
-        # bond_num_div_loss = torch.tensor(1)
-        # charge_div_loss = torch.tensor(1)
-        # elec_state_div_loss = torch.tensor(1)
-        # aroma_div_loss = torch.tensor(1)
-        # ringy_div_loss = torch.tensor(1)
         feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
-
-        # Should not be None
-        # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
-
-        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
-        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
-        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
-        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
-        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
-        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
-        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
-        # div_loss_list = [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss]
-        # print(f"sil_loss {sil_loss}")
-        # print(f"equivalent_atom_loss {equivalent_atom_loss}")
-        # print(f"atom_type_div_loss {atom_type_div_loss}")
         return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
-        # Compute distances between encoder outputs and codebook vectors
         distances = torch.cdist(encoder_outputs, codebook)
-
-        # Soft assignment with temperature
         soft_assignments = F.softmax(-distances / temperature, dim=-1)
-
-        # Straight-through estimator for discrete selection
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
-
-        # print(f"0 quantized Gradients: {quantized}")
-        # print(f"0 encoder_outputs Gradients: {encoder_outputs}")
-
-        # Encourage encoder outputs to be close to selected codebook vectors
         latent_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
-        # Encourage codebook vectors to be close to encoder outputs
         codebook_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
-
-        # print(f"1 quantized Gradients: {quantized}")
-        # print(f"1 encoder_outputs Gradients: {encoder_outputs}")
-        # print(f"commitment_loss: {commitment_loss}")
-        # Entropy regularization to prevent codebook collapse 罰だから、プラスであってほしいい
-        # entropy_loss = -torch.mean(
-        #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
-        # )
-        # print(f"entropy_loss: {entropy_loss}")
-        # entropy_loss = torch.mean(
-        #     torch.sum(soft_assignments * torch.log(soft_assignments + 1e-8), dim=-1)
-        # )
-        # Combine losses with tunable weights
-        # commitment_loss = latent_loss + codebook_loss
-        """
-        commitment_loss: 0.001366406329907477
-        entropy_loss: 8.031081199645996"""
-        # total_loss = commitment_loss + 0.01 * entropy_loss
-        # total_loss = commitment_loss + 0.00001 * entropy_loss
-
         return latent_loss, codebook_loss
-
-    import torch
-    import torch.nn.functional as F
-    from einops import rearrange
 
     def forward(self, x, init_feat, logger, epoch=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
-
         if only_one:
             x = rearrange(x, 'b d -> b 1 d')
-
         shape, device, heads, is_multiheaded, codebook_size = (
-            x.shape, x.device, self.heads, self.heads > 1, self.codebook_size
-        )
+            x.shape, x.device, self.heads, self.heads > 1, self.codebook_size)
         need_transpose = not self.channel_last and not self.accept_image_fmap
-
         if self.accept_image_fmap:
             height, width = x.shape[-2:]
             x = rearrange(x, 'b c h w -> b (h w) c')
-
         if need_transpose:
             x = rearrange(x, 'b d n -> b n d')
-
-        # print("Input x shape:", x.shape)
-
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-
-        # Debug before codebook step
-        # print(f"Before codebook: x shape = {x.shape}")
-
-        # print(f"x: {x}")
-        # print(f"init_feat: {init_feat}")
-        # if self.training:
         quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
-        # else:
-        #     quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
-        # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
-        """
-        quantize: データの数だけ存在する、離散化されたクラスタ中心
-        embed_ind: データの数だけ存在する、所属するクラスタID
-        embed: クラスタ中心ベクトル
-        latents: データの数だけ存在する、潜在変数ベクトル
-        init_cb: 
-        """
-
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
-
-        # if self.training:
         quantize = x_tmp + (quantize - x_tmp)
-
-        # quantize_unique = torch.unique(quantize, dim=0)
-        # num_unique = quantize_unique.shape[0]
-        # print(f"Number of unique cb vectors: {num_unique}")
-        # commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
-        #               / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
-
-        # if self.orthogonal_reg_active_codes_only:
-        #     unique_code_ids = torch.unique(embed_ind)
-        #     print(f"Unique codebook IDs used: {unique_code_ids}")
-        #     codebook = torch.squeeze(self._codebook.embed)[unique_code_ids]
-
         codebook = self._codebook.embed
-
-        # print(f"embed_ind 0: {embed_ind}")
         spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = (
             self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch))
-
         args = get_args()
         if args.train_or_infer == 'use_nonredun_cb_infer':
             pass
@@ -1476,54 +1289,15 @@ class VectorQuantize(nn.Module):
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
             elif embed_ind.ndim != 1:
                 raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        """
-        /vqatom/0227version/vq.py:1457: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
-          commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
-        /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
-          codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
         latent_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
-        """
-        # feat_div_loss: 0.0001748909562593326 * 100
-        commit_loss: 0.00524178147315979     * 0.01  """
-        # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
-        # print(f"commit loss {self.commitment_weight * latent_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
-        # if epoch < 5:
-        #     print(f"epoch is less than 10")
-        #     loss = (self.lamb_div * feat_div_loss)
-        #     # loss = (self.commitment_weight * commit_loss)
-        # else:
-        #     print(f"epoch is more than 10 !!")
-        # loss = self.lamb_div * feat_div_loss
-        #
-        #     commitment_weight=0.01,  # using
-        #     lamb_div=0.01,           # using
-        # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
         loss = (self.commitment_weight * latent_loss + self.commitment_weight * codebook_loss + self.lamb_div * feat_div_loss)
-        #
-        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
-        #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
-
-        # quantize = self.project_out(quantize)
-
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
-
-        # if self.accept_image_fmap:
-        #     print("fmap ===========")
-        #     quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
-        #     embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
-        # commit_loss = torch.tensor(1)
         if only_one:
             if len(quantize.shape) == 3:
                 # this line is executed
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
-        """
-        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
-         x, init_cb, sil_loss, commit_loss) = quantize_output"""
-        # if self.training:
         return (quantize, embed_ind, loss, dist, embed, latent_loss, latents, div_nega_loss, x, latent_loss, sil_loss,
                 num_unique, repel_loss, cb_repel_loss)
-        # else:
-        #     return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
