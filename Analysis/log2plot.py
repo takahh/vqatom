@@ -76,6 +76,8 @@ def plot(type, num_pair):
     cb_loss_test = []
     repel_loss_train = []
     repel_loss_test = []
+    cb_repel_loss_train = []
+    cb_repel_loss_test = []
     sil_loss_train = []
     sil_loss_test = []
     train_loss = []
@@ -84,7 +86,7 @@ def plot(type, num_pair):
     effective_cb_size_list = []
     plt.rcParams.update({'font.size': 24})  # set general font size to 14
 
-    with open(f"/Users/taka/Downloads/log_abs") as file:
+    with open(f"/Users/taka/Downloads/with_cb_repel/outputs/log") as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
         print(lines)
@@ -160,8 +162,13 @@ def plot(type, num_pair):
                 continue
             # Silhouette losses (from two consecutive lines)
             try:
-                repel_loss_train.append(float(line2_parts[-1].replace(',', '')))
-                repel_loss_test.append(float(line3_parts[-1].replace(',', '')))
+                repel_loss_train.append(float(line2_parts[-5].split(',')[0]))
+                repel_loss_test.append(float(line3_parts[-5].split(",")[0]))
+            except ValueError:
+                pass
+            try:
+                cb_repel_loss_train.append(float(line2_parts[-1].replace(',', '')))
+                cb_repel_loss_test.append(float(line3_parts[-1].replace(',', '')))
             except ValueError:
                 pass
             # Silhouette losses (from two consecutive lines)
@@ -206,6 +213,12 @@ def plot(type, num_pair):
         plt.plot(epochs, unique_cb_mean_list, label='Unique CB mean', marker='d')
         plt.title('Unique CB vector counts', fontsize=FSIZE)
         best_unique_cb_num_dict[num_pair] = max(unique_cb_mean_list)
+    elif type == 5:
+        epochs = list(range(len(cb_repel_loss_train)))
+        plt.plot(epochs, cb_repel_loss_train, label='CB Repel Loss Train', marker='d')
+        epochs = list(range(len(cb_repel_loss_test)))
+        plt.plot(epochs, cb_repel_loss_test, label='CB Repel Loss Test', marker='p')
+        plt.title('CB Repel loss Across Epochs', fontsize=FSIZE)
     else:
         epochs = list(range(len(effective_cb_size_list)))
         plt.plot(epochs, effective_cb_size_list, label='Effective CB size', marker='d')
@@ -234,7 +247,7 @@ exp_list = ['40000_16']
 
 for exp in exp_list:
     if exp != '30000_32':
-        for type in range(0, 6):
+        for type in range(0, 7):
         # for type in range(0, 1):
             cb_dict = plot(type, exp)
     else:
