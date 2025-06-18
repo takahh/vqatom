@@ -441,6 +441,7 @@ def run_inductive(
             ind_list = [item for sublist in ind_list for item in sublist]
         flat = [item for sublist in ind_list for item in sublist]
         print(f"len(flat) = {len(flat)}")
+        print(flat[:100])
         unique_flat = list(set(flat))
         print(f"len(unique_flat) = {len(unique_flat)}")
         count = Counter(flat)
