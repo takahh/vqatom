@@ -722,8 +722,6 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, logger):
-        print("self.initted")
-        print(self.initted)
         if self.initted:
             return
         print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
@@ -802,21 +800,10 @@ class EuclideanCodebook(nn.Module):
         # ---------------------------------
         # Initialize codebook with kmeans
         # ---------------------------------
-        if self.training and epoch == 1:  # mine
+        # if self.training and epoch == 1:  # mine
+        if self.training:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
-        args = get_args()
-        import numpy as np
-        # if args.train_or_infer == "use_nonredun_cb_infer" or args.train_or_infer == "analysis":
-        #     # -------------------
-        #     # use saved codebook
-        #     # -------------------
-        #     print('using saved cb centroids !!!!!!!!')
-        #     embed = np.load('../data/used_cb_vectors_no_clustering.npz')['arr_0']
-        #     embed = torch.from_numpy(embed).view(1, -1, 16).float().to(x.device)
-        #     self.embed = nn.Parameter(embed)
 
-        # Replace `device` with something like torch.device("cuda") if you're using a GPU
-        # else:
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()
         # Compute Distance between latents and codebook
