@@ -317,22 +317,11 @@ def kmeans(
             dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
             dists = torch.cdist(samples, means[:, :k], p=2)
-        min_dists = dists.min(dim=-1).values  # (head, num_samples)
-        # Ensure min_dists is non-negative
-        min_dists = torch.clamp(min_dists, min=0.0)
-        # Square the distances to follow KMeans++ logic (optional but common)
-        probs = min_dists ** 2
-        probs_sum = probs.sum(dim=-1, keepdim=True)  # (head, 1)
-        # Avoid division by zero, NaN, or Inf
-        probs_safe = torch.where(
-            (probs_sum <= 1e-8) | torch.isnan(probs_sum) | torch.isinf(probs_sum),
-            torch.full_like(probs, fill_value=1.0 / probs.shape[-1]),
-            probs / (probs_sum + 1e-8)  # avoid division by zero
-        )
-        # Optional: clamp any remaining negatives due to float error
-        probs_safe = torch.clamp(probs_safe, min=0.0)
-        next_centroid_idx = torch.multinomial(probs_safe, 1)  # (head, 1)
-        means[:, k] = samples.gather(1, next_centroid_idx.unsqueeze(-1).expand(-1, -1, samples.size(-1))).squeeze(1)
+
+        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
+        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
+        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
+        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
     # Iterative optimization
     for _ in range(num_iters):
@@ -535,77 +524,61 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, l, atom_types, codebook, epoch, logger):
+    def forward(self, z, atom_types, epoch, logger):
         eps = 1e-6
 
-        def calc_similarity_matrix(z):
-            # Normalize z to control magnitude and prevent similarity collapse
-            z = F.normalize(z, p=2, dim=1, eps=eps)
-            # Compute cosine similarity matrix
-            similarity_matrix = torch.mm(z, z.T)
-            similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
-            s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
-            s_range = (s_max - s_min).clamp(min=eps)
-            similarity_matrix = (similarity_matrix - s_min) / s_range
-            return similarity_matrix
+        # # Add stronger noise early in training to break symmetry
+        # if epoch < 5:
+        #     z = z + 0.1 * torch.randn_like(z)
 
-        def calc_repel_loss(sim_mat, sharpness=10.0, threshold=0.3):
-            """
-            Penalizes similarity above a certain threshold.
-            Encourages dissimilarity while ignoring far-apart vectors.
-            """
-            N = sim_mat.size(0)
-            identity = torch.eye(N, device=sim_mat.device, dtype=sim_mat.dtype)
-            sim_mat = sim_mat * (1 - identity)  # zero out self-similarities
+        # Normalize z to control magnitude and prevent similarity collapse
+        z = F.normalize(z, p=2, dim=1, eps=eps)
 
-            # Apply sigmoid penalty
-            repel_loss = torch.sigmoid(sharpness * (sim_mat - threshold)).mean()
-            return repel_loss
+        # Compute cosine similarity matrix
+        similarity_matrix = torch.mm(z, z.T)
+        similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
 
-
-        # ----------------------------
-        # latent to similarity matrix
-        # ----------------------------
-        similarity_matrix = calc_similarity_matrix(l)
-        # ----------------------------
-        # codebook to similarity matrix
-        # ----------------------------
-        cb_similarity_matrix = calc_similarity_matrix(codebook[0])
-
-        # ----------------------------------
-        # node features to type simi matrix
-        # ----------------------------------
         # Normalize atom types for cosine similarity
         atom_types_fp32 = atom_types.float()
         atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
         type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
+
+        # Normalize similarity matrices to [0, 1]
+        s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+        s_range = (s_max - s_min).clamp(min=eps)
+        similarity_matrix = (similarity_matrix - s_min) / s_range
+
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
         t_range = (t_max - t_min).clamp(min=eps)
         type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
 
-        # ---------------
-        # latent repel
-        # ---------------
-        repel_loss = calc_repel_loss(similarity_matrix)
-        # repel_loss = calc_repel_loss(l, similarity_matrix)
+        # Repel loss to prevent collapse
+        identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
+        repel_loss = ((similarity_matrix - identity) ** 2).mean()
 
-        # ---------------
-        # codebook repel
-        # ---------------
-        cb_repel_loss = calc_repel_loss(cb_similarity_matrix)
-
-        # ---------------------
-        # Contrastive loss
-        # ---------------------
+        # Contrastive loss: positive & negative based on type similarity
+        pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
         neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
+        # contrastive_loss = pos_loss + neg_loss + eps
         contrastive_loss = 100 * neg_loss
-        latent_repel_weight = 0.5
-        cb_repel_weight = 0.5
-        final_loss = contrastive_loss + latent_repel_weight * repel_loss + cb_repel_weight * cb_repel_loss
 
-        return final_loss, neg_loss, repel_loss, cb_repel_loss
+        # Logging
+        # logger.info(
+        #     f"nega loss: {neg_loss.item():.4f}, pos loss: {pos_loss.item():.4f}, repel: {repel_loss.item():.4f}")
+        # print("similarity_matrix:\n", similarity_matrix[:5, :5].detach().cpu())
+        # print("type_similarity_matrix:\n", type_similarity_matrix[:5, :5].detach().cpu())
+        # print("z std:", z.std().item(), "mean norm:", z.norm(dim=1).mean().item())
+        #
+        # May07 23-16-43: nega loss: 0.0035, pos loss: 0.0522, repel: 0.7744
+        # May07 23-16-44: nega loss: 0.0033, pos loss: 0.0508, repel: 0.7709
+        # Final loss with stronger repel term early on
+        repel_weight = 0.5
+        # repel_weight = 0.5 if epoch < 10 else 0.1
+        final_loss = contrastive_loss + repel_weight * repel_loss
+
+        return final_loss, neg_loss, repel_loss
 
 
 import torch.nn.functional as F
@@ -790,23 +763,13 @@ class EuclideanCodebook(nn.Module):
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
-        # ------------------------------
-        # normalize
-        # ------------------------------
-        x = F.normalize(x, p=2, dim=1)  # latent vectors
-        # codebook = F.normalize(self.codebook, p=2, dim=1)  # codebook vectors
-
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
-        # ---------------------------------
-        # Initialize codebook with kmeans
-        # ---------------------------------
-        # if self.training and epoch == 1:  # mine
-        if self.training:  # mine
+        # Initialize codebook vectors (Ensure it does not detach)
+        if self.training and epoch == 1:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
-
         embed = self.embed  # ✅ DO NOT detach embed
-        init_cb = self.embed.clone().contiguous()
-        # Compute Distance between latents and codebook
+        init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
+        # Compute Distance Without Breaking Gradients
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
         # Compute soft assignment
@@ -814,7 +777,7 @@ class EuclideanCodebook(nn.Module):
         # Convert to hard assignments
         embed_ind_hard_idx = dist.argmax(dim=-1)
         # Access embeddings correctly with shape (1, 1000, 64)
-        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=embed.shape[1]).float()
+        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
         # Apply STE trick
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
         # **Compute Soft Indices (Weighted Sum)**
@@ -1226,16 +1189,70 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
-        embed_ind = embed_ind.to("cuda")
-        codebook = codebook.to("cuda")
-        init_feat = init_feat.to("cuda")
-        latents = latents.to("cuda")
+        # Normalize embeddings (optional: remove if not necessary)
+        embed_ind.to("cuda")
+        codebook.to("cuda")
+        init_feat.to("cuda")
+        latents.to("cuda")
+        quantized.to("cuda")
+        # latents_norm = torch.norm(latents, dim=1, keepdim=True) + 1e-6
+        # latents = latents / latents_norm
+
+        # # Pairwise distances
+        dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
+        #
+        # # Remove diagonal
+        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        #
+        # # Debug: Log distance statistics
+        # # print(f"Min: {dist_matrix_no_diag.min().item()}, Max: {dist_matrix_no_diag.max().item()}, Mean: {dist_matrix_no_diag.mean().item()}")
+        #
+        # Margin loss: Encourage distances >= min_distance
+        smooth_penalty = torch.nn.functional.relu(min_distance - dist_matrix_no_diag)
+        margin_loss = torch.mean(smooth_penalty)  # Use mean for better gradient scaling
+
+        # Spread loss: Encourage diversity
         spread_loss = torch.var(codebook)
+
+        # Pair distance loss: Regularize distances
+        pair_distance_loss = torch.mean(torch.log(dist_matrix_no_diag))
+
+        # sil loss
+        # def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, target_non_empty_clusters=500):
+
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
+
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
-        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss)
+        equivalent_gtroup_list = self.fast_find_equivalence_groups(latents_for_sil)
+        # print(equivalent_gtroup_list[:10])
+                                                        # cluster_indices, embed_ind, equivalence_groups, logger
+        # equivalent_atom_loss = self.vq_codebook_regularization_loss(embed_ind, equivalent_gtroup_list, logger)
+        # embed_ind, sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, t.shape[-2], t.shape[-2])
+        # atom_type_div_loss = torch.tensor(1)
+        # bond_num_div_loss = torch.tensor(1)
+        # charge_div_loss = torch.tensor(1)
+        # elec_state_div_loss = torch.tensor(1)
+        # aroma_div_loss = torch.tensor(1)
+        # ringy_div_loss = torch.tensor(1)
+        feat_div_loss, div_nega_loss, repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
+
+        # Should not be None
+        # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)
+
+        # atom_type_div_loss = compute_contrastive_loss(quantized, init_feat[:, 0])
+        # bond_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 1])
+        # charge_div_loss = compute_contrastive_loss(quantized, init_feat[:, 2])
+        # elec_state_div_loss = compute_contrastive_loss(quantized, init_feat[:, 3])
+        # aroma_div_loss = compute_contrastive_loss(quantized, init_feat[:, 4])
+        # ringy_div_loss = compute_contrastive_loss(quantized, init_feat[:, 5])
+        # h_num_div_loss = compute_contrastive_loss(quantized, init_feat[:, 6])
+        # div_loss_list = [atom_type_div_loss, bond_num_div_loss, charge_div_loss, elec_state_div_loss, aroma_div_loss, ringy_div_loss, h_num_div_loss]
+        # print(f"sil_loss {sil_loss}")
+        # print(f"equivalent_atom_loss {equivalent_atom_loss}")
+        # print(f"atom_type_div_loss {atom_type_div_loss}")
+        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -1261,32 +1278,101 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, 'b d n -> b n d')
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
+
+        # Debug before codebook step
+        # print(f"Before codebook: x shape = {x.shape}")
+
+        # print(f"x: {x}")
+        # print(f"init_feat: {init_feat}")
+        # if self.training:
         quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
+        # else:
+        #     quantize, embed_ind, dist, embed, latents, init_cb = self._codebook(x, logger, epoch)
+        # print(f"After codebook: embed_ind shape = {embed_ind.shape}, unique IDs = {torch.unique(embed_ind)}")
+        """
+        quantize: データの数だけ存在する、離散化されたクラスタ中心
+        embed_ind: データの数だけ存在する、所属するクラスタID
+        embed: クラスタ中心ベクトル
+        latents: データの数だけ存在する、潜在変数ベクトル
+        init_cb: 
+        """
+
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
+
+        # if self.training:
         quantize = x_tmp + (quantize - x_tmp)
+
+        # quantize_unique = torch.unique(quantize, dim=0)
+        # num_unique = quantize_unique.shape[0]
+        # print(f"Number of unique cb vectors: {num_unique}")
+        # commit_loss = F.mse_loss(torch.squeeze(quantize), torch.squeeze(x), reduction='mean') \
+        #               / torch.tensor(quantize.shape[1], dtype=torch.float, device=quantize.device)
+
+        # if self.orthogonal_reg_active_codes_only:
+        #     unique_code_ids = torch.unique(embed_ind)
+        #     print(f"Unique codebook IDs used: {unique_code_ids}")
+        #     codebook = torch.squeeze(self._codebook.embed)[unique_code_ids]
+
         codebook = self._codebook.embed
-        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = (
-            self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch))
-        args = get_args()
-        if args.train_or_infer == 'use_nonredun_cb_infer':
-            pass
-        else:
-            if len(embed_ind.shape) == 3:
-                embed_ind = embed_ind[0]
-            if embed_ind.ndim == 2:
-                embed_ind = rearrange(embed_ind, 'b 1 -> b')
-            elif embed_ind.ndim != 1:
-                raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        latent_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
-        loss = (self.commitment_weight * latent_loss + self.commitment_weight * codebook_loss + self.lamb_div * feat_div_loss)
+
+        # print(f"embed_ind 0: {embed_ind}")
+        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize,
+                                                                   logger, epoch)
+        # print(f"embed_ind: {embed_ind}")
+        if len(embed_ind.shape) == 3:
+            embed_ind = embed_ind[0]
+        if embed_ind.ndim == 2:
+            embed_ind = rearrange(embed_ind, 'b 1 -> b')
+        elif embed_ind.ndim != 1:
+            raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
+        """
+        /vqatom/0227version/vq.py:1457: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
+          commit_loss = F.mse_loss(quantize.detach().squeeze(1), x.squeeze(0))
+        /vqatom/0227version/vq.py:1458: UserWarning: Using a target size (torch.Size([6290, 1, 64])) that is different to the input size (torch.Size([1, 6290, 64])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
+          codebook_loss = F.mse_loss(quantize.squeeze(1), x.detach().squeeze(0))"""
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
+        """
+        # feat_div_loss: 0.0001748909562593326 * 100
+        commit_loss: 0.00524178147315979     * 0.01  """
+        # loss = self.commitment_weight * commit_loss + self.lamb_cb * codebook_loss
+        print(f"commit loss {self.commitment_weight * commit_loss}, div nega {self.lamb_div * div_nega_loss}, sil loss {self.lamb_sil * sil_loss}")
+        # if epoch < 5:
+        #     print(f"epoch is less than 10")
+        #     loss = (self.lamb_div * feat_div_loss)
+        #     # loss = (self.commitment_weight * commit_loss)
+        # else:
+        #     print(f"epoch is more than 10 !!")
+        # loss = self.lamb_div * feat_div_loss
+        #
+        #     commitment_weight=0.01,  # using
+        #     lamb_div=0.01,           # using
+        # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
+        loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss)
+        #
+        # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
+        #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
+
+        # quantize = self.project_out(quantize)
+
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
+
+        # if self.accept_image_fmap:
+        #     print("fmap ===========")
+        #     quantize = rearrange(quantize, 'b (h w) c -> b c h w', h=height, w=width)
+        #     embed_ind = rearrange(embed_ind, 'b (h w) ... -> b h w ...', h=height, w=width)
+        # commit_loss = torch.tensor(1)
         if only_one:
             if len(quantize.shape) == 3:
                 # this line is executed
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
-        return (quantize, embed_ind, loss, dist, embed, latent_loss, latents, div_nega_loss, x, latent_loss, sil_loss,
-                num_unique, repel_loss, cb_repel_loss)
+        """
+        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, spread_loss, detached_quantize,
+         x, init_cb, sil_loss, commit_loss) = quantize_output"""
+        # if self.training:
+        return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss, num_unique, repel_loss
+        # else:
+        #     return quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss
