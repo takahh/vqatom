@@ -8,14 +8,14 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-# DATA_PATH = "/Users/taka/Documents/final_infer_on_all_data/40000_16/"
-DATA_PATH = "/"
+DATA_PATH = "/Users/taka/Downloads/with_cb_repel/"
+# DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 1
+EPOCH_START = 2
 SAMPLE_LATENT = 300000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
@@ -82,7 +82,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
     for N_NEIGHBORS in [3, 4, 5, 10]:
-        for zoom in [10, 5, 2]:
+        for zoom in [50, 30, 10, 5]:
             for SPREAD in [0.3, 1, 2, 3]:
                 print("reducer setup")
                 reducer = umap.UMAP(
@@ -133,18 +133,19 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     # plt.ylim(-30, 30)
 
                     plt.title(title + " (Zoomed)")
-                    if not os.path.exists(f"/{samples}"):
-                        os.mkdir(f"/{samples}")
-                    plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
+                    # if not os.path.exists(f"/{samples}"):
+                    #     os.mkdir(f"/{samples}")
+                    plt.savefig(f"./n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_epo_{epoch}_{i}.png")
+                    # plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
 
 
 def process_epoch(epoch, samples):
     """Load data and plot visualization for a single epoch."""
-    codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
+    # codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
     # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
-    # codebook_file = f'{DATA_PATH}init_codebook_{epoch}.npz'
+    codebook_file = f'{DATA_PATH}init_codebook_{epoch}.npz'
+    latent_file = f"{DATA_PATH}latents_{epoch}.npz"
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
-    latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
     cb_arr = load_npz_array(codebook_file)
     latent_arr = load_npz_array_multi(latent_file)
@@ -170,7 +171,7 @@ def process_epoch(epoch, samples):
 
 
 def main():
-    for samples in [30000, 100000, 300000, 1000000, 2000000]:
+    for samples in [30000]:
         for epoch in range(EPOCH_START, EPOCH_END):
             print(f"Processing epoch {epoch}")
             process_epoch(epoch, samples)
