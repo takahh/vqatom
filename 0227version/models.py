@@ -113,22 +113,22 @@ class EquivariantThreeHopGINE(nn.Module):
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, hidden_feats)
+            nn.Linear(hidden_feats, hidden_feats)
         )
         nn2 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, hidden_feats)
+            nn.Linear(hidden_feats, hidden_feats)
         )
         nn3 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, out_feats)
+            nn.Linear(hidden_feats, out_feats)
         )
         nn4 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, out_feats)
+            nn.Linear(hidden_feats, out_feats)
         )
 
         self.gine1 = GINEConv(nn1, edge_dim=1)
@@ -286,18 +286,17 @@ class EquivariantThreeHopGINE(nn.Module):
         losslist = [div_nega_loss.item(), commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item()]
 
-        if batched_graph_base:  # from --- train_sage --
-            # if self.train_or_infer == "train":
-            #     sample_list = []
-            # else:
+        if batched_graph_base:
+            # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
             latents = h
-            num_nodes = batched_graph_base.num_nodes()
-            src, dst = batched_graph_base.edges()
-            sample_adj_base = torch.zeros((num_nodes, num_nodes), dtype=torch.float32, device=src.device)
-            sample_adj_base[src, dst] = 1.0
+            sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
+            # print(f"emb_ind shape {emb_ind.shape}")
+            # print(f"features shape {features.shape}")
+            # print(f"src shape {src.shape}")
+            # print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
-        else:   # -- from evaluate ---
+        else:
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
 

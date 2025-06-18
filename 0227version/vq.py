@@ -1167,26 +1167,7 @@ class VectorQuantize(nn.Module):
         equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
         return equivalence_groups
 
-    def pairwise_distances_no_diag(self, x: torch.Tensor, chunk_size: int = 64):
-        if x.dim() == 2:
-            dist_matrix = torch.cdist(x, x, p=2)
-            dist_matrix.fill_diagonal_(float('inf'))  # no need to create a mask
-            return dist_matrix
 
-        elif x.dim() == 3:
-            B, N, D = x.shape
-            results = []
-            mask = ~torch.eye(N, dtype=torch.bool, device=x.device).unsqueeze(0)  # [1, N, N]
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                xb = x[start:end]  # [chunk, N, D]
-                dist = torch.cdist(xb, xb, p=2)  # [chunk, N, N]
-                dist = dist.masked_fill(~mask, float('inf'))
-                dist_flat = dist[mask.expand(end - start, -1, -1)].view(end - start, N, N - 1)
-                results.append(dist_flat)
-            return torch.cat(results, dim=0)  # [B, N, N - 1]
-        else:
-            raise ValueError(f"Expected 2D or 3D input, got {x.shape}")
 
     def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, epoch=0):
         # Normalize embeddings (optional: remove if not necessary)
