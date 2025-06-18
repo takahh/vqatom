@@ -327,11 +327,9 @@ def run_inductive(
                     break
                 # if idx == 1:
                 #     break
-                print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    print(f"chunk {i}")
 
                     # print(f"Allocated memory: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
                     # print(f"Cached memory:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
@@ -421,7 +419,7 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
-                    # print(f"len(ind_chunk) = {len(ind_chunk)}")
+                    print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
