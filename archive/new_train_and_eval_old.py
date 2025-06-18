@@ -410,24 +410,16 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             print("train ============")
             # Iterate through batches
-
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-
-                # if idx == 5:
-                #     break
-                if idx == 1:
+                if idx == 5:
                     break
-                # print(f"idx {idx}")
                 start_convert_to_dgl = time.time()
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 convert_to_dgl_time = time.time() - start_convert_to_dgl
-                print(f"convert_to_dgl_time: {convert_to_dgl_time:.6f} sec", flush=True)
                 for i in range(0, len(glist), chunk_size):
                     import gc
                     import torch
-                    if i == 1:
-                        break
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
@@ -492,8 +484,6 @@ def run_inductive(
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
-                if i == 1:
-                    break
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
