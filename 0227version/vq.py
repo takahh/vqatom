@@ -539,7 +539,7 @@ class ContrastiveLoss(nn.Module):
         print(f"z {z.shape}")
         print(f"codebook {codebook.shape}")
         similarity_matrix = torch.mm(z, z.T)
-        cb_similarity_matrix = torch.mm(codebook, codebook.T)
+        cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         # Normalize z to control magnitude and prevent similarity collapse
         z = F.normalize(z, p=2, dim=1, eps=eps)
