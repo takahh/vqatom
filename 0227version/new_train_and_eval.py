@@ -520,7 +520,7 @@ def run_inductive(
                   f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
                   # f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},"
             )
-
+        import os
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
         if conf['train_or_infer'] != "train":
@@ -536,7 +536,6 @@ def run_inductive(
                   f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
                   f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             )
-            import os
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
             if conf['train_or_infer'] == "train":
