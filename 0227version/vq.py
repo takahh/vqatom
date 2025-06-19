@@ -536,8 +536,8 @@ class ContrastiveLoss(nn.Module):
         atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
         type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
-        print(f"z {z.shape}")
-        print(f"codebook {codebook.shape}")
+        # print(f"z {z.shape}")
+        # print(f"codebook {codebook.shape}")
         similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
