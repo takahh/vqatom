@@ -544,7 +544,7 @@ class ContrastiveLoss(nn.Module):
         # Normalize z to control magnitude and prevent similarity collapse
         z = F.normalize(z, p=2, dim=1, eps=eps)
 
-        def calc_repel_loss(simi_matrix):
+        def calc_repel_loss(v, simi_matrix):
             # Compute cosine similarity matrix
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
 
@@ -554,12 +554,12 @@ class ContrastiveLoss(nn.Module):
             simi_matrix = (simi_matrix - s_min) / s_range
 
             # Repel loss to prevent collapse
-            identity = torch.eye(z.size(0), device=z.device, dtype=simi_matrix.dtype)
+            identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        latent_repel_loss = calc_repel_loss(latent_similarity_matrix)
-        cb_repel_loss = calc_repel_loss(cb_similarity_matrix)
+        latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
+        cb_repel_loss = calc_repel_loss(codebook, cb_similarity_matrix)
 
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
         t_range = (t_max - t_min).clamp(min=eps)
