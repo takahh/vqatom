@@ -75,7 +75,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     del logits, quantized
     torch.cuda.empty_cache()
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
+    # allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
     # print(f"Allocated Memory: {allocated:.2f} MB")
     # for name, param in model.named_parameters():
     #     if param.grad is not None:
@@ -326,7 +326,7 @@ def run_inductive(
         # Train
         # --------------------------------
         if conf["train_or_infer"] == "train":
-            # make initted FALSE at the beginning in every epoch in train
+            # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             # Iterate through batches
             print("TRAIN ---------------")
