@@ -524,19 +524,12 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, z, atom_types, epoch, logger):
+    def forward(self, z, atom_types, codebook, epoch, logger):
         eps = 1e-6
 
         # # Add stronger noise early in training to break symmetry
         # if epoch < 5:
         #     z = z + 0.1 * torch.randn_like(z)
-
-        # Normalize z to control magnitude and prevent similarity collapse
-        z = F.normalize(z, p=2, dim=1, eps=eps)
-
-        # Compute cosine similarity matrix
-        similarity_matrix = torch.mm(z, z.T)
-        similarity_matrix = torch.clamp(similarity_matrix, -1 + eps, 1 - eps)
 
         # Normalize atom types for cosine similarity
         atom_types_fp32 = atom_types.float()
@@ -544,21 +537,35 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
 
-        # Normalize similarity matrices to [0, 1]
-        s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
-        s_range = (s_max - s_min).clamp(min=eps)
-        similarity_matrix = (similarity_matrix - s_min) / s_range
+        similarity_matrix = torch.mm(z, z.T)
+        cb_similarity_matrix = torch.mm()
+
+        # Normalize z to control magnitude and prevent similarity collapse
+        z = F.normalize(z, p=2, dim=1, eps=eps)
+
+        def calc_repel_loss(simi_matrix):
+            # Compute cosine similarity matrix
+            similarity_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+
+            # Normalize similarity matrices to [0, 1]
+            s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+            s_range = (s_max - s_min).clamp(min=eps)
+            similarity_matrix = (similarity_matrix - s_min) / s_range
+
+            # Repel loss to prevent collapse
+            identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
+            repel_loss = ((similarity_matrix - identity) ** 2).mean()
+            return repel_loss
+
+        latent_repel_loss = calc_repel_loss(similarity_matrix)
+        cb_repel_loss = calc_repel_loss(codebook)
 
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
         t_range = (t_max - t_min).clamp(min=eps)
         type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
 
-        # Repel loss to prevent collapse
-        identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
-        repel_loss = ((similarity_matrix - identity) ** 2).mean()
-
         # Contrastive loss: positive & negative based on type similarity
-        pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
+        # pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
         neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
         # contrastive_loss = pos_loss + neg_loss + eps
@@ -574,11 +581,12 @@ class ContrastiveLoss(nn.Module):
         # May07 23-16-43: nega loss: 0.0035, pos loss: 0.0522, repel: 0.7744
         # May07 23-16-44: nega loss: 0.0033, pos loss: 0.0508, repel: 0.7709
         # Final loss with stronger repel term early on
-        repel_weight = 0.5
+        latent_repel_weight = 0.5
+        cb_repel_weight = 0.5
         # repel_weight = 0.5 if epoch < 10 else 0.1
-        final_loss = contrastive_loss + repel_weight * repel_loss
+        final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
-        return final_loss, neg_loss, repel_loss
+        return final_loss, neg_loss, latent_repel_loss
 
 
 import torch.nn.functional as F
@@ -1218,7 +1226,7 @@ class VectorQuantize(nn.Module):
         # elec_state_div_loss = torch.tensor(1)
         # aroma_div_loss = torch.tensor(1)
         # ringy_div_loss = torch.tensor(1)
-        feat_div_loss, div_nega_loss, repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, epoch, logger)
+        feat_div_loss, div_nega_loss, repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
 
         # Should not be None
         # equidist_cb_loss = compute_duplicate_nearest_codebook_loss(latents, codebook)

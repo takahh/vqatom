@@ -8,14 +8,15 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/normalized/"
+DATA_PATH = "/Users/taka/Downloads/0227version/40000_16/"
+SAMPLES = 10000
 # DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 1
+EPOCH_START = 2
 SAMPLE_LATENT = 300000
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
@@ -143,10 +144,10 @@ def process_epoch(epoch, samples):
     """Load data and plot visualization for a single epoch."""
     # codebook_file = f"{DATA_PATH}used_cb_vectors.npz"
     # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
-    codebook_file = f'{DATA_PATH}init_codebook_{epoch}.npz'
-    latent_file = f"{DATA_PATH}latents_{epoch}.npz"
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
+    codebook_file = f'{DATA_PATH}used_cb_vectors.npz'
+    latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     cb_arr = load_npz_array(codebook_file)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
@@ -171,10 +172,9 @@ def process_epoch(epoch, samples):
 
 
 def main():
-    for samples in [30000]:
-        for epoch in range(EPOCH_START, EPOCH_END):
-            print(f"Processing epoch {epoch}")
-            process_epoch(epoch, samples)
+    for epoch in range(EPOCH_START, EPOCH_END):
+        print(f"Processing epoch {epoch}")
+        process_epoch(epoch, SAMPLES)
 
 
 if __name__ == '__main__':
