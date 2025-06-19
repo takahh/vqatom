@@ -539,8 +539,7 @@ def run_inductive(
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             os.makedirs(kw, exist_ok=True)
             if conf['train_or_infer'] == "train":
-                np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
-                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
+                pass
             else:
                 np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
                 np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
@@ -556,3 +555,8 @@ def run_inductive(
             with open(f"./{kw}/ind_frequencies.json", 'w') as f:
                 json.dump(dict(count), f)
             np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
+        else:
+            print("used_cb_vectors_all_epochs.shape")
+            print(used_cb_vectors_all_epochs.shape)
+            np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
+            np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
