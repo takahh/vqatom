@@ -328,6 +328,7 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
+            print(f"model.vq._codebook.initted {model.vq._codebook.initted}")
             # Iterate through batches
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
