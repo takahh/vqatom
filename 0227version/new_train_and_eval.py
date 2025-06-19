@@ -284,6 +284,14 @@ class GraphDataset(Dataset):
     def __getitem__(self, idx):
         return self.graphs[idx]
 
+import psutil
+import os
+
+def print_memory_usage(tag=""):
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info().rss / (1024 ** 2)  # in MB
+    print(f"[{tag}] Memory Usage: {mem:.2f} MB")
+
 
 def run_inductive(
         conf,
@@ -329,7 +337,7 @@ def run_inductive(
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    print(f"[{tag}] Memory Usage: {mem:.2f} MB")
+                    print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
