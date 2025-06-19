@@ -551,8 +551,8 @@ class ContrastiveLoss(nn.Module):
         neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
         contrastive_loss = 100 * neg_loss
-        latent_repel_weight = 0.1
-        cb_repel_weight = 0.1
+        latent_repel_weight = 1
+        cb_repel_weight = 1
         final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
         return final_loss, neg_loss, latent_repel_loss
