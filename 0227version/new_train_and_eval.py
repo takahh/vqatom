@@ -520,6 +520,9 @@ def run_inductive(
                   f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
                   # f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},"
             )
+
+        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+        os.makedirs(kw, exist_ok=True)
         if conf['train_or_infer'] != "train":
             logger.info(f"epoch {epoch}:"
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
@@ -536,8 +539,6 @@ def run_inductive(
             import os
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
-            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-            os.makedirs(kw, exist_ok=True)
             if conf['train_or_infer'] == "train":
                 pass
             else:
