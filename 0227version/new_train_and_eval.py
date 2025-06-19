@@ -333,10 +333,18 @@ def run_inductive(
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
+                # --------------- delete soon !!!! ----------------
+                if idx == 1:
+                    break
+                # --------------- delete soon !!!! ----------------
                 print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
+                    # --------------- delete soon !!!! ----------------
+                    if i > 100:
+                        break
+                    # --------------- delete soon !!!! ----------------
                     print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
@@ -531,14 +539,15 @@ def run_inductive(
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
             os.makedirs(kw, exist_ok=True)
             if conf['train_or_infer'] == "train":
-                pass
+                np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
+                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
             else:
                 np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
                 np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
                 np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
-                np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
                 np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
+                np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
                 np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
