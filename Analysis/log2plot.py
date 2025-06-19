@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # from archive.train_and_eval import train
-
+PATH = "/Users/taka/Downloads/log"
 
 # Set global font size
 FSIZE = 23
@@ -86,7 +86,7 @@ def plot(type, num_pair):
     effective_cb_size_list = []
     plt.rcParams.update({'font.size': 24})  # set general font size to 14
 
-    with open(f"/Users/taka/Downloads/with_cb_repel/outputs/log") as file:
+    with open(PATH) as file:
     # with open(f'/Users/taka/Documents/vqatom_train_output/{num_pair}', 'r') as file:
         lines = file.readlines()
         print(lines)

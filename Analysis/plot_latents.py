@@ -9,15 +9,14 @@ import matplotlib.pyplot as plt
 np.set_printoptions(threshold=np.inf)
 
 DATA_PATH = "/Users/taka/Downloads/0227version/40000_16/"
-SAMPLES = 10000
+SAMPLES = 500000
 # DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 2
-SAMPLE_LATENT = 300000
+EPOCH_START = 1
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -82,10 +81,10 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
-    for N_NEIGHBORS in [3, 4, 5, 10]:
-        for zoom in [50, 30, 10, 5]:
-            for SPREAD in [0.3, 1, 2, 3]:
-                print("reducer setup")
+    for N_NEIGHBORS in [10]:
+        for zoom in [5]:
+            for SPREAD in [1]:
+                # print("reducer setup")
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
                     min_dist=MIN_DIST,
@@ -94,11 +93,11 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     n_epochs=100,
                     random_state=42
                 ).fit(latent_arr)
-                print("reducer setup done")
+                # print("reducer setup done")
                 latent_emb = reducer.transform(latent_arr)
-                print("latent transform done")
+                # print("latent transform done")
                 cb_emb = reducer.transform(cb_arr)
-                print("cb transform done")
+                # print("cb transform done")
                 x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
                 y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
