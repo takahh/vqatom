@@ -345,7 +345,7 @@ def run_inductive(
                     if i > 100:
                         break
                     # --------------- delete soon !!!! ----------------
-                    print_memory_usage(f"idx {idx}")
+                    # print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
                     # Ensure node features are correctly extracted
@@ -431,7 +431,7 @@ def run_inductive(
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
                 try:
                     ind_chunk = sample_list_test[0].cpu().tolist()
-                    print(f"len(ind_chunk) = {len(ind_chunk)}")
+                    # print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
                     latent_list.append(latent_chunk)
