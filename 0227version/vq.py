@@ -538,7 +538,7 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
 
         similarity_matrix = torch.mm(z, z.T)
-        cb_similarity_matrix = torch.mm()
+        cb_similarity_matrix = torch.mm(codebook, codebook.T)
 
         # Normalize z to control magnitude and prevent similarity collapse
         z = F.normalize(z, p=2, dim=1, eps=eps)
@@ -558,7 +558,7 @@ class ContrastiveLoss(nn.Module):
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(similarity_matrix)
-        cb_repel_loss = calc_repel_loss(codebook)
+        cb_repel_loss = calc_repel_loss(cb_similarity_matrix)
 
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
         t_range = (t_max - t_min).clamp(min=eps)
