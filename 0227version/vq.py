@@ -538,7 +538,7 @@ class ContrastiveLoss(nn.Module):
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
         # print(f"z {z.shape}")
         # print(f"codebook {codebook.shape}")
-        similarity_matrix = torch.mm(z, z.T)
+        latent_similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         # Normalize z to control magnitude and prevent similarity collapse
@@ -546,19 +546,19 @@ class ContrastiveLoss(nn.Module):
 
         def calc_repel_loss(simi_matrix):
             # Compute cosine similarity matrix
-            similarity_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
 
             # Normalize similarity matrices to [0, 1]
-            s_min, s_max = similarity_matrix.min(), similarity_matrix.max()
+            s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
-            similarity_matrix = (similarity_matrix - s_min) / s_range
+            simi_matrix = (simi_matrix - s_min) / s_range
 
             # Repel loss to prevent collapse
-            identity = torch.eye(z.size(0), device=z.device, dtype=similarity_matrix.dtype)
-            repel_loss = ((similarity_matrix - identity) ** 2).mean()
+            identity = torch.eye(z.size(0), device=z.device, dtype=simi_matrix.dtype)
+            repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        latent_repel_loss = calc_repel_loss(similarity_matrix)
+        latent_repel_loss = calc_repel_loss(latent_similarity_matrix)
         cb_repel_loss = calc_repel_loss(cb_similarity_matrix)
 
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
@@ -568,7 +568,7 @@ class ContrastiveLoss(nn.Module):
         # Contrastive loss: positive & negative based on type similarity
         # pos_loss = torch.mean((1 - similarity_matrix) * type_similarity_matrix)
         neg_mask = F.relu(type_similarity_matrix - 0.8)
-        neg_loss = torch.mean(F.relu(similarity_matrix - 0.9) * neg_mask)
+        neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
         # contrastive_loss = pos_loss + neg_loss + eps
         contrastive_loss = 100 * neg_loss
 
