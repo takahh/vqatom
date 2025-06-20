@@ -674,9 +674,9 @@ class EuclideanCodebook(nn.Module):
     @torch.jit.ignore
     def init_embed_(self, data, logger):
         # print(f"self.initted {self.initted}")
-        if self.initted[0] != 0:
-            # print("return!!!!!")
-            return
+        # if self.initted[0] != 0:
+        #     # print("return!!!!!")
+        #     return
         print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
         # samples,
         # num_clusters,
