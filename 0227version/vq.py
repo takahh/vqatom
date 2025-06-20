@@ -530,9 +530,8 @@ class ContrastiveLoss(nn.Module):
         atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
         type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
         type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
-        latent_similarity_matrix = torch.mm(z, z.T)
-        cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
-        z = F.normalize(z, p=2, dim=1, eps=eps)
+        latent_similarity_matrix = torch.mm(F.normalize(z, dim=-1), F.normalize(z, dim=-1).T)
+        cb_similarity_matrix = torch.mm(F.normalize(codebook[0], dim=-1), F.normalize(codebook[0], dim=-1).T)
 
         def calc_repel_loss(v, simi_matrix):
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
@@ -544,15 +543,15 @@ class ContrastiveLoss(nn.Module):
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
-        cb_repel_loss = calc_repel_loss(codebook, cb_similarity_matrix)
+        cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
         t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
         t_range = (t_max - t_min).clamp(min=eps)
         type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
         neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
-        contrastive_loss = 100 * neg_loss
-        latent_repel_weight = 0.5
-        cb_repel_weight = 0.5
+        contrastive_loss = neg_loss
+        latent_repel_weight = 0.05 # 0.005 in success
+        cb_repel_weight = 0.05  # 0.005
         final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
         return final_loss, neg_loss, latent_repel_loss
@@ -1232,8 +1231,7 @@ class VectorQuantize(nn.Module):
         #     commitment_weight=0.01,  # using
         #     lamb_div=0.01,           # using
         # commit loss 7.9770e-07, div nega 2.502e-05, sil loss 4.6171e-06
-        loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss +
-                self.lamb_div * feat_div_loss)
+        loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + feat_div_loss)
         #
         # loss = (self.commitment_weight * commit_loss + self.lamb_div * feat_div_loss
         #         + self.lamb_cb * codebook_loss + self.lamb_sil * sil_loss)
