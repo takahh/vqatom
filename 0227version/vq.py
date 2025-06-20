@@ -526,10 +526,10 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, z, atom_types, codebook, epoch, logger):
         eps = 1e-6
-        atom_types_fp32 = atom_types.float()
-        atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
-        type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
-        type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
+        # atom_types_fp32 = atom_types.float()
+        # atom_types_norm = F.normalize(atom_types_fp32, p=2, dim=1, eps=eps)
+        # type_similarity_matrix = torch.mm(atom_types_norm, atom_types_norm.T)
+        # type_similarity_matrix = torch.clamp(type_similarity_matrix, -1 + eps, 1 - eps)
         latent_similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
@@ -544,16 +544,17 @@ class ContrastiveLoss(nn.Module):
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
-        t_range = (t_max - t_min).clamp(min=eps)
-        type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
-        neg_mask = F.relu(type_similarity_matrix - 0.8)
-        neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
-        contrastive_loss = neg_loss
+        # t_min, t_max = type_similarity_matrix.min(), type_similarity_matrix.max()
+        # t_range = (t_max - t_min).clamp(min=eps)
+        # type_similarity_matrix = (type_similarity_matrix - t_min) / t_range
+        # neg_mask = F.relu(type_similarity_matrix - 0.8)
+        # neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
+        # contrastive_loss = neg_loss
         latent_repel_weight = 0.05 # 0.005 in success
         cb_repel_weight = 0.05  # 0.005
-        final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
-
+        # final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        neg_loss = 1
         return final_loss, neg_loss, latent_repel_loss
 
 
