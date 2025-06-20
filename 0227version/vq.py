@@ -677,7 +677,7 @@ class EuclideanCodebook(nn.Module):
         # if self.initted[0] != 0:
         #     # print("return!!!!!")
         #     return
-        print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
+        # print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
         # samples,
         # num_clusters,
         # num_iters=100,
