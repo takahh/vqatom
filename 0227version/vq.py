@@ -553,7 +553,8 @@ class ContrastiveLoss(nn.Module):
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
         # final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
-        final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        final_loss = latent_repel_weight * latent_repel_loss
         neg_loss = 1
         return final_loss, neg_loss, latent_repel_loss
 
