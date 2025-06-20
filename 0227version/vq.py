@@ -551,8 +551,8 @@ class ContrastiveLoss(nn.Module):
         neg_mask = F.relu(type_similarity_matrix - 0.8)
         neg_loss = torch.mean(F.relu(latent_similarity_matrix - 0.9) * neg_mask)
         contrastive_loss = 100 * neg_loss
-        latent_repel_weight = 5
-        cb_repel_weight = 5
+        latent_repel_weight = 0.5
+        cb_repel_weight = 0.5
         final_loss = contrastive_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
         return final_loss, neg_loss, latent_repel_loss
@@ -980,7 +980,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=100,  # using
+            commitment_weight=0.25,  # using
             codebook_weight=0.01,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
