@@ -736,7 +736,7 @@ class EuclideanCodebook(nn.Module):
     import torch
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None, epoch=None):
+    def forward(self, x, logger=None, chunk_i=None):
         x = x.float()
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
@@ -744,7 +744,7 @@ class EuclideanCodebook(nn.Module):
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # Keeps gradient connection
         # Initialize codebook vectors (Ensure it does not detach)
         # if self.training and epoch == 1:  # mine
-        if self.training:  # mine
+        if self.training and chunk_i % 5 == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`

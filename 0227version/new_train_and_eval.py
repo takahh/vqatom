@@ -353,7 +353,7 @@ def run_inductive(
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, epoch, logger)
+                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger)
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
