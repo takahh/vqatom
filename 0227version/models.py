@@ -283,7 +283,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # print(f"emb_ind {emb_ind} ----------------------")
         detached_quantize = quantize.detach()
         # Loss components list
-        losslist = [None, commit_loss.item(), cb_loss.item(), sil_loss.item(),
+        losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item()]
 
         if batched_graph_base:
