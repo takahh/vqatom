@@ -553,4 +553,4 @@ def run_inductive(
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
             np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
-            np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
+            np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
