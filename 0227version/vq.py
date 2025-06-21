@@ -574,7 +574,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------
         # losses are combined here
         # ---------------------------------------
-        if epoch > 10:
+        if epoch > 30:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
         else:
             loss = repel_loss
