@@ -109,22 +109,22 @@ class EquivariantThreeHopGINE(nn.Module):
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, hidden_feats)
+            nn.Linear(hidden_feats, hidden_feats)
         )
         nn2 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, hidden_feats)
+            nn.Linear(hidden_feats, hidden_feats)
         )
         nn3 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, out_feats)
+            nn.Linear(hidden_feats, out_feats)
         )
         nn4 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            # nn.Linear(hidden_feats, out_feats)
+            nn.Linear(hidden_feats, out_feats)
         )
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
