@@ -543,7 +543,7 @@ class VectorQuantize(nn.Module):
         return latent_loss, codebook_loss
 
 
-    def forward(self, x, init_feat, logger, epoch=None):
+    def forward(self, x, init_feat, logger, chunk_i=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -571,10 +571,10 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
-        # ---------------------------------------
-        # losses are combined here
-        # ---------------------------------------
-        if epoch > 30:
+        # ---------------------------------------------
+        # only repel losses at the first several steps
+        # ---------------------------------------------
+        if chunk_i > 30:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
         else:
             loss = repel_loss
