@@ -311,7 +311,7 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
-        if self.training and chunk_i % 5 == 0:  # mine
+        if self.training and chunk_i % 20 == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
