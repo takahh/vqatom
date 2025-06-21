@@ -56,7 +56,7 @@ import time
 import torch
 
 
-def train_sage(model, g, feats, optimizer, epoch, logger):
+def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()
@@ -67,7 +67,7 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     optimizer.zero_grad()
     with (torch.cuda.amp.autocast()):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique \
-        = model(g, feats, epoch, logger)  # g is blocks
+        = model(g, feats, chunk_i, logger, epoch)  # g is blocks
     model.vq._codebook.embed.data.copy_(cb)
     loss = loss.to(device)
     del logits, quantized
@@ -319,8 +319,6 @@ def run_inductive(
         if conf["train_or_infer"] == "train":
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
-            # print(f"model.vq._codebook.initted {model.vq._codebook.initted}")
-            # Iterate through batches
             print("TRAIN ---------------")
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
@@ -344,7 +342,7 @@ def run_inductive(
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger)
+                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx)
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()

@@ -305,7 +305,7 @@ class EuclideanCodebook(nn.Module):
     import torch
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None, chunk_i=None):
+    def forward(self, x, logger=None, chunk_i=None, epoch=None):
         x = x.float()
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
@@ -523,8 +523,8 @@ class VectorQuantize(nn.Module):
         latents.to("cuda")
         quantized.to("cuda")
         dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
-        mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
+        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
+        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
         spread_loss = torch.var(codebook)
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
@@ -543,7 +543,7 @@ class VectorQuantize(nn.Module):
         return latent_loss, codebook_loss
 
 
-    def forward(self, x, init_feat, logger, chunk_i=None):
+    def forward(self, x, init_feat, logger, chunk_i=None, epoch=0):
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -557,7 +557,7 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, 'b d n -> b n d')
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, chunk_i)
+        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, chunk_i, epoch)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)

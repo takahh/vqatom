@@ -169,7 +169,7 @@ class EquivariantThreeHopGINE(nn.Module):
                 return False
         return True
 
-    def forward(self, data, features, chunk_i, logger=None, batched_graph_base=None):
+    def forward(self, data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None):
         import torch
         torch.set_printoptions(threshold=10_000)  # Set a high threshold to print all elements
         import torch
@@ -219,7 +219,7 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.ln3(h)
         h = self.linear_1(h)
         quantize_output = self.vq(
-            h, init_feat, logger, chunk_i
+            h, init_feat, logger, chunk_i, epoch
         )
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
          x, cb_loss, sil_loss, num_unique, repel_loss, cb_repel_loss) = quantize_output
