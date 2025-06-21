@@ -101,44 +101,35 @@ class AtomEmbedding(nn.Module):
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super(EquivariantThreeHopGINE, self).__init__()
-
         if args is None:
             args = get_args()  # Ensure this function is defined elsewhere
         self.feat_embed = AtomEmbedding()
-        # Initial linear layer for node features
-        # self.linear_0 = nn.Linear(136, args.hidden_dim)
         self.linear_0 = nn.Linear(88, args.hidden_dim)
-
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
             # nn.ReLU(),
-            nn.Linear(hidden_feats, hidden_feats)
+            # nn.Linear(hidden_feats, hidden_feats)
         )
         nn2 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            nn.Linear(hidden_feats, hidden_feats)
+            # nn.Linear(hidden_feats, hidden_feats)
         )
         nn3 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            nn.Linear(hidden_feats, out_feats)
+            # nn.Linear(hidden_feats, out_feats)
         )
         nn4 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
             # nn.ReLU(),
-            nn.Linear(hidden_feats, out_feats)
+            # nn.Linear(hidden_feats, out_feats)
         )
-
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
         self.gine3 = GINEConv(nn3, edge_dim=1)
         self.gine4 = GINEConv(nn4, edge_dim=1)
-        # self.gine1 = GINEConv(nn1, edge_dim=1)
-        # self.gine2 = GINEConv(nn2, edge_dim=1)
-        # self.gine3 = GINEConv(nn3, edge_dim=1)
-
         # Vector quantization layer
         self.vq = VectorQuantize(
             dim=args.hidden_dim,
@@ -147,10 +138,8 @@ class EquivariantThreeHopGINE(nn.Module):
             use_cosine_sim=False,
             threshold_ema_dead_code=2,
         )
-
         # Bond weight layer
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
-
         # Activation and normalization layers
         self.leaky_relu0 = nn.LeakyReLU(0.2)
         self.leaky_relu1 = nn.LeakyReLU(0.2)
@@ -160,9 +149,6 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln3 = nn.LayerNorm(args.hidden_dim)
         self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
         self.train_or_infer = args.train_or_infer
-        # self.dropout_0 = nn.Dropout(p=0.2)
-        # self.dropout_1 = nn.Dropout(p=0.2)
-        # self.dropout_2 = nn.Dropout(p=0.2)
 
     def reset_kmeans(self):
         """Reset k-means clustering for vector quantization."""
@@ -182,22 +168,14 @@ class EquivariantThreeHopGINE(nn.Module):
     def forward(self, data, features, chunk_i, logger=None, batched_graph_base=None):
         import torch
         torch.set_printoptions(threshold=10_000)  # Set a high threshold to print all elements
-
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         data = data.to(device)
-        num_unique = None
-
         src_one_way, dst_one_way = data.edges()
-        # ------------------------
-        # make edges bidirectional
-        # ------------------------
         src = torch.cat([src_one_way, dst_one_way])
         dst = torch.cat([dst_one_way, src_one_way])
-        # Create detached copies for the output
         src_output = src.detach().clone()
         dst_output = dst.detach().clone()
-
         num_nodes = data.num_nodes()
         sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
         self.gine1 = self.gine1.to(device)
@@ -205,106 +183,56 @@ class EquivariantThreeHopGINE(nn.Module):
         self.gine3 = self.gine3.to(device)
         self.gine4 = self.gine4.to(device)
         self.vq = self.vq.to(device)
-
         self.bond_weight = self.bond_weight.to(device)
-        # self.bond_weight = torch.tensor(1).to(device)
-        # self.bond_weight = nn.Parameter(torch.tensor(1.0, device=device), requires_grad=True).to(device)
-
         feat_before_transform = features.detach()
-        features = self.feat_embed(features).to(device) # Ensure this function is defined
-        # features = transform_node_feats(features)
-        # features = features.to(device)  # Ensure this function is defined
-        # # Initial node feature transformation
+        features = self.feat_embed(features).to(device)
         features = features.to(device)
         h = self.linear_0(features)
         init_feat = h
-        # Handle edge weights
         edge_weight = data.edata.get(
             'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
         )
         edge_weight = torch.cat([edge_weight, edge_weight])
-        # print(f"len edges {src.shape}, edge weight len {edge_weight.shape}")
         mapped_indices = torch.where(
             (edge_weight >= 1) & (edge_weight <= 4),
             edge_weight - 1,
             torch.zeros_like(edge_weight)
         )
         mapped_indices = mapped_indices.long()
-        # print(f"features {features[:40]}")
         transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
         transformed_edge_weight = transformed_edge_weight.unsqueeze(
             -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
-        # Extract edge indices and construct edge_index tensor
         edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
-        # edge_attr = torch.ones((transformed_edge_weight[0], transformed_edge_weight[1]), device=src.device) # 結合情報　全部１
         edge_attr = transformed_edge_weight
         edge_attr = torch.ones(edge_attr.shape).to(device)
-        # print(f"src {src[:80]}")
-        # print(f"dst {dst[:80]}")
-        # GINE Layer 1
-        # with torch.cuda.amp.autocast():
         h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine1(h, edge_index=edge_index)
         h = self.ln0(h)
-        # h = self.dropout_0(h)
-        # h = self.leaky_relu0(h)
-
-        # GINE Layer 2
         h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
-        # # h = self.gine2(h, edge_index=edge_index)
         h = self.ln1(h)
-        # h = self.dropout_1(h)
-        # h = self.leaky_relu1(h)
-        #
-        # # GINE Layer 3
         h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine3(h, edge_index=edge_index)
         h = self.ln2(h)
-        # h = self.dropout_2(h)
-
-        # # GINE Layer 3
         h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
-        # h = self.gine3(h, edge_index=edge_index)
         h = self.ln3(h)
-        # h = self.dropout_2(h)
-
         h = self.linear_1(h)
-        # Vector Quantization
         quantize_output = self.vq(
             h, init_feat, logger, chunk_i
         )
-        # quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-        #x, commit_loss, sil_loss, num_unique, repel_loss,
          x, cb_loss, sil_loss, num_unique, repel_loss, cb_repel_loss) = quantize_output
-        # else:
-        #     (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-        #      x, cb_loss, sil_loss) = quantize_output
-        # print(f"emb_ind {emb_ind} ----------------------")
         detached_quantize = quantize.detach()
-        # Loss components list
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
-
         if batched_graph_base:
-            # sample_adj_base = batched_graph_base.adj(sparse_fmt="coo").to_dense()
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
-            # print(f"emb_ind shape {emb_ind.shape}")
-            # print(f"features shape {features.shape}")
-            # print(f"src shape {src.shape}")
-            # print(f"dst shape {dst.shape}")
             sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
-
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
-        # if self.training:
         return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
-        # else:
-        #     return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list
+
 
 class MLP(nn.Module):
     def __init__(

@@ -63,25 +63,16 @@ def train_sage(model, g, feats, optimizer, epoch, logger):
     g.to(device)
     feats.to(device)
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
-    # scaler = torch.cuda.amp.GradScaler()
     scaler = torch.cuda.amp.GradScaler(init_scale=1e2)  # Try lower scale like 1e1
     optimizer.zero_grad()
     with (torch.cuda.amp.autocast()):
         _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique \
         = model(g, feats, epoch, logger)  # g is blocks
-    # cb is self.embed
     model.vq._codebook.embed.data.copy_(cb)
     loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
-    # allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
-    # print(f"Allocated Memory: {allocated:.2f} MB")
-    # for name, param in model.named_parameters():
-    #     if param.grad is not None:
-    #         print(f"after model forward {name}: {param.grad.abs().mean()}")  # Mean absolute activation
-    #     else:
-    #         print(f"after model forward {name}: param.grad is None")  # Mean absolute activation
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     scaler.step(optimizer)
