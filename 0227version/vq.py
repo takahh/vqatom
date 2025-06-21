@@ -557,13 +557,13 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, 'b d n -> b n d')
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, epoch)
+        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, chunk_i)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch)
+            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
