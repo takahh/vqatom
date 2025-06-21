@@ -574,10 +574,10 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------
         # losses are combined here
         # ---------------------------------------
-        if epoch > 30:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
-        else:
-            loss = repel_loss
+        # if epoch > 30:
+        loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
+        # else:
+        #     loss = repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
