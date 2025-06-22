@@ -541,7 +541,7 @@ def run_inductive(
                 np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
                 np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
                 np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-                np.savez(f"./{kw}/used_cb_vectors", used_cb_vectors_all_epochs.detach().cpu().numpy())
+                np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
             np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
 
             kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
