@@ -238,3 +238,96 @@ class EquivariantThreeHopGINE(nn.Module):
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
         return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
 
+
+class Model(nn.Module):
+    """
+    Wrapper of different models
+    """
+
+    def __init__(self, conf):
+        super(Model, self).__init__()
+        self.model_name = conf["model_name"]
+        if "MLP" in conf["model_name"]:
+            self.encoder = MLP(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                norm_type=conf["norm_type"],
+            ).to(conf["device"])
+        elif "SAGE" in conf["model_name"]:
+            self.encoder = SAGE(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+                codebook_size=conf["codebook_size"],
+                lamb_edge=conf["lamb_edge"],
+                lamb_node=conf["lamb_node"],
+                lamb_div_ele=conf["lamb_div_ele"]
+            ).to(conf["device"])
+        elif "GCN" in conf["model_name"]:
+            self.encoder = GCN(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+                codebook_size=conf["codebook_size"],
+                lamb_edge=conf["lamb_edge"],
+                lamb_node=conf["lamb_node"]
+            ).to(conf["device"])
+        elif "GAT" in conf["model_name"]:
+            self.encoder = GAT(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                attn_drop=conf["attn_dropout_ratio"],
+            ).to(conf["device"])
+        elif "APPNP" in conf["model_name"]:
+            self.encoder = APPNP(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+            ).to(conf["device"])
+
+    def forward(self, data, feats, epoch, logger):
+        """
+        data: a graph `g` or a `dataloader` of blocks
+        """
+        if "MLP" in self.model_name:
+            return self.encoder(feats)
+        else:
+            return self.encoder(data, feats, epoch, logger)
+
+    def forward_fitnet(self, data, feats):
+        """
+        Return a tuple (h_list, h)
+        h_list: intermediate hidden representation
+        h: final output
+        """
+        if "MLP" in self.model_name:
+            return self.encoder(feats)
+        else:
+            return self.encoder(data, feats)
+
+    def inference(self, data, feats):
+        if "SAGE" in self.model_name:
+            # return self.forward(data, feats)
+
+            return self.encoder.inference(data, feats)
+        else:
+            return self.forward(data, feats)
