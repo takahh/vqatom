@@ -389,12 +389,21 @@ def run_inductive(
         import os
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
-
-        if conf['train_or_infer'] == "train":
+        if conf['train_or_infer'] == "hptune" or conf['train_or_infer'] == "train":
+            # ---------------------------
+            # unique cb per minibatch
+            # ---------------------------
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
+            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
+                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
+            # ---------------------------
+            # losses of train
+            # ---------------------------
             print(
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
@@ -402,10 +411,6 @@ def run_inductive(
                 f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"train - latent_repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
                 f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
-            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
-                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
             # Log training losses
             logger.info(
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
@@ -415,10 +420,13 @@ def run_inductive(
                 f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
+            # -----------------------------
+            # write latents and cb vectors
+            # -----------------------------
             np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
             np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
 
-        elif conf['train_or_infer'] != "train":
+        elif conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "analysis":
             logger.info(f"epoch {epoch}:"
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
                 f"unique_cb_vecs min: {min(cb_unique_num_list_test): 9f},"
@@ -439,6 +447,9 @@ def run_inductive(
                 json.dump(dict(count), f)
             np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
 
+        # ---------------------------
+        # losses of evaluation
+        # ---------------------------
         print(
               f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
               f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
