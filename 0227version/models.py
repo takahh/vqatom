@@ -230,7 +230,7 @@ class EquivariantThreeHopGINE(nn.Module):
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
-            print(f"in model py, latent shape is {latents.shape}")
+            print(f"in model py, if batched_graph_base, latent shape is {latents.shape}")
             sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
         else:   # from train_sage
             sample_bond_info = data.edata["weight"]
