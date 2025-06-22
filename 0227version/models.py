@@ -229,7 +229,7 @@ class EquivariantThreeHopGINE(nn.Module):
         detached_quantize = quantize.detach()
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
-        if not self.training:  # from evaluate
+        if batched_graph_base:  # from evaluate
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
