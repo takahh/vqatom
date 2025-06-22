@@ -225,7 +225,7 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    if conf['train_or_infer'] == "htune" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
+    if conf['train_or_infer'] == "hptune" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
         datapath = DATAPATH
     else:
         datapath = DATAPATH_INFER
@@ -233,7 +233,7 @@ def run_inductive(
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-    if conf['train_or_infer'] == "htune":
+    if conf['train_or_infer'] == "hptune":
         start_num = 0
         end_num = 10
     elif conf['train_or_infer'] == "train":
@@ -253,7 +253,7 @@ def run_inductive(
         # --------------------------------
         # Train
         # --------------------------------
-        if conf["train_or_infer"] == "htune" or conf["train_or_infer"] == "train":
+        if conf["train_or_infer"] == "hptune" or conf["train_or_infer"] == "train":
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             print("TRAIN ---------------")
@@ -301,7 +301,7 @@ def run_inductive(
         ind_list = []
         latent_list = []
         quantized = None
-        if conf['train_or_infer'] == "htune":
+        if conf['train_or_infer'] == "hptune":
             start_num = 10
             end_num = 12
         elif conf['train_or_infer'] == "train":
