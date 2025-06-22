@@ -1,8 +1,4 @@
-from dgl.nn import GraphConv, APPNPConv, GATConv
-
 from train_teacher import get_args
-from old_train_and_eval import transform_node_feats
-# from train_and_eval import filter_small_graphs_from_blocks
 import torch.nn as nn
 
 
@@ -13,8 +9,6 @@ class BondWeightLayer(nn.Module):
         self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
         self.edge_mlp = nn.Sequential(
             nn.Linear(hidden_dim, 1),
-            # nn.Sigmoid()  # Output weight in range (0,1)
-            # nn.Softplus()  # Smooth and maintains gradient flow
         )
 
         self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
@@ -82,12 +76,9 @@ class AtomEmbedding(nn.Module):
         Each column is an integer feature:
         [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
         """
-
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         atom_inputs = atom_inputs.to(device)
-        # print("valence input min:", atom_inputs[:, 3].min().item())
-        # print("valence input max:", atom_inputs[:, 3].max().item())
 
         x0 = self.element_embed(atom_inputs[:, 0].long())
         x1 = self.degree_embed(atom_inputs[:, 1].long())
@@ -111,27 +102,15 @@ class EquivariantThreeHopGINE(nn.Module):
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
-            # nn.ReLU(),
-            # nn.GELU(),
-            # nn.Linear(hidden_feats, hidden_feats)
         )
         nn2 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
-            # nn.ReLU(),
-            # nn.GELU(),
-            # nn.Linear(hidden_feats, hidden_feats)
         )
         nn3 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
-            # nn.ReLU(),
-            # nn.GELU(),
-            # nn.Linear(hidden_feats, out_feats)
         )
         nn4 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
-            # nn.ReLU(),
-            # nn.GELU(),
-            # nn.Linear(hidden_feats, out_feats)
         )
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)

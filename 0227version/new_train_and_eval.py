@@ -10,52 +10,6 @@ DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
 
 
-def transform_node_feats(a):
-    transformed = torch.empty_like(a)
-    transformed[:, 0] = torch.where(a[:, 0] == 6, 1,
-                        torch.where(a[:, 0] == 8, 20, torch.where(a[:, 0] == 7, 10,
-                        torch.where(a[:, 0] == 17, 5, torch.where(a[:, 0] == 9, 15,
-                        torch.where(a[:, 0] == 35, 8, torch.where(a[:, 0] == 16, 3,
-                        torch.where(a[:, 0] == 15, 12, torch.where(a[:, 0] == 1, 18,
-                        torch.where(a[:, 0] == 5, 2, torch.where(a[:, 0] == 53, 16,
-                        torch.where(a[:, 0] == 14, 4, torch.where(a[:, 0] == 34, 6,
-                        torch.where(a[:, 0] == 19, 7, torch.where(a[:, 0] == 11, 9,
-                        torch.where(a[:, 0] == 3, 11, torch.where(a[:, 0] == 30, 13,
-                        torch.where(a[:, 0] == 33, 14, torch.where(a[:, 0] == 12, 17,
-                        torch.where(a[:, 0] == 52, 19, -2))))))))))))))))))))
-
-    transformed[:, 1] = torch.where(a[:, 1] == 1, 1,
-    torch.where(a[:, 1] == 2, 20, torch.where(a[:, 1] == 3, 10,
-    torch.where(a[:, 1] == 0, 15, torch.where(a[:, 1] == 4, 5,
-    torch.where(a[:, 1] == 6, 7,
-    torch.where(a[:, 1] == 5, 12, -2)))))))
-
-    transformed[:, 2] = torch.where(a[:, 2] == 0, 1,
-    torch.where(a[:, 2] == 1, 20, torch.where(a[:, 2] == -1, 10,
-    torch.where(a[:, 2] == 3, 5,
-    torch.where(a[:, 2] == 2, 15, -2)))))
-
-    transformed[:, 3] = torch.where(a[:, 3] == 4, 1,
-    torch.where(a[:, 3] == 3, 20, torch.where(a[:, 3] == 1, 10,
-    torch.where(a[:, 3] == 2, 5, torch.where(a[:, 3] == 7, 15,
-    torch.where(a[:, 3] == 6, 18, -2))))))
-
-    transformed[:, 4] = torch.where(a[:, 4] == 0, 1,
-    torch.where(a[:, 4] == 1, 20, -2))
-
-    transformed[:, 5] = torch.where(a[:, 5] == 0, 1,
-    torch.where(a[:, 5] == 1, 20, -2))
-
-    transformed[:, 6] = torch.where(a[:, 6] == 3, 1,
-    torch.where(a[:, 6] == 0, 20, torch.where(a[:, 6] == 1, 10,
-    torch.where(a[:, 6] == 2, 15, torch.where(a[:, 6] == 4, 5, -2)))))
-    return transformed
-
-#            # model, batched_graph, batched_feats, optimizer, epoch, logger)
-import time
-import torch
-
-
 def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -116,29 +70,8 @@ class MoleculeGraphDataset(Dataset):
         adj_matrix = torch.tensor(np.load(self.adj_files[idx]))  # Load adjacency matrix
 
         attr_matrix = torch.tensor(np.load(self.attr_files[idx]))  # Load atom features
-    #     # print(f"attr_matrix.shape {attr_matrix.shape}")
-    #     # pad_size = 100 - attr_matrix.shape[0]
-    #     attr.append(attr_matrix)  # Pad rows only
-    #     # print(f"padded_attr.shape {padded_attr.shape}")
-    #
         return torch.tensor(adj_matrix, dtype=torch.float32), torch.tensor(attr_matrix, dtype=torch.float32)
 
-# def collate_fn(batch):
-#     adj_matrices, attr_matrices = zip(*batch)
-#
-#     max_nodes = max(adj.shape[0] for adj in adj_matrices)
-#     num_features = attr_matrices[0].shape[1]
-#
-#     padded_adj = [
-#         torch.nn.functional.pad(adj, (0, max_nodes - adj.shape[0], 0, max_nodes - adj.shape[0]))
-#         for adj in adj_matrices
-#     ]
-#     padded_attr = [
-#         torch.nn.functional.pad(attr, (0, 0, 0, max_nodes - attr.shape[0]))
-#         for attr in attr_matrices
-#     ]
-#
-#     return torch.stack(padded_adj), torch.stack(padded_attr)
 
 def collate_fn(batch):
     """Pads adjacency matrices and attributes while handling size mismatches."""
@@ -162,9 +95,6 @@ def convert_to_dgl(adj_batch, attr_batch):
     base_graphs = []
     extended_graphs = []
     for i in range(len(adj_batch)):  # Loop over each molecule set
-        # if i == 1:
-        #     break
-        # print(f"{i} - {adj_batch[i].shape}")
         # Reshape the current batch
         args = get_args()
         if args.train_or_infer == 'analysis':
@@ -456,87 +386,69 @@ def run_inductive(
         # -------------------------------
         # Save loss information and else
         # -------------------------------
+        import os
+        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+        os.makedirs(kw, exist_ok=True)
+
         if conf['train_or_infer'] == "train":
-            print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
-            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
+            print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
                 f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},"
-                        )
+                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
             print(
-                # f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"train - latent_repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},"
-            )
-            print(
-                  # f"test - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
-                  f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
-                  f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
-                  f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
-                  f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-                  f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},"
-            )
+                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
+            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
+                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
+                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
             # Log training losses
             logger.info(
-                # f"train - feat_div_nega loss: {sum(loss_list_list_train[0]) / len(loss_list_list_train[0]): 9f}, "
                 f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - latent_repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},"
-            )
-            # Log testing losses
-            logger.info(
-                # f"test - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
-                  f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
-                  f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
-                  f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
-                  f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-                  f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},"
-            )
-        import os
-        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-        os.makedirs(kw, exist_ok=True)
-        if conf['train_or_infer'] != "train":
-            logger.info(f"epoch {epoch}:"
-                f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
-                f"unique_cb_vecs min: {min(cb_unique_num_list_test): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list_test): 9f},"
-                        )
-            # Log testing losses
-            logger.info(
-                f"test - feat_div_nega loss: {sum(loss_list_list_test[0]) / len(loss_list_list_test[0]): 9f}, "
-                  f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
-                  f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
-                  f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
-                  f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-                  f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},"
-            )
-            print("used_cb_vectors_all_epochs.shape")
-            print(used_cb_vectors_all_epochs.shape)
-            if conf['train_or_infer'] == "train":
-                pass
-            else:
-                np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-                np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
-                np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
-                np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
-                np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
-                np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
-                np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-                np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
-            np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
-
-            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-            with open(f"./{kw}/ind_frequencies.json", 'w') as f:
-                json.dump(dict(count), f)
-            np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
-        else:
+                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
             np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
             np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
+
+        elif conf['train_or_infer'] != "train":
+            logger.info(f"epoch {epoch}:"
+                f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
+                f"unique_cb_vecs min: {min(cb_unique_num_list_test): 9f},"
+                f"unique_cb_vecs max: {max(cb_unique_num_list_test): 9f},")
+            print("used_cb_vectors_all_epochs.shape")
+            print(used_cb_vectors_all_epochs.shape)
+            np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
+            np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
+            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
+            np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
+            np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
+            np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
+            np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
+            np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
+            np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
+            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+            with open(f"./{kw}/ind_frequencies.json", 'w') as f:
+                json.dump(dict(count), f)
+            np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
+
+        print(
+              f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
+              f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
+              f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
+              f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
+              f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
+        # Log testing losses
+        logger.info(
+            f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
+            f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
+            f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
+            f"test - latent_repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
+            f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
