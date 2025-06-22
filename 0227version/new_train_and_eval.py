@@ -295,13 +295,22 @@ def run_inductive(
     # define train and test list
     # ----------------------------
     # Initialize dataset and dataloader
-    if conf['train_or_infer'] == "train" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
+    if conf['train_or_infer'] == "htune" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
         datapath = DATAPATH
     else:
         datapath = DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
-    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+    if conf['train_or_infer'] == "htune":
+        start_num = 0
+        end_num = 10
+    elif conf['train_or_infer'] == "train":
+        start_num = 12
+        end_num = 42
+    elif conf['train_or_infer'] == "infer":
+        pass
 
     for epoch in range(1, conf["max_epoch"] + 1):
         loss_list_list_train = [[]] * 11
@@ -314,25 +323,16 @@ def run_inductive(
         # --------------------------------
         # Train
         # --------------------------------
-        if conf["train_or_infer"] == "train":
+        if conf["train_or_infer"] == "htune" or conf["train_or_infer"] == "train":
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             print("TRAIN ---------------")
-            for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                if idx == 5:
-                    break
-                # # --------------- delete soon !!!! ----------------
-                # if idx == 1:
-                #     break
-                # # --------------- delete soon !!!! ----------------
+            for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
+            # for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    # # --------------- delete soon !!!! ----------------
-                    # if i > 100:
-                    #     break
-                    # # --------------- delete soon !!!! ----------------
                     # print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
@@ -360,10 +360,6 @@ def run_inductive(
         # --------------------------------
         if conf["train_or_infer"] == "infer":
             pass
-            # thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-            # best_epoch_dict = {'1000_64': 73, '1000_128': 80, '1000_256': 74, '1500_64': 55, '1500_128': 80, '1500_256': 72, '2000_64': 75, '2000_128': 37, '2000_256': 73}
-            # model.load_state_dict(f"model_epoch_{best_epoch_dict[thiskey]}.pth")
-            # print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
         else:
             state = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
@@ -375,30 +371,21 @@ def run_inductive(
         ind_list = []
         latent_list = []
         quantized = None
-        if conf['train_or_infer'] == "analysis":
-            start_num = 0
-            end_num = 1
-        elif conf['train_or_infer'] == "train":
+        if conf['train_or_infer'] == "htune":
             start_num = 10
-            end_num = 11
-        elif conf['train_or_infer'] == "use_nonredun_cb_infer":
-            start_num = 0
-            end_num = 16
-        else: # conf['train_or_infer'] == infer
-            start_num = 0
-            end_num = 1
+            end_num = 12
+        elif conf['train_or_infer'] == "train":
+            start_num = 42
+            end_num = 48
+        elif conf['train_or_infer'] == "infer":
+            start_num = 48
+            end_num = 248
         print(f"start num {start_num}, end num {end_num}")
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, None), start=start_num):
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
-            if idx == end_num:
-                break
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
-                # # ------------- delete soon ---------------------
-                # if i > 100:
-                #     break
-                # # ------------- delete soon ---------------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
