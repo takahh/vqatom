@@ -82,6 +82,8 @@ class AtomEmbedding(nn.Module):
         Each column is an integer feature:
         [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
         """
+
+        import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         atom_inputs = atom_inputs.to(device)
         # print("valence input min:", atom_inputs[:, 3].min().item())
