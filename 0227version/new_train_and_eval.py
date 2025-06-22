@@ -93,8 +93,6 @@ def evaluate(model, g, feats, epoch, logger, g_base):
         _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
         num_unique = model(g, feats, epoch, logger, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
-    # print("sample_list_test -----------------")
-    # print(sample_list_test)
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
     test_loss = test_loss.to(device)
@@ -424,6 +422,7 @@ def run_inductive(
                     # print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
+                    print(f"sample_list_test[2].shape {sample_list_test[2].shape}")
                     latent_list.append(latent_chunk)
                 except IndexError:
                     print("INDEX ERROR in collecting ind_list !!!!!!!")

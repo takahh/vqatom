@@ -226,12 +226,12 @@ class EquivariantThreeHopGINE(nn.Module):
         detached_quantize = quantize.detach()
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
-        if batched_graph_base:
+        if batched_graph_base:  # from evaluate
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
             sample_bond_info = batched_graph_base.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
-        else:
+        else:   # from train_sage
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]

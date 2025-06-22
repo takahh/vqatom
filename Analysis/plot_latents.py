@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/0227version/40000_16/"
+DATA_PATH = "/Users/taka/Downloads/tmp/40000_16/"
 SAMPLES = 500000
 # DATA_PATH = "/"
 DIMENSION = 16
@@ -16,7 +16,7 @@ N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 1
+EPOCH_START = 2
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -31,7 +31,9 @@ def load_npz_array_multi(filename):
     """Load and return the array from a .npz file."""
     arr0 = np.load(filename, allow_pickle=True)
     arr_all = []
+    print(arr0.files)
     for names in arr0.files:
+        print(arr0[names].shape)
         arr = arr0[names].tolist()
         arr_all.extend(arr)
     final_arr = np.array(arr_all)
@@ -148,6 +150,7 @@ def process_epoch(epoch, samples):
     codebook_file = f'{DATA_PATH}used_cb_vectors.npz'
     latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     cb_arr = load_npz_array(codebook_file)
+    print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
