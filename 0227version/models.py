@@ -46,6 +46,7 @@ from vq import VectorQuantize  # Ensure correct import
 
 
 class BondWeightLayer(nn.Module):
+    import torch
     def __init__(self, bond_types=4, hidden_dim=64):
         super().__init__()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
