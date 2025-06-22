@@ -321,18 +321,18 @@ def run_inductive(
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
-                # --------------- delete soon !!!! ----------------
-                if idx == 1:
-                    break
-                # --------------- delete soon !!!! ----------------
+                # # --------------- delete soon !!!! ----------------
+                # if idx == 1:
+                #     break
+                # # --------------- delete soon !!!! ----------------
                 print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    # --------------- delete soon !!!! ----------------
-                    if i > 100:
-                        break
-                    # --------------- delete soon !!!! ----------------
+                    # # --------------- delete soon !!!! ----------------
+                    # if i > 100:
+                    #     break
+                    # # --------------- delete soon !!!! ----------------
                     # print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
                     batched_graph = dgl.batch(chunk)
@@ -395,10 +395,10 @@ def run_inductive(
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
-                # ------------- delete soon ---------------------
-                if i > 100:
-                    break
-                # ------------- delete soon ---------------------
+                # # ------------- delete soon ---------------------
+                # if i > 100:
+                #     break
+                # # ------------- delete soon ---------------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
@@ -422,7 +422,7 @@ def run_inductive(
                     # print(f"len(ind_chunk) = {len(ind_chunk)}")
                     ind_list.append(ind_chunk)
                     latent_chunk = sample_list_test[2].cpu().tolist()
-                    print(f"sample_list_test[2].shape {sample_list_test[2].shape}")
+                    # print(f"sample_list_test[2].shape {sample_list_test[2].shape}")
                     latent_list.append(latent_chunk)
                 except IndexError:
                     print("INDEX ERROR in collecting ind_list !!!!!!!")
