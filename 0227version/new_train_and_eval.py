@@ -248,7 +248,6 @@ def run_inductive(
             end_num = 75
         elif conf['train_or_infer'] == "infer":
             pass
-
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
