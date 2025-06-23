@@ -242,10 +242,10 @@ def run_inductive(
 
         if conf['train_or_infer'] == "hptune":
             start_num = 0
-            end_num = 10
+            end_num = 30
         elif conf['train_or_infer'] == "train":
-            start_num = 12
-            end_num = 42
+            start_num = 45
+            end_num = 75
         elif conf['train_or_infer'] == "infer":
             pass
 
@@ -302,14 +302,14 @@ def run_inductive(
         latent_list = []
         quantized = None
         if conf['train_or_infer'] == "hptune":
-            start_num = 10
-            end_num = 12
+            start_num = 30
+            end_num = 45
         elif conf['train_or_infer'] == "train":
-            start_num = 42
-            end_num = 48
+            start_num = 75
+            end_num = 90
         elif conf['train_or_infer'] == "infer":
-            start_num = 48
-            end_num = 248
+            start_num = 90
+            end_num = 270
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
