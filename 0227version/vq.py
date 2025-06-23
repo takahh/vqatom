@@ -325,7 +325,7 @@ class EuclideanCodebook(nn.Module):
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
-        used_codebook = self.embed[:, used_codebook_indices, :]  # Shape: (num_used, dim)
+        used_codebook = self.embed[:, used_codebook_indices, :]
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
