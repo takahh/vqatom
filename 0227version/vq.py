@@ -262,7 +262,7 @@ class EuclideanCodebook(nn.Module):
         # if self.initted[0] != 0:
         #     # print("return!!!!!")
         #     return
-        # print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
+        print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
         embed, cluster_size = kmeans(
             data,
             self.codebook_size,
@@ -576,7 +576,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if chunk_i > 30:
+        if chunk_i > 10:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
         else:
             loss = repel_loss
