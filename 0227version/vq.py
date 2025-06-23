@@ -194,6 +194,7 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, atom_types, codebook, epoch, logger):
         eps = 1e-6
         latent_similarity_matrix = torch.mm(z, z.T)
+        print(f"codebook.shape {codebook.shape}")
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix):
