@@ -323,6 +323,8 @@ class EuclideanCodebook(nn.Module):
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
+        used_codebook_indices = torch.unique(embed_ind_hard_idx)
+        used_codebook = self.embed[used_codebook_indices]  # Shape: (num_used, dim)
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
@@ -350,7 +352,7 @@ class EuclideanCodebook(nn.Module):
             self.expire_codes_(x)
             del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
         torch.cuda.empty_cache()  # Frees unused GPU memory
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique
+        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
 
 
 class VectorQuantize(nn.Module):
@@ -557,13 +559,13 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, 'b d n -> b n d')
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-        quantize, embed_ind, dist, embed, latents, init_cb, num_unique = self._codebook(x, logger, chunk_i, epoch)
+        quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, chunk_i)
+            = self.orthogonal_loss_fn(embed_ind, used_cb, init_feat, x, quantize, logger, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
