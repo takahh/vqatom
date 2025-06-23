@@ -576,7 +576,8 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if chunk_i > 10:
+        # if chunk_i > 10:
+        if chunk_i > 1000:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
         else:
             loss = repel_loss
