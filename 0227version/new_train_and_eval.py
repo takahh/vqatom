@@ -233,21 +233,21 @@ def run_inductive(
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-    if conf['train_or_infer'] == "hptune":
-        start_num = 0
-        end_num = 10
-    elif conf['train_or_infer'] == "train":
-        start_num = 12
-        end_num = 42
-    elif conf['train_or_infer'] == "infer":
-        pass
-
     for epoch in range(1, conf["max_epoch"] + 1):
         loss_list_list_train = [[]] * 11
         loss_list_list_test = [[]] * 11
         loss_list = []
         cb_unique_num_list = []
         cb_unique_num_list_test = []
+
+        if conf['train_or_infer'] == "hptune":
+            start_num = 0
+            end_num = 10
+        elif conf['train_or_infer'] == "train":
+            start_num = 12
+            end_num = 42
+        elif conf['train_or_infer'] == "infer":
+            pass
 
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
