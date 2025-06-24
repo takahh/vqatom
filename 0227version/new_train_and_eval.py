@@ -243,11 +243,9 @@ def run_inductive(
         if conf['train_or_infer'] == "hptune":
             start_num = 0
             end_num = 30
-        elif conf['train_or_infer'] == "train":
-            start_num = 45
-            end_num = 75
-        elif conf['train_or_infer'] == "infer":
-            pass
+        # elif conf['train_or_infer'] == "train":
+        #     start_num = 45
+        #     end_num = 75
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
@@ -303,12 +301,12 @@ def run_inductive(
         if conf['train_or_infer'] == "hptune":
             start_num = 30
             end_num = 45
-        elif conf['train_or_infer'] == "train":
-            start_num = 75
-            end_num = 90
+        # elif conf['train_or_infer'] == "train":
+        #     start_num = 75
+        #     end_num = 90
         elif conf['train_or_infer'] == "infer":
-            start_num = 90
-            end_num = 270
+            start_num = 45
+            end_num = 275
         print(f"start num {start_num}, end num {end_num}")
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
