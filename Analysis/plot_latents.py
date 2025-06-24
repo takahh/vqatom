@@ -85,16 +85,16 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
     latent_arr = PCA(n_components=DIMENSION).fit_transform(latent_arr)
 
-    for N_NEIGHBORS in [2, 5, 10]:
-        for zoom in [3, 1]:
-            for SPREAD in [1, 0.5, 0.2]:
+    for N_NEIGHBORS in [10, 5]:
+        for zoom in [20, 3, 1]:
+            for SPREAD in [1, 2]:
                 # print("reducer setup")
 
                 # Run UMAP with faster config
                 reducer = umap.UMAP(
-                    n_neighbors=10,
+                    n_neighbors=N_NEIGHBORS,
                     min_dist=0.01,
-                    spread=1.0,
+                    spread=SPREAD,
                     n_components=2,
                     n_epochs=30,
                     random_state=None,  # Enables multithreading

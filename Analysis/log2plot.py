@@ -2,10 +2,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # from archive.train_and_eval import train
-PATH = "/Users/taka/Downloads/log"
+PATH = "/Users/taka/Documents/log_hptune/bothloss/0227version/outputs/log"
+OPATH = "/Users/taka/Documents/plot_hptune/"
 
 # Set global font size
-FSIZE = 23
+FSIZE = 12
 plt.rcParams.update({
     'font.size': FSIZE,           # base font size
     'axes.labelsize': FSIZE,      # x/y labels
@@ -23,7 +24,7 @@ def plot_cb_best(data):
     # Organize data by batch size
     grouped = defaultdict(list)
     print(data)
-    for key, value in data[0].items():
+    for key, value in data.items():
         sample_size, batch_size = key.split('_')
         sample_size = int(sample_size)
         batch_size = int(batch_size)
@@ -49,17 +50,15 @@ def plot_cb_best(data):
 def get_cbmax_from_log(pair_name):
     effective_cb_size_list = []
     cb_num_mean_list = []
-    if pair_name == '30000_32':
-        filepath = f'/Users/taka/Documents/vqatom_train_output/log_bothloss_{pair_name}'
-    else:
-        filepath = f'/Users/taka/Documents/vqatom_train_output/{pair_name}/outputs/log'
+    filepath = PATH.replace("bothloss", f"bothloss_{pair_name}")
     with open(filepath, 'r') as file:
         for line in file:
             if "observed" in line:
                 effective_cb_size_list.append(float(line.split(" ")[-1].strip()))
             elif "unique_cb_vecs mean" in line:
                 cb_num_mean_list.append(float(line.split()[10].split(',')[0]))
-    return max(effective_cb_size_list), max(cb_num_mean_list)
+    best_epoch = effective_cb_size_list.index(max(effective_cb_size_list))
+    return max(effective_cb_size_list), max(cb_num_mean_list), best_epoch
 
 
 best_unique_cb_num_list = []
@@ -240,16 +239,58 @@ def plot(type, num_pair):
     # print("Plot has been saved as 'training_metrics_plot.png'")
 
 
-# exp_list = ['15000_64', '10000_64', '5000_64', '20000_64', '15000_128', '10000_128', '5000_128', '15000_32', '20000_32',
-#             '10000_32', '5000_32',  '20000_16', '15000_16', '10000_16', '25000_16', '30000_16', '20000_8', '25000_8',
-#             '30000_8', '25000_32', '30000_32']
-exp_list = ['40000_16']
+exp_list = ['35000_8', '35000_16', '35000_32', '40000_8', '40000_16', '40000_32', '45000_8', '45000_16', '45000_32']
+cb_dict = {}
+
 
 for exp in exp_list:
-    if exp != '30000_32':
-        for type in range(0, 7):
-        # for type in range(0, 1):
-            cb_dict = plot(type, exp)
-    else:
-        cb_dict[exp] = get_cbmax_from_log(exp)
+    # for type in range(0, 7):
+    cb_dict[exp] = get_cbmax_from_log(exp)
+print(cb_dict)
+exp_list = []
+best_epoch_list = []
+used_cb_size_list = []
+mean_cb_size_list = []
+for ele in cb_dict.items():
+    exp_list.append(ele[0])
+
+for ele in cb_dict.items():
+    used_cb_size_list.append(float(ele[1][0]))
+    mean_cb_size_list.append(float(ele[1][1]))
+    best_epoch_list.append(float(ele[1][2]))
+
+plt.figure()
+plt.plot(exp_list, used_cb_size_list, marker='o', label='Used CB Size')
+plt.xlabel("Experiment")
+plt.ylabel("Used Codebook Size")
+plt.title("Used Codebook Size per Experiment")
+plt.xticks(rotation=45, ha='right')  # Rotate for better readability
+plt.grid(True)
+plt.tight_layout()  # Adjust layout to prevent label cutoff
+plt.legend()
+plt.savefig(f"/Users/taka/Documents/plot_hptune/used_cb_size.png")
+
+plt.figure()
+plt.plot(exp_list, mean_cb_size_list, marker='s', color='orange', label='Mean CB Size')
+plt.xlabel("Experiment")
+plt.ylabel("Mean Codebook Size")
+plt.title("Mean Codebook Size per Experiment")
+plt.xticks(rotation=90, ha='right')
+plt.grid(True)
+plt.tight_layout()
+plt.legend()
+plt.savefig(f"/Users/taka/Documents/plot_hptune/mean_cb_size.png")
+
+plt.figure()
+plt.plot(exp_list, best_epoch_list, marker='s', color='orange', label='Best Epoch')
+plt.xlabel("Experiment")
+plt.ylabel("Best Epoch")
+plt.title("Best Epochs")
+plt.xticks(rotation=90, ha='right')
+plt.grid(True)
+plt.tight_layout()
+plt.legend()
+plt.savefig(f"/Users/taka/Documents/plot_hptune/best_epochs.png")
+
+
 # plot_cb_best(cb_dict)
