@@ -5,18 +5,20 @@ import numpy as np
 import umap
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/tmp/40000_16/"
+DATA_PATH = "//Users/taka/Downloads/40000_8/40000_8/"
+OPATH = "/Users/taka/Documents/"
 SAMPLES = 500000
 # DATA_PATH = "/"
-DIMENSION = 16
+DIMENSION = 8
 N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 2
+EPOCH_START = 1
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -31,9 +33,7 @@ def load_npz_array_multi(filename):
     """Load and return the array from a .npz file."""
     arr0 = np.load(filename, allow_pickle=True)
     arr_all = []
-    print(arr0.files)
     for names in arr0.files:
-        print(arr0[names].shape)
         arr = arr0[names].tolist()
         arr_all.extend(arr)
     final_arr = np.array(arr_all)
@@ -67,7 +67,7 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
         bins = 100
         for i in range(2):
             plt.figure(figsize=(10, 8))
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.6)
+            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.8)
             # plt.hist2d(
             #     zoomed_latent[:, 0], zoomed_latent[:, 1],
             #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
@@ -77,29 +77,37 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             plt.ylim(y_range)
 
             if i == 0:
-                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.6, marker='x')
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.9, marker='x')
             plt.title(title + f" (Zoomed {zoom}, epoch {epoch})")
             plt.colorbar(label='Density')
             plt.show()
 
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
-    for N_NEIGHBORS in [10]:
-        for zoom in [5]:
-            for SPREAD in [1]:
+    latent_arr = PCA(n_components=DIMENSION).fit_transform(latent_arr)
+
+    for N_NEIGHBORS in [2, 5, 10]:
+        for zoom in [3, 1]:
+            for SPREAD in [1, 0.5, 0.2]:
                 # print("reducer setup")
+
+                # Run UMAP with faster config
                 reducer = umap.UMAP(
-                    n_neighbors=N_NEIGHBORS,
-                    min_dist=MIN_DIST,
-                    spread=SPREAD,
+                    n_neighbors=10,
+                    min_dist=0.01,
+                    spread=1.0,
                     n_components=2,
-                    n_epochs=100,
-                    random_state=42
+                    n_epochs=30,
+                    random_state=None,  # Enables multithreading
+                    init='random',  # Avoid spectral init warning
+                    low_memory=True,
+                    verbose=True
                 ).fit(latent_arr)
-                # print("reducer setup done")
+
+                print("reducer setup done")
                 latent_emb = reducer.transform(latent_arr)
-                # print("latent transform done")
+                print("latent transform done")
                 cb_emb = reducer.transform(cb_arr)
-                # print("cb transform done")
+                print("cb transform done")
                 x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
                 y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
@@ -128,7 +136,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     )
                     plt.colorbar(label='Density')
                     if i == 0:
-                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.2, marker='x')
+                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.9, marker='x')
                     plt.xlim(x_range)
                     plt.ylim(y_range)
                     # plt.xlim(-30, 30)
@@ -137,7 +145,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     plt.title(title + " (Zoomed)")
                     # if not os.path.exists(f"/{samples}"):
                     #     os.mkdir(f"/{samples}")
-                    plt.savefig(f"./n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_epo_{epoch}_{i}.png")
+                    plt.savefig(f"{OPATH}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_epo_{epoch}_{i}.png")
                     # plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
 
 
@@ -147,7 +155,7 @@ def process_epoch(epoch, samples):
     # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
-    codebook_file = f'{DATA_PATH}used_cb_vectors.npz'
+    codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
