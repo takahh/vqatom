@@ -92,9 +92,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
     latent_pca = combined_pca[:latent_arr.shape[0]]
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
-    for N_NEIGHBORS in [10, 5]:
+    for N_NEIGHBORS in [50]:
         for zoom in [5, 3, 1]:
-            for SPREAD in [1, 2]:
+            for SPREAD in [2]:
                 for min_dist in [0.1, 0.5, 0.8]:
                     reducer = umap.UMAP(
                         n_neighbors=N_NEIGHBORS,

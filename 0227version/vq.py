@@ -204,6 +204,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             repel_weights = 1.0 - simi_matrix
+            print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
             repel_loss = (repel_weights ** 2 * (1 - identity)).mean()
             return repel_loss
 
