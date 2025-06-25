@@ -196,39 +196,25 @@ class ContrastiveLoss(nn.Module):
         latent_similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
+        # successfull but gas like distribution
         # def calc_repel_loss(v, simi_matrix):
-        #     # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+        #     simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
         #     s_min, s_max = simi_matrix.min(), simi_matrix.max()
         #     s_range = (s_max - s_min).clamp(min=eps)
         #     simi_matrix = (simi_matrix - s_min) / s_range
-        #     print(f"simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
         #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-        #     # repel_loss = ((simi_matrix - identity) ** 2).mean()
-        #     temperature = 5.0  # control sharpness
-        #     margin = 0.
-        #     weight = torch.exp(-temperature * (simi_matrix - margin) ** 2)
-        #
-        #     repel_loss = ((weight * (1 - identity)) ** 2).mean()
+        #     repel_loss = ((simi_matrix - identity) ** 2).mean()
         #     return repel_loss
 
-        def calc_repel_loss(v, simi_matrix, temperature=2.0):
-            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
 
-            print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            # Normalize to [0, 1]
+        def calc_repel_loss(v, simi_matrix, temperature=8.0):
+            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             simi_matrix = (simi_matrix - s_min) / s_range
-            print(f"1 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-
-            # Bell-shaped penalty curve, max around simi=0.5
             penalty = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
-
-            # Only apply to off-diagonal pairs
-            repel_loss = ((penalty * (1 - identity)) ** 2).mean()
-
+            repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
