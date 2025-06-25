@@ -197,7 +197,7 @@ class ContrastiveLoss(nn.Module):
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix):
-            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             # ----------
             # normalize
             # ----------
