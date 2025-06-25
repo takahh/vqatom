@@ -198,9 +198,17 @@ class ContrastiveLoss(nn.Module):
 
         def calc_repel_loss(v, simi_matrix):
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            # ----------
+            # normalize
+            # ----------
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
-            simi_matrix = (simi_matrix - s_min) / s_range
+            # simi_matrix = (simi_matrix - s_min) / s_range
+            if (s_max - s_min).abs() < eps:
+                simi_matrix = simi_matrix.clone()  # or fill with 0.5, etc.
+            else:
+                simi_matrix = (simi_matrix - s_min) / s_range
+
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             repel_weights = 1.0 - simi_matrix
