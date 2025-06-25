@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "//Users/taka/Downloads/40000_8/40000_8/"
+DATA_PATH = "/Users/taka/Documents/infer_on_large_data/40000_8/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 500000
 # DATA_PATH = "/"
@@ -82,71 +82,81 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             plt.colorbar(label='Density')
             plt.show()
 
+
 def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, samples):
-    latent_arr = PCA(n_components=DIMENSION).fit_transform(latent_arr)
+    # 1. Concatenate before PCA
+    combined = np.concatenate((latent_arr, cb_arr), axis=0)
+
+    # 2. Apply PCA to combined array
+    combined_pca = PCA(n_components=DIMENSION).fit_transform(combined)
+    latent_pca = combined_pca[:latent_arr.shape[0]]
+    cb_pca = combined_pca[latent_arr.shape[0]:]
 
     for N_NEIGHBORS in [10, 5]:
-        for zoom in [20, 3, 1]:
+        for zoom in [5, 3, 1]:
             for SPREAD in [1, 2]:
-                # print("reducer setup")
+                for min_dist in [0.1, 0.5, 0.8]:
+                    reducer = umap.UMAP(
+                        n_neighbors=N_NEIGHBORS,
+                        min_dist=min_dist,
+                        spread=SPREAD,
+                        n_components=2,
+                        n_epochs=15,
+                        random_state=None,
+                        init='random',
+                        low_memory=True,
+                        verbose=True,
+                        metric='euclidean',
+                        n_jobs=-1
+                    ).fit(combined_pca)
+                    # 3. Separate embeddings
+                    latent_emb = reducer.embedding_[:latent_arr.shape[0]]
+                    cb_emb = reducer.embedding_[latent_arr.shape[0]:]
 
-                # Run UMAP with faster config
-                reducer = umap.UMAP(
-                    n_neighbors=N_NEIGHBORS,
-                    min_dist=0.01,
-                    spread=SPREAD,
-                    n_components=2,
-                    n_epochs=30,
-                    random_state=None,  # Enables multithreading
-                    init='random',  # Avoid spectral init warning
-                    low_memory=True,
-                    verbose=True
-                ).fit(latent_arr)
+                    print("*** reducer setup done")
+                    # latent_emb = reducer.transform(latent_emb)
+                    print("*** latent transform done")
+                    # cb_emb = reducer.transform(cb_emb)
+                    print("*** cb transform done")
+                    x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
+                    y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
 
-                print("reducer setup done")
-                latent_emb = reducer.transform(latent_arr)
-                print("latent transform done")
-                cb_emb = reducer.transform(cb_arr)
-                print("cb transform done")
-                x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
-                y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-
-                latent_mask = (
-                    (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
-                    (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
-                )
-                cb_mask = (
-                    (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
-                    (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
-                )
-
-                zoomed_latent = latent_emb[latent_mask]
-                zoomed_cb = cb_emb[cb_mask]
-
-                bins = 100
-                title = f"UMAP: n_neighbors {N_NEIGHBORS}, min_dist {MIN_DIST}, \n spread {SPREAD}, zoom {zoom} samples {samples}"
-
-                for i in range(2):
-                    plt.figure()
-                    # plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
-                    plt.hist2d(
-                        zoomed_latent[:, 0], zoomed_latent[:, 1],
-                        bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                        cmap="Blues"
+                    latent_mask = (
+                        (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
+                        (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
                     )
-                    plt.colorbar(label='Density')
-                    if i == 0:
-                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.9, marker='x')
-                    plt.xlim(x_range)
-                    plt.ylim(y_range)
-                    # plt.xlim(-30, 30)
-                    # plt.ylim(-30, 30)
+                    cb_mask = (
+                        (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
+                        (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
+                    )
 
-                    plt.title(title + " (Zoomed)")
-                    # if not os.path.exists(f"/{samples}"):
-                    #     os.mkdir(f"/{samples}")
-                    plt.savefig(f"{OPATH}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_epo_{epoch}_{i}.png")
-                    # plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
+                    zoomed_latent = latent_emb[latent_mask]
+                    zoomed_cb = cb_emb[cb_mask]
+
+                    bins = 100
+                    title = f"UMAP: n_neighbors {N_NEIGHBORS}, min_dist {min_dist}, \n spread {SPREAD}, zoom {zoom} samples {samples}"
+
+                    for i in range(2):
+                        plt.figure()
+                        # plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=3, c='black')
+                        plt.hist2d(
+                            zoomed_latent[:, 0], zoomed_latent[:, 1],
+                            bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                            cmap="Blues"
+                        )
+                        plt.colorbar(label='Density')
+                        if i == 0:
+                            plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.9, marker='x')
+                        plt.xlim(x_range)
+                        plt.ylim(y_range)
+                        # plt.xlim(-30, 30)
+                        # plt.ylim(-30, 30)
+
+                        plt.title(title + " (Zoomed)")
+                        if not os.path.exists(f"{OPATH}/distri_images/"):
+                            os.mkdir(f"{OPATH}/distri_images/")
+                        plt.savefig(f"{OPATH}/distri_images/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_mindist{min_dist}_{i}.png")
+                        # plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
 
 
 def process_epoch(epoch, samples):
