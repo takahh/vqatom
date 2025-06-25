@@ -211,7 +211,7 @@ class ContrastiveLoss(nn.Module):
         #     repel_loss = ((weight * (1 - identity)) ** 2).mean()
         #     return repel_loss
 
-        def calc_repel_loss(v, simi_matrix, temperature=8.0):
+        def calc_repel_loss(v, simi_matrix, temperature=2.0):
             # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
 
             print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
