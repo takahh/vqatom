@@ -197,7 +197,7 @@ class ContrastiveLoss(nn.Module):
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix):
-            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             # ----------
             # normalize
             # ----------
@@ -218,7 +218,8 @@ class ContrastiveLoss(nn.Module):
             active_mask = (simi_matrix > margin).float()
             repel_loss = (repel_weights ** 2 * active_mask * (1 - identity)).mean()
             return repel_loss
-
+        print("latent_similarity_matrix.mean()")
+        print(latent_similarity_matrix.mean())
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
         latent_repel_weight = 0.005 # 0.005 in success
