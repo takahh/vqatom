@@ -205,7 +205,9 @@ class ContrastiveLoss(nn.Module):
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             repel_weights = 1.0 - simi_matrix
             print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
-            repel_loss = (repel_weights ** 2 * (1 - identity)).mean()
+            margin = 0.3  # only penalize if similarity is not low enough
+            active_mask = (simi_matrix > margin).float()
+            repel_loss = (repel_weights ** 2 * active_mask * (1 - identity)).mean()
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
