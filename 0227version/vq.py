@@ -201,10 +201,12 @@ class ContrastiveLoss(nn.Module):
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             simi_matrix = (simi_matrix - s_min) / s_range
+            print(f"simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}")
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             temperature = 5.0  # control sharpness
-            weight = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
+            margin = 0.8
+            weight = torch.exp(-temperature * (simi_matrix - margin) ** 2)
 
             repel_loss = ((weight * (1 - identity)) ** 2).mean()
             return repel_loss
