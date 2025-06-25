@@ -197,31 +197,25 @@ class ContrastiveLoss(nn.Module):
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix):
-            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-            # ----------
-            # normalize
-            # ----------
-            # s_min, s_max = simi_matrix.min(), simi_matrix.max()
-            # s_range = (s_max - s_min).clamp(min=eps)
-            # simi_matrix = (simi_matrix - s_min) / s_range
-            #
+            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            s_min, s_max = simi_matrix.min(), simi_matrix.max()
+            s_range = (s_max - s_min).clamp(min=eps)
+            simi_matrix = (simi_matrix - s_min) / s_range
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
-            repel_weights = 1.0 - simi_matrix
-            # print(f"s_min: {s_min}, s_max: {s_max}, s_range: {s_range}")
-            # print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
-            # margin = 0.3  # only penalize if similarity is not low enough
-            # active_mask = (simi_matrix > margin).float()
-            repel_loss = (repel_weights ** 2 * (1 - identity)).mean()
+            temperature = 5.0  # control sharpness
+            weight = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
+
+            repel_loss = ((weight * (1 - identity)) ** 2).mean()
             return repel_loss
-        # print("latent_similarity_matrix.mean()")
-        # print(latent_similarity_matrix.mean())
+
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
+
         return final_loss, neg_loss, latent_repel_loss, cb_repel_loss
 
 
