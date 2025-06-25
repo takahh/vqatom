@@ -204,19 +204,18 @@ class ContrastiveLoss(nn.Module):
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             # simi_matrix = (simi_matrix - s_min) / s_range
-            if (s_max - s_min).abs() < eps:
-                simi_matrix = simi_matrix.clone()  # or fill with 0.5, etc.
-            else:
-                simi_matrix = (simi_matrix - s_min) / s_range
-
+            # if (s_max - s_min).abs() < eps:
+            #     simi_matrix = simi_matrix.clone()  # or fill with 0.5, etc.
+            # else:
+            simi_matrix = (simi_matrix - s_min) / s_range
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             repel_weights = 1.0 - simi_matrix
-            print(f"s_min: {s_min}, s_max: {s_max}, s_range: {s_range}")
-            print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
-            margin = 0.3  # only penalize if similarity is not low enough
-            active_mask = (simi_matrix > margin).float()
-            repel_loss = (repel_weights ** 2 * active_mask * (1 - identity)).mean()
+            # print(f"s_min: {s_min}, s_max: {s_max}, s_range: {s_range}")
+            # print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
+            # margin = 0.3  # only penalize if similarity is not low enough
+            # active_mask = (simi_matrix > margin).float()
+            repel_loss = (repel_weights ** 2 * (1 - identity)).mean()
             return repel_loss
         # print("latent_similarity_matrix.mean()")
         # print(latent_similarity_matrix.mean())
