@@ -207,7 +207,7 @@ class ContrastiveLoss(nn.Module):
         #     return repel_loss
 
 
-        def calc_repel_loss(v, simi_matrix, temperature=8.0):
+        def calc_repel_loss(v, simi_matrix, temperature=10.0):
             print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
@@ -218,12 +218,13 @@ class ContrastiveLoss(nn.Module):
             penalty = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
             repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
             return repel_loss
+
         print("latents")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        latent_repel_weight = 0.005 # 0.005 in success
-        cb_repel_weight = 0.005  # 0.005
+        latent_repel_weight = 0.05 # 0.005 in success
+        cb_repel_weight = 0.05  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
