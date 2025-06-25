@@ -205,14 +205,14 @@ class ContrastiveLoss(nn.Module):
         #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
         #     # repel_loss = ((simi_matrix - identity) ** 2).mean()
         #     temperature = 5.0  # control sharpness
-        #     margin = 0.8
+        #     margin = 0.
         #     weight = torch.exp(-temperature * (simi_matrix - margin) ** 2)
         #
         #     repel_loss = ((weight * (1 - identity)) ** 2).mean()
         #     return repel_loss
 
         def calc_repel_loss(v, simi_matrix, temperature=8.0):
-            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
 
             # Normalize to [0, 1]
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
@@ -229,6 +229,7 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((penalty * (1 - identity)) ** 2).mean()
 
             return repel_loss
+
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
         latent_repel_weight = 0.005 # 0.005 in success
