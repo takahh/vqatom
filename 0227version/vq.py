@@ -204,6 +204,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             repel_weights = 1.0 - simi_matrix
+            print(f"s_min: {s_min}, s_max: {s_max}, s_range: {s_range}")
             print(f"repel_weights min {repel_weights.min()}, mean {repel_weights.mean()} max {repel_weights.max()}")
             margin = 0.3  # only penalize if similarity is not low enough
             active_mask = (simi_matrix > margin).float()
