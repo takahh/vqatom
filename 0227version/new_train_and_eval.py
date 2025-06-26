@@ -348,7 +348,6 @@ def run_inductive(
             if args.get_umap_data:
                 cb_new = model.vq._codebook.embed
                 np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-
         # -------------------------------------------
         # Count Codebook Frequency and used Codebook
         # -------------------------------------------
