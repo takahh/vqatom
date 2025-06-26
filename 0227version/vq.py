@@ -214,9 +214,9 @@ class ContrastiveLoss(nn.Module):
             """
             Repels vectors in Euclidean space only if they are closer than a margin.
             """
+            v = F.normalize(v, p=2, dim=-1, eps=1e-6)
             # Compute pairwise squared distances
             dist_matrix = torch.cdist(v, v, p=2)  # [N, N], Euclidean distances
-            dist_squared = dist_matrix ** 2
             print(f"0 simimatrix max {dist_matrix.max()}, mean {dist_matrix.mean()}, min {dist_matrix.min()}")
 
             # Create off-diagonal mask
