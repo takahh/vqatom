@@ -266,12 +266,13 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        node_label = get_kmeans_labels(z, n_clusters=20000)
-        attract_loss = calc_attract_loss(z, node_label)
-        latent_repel_weight = 100 # 0.005 in success
-        cb_repel_weight = 100  # 0.005
-        attract_weight = 100
-        final_loss = attract_weight * attract_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        node_label = get_kmeans_labels(z)
+        # attract_loss = calc_attract_loss(z, node_label)
+        latent_repel_weight = 1 # 0.005 in success
+        cb_repel_weight = 1  # 0.005
+        attract_weight = 1
+        # final_loss = attract_weight * attract_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, cb_repel_loss
