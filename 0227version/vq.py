@@ -603,6 +603,7 @@ class VectorQuantize(nn.Module):
         # if chunk_i > 10:
         if chunk_i > 5:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
+            print(f"repel weighted {repel_loss}, commit {self.commitment_weight * commit_loss}")
         else:
             loss = repel_loss
         if need_transpose:
