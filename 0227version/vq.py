@@ -211,67 +211,27 @@ class ContrastiveLoss(nn.Module):
         #     return repel_loss
 
         def calc_repel_loss(v, margin=1.0, temperature=10.0):
-            """
-            Repels vectors in Euclidean space only if they are closer than a margin.
-            """
             v = F.normalize(v, p=2, dim=-1, eps=1e-6)
-            # Compute pairwise squared distances
             dist_matrix = torch.cdist(v, v, p=2)  # [N, N], Euclidean distances
-            print(f"0 simimatrix max {dist_matrix.max()}, mean {dist_matrix.mean()}, min {dist_matrix.min()}")
-
-            # Create off-diagonal mask
+            print(f"distance max {dist_matrix.max()}, mean {dist_matrix.mean()}, min {dist_matrix.min()}")
             identity = torch.eye(v.size(0), device=v.device, dtype=v.dtype)
             mask = 1 - identity
-
-            # Margin-based penalty: penalize only when distance is below margin
-            # loss ~ exp( -temperature * (dist - margin)^2 ) for dist < margin
-            # margin_diff = margin - dist_matrix
-            # penalty = torch.exp(-temperature * margin_diff.clamp(min=0) ** 2)
             eps = 1e-4
             safe_dists = dist_matrix + eps
             penalty = 1.0 / safe_dists  # or: -torch.log(safe_dists)
             collapse_penalty = ((dist_matrix < 1e-3).float() * mask).sum() * 100.0
             repel_loss = (penalty * mask).sum() / mask.sum() + collapse_penalty
-
-            # Apply mask and average
-            # repel_loss = (penalty * mask).sum() / mask.sum()
             deterministic_backup = torch.are_deterministic_algorithms_enabled()
             torch.use_deterministic_algorithms(False)
             print("Distance histogram", torch.histc(dist_matrix.cpu(), bins=10, min=0.0, max=2.0))
             torch.use_deterministic_algorithms(deterministic_backup)
-
             return repel_loss
-
-        def calc_attract_loss(v, labels):
-            v = F.normalize(v, p=2, dim=-1, eps=1e-6)
-            dist_matrix = torch.cdist(v, v, p=2)
-            label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # [B, B]
-            identity = torch.eye(v.size(0), device=v.device)
-            same_class_mask = (label_eq & (~identity.bool())).float()
-
-            # Pull similar points together
-            attract_loss = (dist_matrix * same_class_mask).sum() / same_class_mask.sum().clamp(min=1.0)
-            return attract_loss
-
-        from sklearn.cluster import KMeans
-
-        def get_kmeans_labels(v, n_clusters=10):
-            with torch.no_grad():
-                v_np = F.normalize(v, p=2, dim=-1).cpu().numpy()
-                kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
-                cluster_ids = kmeans.fit_predict(v_np)
-                return torch.tensor(cluster_ids, device=v.device)
-
         print("latents")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        node_label = get_kmeans_labels(z)
-        # attract_loss = calc_attract_loss(z, node_label)
-        latent_repel_weight = 100 # 0.005 in success
-        cb_repel_weight = 100  # 0.005
-        attract_weight = 1
-        # final_loss = attract_weight * attract_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        latent_repel_weight = 0.005 # 0.005 in success
+        cb_repel_weight = 0.005  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
