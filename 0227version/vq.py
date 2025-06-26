@@ -555,9 +555,10 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
+        # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
+        two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, epoch, logger)
 
-        return (spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss)
+        return (spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -588,7 +589,8 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        spread_loss, embed_ind, sil_loss, feat_div_loss, div_nega_loss, repel_loss, cb_repel_loss \
+        # spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss
+        spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
             = self.orthogonal_loss_fn(embed_ind, used_cb, init_feat, x, quantize, logger, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -602,8 +604,8 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # if chunk_i > 10:
         if chunk_i > 5:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
-            print(f"repel weighted {repel_loss}, commit {self.commitment_weight * commit_loss}")
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
+            print(f"repel weighted {two_repel_loss}, commit {self.commitment_weight * commit_loss}")
         else:
             loss = repel_loss
         if need_transpose:
