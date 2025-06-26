@@ -242,13 +242,36 @@ class ContrastiveLoss(nn.Module):
 
             return repel_loss
 
+        def calc_attract_loss(v, labels):
+            v = F.normalize(v, p=2, dim=-1, eps=1e-6)
+            dist_matrix = torch.cdist(v, v, p=2)
+            label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # [B, B]
+            identity = torch.eye(v.size(0), device=v.device)
+            same_class_mask = (label_eq & (~identity.bool())).float()
+
+            # Pull similar points together
+            attract_loss = (dist_matrix * same_class_mask).sum() / same_class_mask.sum().clamp(min=1.0)
+            return attract_loss
+
+        from sklearn.cluster import KMeans
+
+        def get_kmeans_labels(v, n_clusters=10):
+            with torch.no_grad():
+                v_np = F.normalize(v, p=2, dim=-1).cpu().numpy()
+                kmeans = KMeans(n_clusters=n_clusters, n_init="auto")
+                cluster_ids = kmeans.fit_predict(v_np)
+                return torch.tensor(cluster_ids, device=v.device)
+
         print("latents")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
+        node_label = get_kmeans_labels(z, n_clusters=20000)
+        attract_loss = calc_attract_loss(z, node_label)
         latent_repel_weight = 100 # 0.005 in success
         cb_repel_weight = 100  # 0.005
-        final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        attract_weight = 100
+        final_loss = attract_weight * attract_loss + latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, cb_repel_loss
