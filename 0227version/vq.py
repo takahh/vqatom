@@ -196,29 +196,32 @@ class ContrastiveLoss(nn.Module):
         latent_similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
-        # successfull but gas like distribution
-        # def calc_repel_loss(v, simi_matrix):
-        #     simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-        #     s_min, s_max = simi_matrix.min(), simi_matrix.max()
-        #     s_range = (s_max - s_min).clamp(min=eps)
-        #     simi_matrix = (simi_matrix - s_min) / s_range
+        # def calc_repel_loss(v, simi_matrix, temperature=12.0):
+        #     v = F.normalize(v, p=2, dim=-1)
+        #     simi_matrix = torch.matmul(v, v.T)
+        #     print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+        #     # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+        #     # s_min, s_max = simi_matrix.min(), simi_matrix.max()
+        #     # s_range = (s_max - s_min).clamp(min=eps)
+        #     # simi_matrix = (simi_matrix - s_min) / s_range
+        #     # print(f"1 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
         #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-        #     repel_loss = ((simi_matrix - identity) ** 2).mean()
+        #     penalty = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
+        #     repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
         #     return repel_loss
 
-
         def calc_repel_loss(v, simi_matrix, temperature=12.0):
-            v = F.normalize(v, p=2, dim=-1)
+            # Normalize to get cosine similarity
+            v = F.normalize(v, p=2, dim=-1, eps=eps)
             simi_matrix = torch.matmul(v, v.T)
             print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-            # s_min, s_max = simi_matrix.min(), simi_matrix.max()
-            # s_range = (s_max - s_min).clamp(min=eps)
-            # simi_matrix = (simi_matrix - s_min) / s_range
-            # print(f"1 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-            penalty = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
-            repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
+            # Mask diagonal (self-similarity) if needed
+            identity = torch.eye(v.size(0), device=v.device, dtype=v.dtype)
+            mask = 1 - identity  # 1 for off-diagonal, 0 for diagonal
+            # Apply Gaussian penalty centered at 0 (encouraging cosine similarity → 0)
+            penalty = torch.exp(-temperature * simi_matrix ** 2)
+            # Compute repel loss (only off-diagonal terms)
+            repel_loss = ((penalty * simi_matrix ** 2) * mask).sum() / mask.sum()
             return repel_loss
 
         print("latents")
