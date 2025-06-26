@@ -225,19 +225,24 @@ class ContrastiveLoss(nn.Module):
 
             # Margin-based penalty: penalize only when distance is below margin
             # loss ~ exp( -temperature * (dist - margin)^2 ) for dist < margin
-            margin_diff = margin - dist_matrix
-            penalty = torch.exp(-temperature * margin_diff.clamp(min=0) ** 2)
+            # margin_diff = margin - dist_matrix
+            # penalty = torch.exp(-temperature * margin_diff.clamp(min=0) ** 2)
+            eps = 1e-4
+            safe_dists = dist_matrix + eps
+            penalty = 1.0 / safe_dists  # or: -torch.log(safe_dists)
 
             # Apply mask and average
             repel_loss = (penalty * mask).sum() / mask.sum()
+            print("Distance histogram", torch.histc(dist_matrix, bins=10, min=0.0, max=2.0))
+
             return repel_loss
 
         print("latents")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        latent_repel_weight = 10 # 0.005 in success
-        cb_repel_weight = 10  # 0.005
+        latent_repel_weight = 100 # 0.005 in success
+        cb_repel_weight = 100  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
