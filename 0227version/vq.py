@@ -210,7 +210,7 @@ class ContrastiveLoss(nn.Module):
         #     repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
         #     return repel_loss
 
-        def calc_repel_loss(v, simi_matrix, temperature=12.0):
+        def calc_repel_loss(v, simi_matrix, temperature=30.0):
             # Normalize to get cosine similarity
             v = F.normalize(v, p=2, dim=-1, eps=eps)
             simi_matrix = torch.matmul(v, v.T)
