@@ -210,18 +210,25 @@ class ContrastiveLoss(nn.Module):
         #     repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
         #     return repel_loss
 
-        def calc_repel_loss(v, simi_matrix, temperature=30.0):
-            # Normalize to get cosine similarity
-            v = F.normalize(v, p=2, dim=-1, eps=eps)
-            simi_matrix = torch.matmul(v, v.T)
-            print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            # Mask diagonal (self-similarity) if needed
+        def calc_repel_loss(v, margin=1.0, temperature=10.0):
+            """
+            Repels vectors in Euclidean space only if they are closer than a margin.
+            """
+            # Compute pairwise squared distances
+            dist_matrix = torch.cdist(v, v, p=2)  # [N, N], Euclidean distances
+            dist_squared = dist_matrix ** 2
+
+            # Create off-diagonal mask
             identity = torch.eye(v.size(0), device=v.device, dtype=v.dtype)
-            mask = 1 - identity  # 1 for off-diagonal, 0 for diagonal
-            # Apply Gaussian penalty centered at 0 (encouraging cosine similarity → 0)
-            penalty = torch.exp(-temperature * simi_matrix ** 2)
-            # Compute repel loss (only off-diagonal terms)
-            repel_loss = ((penalty * simi_matrix ** 2) * mask).sum() / mask.sum()
+            mask = 1 - identity
+
+            # Margin-based penalty: penalize only when distance is below margin
+            # loss ~ exp( -temperature * (dist - margin)^2 ) for dist < margin
+            margin_diff = margin - dist_matrix
+            penalty = torch.exp(-temperature * margin_diff.clamp(min=0) ** 2)
+
+            # Apply mask and average
+            repel_loss = (penalty * mask).sum() / mask.sum()
             return repel_loss
 
         print("latents")
