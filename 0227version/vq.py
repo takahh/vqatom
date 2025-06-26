@@ -233,7 +233,10 @@ class ContrastiveLoss(nn.Module):
 
             # Apply mask and average
             repel_loss = (penalty * mask).sum() / mask.sum()
-            print("Distance histogram", torch.histc(dist_matrix, bins=10, min=0.0, max=2.0))
+            deterministic_backup = torch.are_deterministic_algorithms_enabled()
+            torch.use_deterministic_algorithms(False)
+            print("Distance histogram", torch.histc(dist_matrix.cpu(), bins=10, min=0.0, max=2.0))
+            torch.use_deterministic_algorithms(deterministic_backup)
 
             return repel_loss
 
