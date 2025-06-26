@@ -230,8 +230,8 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        latent_repel_weight = 0.00000001 # 0.005 in success
-        cb_repel_weight = 0.00000001  # 0.005
+        latent_repel_weight = 0.00001 # 0.005 in success
+        cb_repel_weight = 0.00001  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
@@ -407,7 +407,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=1000,  # using
+            commitment_weight=100,  # using
             codebook_weight=0.01,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
