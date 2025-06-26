@@ -230,9 +230,11 @@ class ContrastiveLoss(nn.Module):
             eps = 1e-4
             safe_dists = dist_matrix + eps
             penalty = 1.0 / safe_dists  # or: -torch.log(safe_dists)
+            collapse_penalty = ((dist_matrix < 1e-3).float() * mask).sum() * 100.0
+            repel_loss = (penalty * mask).sum() / mask.sum() + collapse_penalty
 
             # Apply mask and average
-            repel_loss = (penalty * mask).sum() / mask.sum()
+            # repel_loss = (penalty * mask).sum() / mask.sum()
             deterministic_backup = torch.are_deterministic_algorithms_enabled()
             torch.use_deterministic_algorithms(False)
             print("Distance histogram", torch.histc(dist_matrix.cpu(), bins=10, min=0.0, max=2.0))
