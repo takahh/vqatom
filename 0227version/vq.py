@@ -217,6 +217,7 @@ class ContrastiveLoss(nn.Module):
             # Compute pairwise squared distances
             dist_matrix = torch.cdist(v, v, p=2)  # [N, N], Euclidean distances
             dist_squared = dist_matrix ** 2
+            print(f"0 simimatrix max {dist_matrix.max()}, mean {dist_matrix.mean()}, min {dist_matrix.min()}")
 
             # Create off-diagonal mask
             identity = torch.eye(v.size(0), device=v.device, dtype=v.dtype)
