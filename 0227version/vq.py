@@ -527,7 +527,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, min_distance=0.5, chunk=0):
+    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, chunk=0):
         embed_ind.to("cuda")
         codebook.to("cuda")
         init_feat.to("cuda")
