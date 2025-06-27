@@ -197,7 +197,7 @@ class ContrastiveLoss(nn.Module):
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix, chunk):
-            simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             simi_matrix = (simi_matrix - s_min) / s_range
@@ -210,13 +210,14 @@ class ContrastiveLoss(nn.Module):
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix, chunk)
-        cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
+        # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
-        final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        final_loss = latent_repel_weight * latent_repel_loss
         neg_loss = 1
 
-        return final_loss, neg_loss, latent_repel_loss, cb_repel_loss
+        return final_loss, neg_loss, latent_repel_loss, latent_repel_loss
 
 
 import torch.nn.functional as F
@@ -316,7 +317,7 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
-        if self.training and chunk_i % 300 == 0:  # mine
+        if self.training and chunk_i % 320 == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
@@ -541,14 +542,14 @@ class VectorQuantize(nn.Module):
 
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
+        # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
         two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = (
             self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, chunk, logger))
-        spread_loss = spread_loss(latents_for_sil)
+        # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss)
+        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, repel_loss, repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -594,7 +595,8 @@ class VectorQuantize(nn.Module):
         # if chunk_i > 30:
         #     loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
         # else:
-        loss = repel_loss + self.spread_weight * spread_loss
+        # loss = repel_loss + self.spread_weight * spread_loss
+        loss = repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
