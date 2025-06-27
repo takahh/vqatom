@@ -242,8 +242,8 @@ def run_inductive(
 
         if conf['train_or_infer'] == "hptune":
             start_num = 0
-            end_num = 30
-            end_num = 5
+            # end_num = 30
+            end_num = 80
         # elif conf['train_or_infer'] == "train":
         #     start_num = 45
         #     end_num = 75
