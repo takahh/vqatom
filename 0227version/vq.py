@@ -201,6 +201,8 @@ class ContrastiveLoss(nn.Module):
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             simi_matrix = (simi_matrix - s_min) / s_range
+            print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+            print("simi_matrix histogram", torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0))
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
