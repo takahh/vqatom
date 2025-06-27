@@ -211,9 +211,7 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        print("latent")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix, chunk)
-        print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
