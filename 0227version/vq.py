@@ -532,13 +532,22 @@ class VectorQuantize(nn.Module):
         dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
         # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
         # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
-        spread_loss = torch.var(codebook)
+
+        def spread_loss(z, eps=1e-6):
+            # z: [N, D] latent vectors
+            var = torch.var(z, dim=0) + eps  # variance along each dimension
+            inv_var = 1.0 / var
+            return inv_var.mean()
+
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
         two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = (
             self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, chunk, logger))
+        spread_loss = spread_loss(latents_for_sil)
+        if chunk == 0:
+            logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
         return (spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss)
 
 
@@ -570,7 +579,7 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
+        spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -582,10 +591,10 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if chunk_i > 30:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
-        else:
-            loss = repel_loss
+        # if chunk_i > 30:
+        #     loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
+        # else:
+        loss = repel_loss + self.spread_weight * spread_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
