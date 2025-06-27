@@ -198,24 +198,23 @@ class ContrastiveLoss(nn.Module):
         u = F.normalize(codebook[0], dim=1)
         cb_similarity_matrix = torch.mm(u, u.T)
 
-        def calc_repel_loss(v, simi_matrix):
+        def calc_repel_loss(v, simi_matrix, chunk):
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
             s_min, s_max = simi_matrix.min(), simi_matrix.max()
             s_range = (s_max - s_min).clamp(min=eps)
             simi_matrix = (simi_matrix - s_min) / s_range
-            print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
+            if chunk == 0:
+                print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+                logger.info(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+            # hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             repel_loss = ((simi_matrix - identity) ** 2).mean()
-            return repel_loss, hist
+            return repel_loss
 
         print("latent")
-        latent_repel_loss, hist_lat = calc_repel_loss(z, latent_similarity_matrix)
+        latent_repel_loss, hist_lat = calc_repel_loss(z, latent_similarity_matrix, chunk)
         print("cb")
-        cb_repel_loss, hist_cb = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        if chunk == 0:
-            logger.info(f"lat {hist_lat}")
-            logger.info(f"cb {hist_cb}")
+        cb_repel_loss, hist_cb = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
