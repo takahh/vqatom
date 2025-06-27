@@ -206,7 +206,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
-
+        print("latent")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
