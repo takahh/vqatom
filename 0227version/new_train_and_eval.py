@@ -230,7 +230,7 @@ def run_inductive(
     else:
         datapath = DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     for epoch in range(1, conf["max_epoch"] + 1):
@@ -240,13 +240,6 @@ def run_inductive(
         cb_unique_num_list = []
         cb_unique_num_list_test = []
 
-        if conf['train_or_infer'] == "hptune":
-            start_num = 0
-            # end_num = 30
-            end_num = 16
-        # elif conf['train_or_infer'] == "train":
-        #     start_num = 45
-        #     end_num = 75
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
@@ -255,8 +248,13 @@ def run_inductive(
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             print("TRAIN ---------------")
-            for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
-            # for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+            for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                if idx == 5:
+                    break
+                # --------------- delete soon !!!! ----------------
+                if idx == 1:
+                    break
+                # --------------- delete soon !!!! ----------------
                 print(f"idx {idx}")
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
@@ -300,8 +298,8 @@ def run_inductive(
         latent_list = []
         quantized = None
         if conf['train_or_infer'] == "hptune":
-            start_num = 30
-            end_num = 45
+            start_num = 10
+            end_num = 11
             # end_num = 31
         # elif conf['train_or_infer'] == "train":
         #     start_num = 75

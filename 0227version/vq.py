@@ -193,10 +193,8 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, z, atom_types, codebook, chunk, logger):
         eps = 1e-6
-        z = F.normalize(z, dim=1)
         latent_similarity_matrix = torch.mm(z, z.T)
-        u = F.normalize(codebook[0], dim=1)
-        cb_similarity_matrix = torch.mm(u, u.T)
+        cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
         def calc_repel_loss(v, simi_matrix, chunk):
             simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
@@ -586,10 +584,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         if chunk_i > 30:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
             print(f"repel weighted {two_repel_loss}, commit {self.commitment_weight * commit_loss}")
         else:
-            loss = repel_loss
+            loss = two_repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
