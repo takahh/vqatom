@@ -109,7 +109,7 @@ def kmeans(
         all_reduce_fn=noop
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-    num_iters = 15
+    num_iters = 30
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
@@ -584,10 +584,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         if chunk_i > 30:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
             print(f"repel weighted {two_repel_loss}, commit {self.commitment_weight * commit_loss}")
         else:
-            loss = two_repel_loss
+            loss = repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
