@@ -196,42 +196,20 @@ class ContrastiveLoss(nn.Module):
         latent_similarity_matrix = torch.mm(z, z.T)
         cb_similarity_matrix = torch.mm(codebook[0], codebook[0].T)
 
-        # def calc_repel_loss(v, simi_matrix, temperature=12.0):
-        #     v = F.normalize(v, p=2, dim=-1)
-        #     simi_matrix = torch.matmul(v, v.T)
-        #     print(f"0 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-        #     # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-        #     # s_min, s_max = simi_matrix.min(), simi_matrix.max()
-        #     # s_range = (s_max - s_min).clamp(min=eps)
-        #     # simi_matrix = (simi_matrix - s_min) / s_range
-        #     # print(f"1 simimatrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-        #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-        #     penalty = torch.exp(-temperature * (simi_matrix - 0.5) ** 2)
-        #     repel_loss = (penalty * (simi_matrix - identity) ** 2).mean()
-        #     return repel_loss
-
-        def calc_repel_loss(v, margin=1.0, temperature=10.0):
-            v = F.normalize(v, p=2, dim=-1, eps=1e-6)
-            dist_matrix = torch.cdist(v, v, p=2)  # [N, N], Euclidean distances
-            print(f"distance max {dist_matrix.max()}, mean {dist_matrix.mean()}, min {dist_matrix.min()}")
-            identity = torch.eye(v.size(0), device=v.device, dtype=v.dtype)
-            mask = 1 - identity
-            eps = 1e-4
-            safe_dists = dist_matrix + eps
-            penalty = 1.0 / safe_dists  # or: -torch.log(safe_dists)
-            collapse_penalty = ((dist_matrix < 1e-3).float() * mask).sum() * 100.0
-            repel_loss = (penalty * mask).sum() / mask.sum() + collapse_penalty
-            deterministic_backup = torch.are_deterministic_algorithms_enabled()
-            torch.use_deterministic_algorithms(False)
-            print("Distance histogram", torch.histc(dist_matrix.cpu(), bins=10, min=0.0, max=2.0))
-            torch.use_deterministic_algorithms(deterministic_backup)
+        def calc_repel_loss(v, simi_matrix):
+            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
+            s_min, s_max = simi_matrix.min(), simi_matrix.max()
+            s_range = (s_max - s_min).clamp(min=eps)
+            simi_matrix = (simi_matrix - s_min) / s_range
+            identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
+            repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
-        print("latents")
+
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
         cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix)
-        latent_repel_weight = 0.000001 # 0.005 in success
-        cb_repel_weight = 0.000001  # 0.005
+        latent_repel_weight = 0.005 # 0.005 in success
+        cb_repel_weight = 0.005  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
         neg_loss = 1
 
