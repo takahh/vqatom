@@ -206,6 +206,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
+
         print("latent")
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix)
         print("cb")
@@ -315,7 +316,7 @@ class EuclideanCodebook(nn.Module):
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
-        if self.training and chunk_i == 0:  # mine
+        if self.training and chunk_i % 20 == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
@@ -387,7 +388,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=100,  # using
+            commitment_weight=0.25,  # using
             codebook_weight=0.01,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
@@ -582,9 +583,8 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        # if chunk_i > 10:
-        if chunk_i > 5:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
+        if chunk_i > 30:
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
             print(f"repel weighted {two_repel_loss}, commit {self.commitment_weight * commit_loss}")
         else:
             loss = repel_loss
