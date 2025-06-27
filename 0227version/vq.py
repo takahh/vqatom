@@ -212,9 +212,9 @@ class ContrastiveLoss(nn.Module):
             return repel_loss
 
         print("latent")
-        latent_repel_loss, hist_lat = calc_repel_loss(z, latent_similarity_matrix, chunk)
+        latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix, chunk)
         print("cb")
-        cb_repel_loss, hist_cb = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
+        cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.005 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
         final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
