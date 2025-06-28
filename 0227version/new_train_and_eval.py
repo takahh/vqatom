@@ -244,7 +244,7 @@ def run_inductive(
         # Initial kmeans for all target data
         # ----------------------------------
         all_latents = []
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 0, 1), start=0):
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
