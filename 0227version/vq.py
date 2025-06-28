@@ -116,32 +116,49 @@ def kmeans(
     means = torch.zeros((num_codebooks, dim, num_clusters), device=device, dtype=dtype)
 
     def compute_chunked_dists_fast(samples, means, chunk_size=5000):
-        # samples: [H, N, D]
-        # means: [H, D, K]
+        """
+        Efficiently compute squared L2 distances between samples and means in chunks.
+
+        Args:
+            samples: Tensor of shape [H, N, D]
+            means:   Tensor of shape [H, D, K]
+            chunk_size: Number of centroids to process per chunk
+
+        Returns:
+            dists: Tensor of shape [H, N, K], pairwise squared distances
+        """
         H, N, D = samples.shape
-        _, D2, K = means.shape
-        print(f"{H}, {N}, {D}, {K}")
-        print(f"{_}, {D2}, {K}")
-        assert D == D2
-        print(f"goal is {K}")
-        dists_list = []
-        samples_sq = (samples ** 2).sum(dim=-1, keepdim=True)  # [H, N, 1]
+        H2, D2, K = means.shape
 
-        for i in range(0, K, chunk_size):
-            print(f"{i},", end="")
-            means_chunk = means[:, :, i:i + chunk_size]  # [H, D, chunk]
-            means_sq = (means_chunk ** 2).sum(dim=1, keepdim=True)  # [H, 1, chunk]
+        assert D == D2 and H == H2, f"Incompatible shapes: samples [H={H}, D={D}], means [H={H2}, D={D2}]"
+
+        # Precompute squared norms of samples: [H, N, 1]
+        samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)
+
+        # Compute distances in chunks to reduce memory usage
+        dists_chunks = []
+        for start in range(0, K, chunk_size):
+            end = min(start + chunk_size, K)
+
+            means_chunk = means[:, :, start:end]  # [H, D, chunk]
+            means_sq = means_chunk.pow(2).sum(dim=1).unsqueeze(1)  # [H, 1, chunk]
             dot = torch.matmul(samples, means_chunk)  # [H, N, chunk]
-            dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
-            dists_list.append(dists)
 
-        return torch.cat(dists_list, dim=-1)  # [H, N, K]
+            dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
+            dists_chunks.append(dists)
+
+        return torch.cat(dists_chunks, dim=-1)  # [H, N, K]
 
     # Randomly select the first centroid
-    means[:, :, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
-    # means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
+    # Ensure samples and means are on the same device
     samples = samples.to("cuda")
     means = means.to("cuda")
+
+    # Randomly select the first centroid per head
+    rand_idx = torch.randint(0, samples.shape[1], (samples.shape[0], 1), device=samples.device)  # [H, 1]
+    first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, samples.shape[2]))  # [H, 1, D]
+    means[:, :, 0] = first_centroid.squeeze(1)  # [H, D]
+
     print("kmeans start")
     for k in range(1, num_clusters):
         if k % 10 == 0:
