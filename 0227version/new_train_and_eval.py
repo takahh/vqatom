@@ -45,7 +45,7 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i):
     # with torch.no_grad(), autocast():
     with (torch.no_grad()):  # data, features, chunk_i, logger=None, epoch=None, batched
         _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
-        num_unique = model(g, feats, chunk_i, logger, epoch, g_base)  # g is blocks
+        num_unique = model(g, feats, chunk_i, logger, epoch, g_base, "init_kmeans")  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
@@ -240,6 +240,27 @@ def run_inductive(
         cb_unique_num_list = []
         cb_unique_num_list_test = []
 
+        # ----------------------------------
+        # Initial kmeans for all target data
+        # ----------------------------------
+        all_latents = []
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
+            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            for i in range(0, len(glist), chunk_size):
+                chunk = glist[i:i + chunk_size]
+                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+                batched_graph = dgl.batch(chunk)
+                batched_graph_base = dgl.batch(chunk_base)
+                with torch.no_grad():
+                    batched_feats = batched_graph.ndata["feat"]
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
+                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
+
+        all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+        all_latents = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+        evaluate(model, all_latents, batched_feats, epoch, logger, None, None)
+
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
         # Train
@@ -261,13 +282,15 @@ def run_inductive(
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
                     # print_memory_usage(f"idx {idx}")
-                    chunk = glist[i:i + chunk_size]    # including 2-hop and 3-hop
+                    chunk = glist[i:i + chunk_size]  # including 2-hop and 3-hop
+                    all_chunks = glist
                     batched_graph = dgl.batch(chunk)
+                    batched_graph_all = dgl.batch(all_chunks)
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx)
+                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx, batched_graph_all)
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()

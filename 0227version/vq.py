@@ -315,15 +315,17 @@ class EuclideanCodebook(nn.Module):
     import torch
 
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None, chunk_i=None, epoch=None):
+    def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
         needs_codebook_dim = x.ndim < 4
         if needs_codebook_dim:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
         # if self.training and chunk_i % 320 == 0:  # mine
-        if chunk_i == 0:  # mine
+        if chunk_i == 0 or mode == "init_kmeans":  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
+        if mode == "init_kmeans":
+            return 0
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
@@ -567,7 +569,7 @@ class VectorQuantize(nn.Module):
         return latent_loss, codebook_loss
 
 
-    def forward(self, x, init_feat, logger, chunk_i=None, epoch=0):
+    def forward(self, x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -581,7 +583,9 @@ class VectorQuantize(nn.Module):
             x = rearrange(x, 'b d n -> b n d')
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-        quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch)
+        quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
+        if mode == "init_kmeans":
+            return 0
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
