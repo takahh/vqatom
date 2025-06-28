@@ -37,7 +37,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     return loss, loss_list3, latent_list, latents, num_unique
 
 
-def evaluate(model, g, feats, epoch, logger, g_base):
+def evaluate(model, g, feats, epoch, logger, g_base, chunk_i):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
@@ -45,7 +45,7 @@ def evaluate(model, g, feats, epoch, logger, g_base):
     # with torch.no_grad(), autocast():
     with (torch.no_grad()):  # data, features, chunk_i, logger=None, epoch=None, batched
         _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
-        num_unique = model(g, feats, epoch, logger, epoch, g_base)  # g is blocks
+        num_unique = model(g, feats, chunk_i, logger, epoch, g_base)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
@@ -322,7 +322,7 @@ def run_inductive(
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, logger, g_base
                 test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
-                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base)
+                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
                 cb_unique_num_list_test.append(cb_num_unique)
                 # model.reset_kmeans()
                 test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
