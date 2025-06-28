@@ -44,8 +44,11 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
     with (torch.no_grad()):  # data, features, chunk_i, logger=None, epoch=None, batched
-        _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
-        num_unique = model(g, feats, chunk_i, logger, epoch, g_base, mode)  # g is blocks
+        if mode:
+            return 0
+        else:
+            _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
+            num_unique = model(g, feats, chunk_i, logger, epoch, g_base, mode)  # g is blocks
     latent_list.append(latent_train.detach().cpu())
     cb_list.append(cb.detach().cpu())
     test_latents = test_latents.detach().cpu()
