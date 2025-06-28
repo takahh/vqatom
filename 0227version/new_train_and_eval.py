@@ -254,7 +254,7 @@ def run_inductive(
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
-                print(f"init kmeans idx {i}/{len(glist) - 1}")
+                # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
