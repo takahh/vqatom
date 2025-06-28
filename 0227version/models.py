@@ -202,8 +202,8 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.linear_1(h)
         h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
         norms = h.norm(dim=1)
-        if chunk_i % 50 == 0:
-            print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
+        # if chunk_i % 50 == 0:
+        #     print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
         if mode == "init_kmeans_loop":
             return h
         quantize_output = self.vq(

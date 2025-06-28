@@ -49,6 +49,7 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
             return latents
         elif mode == "init_kmeans_final":
             model(g, feats, chunk_i, logger, epoch, g_base, mode)
+            return 0
         else:
             _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
             num_unique = model(g, feats, chunk_i, logger, epoch, g_base, mode)  # g is blocks
@@ -245,7 +246,6 @@ def run_inductive(
         loss_list = []
         cb_unique_num_list = []
         cb_unique_num_list_test = []
-
         # ----------------------------------
         # Initial kmeans for all target data
         # ----------------------------------
