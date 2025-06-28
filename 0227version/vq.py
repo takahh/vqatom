@@ -209,7 +209,8 @@ class ContrastiveLoss(nn.Module):
                 logger.info(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
             # hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-            repel_loss = ((simi_matrix - identity) ** 2).mean()
+            repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
+            # repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
         latent_repel_loss = calc_repel_loss(z, latent_similarity_matrix, chunk)
