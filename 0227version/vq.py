@@ -195,7 +195,7 @@ class ContrastiveLoss(nn.Module):
         eps = 1e-6
         latent_similarity_matrix = torch.mm(z, z.T)
 
-        if chunk // 100 == 0:
+        if chunk % 100 == 0:
             hist = torch.histc(latent_similarity_matrix.cpu(), bins=20, min=-1.0, max=1.0)
             print(hist)
 
