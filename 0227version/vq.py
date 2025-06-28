@@ -178,6 +178,7 @@ def kmeans(
         sum_min_dists = sum_min_dists + (sum_min_dists == 0).float() * 1e-6
 
         probs = min_dists / sum_min_dists  # [H, N]
+        N = samples.shape[1]  # Add this line before using N
         probs = torch.nan_to_num(probs, nan=1.0 / N, posinf=1.0 / N, neginf=0.0)
         probs = torch.clamp(probs, min=0.0, max=1.0)
         probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
