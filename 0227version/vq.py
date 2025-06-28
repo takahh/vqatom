@@ -174,11 +174,19 @@ def kmeans(
 
         # Compute sampling probabilities
         min_dists = dists.min(dim=-1).values  # [H, N]
-        probs = min_dists / (min_dists.sum(dim=-1, keepdim=True) + 1e-8)  # Normalize
-        probs = torch.nan_to_num(probs, nan=1.0 / samples.shape[1], posinf=1.0 / samples.shape[1], neginf=0.0)
-        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)  # Re-normalize
+        sum_min_dists = min_dists.sum(dim=-1, keepdim=True)  # [H, 1]
+        sum_min_dists = sum_min_dists + (sum_min_dists == 0).float() * 1e-6
 
-        # Sample next centroid index
+        probs = min_dists / sum_min_dists  # [H, N]
+        probs = torch.nan_to_num(probs, nan=1.0 / N, posinf=1.0 / N, neginf=0.0)
+        probs = torch.clamp(probs, min=0.0, max=1.0)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+
+        # fallback if still invalid
+        if torch.isnan(probs).any() or torch.isinf(probs).any() or (probs < 0).any():
+            print("Warning: bad probs. Replacing with uniform.")
+            probs = torch.full_like(probs, 1.0 / N)
+
         next_centroid_idx = torch.multinomial(probs, 1)  # [H, 1]
 
         # Extract corresponding sample vectors from `samples`
