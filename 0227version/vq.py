@@ -180,7 +180,16 @@ def kmeans(
 
         # Sample next centroid index
         next_centroid_idx = torch.multinomial(probs, 1)  # [H, 1]
-        means[:, k] = torch.gather(samples, 1, next_centroid_idx.unsqueeze(-1).expand(-1, -1, dim)).squeeze(1)
+
+        # Extract corresponding sample vectors from `samples`
+        next_centroid = torch.gather(
+            samples,
+            dim=1,
+            index=next_centroid_idx.unsqueeze(-1).expand(-1, -1, samples.shape[2])
+        )  # [H, 1, D]
+
+        # Assign to k-th position in means
+        means[:, :, k] = next_centroid.squeeze(1)  # [H, D]
 
     # Iterative optimization
     for _ in range(num_iters):
