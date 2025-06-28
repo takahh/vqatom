@@ -142,7 +142,7 @@ def kmeans(
     means = means.to("cuda")
     print("kmeans start")
     for k in range(1, num_clusters):
-        if k % 1000 == 0:
+        if k % 10 == 0:
             print(f"{k}, ", end="")
 
         if use_cosine_sim:
