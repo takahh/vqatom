@@ -322,9 +322,9 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
         # if self.training and chunk_i % 320 == 0:  # mine
-        if chunk_i == 0 or mode == "init_kmeans":  # mine
+        if chunk_i == 0:  # mine
             self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
-        if mode == "init_kmeans":
+        if mode == "init_kmeans_final":
             return 0
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
@@ -584,7 +584,7 @@ class VectorQuantize(nn.Module):
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
         quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
-        if mode == "init_kmeans":
+        if mode == "init_kmeans_final":
             return 0
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
