@@ -135,7 +135,11 @@ def kmeans(
                 return torch.cat(results, dim=1)  # concatenate on sample dim
 
             # 変更箇所：
-            dists = batched_cdist(samples, means[:, :k])
+            a_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
+            b_sq = means[:, :k].pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, k]
+            ab = samples @ means[:, :k].transpose(-1, -2)  # [H, N, k]
+            dists = (a_sq + b_sq - 2 * ab).clamp(min=1e-8).sqrt()  # [H, N, k]
+            # dists = batched_cdist(samples, means[:, :k])
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
