@@ -122,20 +122,20 @@ def kmeans(
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             print(f"{k}, ", end="")
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-        else:
-            # dists = torch.cdist(samples, means[:, :k], p=2)
-            def batched_cdist(samples, means, batch_size=1024):
-                results = []
-                for i in range(0, samples.shape[1], batch_size):
-                    sample_chunk = samples[:, i:i + batch_size]  # shape: [H, B, D]
-                    dist_chunk = torch.cdist(sample_chunk, means, p=2)  # [H, B, K]
-                    results.append(dist_chunk)
-                return torch.cat(results, dim=1)  # concatenate on sample dim
-
-            # 変更箇所：
-            dists = batched_cdist(samples, means[:, :k])
+        # if use_cosine_sim:
+        dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+        # else:
+        #     # dists = torch.cdist(samples, means[:, :k], p=2)
+        #     def batched_cdist(samples, means, batch_size=1024):
+        #         results = []
+        #         for i in range(0, samples.shape[1], batch_size):
+        #             sample_chunk = samples[:, i:i + batch_size]  # shape: [H, B, D]
+        #             dist_chunk = torch.cdist(sample_chunk, means, p=2)  # [H, B, K]
+        #             results.append(dist_chunk)
+        #         return torch.cat(results, dim=1)  # concatenate on sample dim
+        #
+        #     # 変更箇所：
+        #     dists = batched_cdist(samples, means[:, :k])
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
