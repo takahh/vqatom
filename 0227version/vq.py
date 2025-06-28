@@ -114,21 +114,33 @@ def kmeans(
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
-    def compute_chunked_dists(samples, means_k, chunk_size=50000):
+    def compute_chunked_dists(samples: torch.Tensor, means: torch.Tensor, chunk_size: int = 10000):
+        """
+        Compute Euclidean distances between samples and means in chunks along the cluster axis to avoid OOM.
+
+        Args:
+            samples: Tensor of shape [H, N, D]
+            means: Tensor of shape [H, D, K]
+            chunk_size: Number of clusters to process at once (chunked along K)
+
+        Returns:
+            dists: Tensor of shape [H, N, K]
+        """
         H, N, D = samples.shape
-        K = means_k.shape[1]
+        _, _, K = means.shape
         dists_list = []
 
-        for start in range(0, N, chunk_size):
-            end = min(start + chunk_size, N)
-            chunk = samples[:, start:end]  # [H, C, D]
-            a_sq = chunk.pow(2).sum(dim=-1, keepdim=True)  # [H, C, 1]
-            b_sq = means_k.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, k]
-            ab = chunk @ means_k.transpose(-1, -2)  # [H, C, k]
-            dists_chunk = (a_sq + b_sq - 2 * ab).clamp(min=1e-8).sqrt()
-            dists_list.append(dists_chunk)
+        # Process in chunks along the cluster (K) axis
+        for i in range(0, K, chunk_size):
+            means_chunk = means[:, :, i:i + chunk_size]  # [H, D, chunk]
+            # reshape for broadcasting
+            s = samples.unsqueeze(2)  # [H, N, 1, D]
+            m = means_chunk.permute(0, 2, 1).unsqueeze(1)  # [H, 1, chunk, D]
+            dists = ((s - m) ** 2).sum(dim=-1)  # [H, N, chunk]
+            dists_list.append(dists)
 
-        return torch.cat(dists_list, dim=1)  # [H, N, k]
+        # Concatenate along the cluster dimension
+        return torch.cat(dists_list, dim=2)  # [H, N, K]
 
     # Randomly select the first centroid
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
