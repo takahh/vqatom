@@ -114,28 +114,25 @@ def kmeans(
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
-    def compute_chunked_dists(samples: torch.Tensor, means: torch.Tensor, chunk_size: int = 10000):
-        """
-        Compute Euclidean distances between samples and means on CPU to avoid CUDA OOM.
-        """
-        # Move to CPU
-        samples = samples.cpu()
-        means = means.cpu()
-
+    def compute_chunked_dists_fast(samples, means, chunk_size=5000):
+        # samples: [H, N, D]
+        # means: [H, D, K]
         H, N, D = samples.shape
-        _, _, K = means.shape
+        _, D2, K = means.shape
+        assert D == D2
+        print(f"goal is {K}")
         dists_list = []
+        samples_sq = (samples ** 2).sum(dim=-1, keepdim=True)  # [H, N, 1]
 
         for i in range(0, K, chunk_size):
             print(f"{i},", end="")
             means_chunk = means[:, :, i:i + chunk_size]  # [H, D, chunk]
-            s = samples.unsqueeze(2)  # [H, N, 1, D]
-            m = means_chunk.permute(0, 2, 1).unsqueeze(1)  # [H, 1, chunk, D]
-            dists = ((s - m) ** 2).sum(dim=-1)  # [H, N, chunk]
+            means_sq = (means_chunk ** 2).sum(dim=1, keepdim=True)  # [H, 1, chunk]
+            dot = torch.matmul(samples, means_chunk)  # [H, N, chunk]
+            dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
             dists_list.append(dists)
 
-        dists = torch.cat(dists_list, dim=2)  # [H, N, K]
-        return dists.cuda()  # Optionally move back to GPU for next steps
+        return torch.cat(dists_list, dim=-1)  # [H, N, K]
 
     # Randomly select the first centroid
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
