@@ -114,6 +114,22 @@ def kmeans(
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
+    def compute_chunked_dists(samples, means_k, chunk_size=50000):
+        H, N, D = samples.shape
+        K = means_k.shape[1]
+        dists_list = []
+
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            chunk = samples[:, start:end]  # [H, C, D]
+            a_sq = chunk.pow(2).sum(dim=-1, keepdim=True)  # [H, C, 1]
+            b_sq = means_k.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, k]
+            ab = chunk @ means_k.transpose(-1, -2)  # [H, C, k]
+            dists_chunk = (a_sq + b_sq - 2 * ab).clamp(min=1e-8).sqrt()
+            dists_list.append(dists_chunk)
+
+        return torch.cat(dists_list, dim=1)  # [H, N, k]
+
     # Randomly select the first centroid
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
     samples = samples.to("cuda")
@@ -129,11 +145,7 @@ def kmeans(
             means_normalized = F.normalize(means[:, :k], dim=-1)
             dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
         else:
-            # Fast manual L2 distance
-            a_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
-            b_sq = means[:, :k].pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, k]
-            ab = samples @ means[:, :k].transpose(-1, -2)  # [H, N, k]
-            dists = (a_sq + b_sq - 2 * ab).clamp(min=1e-8).sqrt()  # [H, N, k]
+            dists = compute_chunked_dists(samples, means[:, :k], chunk_size=50000)
 
         # Compute sampling probabilities
         min_dists = dists.min(dim=-1).values  # [H, N]
