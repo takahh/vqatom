@@ -157,59 +157,64 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         data = data.to(device)
-        src_one_way, dst_one_way = data.edges()
-        src = torch.cat([src_one_way, dst_one_way])
-        dst = torch.cat([dst_one_way, src_one_way])
-        src_output = src.detach().clone()
-        dst_output = dst.detach().clone()
-        num_nodes = data.num_nodes()
-        sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
-        self.gine1 = self.gine1.to(device)
-        self.gine2 = self.gine2.to(device)
-        self.gine3 = self.gine3.to(device)
-        self.gine4 = self.gine4.to(device)
-        self.vq = self.vq.to(device)
-        self.bond_weight = self.bond_weight.to(device)
-        feat_before_transform = features.detach()
-        features = self.feat_embed(features).to(device)
-        features = features.to(device)
-        h = self.linear_0(features)
-        init_feat = h
-        edge_weight = data.edata.get(
-            'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
-        )
-        edge_weight = torch.cat([edge_weight, edge_weight])
-        mapped_indices = torch.where(
-            (edge_weight >= 1) & (edge_weight <= 4),
-            edge_weight - 1,
-            torch.zeros_like(edge_weight)
-        )
-        mapped_indices = mapped_indices.long()
-        transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
-        transformed_edge_weight = transformed_edge_weight.unsqueeze(
-            -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
-        edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
-        edge_attr = transformed_edge_weight
-        edge_attr = torch.ones(edge_attr.shape).to(device)
-        h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-        h = self.ln0(h)
-        h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
-        h = self.ln1(h)
-        h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
-        h = self.ln2(h)
-        h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
-        h = self.ln3(h)
-        h = self.linear_1(h)
-        h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
-        norms = h.norm(dim=1)
-        # if chunk_i % 50 == 0:
-        #     print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
+        if mode != "init_kmeans_final":
+            src_one_way, dst_one_way = data.edges()
+            src = torch.cat([src_one_way, dst_one_way])
+            dst = torch.cat([dst_one_way, src_one_way])
+            src_output = src.detach().clone()
+            dst_output = dst.detach().clone()
+            num_nodes = data.num_nodes()
+            sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
+            self.gine1 = self.gine1.to(device)
+            self.gine2 = self.gine2.to(device)
+            self.gine3 = self.gine3.to(device)
+            self.gine4 = self.gine4.to(device)
+            self.vq = self.vq.to(device)
+            self.bond_weight = self.bond_weight.to(device)
+            feat_before_transform = features.detach()
+            features = self.feat_embed(features).to(device)
+            features = features.to(device)
+            h = self.linear_0(features)
+            init_feat = h
+            edge_weight = data.edata.get(
+                'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
+            )
+            edge_weight = torch.cat([edge_weight, edge_weight])
+            mapped_indices = torch.where(
+                (edge_weight >= 1) & (edge_weight <= 4),
+                edge_weight - 1,
+                torch.zeros_like(edge_weight)
+            )
+            mapped_indices = mapped_indices.long()
+            transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
+            transformed_edge_weight = transformed_edge_weight.unsqueeze(
+                -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
+            edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
+            edge_attr = transformed_edge_weight
+            edge_attr = torch.ones(edge_attr.shape).to(device)
+            h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
+            h = self.ln0(h)
+            h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
+            h = self.ln1(h)
+            h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
+            h = self.ln2(h)
+            h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
+            h = self.ln3(h)
+            h = self.linear_1(h)
+            h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
+            norms = h.norm(dim=1)
+            # if chunk_i % 50 == 0:
+            #     print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
         if mode == "init_kmeans_loop":
             return h
-        quantize_output = self.vq(
-            h, init_feat, logger, chunk_i, epoch, mode
-        )
-        if mode == "init_kmeans_final":
+        if mode == None:
+            quantize_output = self.vq(
+                h, init_feat, logger, chunk_i, epoch, mode
+            )
+        elif mode == "init_kmeans_final":
+            quantize_output = self.vq(
+                data, None, logger, chunk_i, epoch, mode
+            )
             return 0
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
          x, cb_loss, sil_loss, num_unique, repel_loss, cb_repel_loss) = quantize_output
