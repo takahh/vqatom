@@ -264,8 +264,8 @@ def run_inductive(
                 latents \
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
-        all_latents = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
-        evaluate(model, all_latents, batched_feats, epoch, logger, None, None, "init_kmeans_final")
+        all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+        evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
         print("initial kmeans done")
 
         print(f"epoch {epoch} ------------------------------")
