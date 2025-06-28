@@ -44,8 +44,11 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
     loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
     # with torch.no_grad(), autocast():
     with (torch.no_grad()):  # data, features, chunk_i, logger=None, epoch=None, batched
-        if mode:
-            return 0
+        if mode == "init_kmeans_loop":
+            latents = model(g, feats, chunk_i, logger, epoch, g_base, mode)
+            return latents
+        elif mode == "init_kmeans_final":
+            model(g, feats, chunk_i, logger, epoch, g_base, mode)
         else:
             _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
             num_unique = model(g, feats, chunk_i, logger, epoch, g_base, mode)  # g is blocks
@@ -258,10 +261,9 @@ def run_inductive(
                 batched_graph_base = dgl.batch(chunk_base)
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
+                latents \
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
-        print(f"concat latents")
-        all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+                all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
         evaluate(model, all_latents, batched_feats, epoch, logger, None, None, "init_kmeans_final")
         print("initial kmeans done")
