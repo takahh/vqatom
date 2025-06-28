@@ -127,6 +127,7 @@ def kmeans(
         dists_list = []
 
         for i in range(0, K, chunk_size):
+            print(f"{i},", end="")
             means_chunk = means[:, :, i:i + chunk_size]  # [H, D, chunk]
             s = samples.unsqueeze(2)  # [H, N, 1, D]
             m = means_chunk.permute(0, 2, 1).unsqueeze(1)  # [H, 1, chunk, D]
@@ -151,7 +152,7 @@ def kmeans(
             means_normalized = F.normalize(means[:, :k], dim=-1)
             dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
         else:
-            dists = compute_chunked_dists(samples, means[:, :, :k].transpose(1, 2), chunk_size=10)
+            dists = compute_chunked_dists(samples, means[:, :, :k].transpose(1, 2), chunk_size=1000)
             # dists = compute_chunked_dists(samples, means[:, :k], chunk_size=50000)
 
         # Compute sampling probabilities
