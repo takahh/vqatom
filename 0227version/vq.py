@@ -340,7 +340,7 @@ class EuclideanCodebook(nn.Module):
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
         device = flatten.device
-        if self.training:  #
+        if self.training:
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
             temperature = 0.1  # Softmax temperature
             # Soft assignment instead of one-hot (fixes gradient flow)

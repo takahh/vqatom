@@ -256,6 +256,7 @@ def run_inductive(
                     break
                 # --------------- delete soon !!!! ----------------
                 print(f"idx {idx}")
+
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
                 chunk_size = conf["chunk_size"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
