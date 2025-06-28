@@ -248,6 +248,7 @@ def run_inductive(
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
+                print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
@@ -256,10 +257,11 @@ def run_inductive(
                     batched_feats = batched_graph.ndata["feat"]
                 test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
-
+        print(f"concat latents")
         all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
         evaluate(model, all_latents, batched_feats, epoch, logger, None, None, "init_kmeans_final")
+        print("initial kmeans done")
 
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
