@@ -113,7 +113,7 @@ def kmeans(
 
     # K-Means++ initialization
     # means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
-    means = torch.zeros((num_codebooks, dim, num_clusters), ...)
+    means = torch.zeros((num_codebooks, dim, num_clusters), device=device, dtype=dtype)
 
     def compute_chunked_dists_fast(samples, means, chunk_size=5000):
         # samples: [H, N, D]
