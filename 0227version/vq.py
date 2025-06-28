@@ -122,28 +122,28 @@ def kmeans(
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             print(f"{k}, ", end="")
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-        else:
-            # dists = torch.cdist(samples, means[:, :k], p=2)
-            def batched_cdist(samples, means, batch_size=1024):
-                results = []
-                for i in range(0, samples.shape[1], batch_size):
-                    sample_chunk = samples[:, i:i + batch_size]  # shape: [H, B, D]
-                    dist_chunk = torch.cdist(sample_chunk, means, p=2)  # [H, B, K]
-                    results.append(dist_chunk)
-                return torch.cat(results, dim=1)  # concatenate on sample dim
 
-            # 変更箇所：
+        if use_cosine_sim:
+            # Normalize before matmul (safe for cosine similarity)
+            samples_normalized = F.normalize(samples, dim=-1)
+            means_normalized = F.normalize(means[:, :k], dim=-1)
+            dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
+        else:
+            # Fast manual L2 distance
             a_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
             b_sq = means[:, :k].pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, k]
             ab = samples @ means[:, :k].transpose(-1, -2)  # [H, N, k]
             dists = (a_sq + b_sq - 2 * ab).clamp(min=1e-8).sqrt()  # [H, N, k]
-            # dists = batched_cdist(samples, means[:, :k])
-        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+
+        # Compute sampling probabilities
+        min_dists = dists.min(dim=-1).values  # [H, N]
+        probs = min_dists / (min_dists.sum(dim=-1, keepdim=True) + 1e-8)  # Normalize
+        probs = torch.nan_to_num(probs, nan=1.0 / samples.shape[1], posinf=1.0 / samples.shape[1], neginf=0.0)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)  # Re-normalize
+
+        # Sample next centroid index
+        next_centroid_idx = torch.multinomial(probs, 1)  # [H, 1]
+        means[:, k] = torch.gather(samples, 1, next_centroid_idx.unsqueeze(-1).expand(-1, -1, dim)).squeeze(1)
 
     # Iterative optimization
     for _ in range(num_iters):
