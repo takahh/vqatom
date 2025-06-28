@@ -349,15 +349,16 @@ class EuclideanCodebook(nn.Module):
         quantize_unique = torch.unique(quantize, dim=0)
         num_unique = quantize_unique.shape[0]
 
-        if self.training:
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-            with torch.no_grad():
-                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
-            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
-            self.embed.data.copy_(embed_normalized)
-            self.expire_codes_(x)
-            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+        # if self.training:
+            # embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+            # with torch.no_grad():
+            #     self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+            # cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+            # embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            # self.embed.data.copy_(embed_normalized)
+            # self.expire_codes_(x)
+            # del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
+        del distances, embed_probs, embed_onehot
         torch.cuda.empty_cache()  # Frees unused GPU memory
         return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
 
