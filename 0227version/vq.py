@@ -116,31 +116,25 @@ def kmeans(
 
     def compute_chunked_dists(samples: torch.Tensor, means: torch.Tensor, chunk_size: int = 10000):
         """
-        Compute Euclidean distances between samples and means in chunks along the cluster axis to avoid OOM.
-
-        Args:
-            samples: Tensor of shape [H, N, D]
-            means: Tensor of shape [H, D, K]
-            chunk_size: Number of clusters to process at once (chunked along K)
-
-        Returns:
-            dists: Tensor of shape [H, N, K]
+        Compute Euclidean distances between samples and means on CPU to avoid CUDA OOM.
         """
+        # Move to CPU
+        samples = samples.cpu()
+        means = means.cpu()
+
         H, N, D = samples.shape
         _, _, K = means.shape
         dists_list = []
 
-        # Process in chunks along the cluster (K) axis
         for i in range(0, K, chunk_size):
             means_chunk = means[:, :, i:i + chunk_size]  # [H, D, chunk]
-            # reshape for broadcasting
             s = samples.unsqueeze(2)  # [H, N, 1, D]
             m = means_chunk.permute(0, 2, 1).unsqueeze(1)  # [H, 1, chunk, D]
             dists = ((s - m) ** 2).sum(dim=-1)  # [H, N, chunk]
             dists_list.append(dists)
 
-        # Concatenate along the cluster dimension
-        return torch.cat(dists_list, dim=2)  # [H, N, K]
+        dists = torch.cat(dists_list, dim=2)  # [H, N, K]
+        return dists.cuda()  # Optionally move back to GPU for next steps
 
     # Randomly select the first centroid
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
