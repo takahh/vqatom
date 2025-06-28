@@ -119,6 +119,8 @@ def kmeans(
         # means: [H, D, K]
         H, N, D = samples.shape
         _, D2, K = means.shape
+        print(f"{H}, {N}, {D}, {K}")
+        print(f"{_}, {D2}, {K}")
         assert D == D2
         print(f"goal is {K}")
         dists_list = []
