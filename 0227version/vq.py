@@ -149,7 +149,7 @@ def kmeans(
             means_normalized = F.normalize(means[:, :k], dim=-1)
             dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
         else:
-            dists = compute_chunked_dists(samples, means[:, :, :k].transpose(1, 2), chunk_size=1000)
+            dists = compute_chunked_dists_fast(samples, means[:, :, :k].transpose(1, 2), chunk_size=1000)
             # dists = compute_chunked_dists(samples, means[:, :k], chunk_size=50000)
 
         # Compute sampling probabilities
