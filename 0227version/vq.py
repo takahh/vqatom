@@ -137,7 +137,9 @@ def kmeans(
         #     # 変更箇所：
         #     dists = batched_cdist(samples, means[:, :k])
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
+        eps = 1e-8
+        probs = min_dists / (min_dists.sum(dim=-1, keepdim=True) + eps)
+        # probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
         means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
