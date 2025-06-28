@@ -203,8 +203,8 @@ class EquivariantThreeHopGINE(nn.Module):
 
         h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
         norms = h.norm(dim=1)
-
-        print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
+        if chunk_i // 50 == 0:
+            print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
         quantize_output = self.vq(
             h, init_feat, logger, chunk_i, epoch
         )
