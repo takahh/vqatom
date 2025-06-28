@@ -200,6 +200,8 @@ class EquivariantThreeHopGINE(nn.Module):
         h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
         h = self.ln3(h)
         h = self.linear_1(h)
+        norms = h.norm(dim=1)
+        print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
         quantize_output = self.vq(
             h, init_feat, logger, chunk_i, epoch
         )
