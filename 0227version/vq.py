@@ -228,6 +228,7 @@ def kmeans(
         if use_cosine_sim:
             new_means = l2norm(new_means)
 
+        print(f"means {means.shape}, new_means {new_means.shape}")
         means = torch.where(
             rearrange(zero_mask, '... -> ... 1'),
             means,
