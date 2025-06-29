@@ -113,7 +113,7 @@ def kmeans(
     print(f"samples.shape first -----------------{samples.shape}")
     # K-Means++ initialization
     # means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
-    means = torch.zeros((num_codebooks, dim, num_clusters), device=device, dtype=dtype)
+    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
     def compute_chunked_dists_fast(samples, means, chunk_size=5000):
         """
@@ -157,7 +157,7 @@ def kmeans(
     # Randomly select the first centroid per head
     rand_idx = torch.randint(0, samples.shape[1], (samples.shape[0], 1), device=samples.device)  # [H, 1]
     first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, samples.shape[2]))  # [H, 1, D]
-    means[:, :, 0] = first_centroid.squeeze(1)  # [H, D]
+    means[:, 0, :] = first_centroid.squeeze(1)  # [H, D]
 
     print("kmeans start")
     for k in range(1, num_clusters):
