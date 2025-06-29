@@ -128,7 +128,7 @@ def kmeans(
             dists: Tensor of shape [H, N, K], pairwise squared distances
         """
         H, N, D = samples.shape
-        H2, D2, K = means.shape
+        H2, K, D2 = means.shape
 
         assert D == D2 and H == H2, f"Incompatible shapes: samples [H={H}, D={D}], means [H={H2}, D={D2}]"
 
