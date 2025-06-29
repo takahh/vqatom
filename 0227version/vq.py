@@ -202,7 +202,7 @@ def kmeans(
         means[:, :, k] = next_centroid.squeeze(1)  # [H, D]
         del dists, min_dists, probs
         torch.cuda.empty_cache()
-
+    print(f"sample {sample.shape}, means {means.shape}")
     # Iterative optimization
     for _ in range(num_iters):
         print(f"{_},", end="")
