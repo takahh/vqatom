@@ -162,7 +162,6 @@ def kmeans(
     print("kmeans start")
     for k in range(1, num_clusters):
         if k % 1000 == 0:
-            print(f"{k}, ", end="")
             mem = torch.cuda.memory_allocated() / 1024 ** 3  # in GB
             print(f"{k}, mem: {mem:.2f} GB", end="")
 
@@ -173,7 +172,7 @@ def kmeans(
             dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
         else:
             with torch.cuda.amp.autocast(enabled=True):
-                dists = compute_chunked_dists_fast(samples, means[:, :, :k], chunk_size=250)
+                dists = compute_chunked_dists_fast(samples, means[:, :, :k], chunk_size=1000)
 
         # Compute sampling probabilities
         min_dists = dists.min(dim=-1).values  # [H, N]
@@ -202,6 +201,8 @@ def kmeans(
 
         # Assign to k-th position in means
         means[:, :, k] = next_centroid.squeeze(1)  # [H, D]
+        del dists, min_dists, probs
+        torch.cuda.empty_cache()
 
     # Iterative optimization
     for _ in range(num_iters):
