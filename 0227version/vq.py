@@ -171,9 +171,8 @@ def kmeans(
             means_normalized = F.normalize(means[:, :k], dim=-1)
             dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
         else:
-            with torch.cuda.amp.autocast(enabled=True):
+            with torch.cuda.amp.autocast(enabled=False):
                 dists = compute_chunked_dists_fast(samples, means[:, :, :k], chunk_size=250)
-
         # Compute sampling probabilities
         min_dists = dists.min(dim=-1).values  # [H, N]
         sum_min_dists = min_dists.sum(dim=-1, keepdim=True)  # [H, 1]
