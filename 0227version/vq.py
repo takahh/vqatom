@@ -127,6 +127,7 @@ def kmeans(
         Returns:
             dists: Tensor of shape [H, N, K], pairwise squared distances
         """
+        print(f"samples.shape: {samples.shape}, means.shape: {means.shape}")
         H, N, D = samples.shape
         H2, K, D2 = means.shape
 
