@@ -91,124 +91,103 @@ def all_gather_variably_sized(x, sizes, dim=0):
     return all_x
 
 
-def batched_bincount(x, *, minlength):
-    batch, dtype, device = x.shape[0], x.dtype, x.device
-    target = torch.zeros(batch, minlength, dtype=dtype, device=device)
-    values = torch.ones_like(x)
-    target.scatter_add_(-1, x, values)
-    return target
-
 from einops import rearrange, repeat
 
+def l2norm(t, dim=-1, eps=1e-8):
+    return F.normalize(t, dim=dim, eps=eps)
+
+def noop(x):
+    return x
+
+def batched_bincount(indices, minlength):
+    H, N = indices.shape
+    bins = torch.zeros(H, minlength, device=indices.device, dtype=torch.long)
+    for h in range(H):
+        bins[h].scatter_add_(0, indices[h], torch.ones_like(indices[h]))
+    return bins
 
 def kmeans(
         samples,
         num_clusters,
-        num_iters=100,
+        num_iters=30,
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
-    num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-    num_iters = 30
-    print(f"samples.shape first -----------------{samples.shape}")
-    # K-Means++ initialization
-    # means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
+    # [H, N, D]
+    num_codebooks, num_samples, dim = samples.shape
+    dtype, device = samples.dtype, samples.device
+
+    # Sanity check
+    assert dim > 1, f"Embedding dimension must be >1, but got {dim}"
+    print(f"Starting K-Means: samples.shape = {samples.shape}")
+
+    # Initialize means: [H, K, D]
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
-    def compute_chunked_dists_fast(samples, means, chunk_size=5000):
-        """
-        Efficiently compute squared L2 distances between samples and means in chunks.
+    # Pick first centroid at random per head
+    rand_idx = torch.randint(0, num_samples, (num_codebooks, 1), device=device)  # [H, 1]
+    first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
+    means[:, 0, :] = first_centroid.squeeze(1)
 
-        Args:
-            samples: Tensor of shape [H, N, D]
-            means:   Tensor of shape [H, D, K]
-            chunk_size: Number of centroids to process per chunk
-
-        Returns:
-            dists: Tensor of shape [H, N, K], pairwise squared distances
+    def compute_chunked_dists(samples, means, chunk_size=5000):
         """
-        print(f"samples.shape: {samples.shape}, means.shape: {means.shape}")
+        samples: [H, N, D]
+        means:   [H, K, D]
+        returns: [H, N, K]
+        """
         H, N, D = samples.shape
         H2, K, D2 = means.shape
+        assert D == D2 and H == H2, "Shape mismatch"
 
-        assert D == D2 and H == H2, f"Incompatible shapes: samples [H={H}, D={D}], means [H={H2}, D={D2}]"
-
-        # Precompute squared norms of samples: [H, N, 1]
-        samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)
-
-        # Compute distances in chunks to reduce memory usage
+        samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
         dists_chunks = []
+
         for start in range(0, K, chunk_size):
             end = min(start + chunk_size, K)
-
-            means_chunk = means[:, :, start:end]  # [H, D, chunk]
-            means_sq = means_chunk.pow(2).sum(dim=1).unsqueeze(1)  # [H, 1, chunk]
-            dot = torch.matmul(samples, means_chunk)  # [H, N, chunk]
-
+            means_chunk = means[:, start:end, :]  # [H, chunk, D]
+            means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
+            dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
             dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
             dists_chunks.append(dists)
 
         return torch.cat(dists_chunks, dim=-1)  # [H, N, K]
 
-    # Randomly select the first centroid
-    # Ensure samples and means are on the same device
-    samples = samples.to("cuda")
-    means = means.to("cuda")
-
-    # Randomly select the first centroid per head
-    rand_idx = torch.randint(0, samples.shape[1], (samples.shape[0], 1), device=samples.device)  # [H, 1]
-    first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, samples.shape[2]))  # [H, 1, D]
-    means[:, 0, :] = first_centroid.squeeze(1)  # [H, D]
-
-    print("kmeans start")
+    print("kmeans++ sampling start")
     for k in range(1, num_clusters):
         if k % 1000 == 0:
-            mem = torch.cuda.memory_allocated() / 1024 ** 3  # in GB
-            print(f"{k}, mem: {mem:.2f} GB", end="")
+            mem = torch.cuda.memory_allocated() / 1024 ** 3
+            print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
 
         if use_cosine_sim:
-            # Normalize before matmul (safe for cosine similarity)
-            samples_normalized = F.normalize(samples, dim=-1)
-            means_normalized = F.normalize(means[:, :k], dim=-1)
-            dists = 1 - torch.matmul(samples_normalized, means_normalized.transpose(-1, -2))  # [H, N, k]
+            samples_norm = F.normalize(samples, dim=-1)
+            means_norm = F.normalize(means[:, :k], dim=-1)
+            dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
         else:
             with torch.cuda.amp.autocast(enabled=False):
-                dists = compute_chunked_dists_fast(samples, means[:, :, :k], chunk_size=250)
-        # Compute sampling probabilities
-        min_dists = dists.min(dim=-1).values  # [H, N]
-        sum_min_dists = min_dists.sum(dim=-1, keepdim=True)  # [H, 1]
-        sum_min_dists = sum_min_dists + (sum_min_dists == 0).float() * 1e-6
+                dists = compute_chunked_dists(samples, means[:, :k], chunk_size=250)
 
-        probs = min_dists / sum_min_dists  # [H, N]
-        N = samples.shape[1]  # Add this line before using N
-        probs = torch.nan_to_num(probs, nan=1.0 / N, posinf=1.0 / N, neginf=0.0)
-        probs = torch.clamp(probs, min=0.0, max=1.0)
+        min_dists = dists.min(dim=-1).values  # [H, N]
+        sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6
+        probs = min_dists / sum_min_dists
+
+        probs = torch.nan_to_num(probs, nan=1.0 / num_samples)
+        probs = torch.clamp(probs, 0.0, 1.0)
         probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
 
-        # fallback if still invalid
-        if torch.isnan(probs).any() or torch.isinf(probs).any() or (probs < 0).any():
-            print("Warning: bad probs. Replacing with uniform.")
-            probs = torch.full_like(probs, 1.0 / N)
+        if torch.isnan(probs).any() or torch.isinf(probs).any():
+            print(f"Warning: fallback to uniform sampling at step {k}")
+            probs = torch.full_like(probs, 1.0 / num_samples)
 
-        next_centroid_idx = torch.multinomial(probs, 1)  # [H, 1]
-
-        # Extract corresponding sample vectors from `samples`
-        next_centroid = torch.gather(
-            samples,
-            dim=1,
-            index=next_centroid_idx.unsqueeze(-1).expand(-1, -1, samples.shape[2])
-        )  # [H, 1, D]
-
-        # Assign to k-th position in means
-        means[:, :, k] = next_centroid.squeeze(1)  # [H, D]
+        next_idx = torch.multinomial(probs, 1)  # [H, 1]
+        next_centroid = torch.gather(samples, 1, next_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
+        means[:, k, :] = next_centroid.squeeze(1)
         del dists, min_dists, probs
         torch.cuda.empty_cache()
 
-    print(f"sample {samples.shape}, means {means.shape}")
-    # Iterative optimization
-    # Iterative optimization
-    for _ in range(num_iters):
-        print(f"{_},", end="")
+    print("kmeans++ sampling done. Running Lloyd iterations")
+
+    for i in range(num_iters):
+        print(f"Iter {i}", end=", ")
 
         if use_cosine_sim:
             dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
@@ -220,29 +199,23 @@ def kmeans(
         all_reduce_fn(bins)
 
         zero_mask = bins == 0  # [H, K]
-        bins_min_clamped = bins.masked_fill(zero_mask, 1)
+        bins_safe = bins.masked_fill(zero_mask, 1)  # prevent divide by zero
 
-        # Accumulate new means
         new_means = torch.zeros_like(means)  # [H, K, D]
-        new_means.scatter_add_(
-            1,
-            repeat(buckets, 'h n -> h n d', d=dim),  # [H, N, D]
-            samples
-        )
-        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')  # [H, K, D]
+        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
+        new_means = new_means / rearrange(bins_safe, '... -> ... 1')
         all_reduce_fn(new_means)
 
         if use_cosine_sim:
             new_means = l2norm(new_means)
 
-        # Only replace non-empty centroids
         means = torch.where(
-            rearrange(zero_mask, '... -> ... 1'),  # [H, K, 1]
-            means,  # keep old
-            new_means  # replace
+            rearrange(zero_mask, '... -> ... 1'),
+            means,
+            new_means
         )
 
-    return means, bins
+    return means, bins  # [H, K, D], [H, K]
 
 
 def batched_embedding(indices, embed):
