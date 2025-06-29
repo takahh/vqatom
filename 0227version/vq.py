@@ -203,39 +203,43 @@ def kmeans(
         means[:, :, k] = next_centroid.squeeze(1)  # [H, D]
         del dists, min_dists, probs
         torch.cuda.empty_cache()
+
     print(f"sample {samples.shape}, means {means.shape}")
+    # Iterative optimization
     # Iterative optimization
     for _ in range(num_iters):
         print(f"{_},", end="")
-        if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h n d -> h d n')
-        else:
-            # dists = -torch.cdist(samples, means.transpose(1, 2), p=2)  # now means: [1, 10000, 8]
-            # dists = -torch.cdist(samples, means, p=2)
-            dists = -torch.cdist(samples, rearrange(means, 'h d k -> h k d'), p=2)
 
-        buckets = torch.argmax(dists, dim=-1)
-        bins = batched_bincount(buckets, minlength=num_clusters)
+        if use_cosine_sim:
+            dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
+        else:
+            dists = -torch.cdist(samples, means, p=2)  # [H, N, K]
+
+        buckets = torch.argmax(dists, dim=-1)  # [H, N]
+        bins = batched_bincount(buckets, minlength=num_clusters)  # [H, K]
         all_reduce_fn(bins)
 
-        zero_mask = bins == 0
+        zero_mask = bins == 0  # [H, K]
         bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
-
-        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
+        # Accumulate new means
+        new_means = torch.zeros_like(means)  # [H, K, D]
+        new_means.scatter_add_(
+            1,
+            repeat(buckets, 'h n -> h n d', d=dim),  # [H, N, D]
+            samples
+        )
+        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')  # [H, K, D]
         all_reduce_fn(new_means)
 
         if use_cosine_sim:
             new_means = l2norm(new_means)
 
-        print(f"means {means.shape}, new_means {new_means.shape}")
-        means = means.transpose(-1, -2)  # [1, 8, 10000] → [1, 10000, 8]
+        # Only replace non-empty centroids
         means = torch.where(
-            rearrange(zero_mask, '... -> ... 1'),
-            means,
-            new_means
+            rearrange(zero_mask, '... -> ... 1'),  # [H, K, 1]
+            means,  # keep old
+            new_means  # replace
         )
 
     return means, bins
