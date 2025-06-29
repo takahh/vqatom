@@ -229,6 +229,7 @@ def kmeans(
             new_means = l2norm(new_means)
 
         print(f"means {means.shape}, new_means {new_means.shape}")
+        new_means = means.transpose(-1, -2)  # [1, 8, 10000] → [1, 10000, 8]
         means = torch.where(
             rearrange(zero_mask, '... -> ... 1'),
             means,
