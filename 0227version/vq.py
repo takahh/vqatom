@@ -163,6 +163,8 @@ def kmeans(
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             print(f"{k}, ", end="")
+            mem = torch.cuda.memory_allocated() / 1024 ** 3  # in GB
+            print(f"{k}, mem: {mem:.2f} GB", end="")
 
         if use_cosine_sim:
             # Normalize before matmul (safe for cosine similarity)
