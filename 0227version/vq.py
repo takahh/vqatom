@@ -233,7 +233,7 @@ def kmeans(
         means = torch.where(
             rearrange(zero_mask, '... -> ... 1'),
             means,
-            new_means.transpose(1, 2)
+            new_means
         )
 
     return means, bins
