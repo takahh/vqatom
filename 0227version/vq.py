@@ -110,7 +110,7 @@ def kmeans(
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     num_iters = 30
-
+    print(f"samples.shape first -----------------{samples.shape}")
     # K-Means++ initialization
     # means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
     means = torch.zeros((num_codebooks, dim, num_clusters), device=device, dtype=dtype)
