@@ -246,11 +246,11 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, z, atom_types, codebook, chunk, logger):
+    def forward(self, z, chunk, logger):
         eps = 1e-6
         latent_similarity_matrix = torch.mm(z, z.T)
 
-        if chunk % 100 == 0:
+        if chunk % 200 == 0:
             hist = torch.histc(latent_similarity_matrix.cpu().to(torch.float32), bins=20, min=-1.0, max=1.0)
             print(hist)
 
@@ -268,7 +268,7 @@ class ContrastiveLoss(nn.Module):
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        def bell_shaped_repel_loss(v, simi_matrix, mu=0.5, sigma=0.1):
+        def bell_shaped_repel_loss(v, simi_matrix, mu=0.5, sigma=1):
             """
             Penalizes similarities close to mu, shaped like a Gaussian bump.
 
@@ -282,7 +282,7 @@ class ContrastiveLoss(nn.Module):
             simi_matrix = simi_matrix * (1 - identity)  # zero out diagonal
 
             # Optional: clamp for numerical stability
-            simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
+            # simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
 
             # Apply Gaussian bell function
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
