@@ -187,8 +187,6 @@ def kmeans(
     print("kmeans++ sampling done. Running Lloyd iterations")
 
     for i in range(num_iters):
-        print(f"Iter {i}", end=", ")
-
         if use_cosine_sim:
             dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
         else:
