@@ -279,9 +279,9 @@ def run_inductive(
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
-                # --------------- delete soon !!!! ----------------
-                if idx == 1:
-                    break
+                # # --------------- delete soon !!!! ----------------
+                # if idx == 1:
+                #     break
                 # --------------- delete soon !!!! ----------------
                 print(f"idx {idx}")
 

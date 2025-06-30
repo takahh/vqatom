@@ -156,7 +156,7 @@ def kmeans(
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             mem = torch.cuda.memory_allocated() / 1024 ** 3
-            print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
+            # print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
 
         if use_cosine_sim:
             samples_norm = F.normalize(samples, dim=-1)
@@ -594,7 +594,7 @@ class VectorQuantize(nn.Module):
         init_feat.to("cuda")
         latents.to("cuda")
         quantized.to("cuda")
-        dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
+        # dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
         # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
         # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
 
