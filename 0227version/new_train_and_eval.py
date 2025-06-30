@@ -290,14 +290,14 @@ def run_inductive(
                 for i in range(0, len(glist), chunk_size):
                     # print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]  # including 2-hop and 3-hop
-                    all_chunks = glist
+                    # all_chunks = glist
                     batched_graph = dgl.batch(chunk)
-                    batched_graph_all = dgl.batch(all_chunks)
+                    # batched_graph_all = dgl.batch(all_chunks)
                     # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx, batched_graph_all)
+                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx)
                     cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
                     torch.cuda.synchronize()
