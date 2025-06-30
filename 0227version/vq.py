@@ -629,7 +629,7 @@ class VectorQuantize(nn.Module):
         # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
         two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = (
-            self.compute_contrastive_loss(latents_for_sil, init_feat, codebook, chunk, logger))
+            self.compute_contrastive_loss(latents_for_sil, chunk, logger))
         # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
