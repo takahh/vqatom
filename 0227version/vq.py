@@ -280,19 +280,21 @@ class ContrastiveLoss(nn.Module):
             """
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             simi_matrix = simi_matrix * (1 - identity)  # zero out diagonal
-
             # Optional: clamp for numerical stability
             # simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
 
             # Apply Gaussian bell function
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
-            return loss_matrix.mean()
+            return loss_matrix.mean(), simi_matrix
 
-        latent_repel_loss = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
+        latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
         # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+
+        if chunk == 0:
+            print(f"simi_matrix max {sim_mat.max()}, simi_matrix mean {sim_mat.mean()}, min {sim_mat.min()}")
         final_loss = latent_repel_weight * latent_repel_loss
         neg_loss = 1
 
