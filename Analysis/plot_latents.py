@@ -18,7 +18,7 @@ N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 11
+EPOCH_START = 2
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -92,9 +92,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
     latent_pca = combined_pca[:latent_arr.shape[0]]
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
-    for N_NEIGHBORS in [20, 10, 2]:
+    for N_NEIGHBORS in [5]:
         for zoom in [3]:
-            for SPREAD, min_dist in [[4, 4], [6, 6], [10, 10]]:
+            for SPREAD, min_dist in [[10, 1], [1, 0.01]]:
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
                     min_dist=min_dist,
