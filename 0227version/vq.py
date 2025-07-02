@@ -310,7 +310,7 @@ class ContrastiveLoss(nn.Module):
             Returns:
                 Scalar loss value
             """
-            sim_matrix = torch.clamp(sim_matrix, -1.0, 1.0)
+            # sim_matrix = torch.clamp(sim_matrix, -1.0, 1.0)
             loss_matrix = 1 - torch.exp(-((sim_matrix - mu) ** 2) / (2 * sigma ** 2))
 
             if mask is not None:
@@ -338,8 +338,8 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        # latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
+        latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
+        # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
