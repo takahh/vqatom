@@ -18,7 +18,7 @@ N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 2
+EPOCH_START = 8
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -38,21 +38,40 @@ def load_npz_array_multi(filename):
         arr_all.extend(arr)
     final_arr = np.array(arr_all)
     return np.squeeze(final_arr)
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
 def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
-    title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
-    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
-    print("fitting start")
-    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
-    print("fitting done")
-    for zoom in [50, 20, 15, 10, 7, 5, 3, 2]:
-        cb_emb = embedding[:cb_size]
-        latent_emb = embedding[cb_size:cb_size]
-        x_range = np.percentile(cb_emb[:, 0], [50 - zoom, 50 + zoom])
-        y_range = np.percentile(cb_emb[:, 1], [50 - zoom, 50 + zoom])
-        zoom = float(50/int(zoom))
+    """
+    Plots t-SNE visualization of codebook and latent vectors with progressive zoom.
 
-        # Mask both latent and cb to zoom-in range
+    Args:
+        cb_arr (np.ndarray): Codebook vectors, shape [cb_size, D]
+        latent_arr (np.ndarray): Latent vectors, shape [N, D]
+        epoch (int): Current epoch (for labeling)
+        perplexity (float): t-SNE perplexity
+        cb_size (int): Number of codebook vectors (same as cb_arr.shape[0])
+    """
+    assert cb_arr.shape[0] == cb_size, "cb_size mismatch with cb_arr shape"
+    title = f"T-SNE: perplex {perplexity}, epoch {epoch}, cb {cb_size}, dim {latent_arr.shape[-1]}"
+
+    # Run t-SNE
+    tsne = TSNE(n_components=2, random_state=44, perplexity=perplexity, n_iter=250)
+    print("Fitting t-SNE...")
+    embedding = tsne.fit_transform(np.concatenate((cb_arr, latent_arr), axis=0))
+    print("Fitting complete.")
+
+    # Split embeddings
+    cb_emb = embedding[:cb_size]
+    latent_emb = embedding[cb_size:]
+
+    # Zoom levels (percentile range around median)
+    for zoom_percent in [100, 50, 20, 15, 10, 7, 5, 3, 2]:
+        x_range = np.percentile(cb_emb[:, 0], [50 - zoom_percent / 2, 50 + zoom_percent / 2])
+        y_range = np.percentile(cb_emb[:, 1], [50 - zoom_percent / 2, 50 + zoom_percent / 2])
+
+        # Mask points in zoomed region
         latent_mask = (
             (latent_emb[:, 0] >= x_range[0]) & (latent_emb[:, 0] <= x_range[1]) &
             (latent_emb[:, 1] >= y_range[0]) & (latent_emb[:, 1] <= y_range[1])
@@ -61,25 +80,34 @@ def plot_tsne(cb_arr, latent_arr, epoch, perplexity, cb_size):
             (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
             (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
         )
+
         zoomed_latent = latent_emb[latent_mask]
         zoomed_cb = cb_emb[cb_mask]
+
+        print(f"\n[Zoom {zoom_percent}%] Latent pts: {len(zoomed_latent)}, CB pts: {len(zoomed_cb)}")
 
         bins = 100
         for i in range(2):
             plt.figure(figsize=(10, 8))
-            plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=20, c='black', alpha=0.8)
-            # plt.hist2d(
-            #     zoomed_latent[:, 0], zoomed_latent[:, 1],
-            #     bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-            #     cmap="Greys"
-            # )
+            if i == 0:
+                # Heatmap of latent density + CB overlay
+                plt.hist2d(
+                    zoomed_latent[:, 0], zoomed_latent[:, 1],
+                    bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                    cmap="Greys"
+                )
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.9, marker='x')
+            else:
+                # Optional: visualize just the scatter points
+                plt.scatter(zoomed_latent[:, 0], zoomed_latent[:, 1], s=5, alpha=0.4, c='black')
+                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.9, marker='x')
+
             plt.xlim(x_range)
             plt.ylim(y_range)
-
+            plt.title(title + f" | Zoom {zoom_percent}%")
             if i == 0:
-                plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=30, c='red', alpha=0.9, marker='x')
-            plt.title(title + f" (Zoomed {zoom}, epoch {epoch})")
-            plt.colorbar(label='Density')
+                plt.colorbar(label='Density')
+            plt.tight_layout()
             plt.show()
 
 
@@ -92,15 +120,16 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
     latent_pca = combined_pca[:latent_arr.shape[0]]
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
-    for N_NEIGHBORS in [5]:
-        for zoom in [3]:
-            for SPREAD, min_dist in [[10, 1], [1, 0.01]]:
+    # for N_NEIGHBORS in [2, 10, 20, 40]:
+    for N_NEIGHBORS in [10]:
+        for zoom in [3, 50]:
+            for SPREAD, min_dist in [[2, 1], [2, 0.1], [10, 0.01]]:
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
                     min_dist=min_dist,
                     spread=SPREAD,
                     n_components=2,
-                    n_epochs=15,
+                    n_epochs=30,
                     random_state=None,
                     init='random',
                     low_memory=True,
