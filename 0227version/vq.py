@@ -130,55 +130,66 @@ def kmeans(
     first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
     means[:, 0, :] = first_centroid.squeeze(1)
 
-    def compute_chunked_dists(samples, means, chunk_size=5000):
-        """
-        samples: [H, N, D]
-        means:   [H, K, D]
-        returns: [H, N, K]
-        """
-        H, N, D = samples.shape
-        H2, K, D2 = means.shape
-        assert D == D2 and H == H2, "Shape mismatch"
-        samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
-        dists_chunks = []
-        for start in range(0, K, chunk_size):
-            end = min(start + chunk_size, K)
-            means_chunk = means[:, start:end, :]  # [H, chunk, D]
-            means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
-            dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
-            dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
-            dists_chunks.append(dists)
-        return torch.cat(dists_chunks, dim=-1)  # [H, N, K]
+    # def compute_chunked_dists(samples, means, chunk_size=5000):
+    #     """
+    #     samples: [H, N, D]
+    #     means:   [H, K, D]
+    #     returns: [H, N, K]
+    #     """
+    #     H, N, D = samples.shape
+    #     H2, K, D2 = means.shape
+    #     assert D == D2 and H == H2, "Shape mismatch"
+    #     samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
+    #     dists_chunks = []
+    #     for start in range(0, K, chunk_size):
+    #         end = min(start + chunk_size, K)
+    #         means_chunk = means[:, start:end, :]  # [H, chunk, D]
+    #         means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
+    #         dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
+    #         dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
+    #         dists_chunks.append(dists)
+    #     return torch.cat(dists_chunks, dim=-1)  # [H, N, K]print("kmeans++ sampling start")
+    #
+    # Initialize min_dists to large values
+    min_dists = torch.full((num_codebooks, num_samples), float('inf'), device=device)
+
     # --------------------------------------
-    #　K-means ++ for initialization
+    # k-means++ (initialization)
     # --------------------------------------
-    print("kmeans++ sampling start")
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             mem = torch.cuda.memory_allocated() / 1024 ** 3
             print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
-        # if use_cosine_sim:
-        #     samples_norm = F.normalize(samples, dim=-1)
-        #     means_norm = F.normalize(means[:, :k], dim=-1)
-        #     dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
-        # else:
+
         with torch.cuda.amp.autocast(enabled=False):
-            dists = compute_chunked_dists(samples, means[:, :k], chunk_size=150)
-        min_dists = dists.min(dim=-1).values  # [H, N]
-        sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6
-        probs = min_dists / sum_min_dists
+            for start in range(0, k, 150):  # chunk over already chosen centroids
+                end = min(start + 150, k)
+                means_chunk = means[:, start:end, :]  # [H, chunk, D]
+                means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
+                samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
+                dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
+                dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
+                min_chunk_dists, _ = dists.min(dim=-1)  # [H, N]
+                min_dists = torch.minimum(min_dists, min_chunk_dists)  # update inplace
+
+        sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6  # [H, 1]
+        probs = min_dists / sum_min_dists  # [H, N]
         probs = torch.nan_to_num(probs, nan=1.0 / num_samples)
         probs = torch.clamp(probs, 0.0, 1.0)
-        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
+        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)  # renormalize
+
         if torch.isnan(probs).any() or torch.isinf(probs).any():
             print(f"Warning: fallback to uniform sampling at step {k}")
             probs = torch.full_like(probs, 1.0 / num_samples)
+
         next_idx = torch.multinomial(probs, 1)  # [H, 1]
         next_centroid = torch.gather(samples, 1, next_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
         means[:, k, :] = next_centroid.squeeze(1)
-        del dists, min_dists, probs
+
         torch.cuda.empty_cache()
+
     print("kmeans++ sampling done. Running Lloyd iterations")
+
     # --------------------------------------
     # k-means
     # --------------------------------------
