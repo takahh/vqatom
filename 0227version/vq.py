@@ -273,7 +273,7 @@ class ContrastiveLoss(nn.Module):
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
 
-    def forward(self, z, chunk, logger):
+    def forward(self, z, chunk, epoch):
         eps = 1e-6
         latent_similarity_matrix = torch.mm(z, z.T)
 
@@ -298,16 +298,14 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss, simi_matrix
 
-        def adaptive_bell_repel_loss(simi_matrix, mu=0.9, sigma=0.1, eps=1e-6):
+        def adaptive_bell_repel_loss(simi_matrix, mu=0.8, sigma=0.3):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix * (1 - identity)
-
             # Normalize to [0, 1] within this batch
             sim_min = simi_matrix.min()
             sim_max = simi_matrix.max()
             sim_range = (sim_max - sim_min).clamp(min=eps)
             simi_matrix_norm = (simi_matrix - sim_min) / sim_range
-
             # Gaussian bump centered at high similarity
             loss_matrix = torch.exp(-((simi_matrix_norm - mu) ** 2) / (2 * sigma ** 2))
             return loss_matrix.mean(), simi_matrix
@@ -335,7 +333,8 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
         # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
-        latent_repel_weight = 0.5 # 0.005 in success
+        # latent_repel_weight = 0.5 # 0.005 in success
+        latent_repel_weight = max(0.005, 0.5 * (0.95 ** epoch))  # or linear decay
         cb_repel_weight = 0.005  # 0.005
         # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
@@ -654,7 +653,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, chunk=0):
+    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, epoch, chunk=0):
         embed_ind.to("cuda")
         codebook.to("cuda")
         init_feat.to("cuda")
@@ -675,7 +674,7 @@ class VectorQuantize(nn.Module):
         # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
         two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = (
-            self.compute_contrastive_loss(latents_for_sil, chunk, logger))
+            self.compute_contrastive_loss(latents_for_sil, chunk, epoch))
         # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
@@ -715,7 +714,7 @@ class VectorQuantize(nn.Module):
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, chunk_i)
+            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, epoch, logger, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
