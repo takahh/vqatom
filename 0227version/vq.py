@@ -278,7 +278,7 @@ class ContrastiveLoss(nn.Module):
         latent_similarity_matrix = torch.mm(z, z.T)
 
         if chunk % 200 == 0:
-            hist = torch.histc(latent_similarity_matrix.cpu().to(torch.float32), bins=20, min=-1.0, max=1.0)
+            hist = torch.histc(latent_similarity_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
         def calc_repel_loss(v, simi_matrix):
