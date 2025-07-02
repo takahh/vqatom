@@ -293,7 +293,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
             # repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
             repel_loss = ((simi_matrix - identity) ** 2).mean()
-            return repel_loss
+            return repel_loss, simi_matrix
 
 
         def inverted_gaussian_loss(sim_matrix, mu=0.4, sigma=0.2, mask=None):
@@ -338,7 +338,8 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
+        # latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
+        latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
