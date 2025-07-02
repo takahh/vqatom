@@ -154,16 +154,16 @@ def kmeans(
     # --------------------------------------
     print("kmeans++ sampling start")
     for k in range(1, num_clusters):
-        # if k % 1000 == 0:
-        #     mem = torch.cuda.memory_allocated() / 1024 ** 3
-        #     # print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
+        if k % 1000 == 0:
+            mem = torch.cuda.memory_allocated() / 1024 ** 3
+            print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
         # if use_cosine_sim:
         #     samples_norm = F.normalize(samples, dim=-1)
         #     means_norm = F.normalize(means[:, :k], dim=-1)
         #     dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
         # else:
         with torch.cuda.amp.autocast(enabled=False):
-            dists = compute_chunked_dists(samples, means[:, :k], chunk_size=250)
+            dists = compute_chunked_dists(samples, means[:, :k], chunk_size=150)
         min_dists = dists.min(dim=-1).values  # [H, N]
         sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6
         probs = min_dists / sum_min_dists
