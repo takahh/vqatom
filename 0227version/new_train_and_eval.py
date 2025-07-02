@@ -246,9 +246,12 @@ def run_inductive(
         loss_list = []
         cb_unique_num_list = []
         cb_unique_num_list_test = []
-        # ----------------------------------
-        # Initial kmeans for all target data
-        # ----------------------------------
+        # ======================================
+        # Run k-means
+        # ======================================
+        # ------------------------------------------
+        # Collect latent vectors (goes to model.py)
+        # ------------------------------------------
         all_latents = []
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 0, 1), start=0):
             glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
@@ -265,6 +268,9 @@ def run_inductive(
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+        # -------------------------------------------------------------------
+        # Run k-means on the collected latent vectors (goes to the deepest)
+        # -------------------------------------------------------------------
         evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
         print("initial kmeans done")
 

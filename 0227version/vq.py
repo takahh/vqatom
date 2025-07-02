@@ -113,6 +113,7 @@ def kmeans(
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
+    """　データ全体に kmeans をかける様に変えたのでOOMの可能性がある"""
     # [H, N, D]
     num_codebooks, num_samples, dim = samples.shape
     dtype, device = samples.dtype, samples.device
@@ -138,10 +139,8 @@ def kmeans(
         H, N, D = samples.shape
         H2, K, D2 = means.shape
         assert D == D2 and H == H2, "Shape mismatch"
-
         samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
         dists_chunks = []
-
         for start in range(0, K, chunk_size):
             end = min(start + chunk_size, K)
             means_chunk = means[:, start:end, :]  # [H, chunk, D]
@@ -149,70 +148,60 @@ def kmeans(
             dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
             dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
             dists_chunks.append(dists)
-
         return torch.cat(dists_chunks, dim=-1)  # [H, N, K]
-
+    # --------------------------------------
+    #　K-means ++ for initialization
+    # --------------------------------------
     print("kmeans++ sampling start")
     for k in range(1, num_clusters):
-        if k % 1000 == 0:
-            mem = torch.cuda.memory_allocated() / 1024 ** 3
-            # print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
-
-        if use_cosine_sim:
-            samples_norm = F.normalize(samples, dim=-1)
-            means_norm = F.normalize(means[:, :k], dim=-1)
-            dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
-        else:
-            with torch.cuda.amp.autocast(enabled=False):
-                dists = compute_chunked_dists(samples, means[:, :k], chunk_size=250)
-
+        # if k % 1000 == 0:
+        #     mem = torch.cuda.memory_allocated() / 1024 ** 3
+        #     # print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
+        # if use_cosine_sim:
+        #     samples_norm = F.normalize(samples, dim=-1)
+        #     means_norm = F.normalize(means[:, :k], dim=-1)
+        #     dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
+        # else:
+        with torch.cuda.amp.autocast(enabled=False):
+            dists = compute_chunked_dists(samples, means[:, :k], chunk_size=250)
         min_dists = dists.min(dim=-1).values  # [H, N]
         sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6
         probs = min_dists / sum_min_dists
-
         probs = torch.nan_to_num(probs, nan=1.0 / num_samples)
         probs = torch.clamp(probs, 0.0, 1.0)
         probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
-
         if torch.isnan(probs).any() or torch.isinf(probs).any():
             print(f"Warning: fallback to uniform sampling at step {k}")
             probs = torch.full_like(probs, 1.0 / num_samples)
-
         next_idx = torch.multinomial(probs, 1)  # [H, 1]
         next_centroid = torch.gather(samples, 1, next_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
         means[:, k, :] = next_centroid.squeeze(1)
         del dists, min_dists, probs
         torch.cuda.empty_cache()
-
     print("kmeans++ sampling done. Running Lloyd iterations")
-
+    # --------------------------------------
+    # k-means
+    # --------------------------------------
     for i in range(num_iters):
         if use_cosine_sim:
             dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
         else:
             dists = -torch.cdist(samples, means, p=2)  # [H, N, K]
-
         buckets = torch.argmax(dists, dim=-1)  # [H, N]
         bins = batched_bincount(buckets, minlength=num_clusters)  # [H, K]
         all_reduce_fn(bins)
-
         zero_mask = bins == 0  # [H, K]
         bins_safe = bins.masked_fill(zero_mask, 1)  # prevent divide by zero
-
         new_means = torch.zeros_like(means)  # [H, K, D]
         new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
         new_means = new_means / rearrange(bins_safe, '... -> ... 1')
         all_reduce_fn(new_means)
-
         if use_cosine_sim:
             new_means = l2norm(new_means)
-
         means = torch.where(
             rearrange(zero_mask, '... -> ... 1'),
             means,
-            new_means
-        )
-
+            new_means)
     return means, bins  # [H, K, D], [H, K]
 
 
