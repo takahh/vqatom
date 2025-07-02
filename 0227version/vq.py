@@ -295,7 +295,7 @@ class ContrastiveLoss(nn.Module):
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        def bell_shaped_repel_loss(v, simi_matrix, mu=0.95, sigma=0.5):
+        def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
             """
             Penalizes similarities close to mu, shaped like a Gaussian bump.
 
