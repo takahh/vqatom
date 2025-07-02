@@ -283,16 +283,16 @@ class ContrastiveLoss(nn.Module):
 
         def calc_repel_loss(v, simi_matrix, chunk):
             # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-            s_min, s_max = simi_matrix.min(), simi_matrix.max()
-            s_range = (s_max - s_min).clamp(min=eps)
-            simi_matrix = (simi_matrix - s_min) / s_range
-            if chunk == 0:
-                print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-                logger.info(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+            # s_min, s_max = simi_matrix.min(), simi_matrix.max()
+            # s_range = (s_max - s_min).clamp(min=eps)
+            # simi_matrix = (simi_matrix - s_min) / s_range
+            # if chunk == 0:
+            #     print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
+            #     logger.info(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
             # hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
             identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-            repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
-            # repel_loss = ((simi_matrix - identity) ** 2).mean()
+            # repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
+            repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
         def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
