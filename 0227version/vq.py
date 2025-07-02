@@ -106,6 +106,7 @@ def batched_bincount(indices, minlength):
         bins[h].scatter_add_(0, indices[h], torch.ones_like(indices[h]))
     return bins
 
+
 def kmeans(
         samples,
         num_clusters,
@@ -154,7 +155,7 @@ def kmeans(
     min_dists = torch.full((num_codebooks, num_samples), float('inf'), device=device)
 
     # --------------------------------------
-    # k-means++ (initialization)
+    # k-means++ (initialization to
     # --------------------------------------
     chunk_size = 300
     for k in range(1, num_clusters):
@@ -188,6 +189,9 @@ def kmeans(
 
         torch.cuda.empty_cache()
 
+    # ----------------------------------------------
+    # k-means (relates latent vectors to clusters)
+    # ----------------------------------------------
     print("kmeans++ sampling done. Running Lloyd iterations")
     # Lloyd iterations (K-Means)
     for i in range(num_iters):
@@ -291,7 +295,7 @@ class ContrastiveLoss(nn.Module):
             # repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        def bell_shaped_repel_loss(v, simi_matrix, mu=0.95, sigma=0.2):
+        def bell_shaped_repel_loss(v, simi_matrix, mu=0.95, sigma=0.5):
             """
             Penalizes similarities close to mu, shaped like a Gaussian bump.
 
