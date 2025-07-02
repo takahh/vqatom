@@ -307,7 +307,7 @@ class ContrastiveLoss(nn.Module):
 
             # Gaussian bump centered at high similarity
             loss_matrix = torch.exp(-((simi_matrix_norm - mu) ** 2) / (2 * sigma ** 2))
-            return loss_matrix.mean()
+            return loss_matrix.mean(), simi_matrix
 
         # def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
         #     """
