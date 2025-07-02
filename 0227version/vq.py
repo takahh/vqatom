@@ -338,7 +338,7 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
+        latent_repel_loss = inverted_gaussian_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
