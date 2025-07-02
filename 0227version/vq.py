@@ -156,14 +156,14 @@ def kmeans(
     # --------------------------------------
     # k-means++ (initialization)
     # --------------------------------------
+    chunk_size = 300
     for k in range(1, num_clusters):
         if k % 1000 == 0:
             mem = torch.cuda.memory_allocated() / 1024 ** 3
             print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
-
         with torch.cuda.amp.autocast(enabled=False):
-            for start in range(0, k, 150):  # chunk over already chosen centroids
-                end = min(start + 150, k)
+            for start in range(0, k, chunk_size):  # chunk over already chosen centroids
+                end = min(start + chunk_size, k)
                 means_chunk = means[:, start:end, :]  # [H, chunk, D]
                 means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
                 samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
@@ -189,31 +189,54 @@ def kmeans(
         torch.cuda.empty_cache()
 
     print("kmeans++ sampling done. Running Lloyd iterations")
-
-    # --------------------------------------
-    # k-means
-    # --------------------------------------
+    # Lloyd iterations (K-Means)
     for i in range(num_iters):
+        # Initialize:
+        buckets = torch.empty((num_codebooks, num_samples), dtype=torch.long, device=samples.device)
+        min_dists = torch.full((num_codebooks, num_samples), float('inf'), device=samples.device)
+
         if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
+            samples_norm = F.normalize(samples, dim=-1)
+            means_norm = F.normalize(means, dim=-1)
+            dists = torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, K]
+            buckets = dists.argmax(dim=-1)  # [H, N]
         else:
-            dists = -torch.cdist(samples, means, p=2)  # [H, N, K]
-        buckets = torch.argmax(dists, dim=-1)  # [H, N]
+            samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
+            for start in range(0, num_clusters, chunk_size):
+                end = min(start + chunk_size, num_clusters)
+                means_chunk = means[:, start:end, :]  # [H, chunk, D]
+                means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
+                dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
+                dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
+                dists = dists  # lower = better
+
+                # Find current min distances and update buckets
+                new_min_dists, new_buckets = dists.min(dim=-1)  # [H, N]
+                update_mask = new_min_dists < min_dists
+                min_dists = torch.where(update_mask, new_min_dists, min_dists)
+                buckets = torch.where(update_mask, new_buckets + start, buckets)
+
+        # Compute new centroids
         bins = batched_bincount(buckets, minlength=num_clusters)  # [H, K]
         all_reduce_fn(bins)
         zero_mask = bins == 0  # [H, K]
-        bins_safe = bins.masked_fill(zero_mask, 1)  # prevent divide by zero
+        bins_safe = bins.masked_fill(zero_mask, 1)
+
         new_means = torch.zeros_like(means)  # [H, K, D]
         new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
         new_means = new_means / rearrange(bins_safe, '... -> ... 1')
         all_reduce_fn(new_means)
+
         if use_cosine_sim:
-            new_means = l2norm(new_means)
+            new_means = F.normalize(new_means, dim=-1)
+
         means = torch.where(
             rearrange(zero_mask, '... -> ... 1'),
             means,
-            new_means)
-    return means, bins  # [H, K, D], [H, K]
+            new_means
+        )
+
+    return means, bins
 
 
 def batched_embedding(indices, embed):
