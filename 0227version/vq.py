@@ -295,28 +295,19 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss, simi_matrix
 
+        def adaptive_bell_repel_loss(simi_matrix, mu=0.9, sigma=0.1, eps=1e-6):
+            identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
+            simi_matrix = simi_matrix * (1 - identity)
 
-        def inverted_gaussian_loss(sim_matrix, mu=0.4, sigma=0.2, mask=None):
-            """
-            Computes a valley-shaped loss:
-                loss(sim) = 1 - exp(-((sim - mu)^2) / (2 * sigma^2))
+            # Normalize to [0, 1] within this batch
+            sim_min = simi_matrix.min()
+            sim_max = simi_matrix.max()
+            sim_range = (sim_max - sim_min).clamp(min=eps)
+            simi_matrix_norm = (simi_matrix - sim_min) / sim_range
 
-            Args:
-                sim_matrix: [N, N] cosine similarity matrix (values in [0, 1])
-                mu: target similarity to encourage (e.g., 0.5)
-                sigma: width of the valley (e.g., 0.05)
-                mask: optional binary mask [N, N] to select which pairs to include (e.g. non-local)
-
-            Returns:
-                Scalar loss value
-            """
-            # sim_matrix = torch.clamp(sim_matrix, -1.0, 1.0)
-            loss_matrix = 1 - torch.exp(-((sim_matrix - mu) ** 2) / (2 * sigma ** 2))
-
-            if mask is not None:
-                loss_matrix = loss_matrix * mask  # apply mask
-
-            return loss_matrix.mean(), sim_matrix
+            # Gaussian bump centered at high similarity
+            loss_matrix = torch.exp(-((simi_matrix_norm - mu) ** 2) / (2 * sigma ** 2))
+            return loss_matrix.mean()
 
         # def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
         #     """
@@ -338,7 +329,7 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
+        latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
         # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
