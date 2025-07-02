@@ -295,27 +295,50 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss
 
-        def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
+
+        def inverted_gaussian_loss(sim_matrix, mu=0.4, sigma=0.2, mask=None):
             """
-            Penalizes similarities close to mu, shaped like a Gaussian bump.
+            Computes a valley-shaped loss:
+                loss(sim) = 1 - exp(-((sim - mu)^2) / (2 * sigma^2))
 
             Args:
-                v: latent vectors (not directly used here, only for identity matrix)
-                simi_matrix: cosine similarity matrix [N, N]
-                mu: the similarity value to repel (e.g. 0.4~0.5)
-                sigma: width of the bell (0.1 is tight, 0.3 is broad)
-            """
-            identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-            simi_matrix = simi_matrix * (1 - identity)  # zero out diagonal
-            # Optional: clamp for numerical stability
-            # simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
+                sim_matrix: [N, N] cosine similarity matrix (values in [0, 1])
+                mu: target similarity to encourage (e.g., 0.5)
+                sigma: width of the valley (e.g., 0.05)
+                mask: optional binary mask [N, N] to select which pairs to include (e.g. non-local)
 
-            # Apply Gaussian bell function
-            loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
-            return loss_matrix.mean(), simi_matrix
+            Returns:
+                Scalar loss value
+            """
+            sim_matrix = torch.clamp(sim_matrix, -1.0, 1.0)
+            loss_matrix = 1 - torch.exp(-((sim_matrix - mu) ** 2) / (2 * sigma ** 2))
+
+            if mask is not None:
+                loss_matrix = loss_matrix * mask  # apply mask
+
+            return loss_matrix.mean()
+
+        # def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
+        #     """
+        #     Penalizes similarities close to mu, shaped like a Gaussian bump.
+        #
+        #     Args:
+        #         v: latent vectors (not directly used here, only for identity matrix)
+        #         simi_matrix: cosine similarity matrix [N, N]
+        #         mu: the similarity value to repel (e.g. 0.4~0.5)
+        #         sigma: width of the bell (0.1 is tight, 0.3 is broad)
+        #     """
+        #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
+        #     simi_matrix = simi_matrix * (1 - identity)  # zero out diagonal
+        #     # Optional: clamp for numerical stability
+        #     # simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
+        #
+        #     # Apply Gaussian bell function
+        #     loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
+        #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = calc_repel_loss(z, latent_similarity_matrix, chunk)
+        latent_repel_loss, sim_mat = inverted_gaussian_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         latent_repel_weight = 0.5 # 0.005 in success
         cb_repel_weight = 0.005  # 0.005
