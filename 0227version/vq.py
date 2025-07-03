@@ -292,8 +292,8 @@ class ContrastiveLoss(nn.Module):
             repel_loss = torch.exp(-dmat ** (-2) / (2 * sigma ** 2)).mean()
             return repel_loss
 
-        latent_repel_loss, sim_mat = calc_repel_loss(latent_dist_matrix)
-        attract_loss, sim_mat = calc_attractive_loss(latent_dist_matrix)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+        attract_loss = calc_attractive_loss(latent_dist_matrix)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 50  # 0.005
         repel_weight = 0.1  # 0.005
