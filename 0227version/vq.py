@@ -318,39 +318,22 @@ class ContrastiveLoss(nn.Module):
 
         def adaptive_bell_repel_loss(simi_matrix, mu=9, sigma=0.4):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
+            simi_matrix = simi_matrix - identity
             # Gaussian bump centered at high similarity
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
             return loss_matrix.mean(), simi_matrix
 
-        # def bell_shaped_repel_loss(v, simi_matrix, mu=0.975, sigma=0.5):
-        #     """
-        #     Penalizes similarities close to mu, shaped like a Gaussian bump.
-        #
-        #     Args:
-        #         v: latent vectors (not directly used here, only for identity matrix)
-        #         simi_matrix: cosine similarity matrix [N, N]
-        #         mu: the similarity value to repel (e.g. 0.4~0.5)
-        #         sigma: width of the bell (0.1 is tight, 0.3 is broad)
-        #     """
-        #     identity = torch.eye(v.size(0), device=v.device, dtype=simi_matrix.dtype)
-        #     simi_matrix = simi_matrix * (1 - identity)  # zero out diagonal
-        #     # Optional: clamp for numerical stability
-        #     # simi_matrix = torch.clamp(simi_matrix, min=0.0, max=1.0)
-        #
-        #     # Apply Gaussian bell function
-        #     loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
-        #     return loss_matrix.mean(), simi_matrix
+        def attract_high_sim(simi_matrix, threshold=8.5):
+            mask = simi_matrix > threshold
+            loss = torch.zeros_like(simi_matrix)
+            loss[mask] = 1.0 - simi_matrix[mask] / 10.0  # small pull toward max
+            return loss.mean()
 
-        # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
         latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
-        # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
-        # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
-        # latent_repel_weight = 0.5 # 0.005 in success
-        # latent_repel_weight = max(0.005, 0.5 * (0.95 ** epoch))  # or linear decay
-        cb_repel_weight = 0.005  # 0.005
-        # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
+        attract_loss = attract_high_sim(sim_mat)
+        attract_weight = 0.5  # 0.005
 
-        final_loss = latent_repel_loss
+        final_loss = latent_repel_loss + attract_weight * attract_loss
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, latent_repel_loss
