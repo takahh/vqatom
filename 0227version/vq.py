@@ -275,69 +275,25 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, z, chunk, epoch):
         eps = 1e-6
-        latent_similarity_matrix = torch.mm(z, z.T)
+        latent_dist_matrix = torch.cdist(z, z, p=2)
 
         # if chunk == 0:
-        print(f"simi_matrix max {latent_similarity_matrix.max()}, simi_matrix mean {latent_similarity_matrix.mean()}, min {latent_similarity_matrix.min()}")
+        print(f"simi_matrix max {latent_dist_matrix.max()}, simi_matrix mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
 
         if chunk % 200 == 0:
-            hist = torch.histc(latent_similarity_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
+            hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
-        def calc_repel_loss(simi_matrix):
-            # simi_matrix = torch.clamp(simi_matrix, -1 + eps, 1 - eps)
-            # s_min, s_max = simi_matrix.min(), simi_matrix.max()
-            # s_range = (s_max - s_min).clamp(min=eps)
-            # simi_matrix = (simi_matrix - s_min) / s_range
-            # if chunk == 0:
-            #     print(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            #     logger.info(f"simi_matrix max {simi_matrix.max()}, mean {simi_matrix.mean()}, min {simi_matrix.min()}")
-            # hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
-            identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
-            repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
-            # repel_loss = ((simi_matrix - identity) ** (2)).mean()
-            return repel_loss, simi_matrix
-        #
-        # def asymmetric_gaussian_loss(sim_matrix, mu=9.0, sigma_left=0.2, sigma_right=0.5):
-        #     dtype = sim_matrix.dtype  # 保持されているdtypeを取得（float32 or float16）
-        #
-        #     diff = sim_matrix - mu
-        #     left_mask = diff < 0
-        #     right_mask = ~left_mask
-        #
-        #     # sigma をテンソルとして dtype を合わせる
-        #     sigma_left = torch.tensor(sigma_left, dtype=dtype, device=sim_matrix.device)
-        #     sigma_right = torch.tensor(sigma_right, dtype=dtype, device=sim_matrix.device)
-        #
-        #     loss = torch.zeros_like(sim_matrix)
-        #
-        #     loss[left_mask] = 1 - torch.exp(- (diff[left_mask] ** 2) / (2 * sigma_left ** 2)).to(dtype)
-        #     loss[right_mask] = 1 - torch.exp(- (diff[right_mask] ** 2) / (2 * sigma_right ** 2)).to(dtype)
-        #
-        #     return loss.mean(), sim_matrix
-        #
-        # def adaptive_bell_repel_loss(simi_matrix, mu=9.5, sigma=0.5):
-        #     identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
-        #     simi_matrix = simi_matrix - identity
-        #     # Gaussian bump centered at high similarity
-        #     loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
-        #     return loss_matrix.mean(), simi_matrix
+        def calc_repel_loss(dmat, sigma=0.2):
+            repel_loss = torch.exp(-dmat ** 2 / (2 * sigma ** 2)).mean()
+            return repel_loss
 
-        def attract_high_sim(simi_matrix, threshold=8):
-            identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
-            # repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
-            attr_loss = ((simi_matrix - identity + eps) ** (-2)).mean()
-            return attr_loss, simi_matrix
+        def calc_attractive_loss(dmat, sigma=0.2):
+            repel_loss = torch.exp(-dmat ** (-2) / (2 * sigma ** 2)).mean()
+            return repel_loss
 
-        # def inverse_similarity_loss(simi_matrix):
-        #     identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
-        #     simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
-        #     eps = 1e-6  # to prevent divide-by-zero
-        #     loss = 1.0 / (simi_matrix + eps) ** 2
-        #     return loss.mean(),  simi_matrix
-
-        latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix)
-        attract_loss, sim_mat = attract_high_sim(sim_mat)
+        latent_repel_loss, sim_mat = calc_repel_loss(latent_dist_matrix)
+        attract_loss, sim_mat = calc_attractive_loss(latent_dist_matrix)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 50  # 0.005
         repel_weight = 0.1  # 0.005
