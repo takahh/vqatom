@@ -316,7 +316,7 @@ class ContrastiveLoss(nn.Module):
 
             return loss.mean(), sim_matrix
 
-        def adaptive_bell_repel_loss(simi_matrix, mu=8, sigma=0.2):
+        def adaptive_bell_repel_loss(simi_matrix, mu=9, sigma=0.2):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             # Gaussian bump centered at high similarity
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
@@ -342,15 +342,15 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = asymmetric_gaussian_loss(latent_similarity_matrix)
+        latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
         # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         # latent_repel_weight = 0.5 # 0.005 in success
-        latent_repel_weight = max(0.005, 0.5 * (0.95 ** epoch))  # or linear decay
+        # latent_repel_weight = max(0.005, 0.5 * (0.95 ** epoch))  # or linear decay
         cb_repel_weight = 0.005  # 0.005
         # final_loss = latent_repel_weight * latent_repel_loss + cb_repel_weight * cb_repel_loss
 
-        final_loss = latent_repel_weight * latent_repel_loss
+        final_loss = latent_repel_loss
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, latent_repel_loss
