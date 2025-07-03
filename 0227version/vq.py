@@ -328,7 +328,7 @@ class ContrastiveLoss(nn.Module):
             simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
             target = 1.0 - simi_matrix / 10.0  # your attraction term
             loss_matrix = torch.where(simi_matrix > threshold, target, torch.zeros_like(simi_matrix))
-            return loss_matrix.mean()
+            return loss_matrix.mean(), simi_matrix
 
         # def inverse_similarity_loss(simi_matrix):
         #     identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
