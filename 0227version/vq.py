@@ -295,7 +295,7 @@ class ContrastiveLoss(nn.Module):
             # hist = torch.histc(simi_matrix.cpu(), bins=10, min=0.0, max=1.0)
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             # repel_loss = (torch.log(torch.cosh(simi_matrix - identity)) * (1 - identity)).mean()
-            repel_loss = ((simi_matrix - identity) ** 2).mean()
+            repel_loss = ((simi_matrix - identity)).mean()
             return repel_loss, simi_matrix
         #
         # def asymmetric_gaussian_loss(sim_matrix, mu=9.0, sigma_left=0.2, sigma_right=0.5):
