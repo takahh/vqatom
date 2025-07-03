@@ -298,7 +298,7 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss, simi_matrix
 
-        def asymmetric_gaussian_loss(sim_matrix, mu=0.5, sigma_left=0.2, sigma_right=0.5):
+        def asymmetric_gaussian_loss(sim_matrix, mu=9.0, sigma_left=0.2, sigma_right=0.5):
             dtype = sim_matrix.dtype  # 保持されているdtypeを取得（float32 or float16）
 
             diff = sim_matrix - mu
