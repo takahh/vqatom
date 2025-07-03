@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/"
+DATA_PATH = "/Users/taka/Downloads/200_16/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 500000
 # DATA_PATH = "/"
@@ -18,8 +18,8 @@ N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 8
-EPOCH_END = EPOCH_START + 1
+EPOCH_START = 1
+EPOCH_END = EPOCH_START + 13
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
@@ -121,9 +121,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # for N_NEIGHBORS in [2, 10, 20, 40]:
-    for N_NEIGHBORS in [10]:
-        for zoom in [3, 50]:
-            for SPREAD, min_dist in [[2, 1], [2, 0.1], [10, 0.01]]:
+    for N_NEIGHBORS in [5]:
+        for zoom in [3]:
+            for SPREAD, min_dist in [[1.5, 0]]:
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
                     min_dist=min_dist,
@@ -183,7 +183,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
                     plt.title(title + " (Zoomed)")
                     if not os.path.exists(f"{OPATH}/distri_images/"):
                         os.mkdir(f"{OPATH}/distri_images/")
-                    plt.savefig(f"{OPATH}/distri_images/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_mindist{min_dist}_{i}.png")
+                    plt.savefig(f"{OPATH}/distri_images/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_mindist{min_dist}_epo_{epoch}_{i}.png")
                     # plt.savefig(f"/{samples}/n{N_NEIGHBORS}_s{SPREAD}_z{zoom}_{i}.png")
 
 
