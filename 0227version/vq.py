@@ -305,7 +305,7 @@ class ContrastiveLoss(nn.Module):
         final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
         neg_loss = 1
 
-        return final_loss, neg_loss, latent_repel_loss, latent_repel_loss
+        return final_loss, neg_loss, latent_repel_loss, attract_loss
 
 
 import torch.nn.functional as F
@@ -636,13 +636,13 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        # final_loss, neg_loss, latent_repel_loss, cb_repel_loss
-        two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss = (
+        # final_loss, neg_loss, latent_repel_loss, attract_loss
+        two_repel_loss, div_nega_loss, repel_loss, attract_loss = (
             self.compute_contrastive_loss(latents_for_sil, chunk, epoch))
         # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, repel_loss)
+        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
@@ -677,7 +677,8 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, cb_repel_loss \
+        # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
+        spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, attract_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -690,10 +691,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         if epoch > 10:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + repel_loss)
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
         else:
             # loss = repel_loss + self.spread_weight * spread_loss
-            loss = repel_loss
+            loss = two_repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
@@ -703,4 +704,4 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
         return (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
-                num_unique, repel_loss, cb_repel_loss)
+                num_unique, repel_loss, attract_loss)

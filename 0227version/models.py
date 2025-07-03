@@ -216,11 +216,13 @@ class EquivariantThreeHopGINE(nn.Module):
                 data, None, logger, chunk_i, epoch, mode
             )
             return 0
+        # (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
+        #                 num_unique, repel_loss, attract_loss)
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-         x, cb_loss, sil_loss, num_unique, repel_loss, cb_repel_loss) = quantize_output
+         x, cb_loss, sil_loss, num_unique, repel_loss, attract_loss) = quantize_output
         detached_quantize = quantize.detach()
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
-                    repel_loss.item(), cb_repel_loss.item()]
+                    repel_loss.item(), attract_loss.item()]
         if batched_graph_base:  # from evaluate
             latents = h
             sample_adj_base = batched_graph_base.adj().to_dense()
