@@ -323,7 +323,7 @@ class ContrastiveLoss(nn.Module):
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
             return loss_matrix.mean(), simi_matrix
 
-        def attract_high_sim(simi_matrix, threshold=9.5):
+        def attract_high_sim(simi_matrix, threshold=7.5):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
             target = 1.0 - simi_matrix / 10.0  # your attraction term
