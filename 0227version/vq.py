@@ -312,7 +312,7 @@ class ContrastiveLoss(nn.Module):
             loss = torch.zeros_like(sim_matrix)
 
             loss[left_mask] = torch.exp(- (diff[left_mask] ** 2) / (2 * sigma_left ** 2))
-            loss[right_mask] = torch.exp(- (diff[right_mask] ** 2) / (2 * sigma_right ** 2))
+            loss[right_mask] = torch.exp(- (diff[right_mask] ** 2) / (2 * sigma_right ** 2)).to(loss.dtype)
 
             return loss.mean(), sim_matrix
 
