@@ -298,23 +298,23 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss, simi_matrix
 
-        def asymmetric_gaussian_loss(simi_matrix, mu=9.30, sigma_left=0.2, sigma_right=0.5):
-            """
-            Asymmetric bell-shaped loss centered at mu.
-            Uses sigma_left if sim < mu, sigma_right if sim >= mu.
-            """
-            left_mask = simi_matrix < mu
-            right_mask = ~left_mask  # simi_matrix >= mu
+        def asymmetric_gaussian_loss(sim_matrix, mu=0.5, sigma_left=0.2, sigma_right=0.5):
+            dtype = sim_matrix.dtype  # 保持されているdtypeを取得（float32 or float16）
 
-            # Compute squared differences
-            diff = simi_matrix - mu
+            diff = sim_matrix - mu
+            left_mask = diff < 0
+            right_mask = ~left_mask
 
-            # Apply different sigma values
-            loss = torch.zeros_like(simi_matrix)
+            # sigma をテンソルとして dtype を合わせる
+            sigma_left = torch.tensor(sigma_left, dtype=dtype, device=sim_matrix.device)
+            sigma_right = torch.tensor(sigma_right, dtype=dtype, device=sim_matrix.device)
+
+            loss = torch.zeros_like(sim_matrix)
+
             loss[left_mask] = torch.exp(- (diff[left_mask] ** 2) / (2 * sigma_left ** 2))
             loss[right_mask] = torch.exp(- (diff[right_mask] ** 2) / (2 * sigma_right ** 2))
 
-            return loss.mean()
+            return loss.mean(), sim_matrix
 
         def adaptive_bell_repel_loss(simi_matrix, mu=8, sigma=0.2):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
