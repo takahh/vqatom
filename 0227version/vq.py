@@ -334,7 +334,7 @@ class ContrastiveLoss(nn.Module):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
             eps = 1e-6  # to prevent divide-by-zero
-            loss = 1.0 / (simi_matrix + eps)
+            loss = 1.0 / (simi_matrix + eps) ** 2
             return loss.mean(),  simi_matrix
 
         latent_repel_loss, sim_mat = inverse_similarity_loss(latent_similarity_matrix)
