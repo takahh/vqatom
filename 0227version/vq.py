@@ -298,6 +298,24 @@ class ContrastiveLoss(nn.Module):
             repel_loss = ((simi_matrix - identity) ** 2).mean()
             return repel_loss, simi_matrix
 
+        def asymmetric_gaussian_loss(simi_matrix, mu=9.30, sigma_left=0.2, sigma_right=0.5):
+            """
+            Asymmetric bell-shaped loss centered at mu.
+            Uses sigma_left if sim < mu, sigma_right if sim >= mu.
+            """
+            left_mask = simi_matrix < mu
+            right_mask = ~left_mask  # simi_matrix >= mu
+
+            # Compute squared differences
+            diff = simi_matrix - mu
+
+            # Apply different sigma values
+            loss = torch.zeros_like(simi_matrix)
+            loss[left_mask] = torch.exp(- (diff[left_mask] ** 2) / (2 * sigma_left ** 2))
+            loss[right_mask] = torch.exp(- (diff[right_mask] ** 2) / (2 * sigma_right ** 2))
+
+            return loss.mean()
+
         def adaptive_bell_repel_loss(simi_matrix, mu=8, sigma=0.2):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             # Gaussian bump centered at high similarity
@@ -324,7 +342,7 @@ class ContrastiveLoss(nn.Module):
         #     return loss_matrix.mean(), simi_matrix
 
         # latent_repel_loss, sim_mat = bell_shaped_repel_loss(z, latent_similarity_matrix, chunk)
-        latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
+        latent_repel_loss, sim_mat = asymmetric_gaussian_loss(latent_similarity_matrix)
         # latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix, chunk)
         # cb_repel_loss = calc_repel_loss(codebook[0], cb_similarity_matrix, chunk)
         # latent_repel_weight = 0.5 # 0.005 in success
