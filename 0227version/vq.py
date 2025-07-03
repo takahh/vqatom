@@ -316,7 +316,7 @@ class ContrastiveLoss(nn.Module):
 
             return loss.mean(), sim_matrix
 
-        def adaptive_bell_repel_loss(simi_matrix, mu=9, sigma=0.4):
+        def adaptive_bell_repel_loss(simi_matrix, mu=7, sigma=0.5):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix - identity
             # Gaussian bump centered at high similarity
