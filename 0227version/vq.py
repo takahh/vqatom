@@ -330,7 +330,14 @@ class ContrastiveLoss(nn.Module):
             loss_matrix = torch.where(simi_matrix > threshold, target, torch.zeros_like(simi_matrix))
             return loss_matrix.mean()
 
-        latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
+        def inverse_similarity_loss(simi_matrix):
+            identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
+            simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
+            eps = 1e-6  # to prevent divide-by-zero
+            loss = 1.0 / (simi_matrix + eps)
+            return loss.mean(),  simi_matrix
+
+        latent_repel_loss, sim_mat = inverse_similarity_loss(latent_similarity_matrix)
         attract_loss = attract_high_sim(sim_mat)
         attract_weight = 1  # 0.005
 
