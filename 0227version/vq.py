@@ -325,11 +325,10 @@ class ContrastiveLoss(nn.Module):
 
         def attract_high_sim(simi_matrix, threshold=9.5):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
-            simi_matrix = simi_matrix - identity
-            mask = simi_matrix > threshold
-            loss = torch.zeros_like(simi_matrix)
-            loss[mask] = 1.0 - simi_matrix[mask] / 10.0  # small pull toward max
-            return loss.mean()
+            simi_matrix = simi_matrix * (1 - identity)  # zero diagonal
+            target = 1.0 - simi_matrix / 10.0  # your attraction term
+            loss_matrix = torch.where(simi_matrix > threshold, target, torch.zeros_like(simi_matrix))
+            return loss_matrix.mean()
 
         latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
         attract_loss = attract_high_sim(sim_mat)
