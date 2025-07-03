@@ -277,8 +277,8 @@ class ContrastiveLoss(nn.Module):
         eps = 1e-6
         latent_similarity_matrix = torch.mm(z, z.T)
 
-        if chunk == 0:
-            print(f"simi_matrix max {latent_similarity_matrix.max()}, simi_matrix mean {latent_similarity_matrix.mean()}, min {latent_similarity_matrix.min()}")
+        # if chunk == 0:
+        print(f"simi_matrix max {latent_similarity_matrix.max()}, simi_matrix mean {latent_similarity_matrix.mean()}, min {latent_similarity_matrix.min()}")
 
         if chunk % 200 == 0:
             hist = torch.histc(latent_similarity_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
