@@ -316,14 +316,14 @@ class ContrastiveLoss(nn.Module):
 
             return loss.mean(), sim_matrix
 
-        def adaptive_bell_repel_loss(simi_matrix, mu=7, sigma=0.5):
+        def adaptive_bell_repel_loss(simi_matrix, mu=9.5, sigma=0.5):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix - identity
             # Gaussian bump centered at high similarity
             loss_matrix = torch.exp(-((simi_matrix - mu) ** 2) / (2 * sigma ** 2))
             return loss_matrix.mean(), simi_matrix
 
-        def attract_high_sim(simi_matrix, threshold=8.5):
+        def attract_high_sim(simi_matrix, threshold=9.5):
             identity = torch.eye(simi_matrix.size(0), device=simi_matrix.device)
             simi_matrix = simi_matrix - identity
             mask = simi_matrix > threshold
@@ -333,7 +333,7 @@ class ContrastiveLoss(nn.Module):
 
         latent_repel_loss, sim_mat = adaptive_bell_repel_loss(latent_similarity_matrix)
         attract_loss = attract_high_sim(sim_mat)
-        attract_weight = 0.01  # 0.005
+        attract_weight = 0.5  # 0.005
 
         final_loss = latent_repel_loss + attract_weight * attract_loss
         neg_loss = 1
@@ -675,7 +675,7 @@ class VectorQuantize(nn.Module):
         # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, repel_loss, repel_loss)
+        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, repel_loss)
 
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
