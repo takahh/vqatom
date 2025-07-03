@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/200_16/"
+DATA_PATH = "/Users/taka/Downloads/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 500000
 # DATA_PATH = "/"
@@ -19,7 +19,7 @@ MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
 EPOCH_START = 1
-EPOCH_END = EPOCH_START + 13
+EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
