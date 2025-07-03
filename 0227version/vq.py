@@ -339,7 +339,7 @@ class ContrastiveLoss(nn.Module):
 
         latent_repel_loss, sim_mat = calc_repel_loss(latent_similarity_matrix)
         attract_loss, sim_mat = attract_high_sim(sim_mat)
-        attract_weight = 0.01  # 0.005
+        attract_weight = 0.5  # 0.005
 
         final_loss = latent_repel_loss + attract_weight * attract_loss
         neg_loss = 1
