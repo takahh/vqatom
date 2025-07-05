@@ -9,9 +9,9 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/20000_16/20000_16/"
+DATA_PATH = "/Users/taka/Downloads/20000_16_infer/"
 OPATH = "/Users/taka/Documents/"
-SAMPLES = 500000
+SAMPLES = 2000000
 # DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
@@ -19,7 +19,7 @@ MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
 EPOCH_START = 1
-EPOCH_END = EPOCH_START + 20
+EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
@@ -121,9 +121,9 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # for N_NEIGHBORS in [2, 10, 20, 40]:
-    for N_NEIGHBORS in [10]:
-        for zoom in [2]:
-            for SPREAD, min_dist in [[1, 0]]:
+    for N_NEIGHBORS in [2, 10]:
+        for zoom in [1, 2]:
+            for SPREAD, min_dist in [[0.1, 0], [1, 0.1]]:
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
                     min_dist=min_dist,

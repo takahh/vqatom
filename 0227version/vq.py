@@ -482,8 +482,8 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=0.25,  # using
-            codebook_weight=0.01,  # using
+            commitment_weight=1,  # using
+            codebook_weight=1,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
             lamb_div=0.01,           # using
@@ -690,8 +690,8 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if epoch > 10:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss + two_repel_loss)
+        if epoch > 15:
+            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         else:
             # loss = repel_loss + self.spread_weight * spread_loss
             loss = two_repel_loss
