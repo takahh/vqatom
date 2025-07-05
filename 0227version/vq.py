@@ -1,6 +1,10 @@
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from torch import nn, einsum
+
+from archive.train_teacher_old import get_args
+
+
 def exists(val):
     return val is not None
 
@@ -333,7 +337,8 @@ class EuclideanCodebook(nn.Module):
         embed = init_fn(num_codebooks, codebook_size, dim)
         self.codebook_size = codebook_size
         self.num_codebooks = num_codebooks
-
+        args = get_args()
+        self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.kmeans_iters = kmeans_iters
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
@@ -431,7 +436,7 @@ class EuclideanCodebook(nn.Module):
         num_unique = quantize_unique.shape[0]
         # if self.training:
 
-        if self.training and 15 < epoch:
+        if self.training and self.epoch_at_mode_shift < epoch:
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
             temperature = 0.1  # Softmax temperature
             # Soft assignment instead of one-hot (fixes gradient flow)
@@ -451,12 +456,6 @@ class EuclideanCodebook(nn.Module):
             self.expire_codes_(x)
             del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
         torch.cuda.empty_cache()  # Frees unused GPU memory
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
-
-
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
-
-
         return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
 
 
@@ -549,7 +548,8 @@ class VectorQuantize(nn.Module):
             learnable_codebook=has_codebook_orthogonal_loss,
             sample_codebook_temp=sample_codebook_temp
         )
-
+        args = get_args()
+        self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.codebook_size = codebook_size
         self.accept_image_fmap = accept_image_fmap
         self.channel_last = channel_last
@@ -696,7 +696,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if epoch > 15:
+        if epoch > self.epoch_at_mode_shift:
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         else:
             # loss = repel_loss + self.spread_weight * spread_loss
