@@ -216,8 +216,6 @@ class EquivariantThreeHopGINE(nn.Module):
                 data, None, logger, chunk_i, epoch, mode
             )
             return 0
-        # (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
-        #                 num_unique, repel_loss, attract_loss)
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
          x, cb_loss, sil_loss, num_unique, repel_loss, attract_loss) = quantize_output
         detached_quantize = quantize.detach()
