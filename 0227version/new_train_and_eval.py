@@ -249,30 +249,31 @@ def run_inductive(
         # ======================================
         # Run k-means
         # ======================================
-        # ------------------------------------------
-        # Collect latent vectors (goes to model.py)
-        # ------------------------------------------
-        all_latents = []
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 0, 1), start=0):
-            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-            chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            for i in range(0, len(glist), chunk_size):
-                # print(f"init kmeans idx {i}/{len(glist) - 1}")
-                chunk = glist[i:i + chunk_size]
-                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
-                batched_graph = dgl.batch(chunk)
-                batched_graph_base = dgl.batch(chunk_base)
-                with torch.no_grad():
-                    batched_feats = batched_graph.ndata["feat"]
-                latents \
-                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
-                all_latents.append(latents.cpu())  # move to CPU if needed to save memory
-        all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
-        # -------------------------------------------------------------------
-        # Run k-means on the collected latent vectors (goes to the deepest)
-        # -------------------------------------------------------------------
-        evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
-        print("initial kmeans done")
+        if conf['train_or_infer'] == "hptune":
+            # ------------------------------------------
+            # Collect latent vectors (goes to model.py)
+            # ------------------------------------------
+            all_latents = []
+            for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, 0, 1), start=0):
+                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+                chunk_size = conf["chunk_size"]  # in 10,000 molecules
+                for i in range(0, len(glist), chunk_size):
+                    # print(f"init kmeans idx {i}/{len(glist) - 1}")
+                    chunk = glist[i:i + chunk_size]
+                    chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+                    batched_graph = dgl.batch(chunk)
+                    batched_graph_base = dgl.batch(chunk_base)
+                    with torch.no_grad():
+                        batched_feats = batched_graph.ndata["feat"]
+                    latents \
+                        = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
+                    all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+            all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+            # -------------------------------------------------------------------
+            # Run k-means on the collected latent vectors (goes to the deepest)
+            # -------------------------------------------------------------------
+            evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
+            print("initial kmeans done")
 
         print(f"epoch {epoch} ------------------------------")
         # --------------------------------
