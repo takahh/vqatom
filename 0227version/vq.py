@@ -435,6 +435,7 @@ class EuclideanCodebook(nn.Module):
             embed_onehot = embed_probs  # Fully differentiable soft assignment
             embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
             embed_onehot = embed_onehot.to(device)
+            del embed_probs, embed_onehot
 
         embed_ind = embed_ind.to(device)
         quantize_unique = torch.unique(quantize, dim=0)
@@ -448,8 +449,7 @@ class EuclideanCodebook(nn.Module):
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
             self.embed.data.copy_(embed_normalized)
             self.expire_codes_(x)
-            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
-            del distances, embed_probs, embed_onehot
+            del embed_sum, cluster_size, embed_normalized
         torch.cuda.empty_cache()  # Frees unused GPU memory
         return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
 
