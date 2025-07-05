@@ -2,7 +2,7 @@ import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from torch import nn, einsum
 
-from archive.train_teacher_old import get_args
+# from archive.train_teacher import get_args
 
 
 def exists(val):
