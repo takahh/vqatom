@@ -436,7 +436,7 @@ class EuclideanCodebook(nn.Module):
         num_unique = quantize_unique.shape[0]
         # if self.training:
 
-        if self.training and self.epoch_at_mode_shift < epoch and not self.use_checkpoint:
+        if self.training:
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
             temperature = 0.1  # Softmax temperature
             # Soft assignment instead of one-hot (fixes gradient flow)
