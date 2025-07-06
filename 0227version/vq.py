@@ -307,7 +307,7 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
-        attract_weight = 1000  # 0.005
+        attract_weight = 0.1  # 0.005
         repel_weight = 10  # 0.005
         print("repel_weight * latent_repel_loss + attract_weight * attract_loss")
         print(f"{repel_weight * latent_repel_loss}, {attract_weight * attract_loss}")
