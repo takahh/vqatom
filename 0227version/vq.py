@@ -704,7 +704,7 @@ class VectorQuantize(nn.Module):
         #     # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         # else:
         #     # loss = repel_loss + self.spread_weight * spread_loss
-        loss = two_repel_loss
+        loss = two_repel_loss + 0.01 * commit_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
         if only_one:
