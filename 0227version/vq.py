@@ -279,6 +279,7 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, chunk, epoch):
         eps = 1e-6
         latent_dist_matrix = torch.cdist(z, z, p=2)
+        dynamic_threshold = torch.quantile(latent_dist_matrix, 0.1).item()  # e.g., 10th percentile distance
 
         # if chunk == 0:
         print(f"simi_matrix max {latent_dist_matrix.max()}, simi_matrix mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
@@ -287,19 +288,19 @@ class ContrastiveLoss(nn.Module):
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
-        def calc_repel_loss(dmat, sigma=0.7, threshold=0.1):
+        def calc_repel_loss(dmat, threshold=0.1, sigma=0.7, ):
             attract_mask = dmat < threshold
             repel_mask = ~attract_mask
             repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
             return repel_loss
 
-        def calc_attractive_loss(dmat, sigma=3, threshold=0.1):
+        def calc_attractive_loss(dmat, threshold=0.1, sigma=3):
             attract_mask = dmat < threshold
             attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
 
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
-        attract_loss = calc_attractive_loss(latent_dist_matrix)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
+        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 1000  # 0.005
         repel_weight = 10  # 0.005
