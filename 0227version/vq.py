@@ -695,8 +695,11 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
-        if epoch > self.epoch_at_mode_shift:
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
+        args = get_args()
+        if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
+            print(f"loss consists of commit loss only .....")
+            loss = self.commitment_weight * commit_loss
+            # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         else:
             # loss = repel_loss + self.spread_weight * spread_loss
             loss = two_repel_loss
