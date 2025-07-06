@@ -279,7 +279,12 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, chunk, epoch):
         eps = 1e-6
         latent_dist_matrix = torch.cdist(z, z, p=2)
-        dynamic_threshold = torch.quantile(latent_dist_matrix, 0.1).item()  # e.g., 10th percentile distance
+        # dynamic_threshold = torch.quantile(latent_dist_matrix, 0.1).item()  # e.g., 10th percentile distance
+        # Sample a manageable number of distances
+        sample = latent_dist_matrix.flatten()
+        if sample.numel() > 1_000_000:
+            sample = sample[torch.randperm(sample.numel())[:1_000_000]]
+        dynamic_threshold = torch.quantile(sample, 0.1).item()
 
         # if chunk == 0:
         print(f"simi_matrix max {latent_dist_matrix.max()}, simi_matrix mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
