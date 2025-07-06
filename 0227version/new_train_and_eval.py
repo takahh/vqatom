@@ -250,7 +250,7 @@ def run_inductive(
         # Run k-means
         # ======================================
         if conf['train_or_infer'] == "hptune":
-            if conf['use_checkpoint'] == True and epoch > 0:
+            if conf['use_checkpoint'] == True and epoch > 1:
                 pass
             elif not conf['use_checkpoint']:
                 pass
