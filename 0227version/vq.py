@@ -698,7 +698,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
-            print(f"loss consists of commit loss only .....")
+            print(f"commit loss {commit_loss} .....")
             # loss = self.commitment_weight * commit_loss
             loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         else:
