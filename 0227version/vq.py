@@ -342,6 +342,7 @@ class EuclideanCodebook(nn.Module):
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
+        self.use_checkpoint = args.use_checkpoint
         assert not (
                     use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
         self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
@@ -435,7 +436,7 @@ class EuclideanCodebook(nn.Module):
         num_unique = quantize_unique.shape[0]
         # if self.training:
 
-        if self.training and self.epoch_at_mode_shift < epoch:
+        if self.training and self.epoch_at_mode_shift < epoch and not self.use_checkpoint:
             distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
             temperature = 0.1  # Softmax temperature
             # Soft assignment instead of one-hot (fixes gradient flow)
