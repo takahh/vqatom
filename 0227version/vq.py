@@ -655,8 +655,8 @@ class VectorQuantize(nn.Module):
         distances = torch.cdist(encoder_outputs, codebook)
         soft_assignments = F.softmax(-distances / temperature, dim=-1)
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
-        latent_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
-        codebook_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
+        codebook_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
+        latent_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
         return latent_loss, codebook_loss
 
 
