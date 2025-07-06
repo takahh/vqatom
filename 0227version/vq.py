@@ -654,6 +654,7 @@ class VectorQuantize(nn.Module):
     def commitment_loss(self, encoder_outputs, codebook, temperature=1):
         distances = torch.cdist(encoder_outputs, codebook)
         soft_assignments = F.softmax(-distances / temperature, dim=-1)
+        print(f"soft_assignments: {soft_assignments}")
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
         codebook_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
         latent_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
@@ -699,8 +700,8 @@ class VectorQuantize(nn.Module):
         args = get_args()
         if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
             print(f"commit loss {commit_loss} .....")
-            # loss = self.commitment_weight * commit_loss
-            loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
+            loss = self.commitment_weight * commit_loss
+            # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         else:
             # loss = repel_loss + self.spread_weight * spread_loss
             loss = two_repel_loss
