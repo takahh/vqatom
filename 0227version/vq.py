@@ -651,7 +651,7 @@ class VectorQuantize(nn.Module):
         return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
 
-    def commitment_loss(self, encoder_outputs, codebook, temperature=0.1):
+    def commitment_loss(self, encoder_outputs, codebook, temperature=1):
         distances = torch.cdist(encoder_outputs, codebook)
         soft_assignments = F.softmax(-distances / temperature, dim=-1)
         quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
