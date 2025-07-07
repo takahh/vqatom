@@ -168,7 +168,6 @@ def kmeans(
         )
         buckets_flat = buckets.flatten()  # [H * N]
         unique_clusters = torch.unique(buckets_flat)
-        print("Total number of unique clusters used:", unique_clusters.numel())
 
     return means, bins  # [H, K, D], [H, K]
 
