@@ -280,7 +280,7 @@ class EuclideanCodebook(nn.Module):
         args = get_args()
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.train_or_infer = args.train_or_infer
-        if self.train_or_infer == "infer":
+        if args.train_or_infer == "infer":
             self.kmeans_iters = 200
         else:
             self.kmeans_iters = 30
