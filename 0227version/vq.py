@@ -167,7 +167,7 @@ def kmeans(
             new_means
         )
         buckets_flat = buckets.flatten()  # [H * N]
-        unique_clusters = torch.unique(buckets_flat)
+        del dists, buckets, bins, bins_min_clamped, new_means, zero_mask
 
     return means, bins  # [H, K, D], [H, K]
 
