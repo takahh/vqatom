@@ -302,7 +302,7 @@ class EuclideanCodebook(nn.Module):
         self.initted.data.copy_(torch.Tensor([False]))
 
     @torch.jit.ignore
-    def init_embed_(self, data, logger):
+    def init_embed_(self, data, kmeans_iters):
         # if self.initted[0] != 0:
         #     # print("return!!!!!")
         #     return
@@ -310,7 +310,7 @@ class EuclideanCodebook(nn.Module):
         embed, cluster_size = kmeans(
             data,
             self.codebook_size,
-            self.kmeans_iters,
+            kmeans_iters,
         )
         with torch.no_grad():
             self.embed.copy_(embed)
