@@ -112,6 +112,7 @@ def get_args():
     parser.add_argument("--lamb_edge",  type=float, default=0.003)  # default=0.03)
     parser.add_argument("--lamb_node", type=float, default=0.00008)  # default=0.001)
     parser.add_argument("--lamb_div_ele",  type=float, default=0.002)  # default=0.03)
+    parser.add_argument("--dynamic_threshold", action="store_true", help="Use dynamic threshold in loss")
 
     # --------------
     # Model

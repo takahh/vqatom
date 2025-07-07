@@ -201,6 +201,11 @@ class ContrastiveLoss(nn.Module):
         self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
         self.layer_norm_z = nn.LayerNorm(latent_dim)
         self.layer_norm_atom = nn.LayerNorm(latent_dim)
+        args = get_args()
+        if args.dynamic_threshold:
+            self.use_dynamic_threshold = True
+        else:
+            self.use_dynamic_threshold = False
 
     def forward(self, z, chunk, epoch):
         eps = 1e-6
@@ -230,8 +235,12 @@ class ContrastiveLoss(nn.Module):
             attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
 
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
-        attract_loss = calc_attractive_loss(latent_dist_matrix)
+        if self.use_dynamic_threshold:
+            latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
+            attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        else:
+            latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+            attract_loss = calc_attractive_loss(latent_dist_matrix)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 1  # 0.005
         repel_weight = 10  # 0.005
