@@ -117,6 +117,7 @@ def kmeans(
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
+    print(f"{num_iters} is kmeans iterations ##################")
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     # num_iters = 30
 
