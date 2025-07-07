@@ -306,20 +306,22 @@ class ContrastiveLoss(nn.Module):
 
         if epoch < 10:  # repel only
             latent_repel_loss = calc_repel_loss(latent_dist_matrix, 0.1)
+            # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
             repel_weight = 0.1  # 0.005
             print("repel_weight * latent_repel_loss ")
             print(f"{repel_weight * latent_repel_loss}")
             final_loss = repel_weight * latent_repel_loss
             neg_loss = 1
-            attract_loss = 1
+            attract_loss = torch.tensor(1.0, device=latent_repel_loss.device, dtype=latent_repel_loss.dtype)
         else:
-            latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
+            # latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
             attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
             attract_weight = 0.1  # 0.005
             # repel_weight = 0.1  # 0.005
-            print("repel_weight * latent_repel_loss + attract_weight * attract_loss")
-            print(f"{latent_repel_loss}, {attract_loss}")
+            print("attract_weight * attract_loss")
+            print(f"{attract_loss}")
             final_loss = attract_weight * attract_loss
+            latent_repel_loss = torch.tensor(1.0, device=attract_loss.device, dtype=attract_loss.dtype)
             neg_loss = 1
 
 
