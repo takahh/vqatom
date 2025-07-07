@@ -361,10 +361,7 @@ class EuclideanCodebook(nn.Module):
         # inserted to check
         # --------------------
         embed_ind_int = embed_ind.squeeze(-1).long()  # Shape: [B] or [H, N]
-        print(f"@@@ len {len(embed_ind_int.tolist())}")
         unique_clusters = torch.unique(embed_ind_int)
-        print("@@@@@ Unique cluster indices used:", unique_clusters.tolist())
-        print("@@@@@ Number of unique clusters used:", unique_clusters.numel())
 
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
         used_codebook = self.embed[:, used_codebook_indices, :]
