@@ -359,7 +359,7 @@ class EuclideanCodebook(nn.Module):
         # if chunk_i == 0:  # mine
         #     self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         if mode == "init_kmeans_final":
-            self.init_embed_(flatten, logger, self.kmeans_iters)  # ❌ Ensure this function does NOT detach tensors
+            self.init_embed_(self, flatten, self.kmeans_iters)  # ❌ Ensure this function does NOT detach tensors
             return 0
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
