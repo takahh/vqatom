@@ -143,8 +143,8 @@ def kmeans(
             next_centroid_idx = torch.multinomial(probs, 1)
             means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
-            print(f"[0 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"[0 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+            print(f"[0 Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[0 Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
             # Clean up
             del dists, min_dists, probs, next_centroid_idx
