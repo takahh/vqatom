@@ -113,11 +113,10 @@ def batched_bincount(indices, minlength):
 def kmeans(
         samples,
         num_clusters,
-        num_iters=30,
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
-    print(f"{num_iters} is kmeans iterations ##################")
+    num_iters = 200
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     # num_iters = 30
 
@@ -280,10 +279,10 @@ class EuclideanCodebook(nn.Module):
         args = get_args()
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.train_or_infer = args.train_or_infer
-        if args.train_or_infer == "infer":
-            self.kmeans_iters = 200
-        else:
-            self.kmeans_iters = 30
+        # if args.train_or_infer == "infer":
+        #     self.kmeans_iters = 200
+        # else:
+        #     self.kmeans_iters = 30
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
@@ -310,7 +309,6 @@ class EuclideanCodebook(nn.Module):
         embed, cluster_size = kmeans(
             data,
             self.codebook_size,
-            self.kmeans_iters,
         )
         with torch.no_grad():
             self.embed.copy_(embed)
