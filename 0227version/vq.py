@@ -140,9 +140,13 @@ def kmeans(
             probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
             next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
             means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
-
+            # means.index_copy_(1, torch.tensor([k], device=means.device), ...)
             # Free up memory before next iteration
             del dists, min_dists, probs, next_centroid_idx
+            torch.cuda.empty_cache()
+            import gc
+            del dists, min_dists, probs, next_centroid_idx
+            gc.collect()
             torch.cuda.empty_cache()
 
         # Iterative optimization
