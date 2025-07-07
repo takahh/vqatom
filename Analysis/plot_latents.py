@@ -18,7 +18,7 @@ N_NEIGHBORS = 2
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 8
+EPOCH_START = 1
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -126,13 +126,13 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for spread, min_dist in [[10, 0], [5, 0.1], [5, 1]]:
+    for spread, min_dist in [[1, 0], [1, 0.1], [1, 1]]:
         reducer = umap.UMAP(
             n_neighbors=n_neighbors,
             min_dist=min_dist,
             spread=spread,
             n_components=2,
-            n_epochs=200,
+            n_epochs=50,
             init='random',
             low_memory=True,
             metric='euclidean',
@@ -184,6 +184,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
             plt.title(title + " (Zoomed)")
             fname = f"{save_dir}/n{n_neighbors}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
             print(fname)
+            plt.show()
             plt.savefig(fname)
             plt.close()
 
