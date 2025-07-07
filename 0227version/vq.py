@@ -128,24 +128,26 @@ def kmeans(
     samples = samples.to("cuda")
     means = means.to("cuda")
     with torch.no_grad():
-        for k in range(1, num_clusters):
-            if use_cosine_sim:
-                dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-            else:
-                dists = torch.cdist(samples, means[:, :k], p=2)
+        full_dists = torch.empty(samples.shape[0], num_clusters, device=samples.device)
 
-            print(f"0 [Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"0 [Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-            min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-            probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-            next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
+        for k in range(1, num_clusters):
+            current_means = means[:, :k]  # Avoid dynamic slicing if possible
+
+            if use_cosine_sim:
+                dists = 1 - (samples @ rearrange(current_means, 'h n d -> h d n'))  # (H, N, k)
+            else:
+                dists = torch.cdist(samples, current_means, p=2)  # (H, N, k)
+
+            min_dists = dists.min(dim=-1).values
+            probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
+            next_centroid_idx = torch.multinomial(probs, 1)
             means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
-            # means.index_copy_(1, torch.tensor([k], device=means.device), ...)
-            # Free up memory before next iteration
+
+            print(f"[0 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[0 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
+            # Clean up
             del dists, min_dists, probs, next_centroid_idx
-            torch.cuda.empty_cache()
-            import gc
-            gc.collect()
             torch.cuda.empty_cache()
 
         # Iterative optimization
