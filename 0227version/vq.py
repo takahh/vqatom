@@ -145,7 +145,6 @@ def kmeans(
             del dists, min_dists, probs, next_centroid_idx
             torch.cuda.empty_cache()
             import gc
-            del dists, min_dists, probs, next_centroid_idx
             gc.collect()
             torch.cuda.empty_cache()
 
