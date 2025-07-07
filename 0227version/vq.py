@@ -302,16 +302,15 @@ class EuclideanCodebook(nn.Module):
         self.initted.data.copy_(torch.Tensor([False]))
 
     @torch.jit.ignore
-    def init_embed_(self, data, kmeans_iters):
+    def init_embed_(self, data):
         # if self.initted[0] != 0:
         #     # print("return!!!!!")
         #     return
         print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
-        print(f"kmeans_iters in init embed is {kmeans_iters}")
         embed, cluster_size = kmeans(
             data,
             self.codebook_size,
-            kmeans_iters,
+            self.kmeans_iters,
         )
         with torch.no_grad():
             self.embed.copy_(embed)
@@ -360,7 +359,7 @@ class EuclideanCodebook(nn.Module):
         # if chunk_i == 0:  # mine
         #     self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         if mode == "init_kmeans_final":
-            self.init_embed_(flatten, self.kmeans_iters)  # ❌ Ensure this function does NOT detach tensors
+            self.init_embed_(flatten)  # ❌ Ensure this function does NOT detach tensors
             return 0
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
