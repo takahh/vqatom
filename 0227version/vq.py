@@ -293,38 +293,26 @@ class ContrastiveLoss(nn.Module):
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
-        def calc_repel_loss(dmat, threshold=1, sigma=0.7):
+        def calc_repel_loss(dmat, sigma=0.7, threshold=0.1):
             attract_mask = dmat < threshold
             repel_mask = ~attract_mask
             repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
             return repel_loss
 
-        def calc_attractive_loss(dmat, threshold=1, sigma=1):
+        def calc_attractive_loss(dmat, sigma=3, threshold=0.1):
             attract_mask = dmat < threshold
             attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
 
-        if epoch < 10:  # repel only
-            latent_repel_loss = calc_repel_loss(latent_dist_matrix, 1)
-            # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
-            repel_weight = 0.1  # 0.005
-            print("repel_weight * latent_repel_loss ")
-            print(f"{repel_weight * latent_repel_loss}")
-            final_loss = repel_weight * latent_repel_loss
-            neg_loss = 1
-            attract_loss = torch.tensor(1.0, device=latent_repel_loss.device, dtype=latent_repel_loss.dtype)
-        else:
-            # latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-            attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
-            attract_weight = 0.1  # 0.005
-            # repel_weight = 0.1  # 0.005
-            print("attract_weight * attract_loss")
-            print(f"{attract_loss}")
-            final_loss = attract_weight * attract_loss
-            latent_repel_loss = torch.tensor(1.0, device=attract_loss.device, dtype=attract_loss.dtype)
-            neg_loss = 1
-
-
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+        attract_loss = calc_attractive_loss(latent_dist_matrix)
+        print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
+        attract_weight = 1000  # 0.005
+        repel_weight = 10  # 0.005
+        print("repel_weight * latent_repel_loss + attract_weight * attract_loss")
+        print(f"{repel_weight * latent_repel_loss}, {attract_weight * attract_loss}")
+        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        neg_loss = 1
         return final_loss, neg_loss, latent_repel_loss, attract_loss
 
 
