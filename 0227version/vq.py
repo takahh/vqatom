@@ -287,9 +287,9 @@ class ContrastiveLoss(nn.Module):
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
         # if chunk == 0:
-        print(f"simi_matrix max {latent_dist_matrix.max()}, simi_matrix mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
+        print(f"distance_matrix max {latent_dist_matrix.max()}, mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
 
-        if chunk % 200 == 0:
+        if chunk % 10 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
