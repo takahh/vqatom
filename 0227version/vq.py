@@ -307,6 +307,7 @@ class EuclideanCodebook(nn.Module):
         #     # print("return!!!!!")
         #     return
         print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
+        print(f"kmeans_iters in init embed is {kmeans_iters}")
         embed, cluster_size = kmeans(
             data,
             self.codebook_size,
