@@ -122,7 +122,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors, min_dist, cb_size, zoom, s
 
     # for N_NEIGHBORS in [2, 10, 20, 40]:
     for N_NEIGHBORS in [10]:
-        for zoom in [10]:
+        for zoom in [100]:
             for SPREAD, min_dist in [[10, 0], [5, 0.1], [5, 1]]:
                 reducer = umap.UMAP(
                     n_neighbors=N_NEIGHBORS,
