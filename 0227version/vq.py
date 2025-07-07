@@ -117,96 +117,45 @@ def kmeans(
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
-    """　データ全体に kmeans をかける様に変えたのでOOMの可能性がある"""
-    # [H, N, D]
-    num_codebooks, num_samples, dim = samples.shape
-    dtype, device = samples.dtype, samples.device
+    num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
+    num_iters = 30
 
-    # Sanity check
-    assert dim > 1, f"Embedding dimension must be >1, but got {dim}"
-    print(f"Starting K-Means: samples.shape = {samples.shape}")
-
-    # Initialize means: [H, K, D]
+    # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
 
-    # Pick first centroid at random per head
-    rand_idx = torch.randint(0, num_samples, (num_codebooks, 1), device=device)  # [H, 1]
-    first_centroid = torch.gather(samples, 1, rand_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
-    means[:, 0, :] = first_centroid.squeeze(1)
-
-    def compute_chunked_dists(samples, means, chunk_size=5000):
-        """
-        samples: [H, N, D]
-        means:   [H, K, D]
-        returns: [H, N, K]
-        """
-        H, N, D = samples.shape
-        H2, K, D2 = means.shape
-        assert D == D2 and H == H2, "Shape mismatch"
-
-        samples_sq = samples.pow(2).sum(dim=-1, keepdim=True)  # [H, N, 1]
-        dists_chunks = []
-
-        for start in range(0, K, chunk_size):
-            end = min(start + chunk_size, K)
-            means_chunk = means[:, start:end, :]  # [H, chunk, D]
-            means_sq = means_chunk.pow(2).sum(dim=-1).unsqueeze(1)  # [H, 1, chunk]
-            dot = torch.matmul(samples, means_chunk.transpose(-1, -2))  # [H, N, chunk]
-            dists = samples_sq + means_sq - 2 * dot  # [H, N, chunk]
-            dists_chunks.append(dists)
-
-        return torch.cat(dists_chunks, dim=-1)  # [H, N, K]
-
-    print("kmeans++ sampling start")
+    # Randomly select the first centroid
+    means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
+    samples = samples.to("cuda")
+    means = means.to("cuda")
     for k in range(1, num_clusters):
-        if k % 1000 == 0:
-            mem = torch.cuda.memory_allocated() / 1024 ** 3
-            print(f"{k}/{num_clusters}, mem: {mem:.2f} GB")
-
         if use_cosine_sim:
-            samples_norm = F.normalize(samples, dim=-1)
-            means_norm = F.normalize(means[:, :k], dim=-1)
-            dists = 1 - torch.matmul(samples_norm, means_norm.transpose(-1, -2))  # [H, N, k]
+            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
         else:
-            with torch.cuda.amp.autocast(enabled=False):
-                dists = compute_chunked_dists(samples, means[:, :k], chunk_size=250)
+            dists = torch.cdist(samples, means[:, :k], p=2)
 
-        min_dists = dists.min(dim=-1).values  # [H, N]
-        sum_min_dists = min_dists.sum(dim=-1, keepdim=True) + 1e-6
-        probs = min_dists / sum_min_dists
+        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
+        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
+        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
+        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
-        probs = torch.nan_to_num(probs, nan=1.0 / num_samples)
-        probs = torch.clamp(probs, 0.0, 1.0)
-        probs = probs / (probs.sum(dim=-1, keepdim=True) + 1e-8)
-
-        if torch.isnan(probs).any() or torch.isinf(probs).any():
-            print(f"Warning: fallback to uniform sampling at step {k}")
-            probs = torch.full_like(probs, 1.0 / num_samples)
-
-        next_idx = torch.multinomial(probs, 1)  # [H, 1]
-        next_centroid = torch.gather(samples, 1, next_idx.unsqueeze(-1).expand(-1, -1, dim))  # [H, 1, D]
-        means[:, k, :] = next_centroid.squeeze(1)
-        del dists, min_dists, probs
-        torch.cuda.empty_cache()
-
-    print("kmeans++ sampling done. Running Lloyd iterations")
-
-    for i in range(num_iters):
+    # Iterative optimization
+    for _ in range(num_iters):
         if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h k d -> h d k')  # [H, N, K]
+            dists = samples @ rearrange(means, 'h n d -> h d n')
         else:
-            dists = -torch.cdist(samples, means, p=2)  # [H, N, K]
+            dists = -torch.cdist(samples, means, p=2)
 
-        buckets = torch.argmax(dists, dim=-1)  # [H, N]
-        bins = batched_bincount(buckets, minlength=num_clusters)  # [H, K]
+        buckets = torch.argmax(dists, dim=-1)
+        bins = batched_bincount(buckets, minlength=num_clusters)
         all_reduce_fn(bins)
 
-        zero_mask = bins == 0  # [H, K]
-        bins_safe = bins.masked_fill(zero_mask, 1)  # prevent divide by zero
+        zero_mask = bins == 0
+        bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        new_means = torch.zeros_like(means)  # [H, K, D]
+        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
+
         new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-        new_means = new_means / rearrange(bins_safe, '... -> ... 1')
+        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
         all_reduce_fn(new_means)
 
         if use_cosine_sim:
@@ -217,6 +166,9 @@ def kmeans(
             means,
             new_means
         )
+        buckets_flat = buckets.flatten()  # [H * N]
+        unique_clusters = torch.unique(buckets_flat)
+        print("Total number of unique clusters used:", unique_clusters.numel())
 
     return means, bins  # [H, K, D], [H, K]
 
@@ -410,7 +362,7 @@ class EuclideanCodebook(nn.Module):
         # inserted to check
         # --------------------
         embed_ind_int = embed_ind.squeeze(-1).long()  # Shape: [B] or [H, N]
-        print("@@@@@ embed_ind (cluster indices):", embed_ind_int.tolist())
+        print(f"@@@ len {len(embed_ind_int.tolist())}")
         unique_clusters = torch.unique(embed_ind_int)
         print("@@@@@ Unique cluster indices used:", unique_clusters.tolist())
         print("@@@@@ Number of unique clusters used:", unique_clusters.numel())
