@@ -293,13 +293,13 @@ class ContrastiveLoss(nn.Module):
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             print(hist)
 
-        def calc_repel_loss(dmat, sigma=0.7, threshold=1):
+        def calc_repel_loss(dmat, sigma=3, threshold=1):
             attract_mask = dmat < threshold
             repel_mask = ~attract_mask
             repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
             return repel_loss
 
-        def calc_attractive_loss(dmat, sigma=3, threshold=1):
+        def calc_attractive_loss(dmat, sigma=1, threshold=1):
             attract_mask = dmat < threshold
             attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
