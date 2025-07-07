@@ -133,8 +133,8 @@ def kmeans(
         else:
             dists = torch.cdist(samples, means[:, :k], p=2)
 
-        print(f"[Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"[Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+        print(f"[Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"[Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
         min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
         probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
