@@ -167,6 +167,9 @@ def kmeans(
             new_means
         )
         buckets_flat = buckets.flatten()  # [H * N]
+        print(f"[Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"[Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         del dists, buckets, bins, bins_min_clamped, new_means, zero_mask
 
     return means, bins  # [H, K, D], [H, K]
