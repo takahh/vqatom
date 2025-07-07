@@ -127,22 +127,23 @@ def kmeans(
     means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
     samples = samples.to("cuda")
     means = means.to("cuda")
-    for k in range(1, num_clusters):
-        if use_cosine_sim:
-            dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
-        else:
-            dists = torch.cdist(samples, means[:, :k], p=2)
+    with torch.no_grad():
+        for k in range(1, num_clusters):
+            if use_cosine_sim:
+                dists = 1 - (samples @ rearrange(means[:, :k], 'h n d -> h d n'))
+            else:
+                dists = torch.cdist(samples, means[:, :k], p=2)
 
-        print(f"[Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"[Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-        min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
-        probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
-        next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
-        means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+            print(f"[Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+            min_dists = dists.min(dim=-1).values  # Minimum distance to existing centroids
+            probs = min_dists / min_dists.sum(dim=-1, keepdim=True)  # Probabilities proportional to distance
+            next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
+            means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
-        # Free up memory before next iteration
-        del dists, min_dists, probs, next_centroid_idx
-        torch.cuda.empty_cache()
+            # Free up memory before next iteration
+            del dists, min_dists, probs, next_centroid_idx
+            torch.cuda.empty_cache()
 
     # Iterative optimization
     for _ in range(num_iters):
