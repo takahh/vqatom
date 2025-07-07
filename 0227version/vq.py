@@ -140,6 +140,10 @@ def kmeans(
         next_centroid_idx = torch.multinomial(probs, 1)  # Sample next centroid based on probabilities
         means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
+        # Free up memory before next iteration
+        del dists, min_dists, probs, next_centroid_idx
+        torch.cuda.empty_cache()
+
     # Iterative optimization
     for _ in range(num_iters):
         if use_cosine_sim:
