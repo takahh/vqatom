@@ -145,39 +145,39 @@ def kmeans(
             del dists, min_dists, probs, next_centroid_idx
             torch.cuda.empty_cache()
 
-    # Iterative optimization
-    for _ in range(num_iters):
-        if use_cosine_sim:
-            dists = samples @ rearrange(means, 'h n d -> h d n')
-        else:
-            dists = -torch.cdist(samples, means, p=2)
+        # Iterative optimization
+        for _ in range(num_iters):
+            if use_cosine_sim:
+                dists = samples @ rearrange(means, 'h n d -> h d n')
+            else:
+                dists = -torch.cdist(samples, means, p=2)
 
-        buckets = torch.argmax(dists, dim=-1)
-        bins = batched_bincount(buckets, minlength=num_clusters)
-        all_reduce_fn(bins)
+            buckets = torch.argmax(dists, dim=-1)
+            bins = batched_bincount(buckets, minlength=num_clusters)
+            all_reduce_fn(bins)
 
-        zero_mask = bins == 0
-        bins_min_clamped = bins.masked_fill(zero_mask, 1)
+            zero_mask = bins == 0
+            bins_min_clamped = bins.masked_fill(zero_mask, 1)
 
-        new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
+            new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
 
-        new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-        new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
-        all_reduce_fn(new_means)
+            new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
+            new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
+            all_reduce_fn(new_means)
 
-        if use_cosine_sim:
-            new_means = l2norm(new_means)
+            if use_cosine_sim:
+                new_means = l2norm(new_means)
 
-        means = torch.where(
-            rearrange(zero_mask, '... -> ... 1'),
-            means,
-            new_means
-        )
-        buckets_flat = buckets.flatten()  # [H * N]
-        print(f"[1 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"[1 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+            means = torch.where(
+                rearrange(zero_mask, '... -> ... 1'),
+                means,
+                new_means
+            )
+            buckets_flat = buckets.flatten()  # [H * N]
+            print(f"[1 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[1 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
-        del dists, buckets, bins, bins_min_clamped, new_means, zero_mask
+            del dists, buckets, bins, bins_min_clamped, new_means, zero_mask
 
     return means, bins  # [H, K, D], [H, K]
 
