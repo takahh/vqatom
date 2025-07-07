@@ -305,7 +305,7 @@ class ContrastiveLoss(nn.Module):
             return attract_term
 
         if epoch < 10:  # repel only
-            latent_repel_loss = calc_repel_loss(latent_dist_matrix, 0.1)
+            latent_repel_loss = calc_repel_loss(latent_dist_matrix, 1)
             # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
             repel_weight = 0.1  # 0.005
             print("repel_weight * latent_repel_loss ")
