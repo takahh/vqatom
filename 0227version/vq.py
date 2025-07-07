@@ -118,7 +118,7 @@ def kmeans(
         all_reduce_fn=noop
 ):
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-    num_iters = 30
+    # num_iters = 30
 
     # K-Means++ initialization
     means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
@@ -278,7 +278,11 @@ class EuclideanCodebook(nn.Module):
         self.num_codebooks = num_codebooks
         args = get_args()
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
-        self.kmeans_iters = kmeans_iters
+        self.train_or_infer = args.train_or_infer
+        if self.train_or_infer == "infer":
+            self.kmeans_iters = 200
+        else:
+            self.kmeans_iters = 30
         self.eps = eps
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
