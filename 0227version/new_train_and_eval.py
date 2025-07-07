@@ -332,6 +332,7 @@ def run_inductive(
         else:
             state = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
+            torch.save(model.__dict__, f"model_buffers_{epoch}.pth")
             model.load_state_dict(state)
         # --------------------------------
         # Test
