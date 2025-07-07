@@ -217,9 +217,6 @@ def kmeans(
             means,
             new_means
         )
-        buckets_flat = buckets.flatten()  # [H * N]
-        unique_clusters = torch.unique(buckets_flat)
-        print("Total number of unique clusters used:", unique_clusters.numel())
 
     return means, bins  # [H, K, D], [H, K]
 
@@ -409,6 +406,15 @@ class EuclideanCodebook(nn.Module):
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
+        # --------------------
+        # inserted to check
+        # --------------------
+        embed_ind_int = embed_ind.squeeze(-1).long()  # Shape: [B] or [H, N]
+        print("embed_ind (cluster indices):", embed_ind_int.tolist())
+        unique_clusters = torch.unique(embed_ind_int)
+        print("Unique cluster indices used:", unique_clusters.tolist())
+        print("Number of unique clusters used:", unique_clusters.numel())
+
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
         used_codebook = self.embed[:, used_codebook_indices, :]
         embed_ind = embed_ind.view(1, -1, 1)
