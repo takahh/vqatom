@@ -362,7 +362,6 @@ class EuclideanCodebook(nn.Module):
         #     self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)  # ❌ Ensure this function does NOT detach tensors
-            return 0
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
         dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
@@ -382,6 +381,7 @@ class EuclideanCodebook(nn.Module):
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
         if mode == "init_kmeans_final":
             logger.info(f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            return 0
         used_codebook = self.embed[:, used_codebook_indices, :]
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
