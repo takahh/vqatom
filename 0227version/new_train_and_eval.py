@@ -253,7 +253,7 @@ def run_inductive(
         if conf["train_or_infer"] == "infer":
             kmeans_start_num = 6
             # kmeans_end_num = 18
-            kmeans_end_num = 8
+            kmeans_end_num = 7
             # ------------------------------------------
             # Collect latent vectors (goes to model.py)
             # ------------------------------------------
