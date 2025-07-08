@@ -248,9 +248,9 @@ def run_inductive(
         cb_unique_num_list_test = []
 
         # ------------------------------------------
-        # Infer 時、対象データ全体で kmeans, CB 確定
+        # Infer 時、2 batch data で kmeans, CB 確定
         # ------------------------------------------
-        if conf["train_or_infer"] == "infer":
+        if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
             kmeans_start_num = 6
             # kmeans_end_num = 18
             kmeans_end_num = 8
