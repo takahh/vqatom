@@ -226,8 +226,7 @@ class ContrastiveLoss(nn.Module):
 
         if chunk % 10 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
-            logger.info(hist)
-            print(hist)
+            logger.info(hist.cpu().tolist())
 
         def calc_repel_loss(dmat, sigma=3, threshold=1):
             attract_mask = dmat < threshold
