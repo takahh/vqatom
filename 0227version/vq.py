@@ -369,7 +369,14 @@ class EuclideanCodebook(nn.Module):
         dist = -dist  # Negative similarity
         embed_ind_soft = F.softmax(dist, dim=-1)
         embed_ind_hard_idx = dist.argmax(dim=-1)
-        embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
+        chunk_size = 1024  # adjust based on your GPU memory
+        embed_ind_hard_list = []
+        for i in range(0, embed_ind_hard_idx.shape[1], chunk_size):
+            chunk = embed_ind_hard_idx[:, i:i + chunk_size]
+            onehot_chunk = F.one_hot(chunk, num_classes=self.embed.shape[1]).float()
+            embed_ind_hard_list.append(onehot_chunk)
+        embed_ind_hard = torch.cat(embed_ind_hard_list, dim=1)
+        # embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
         embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
                                                                  device=embed_ind_one_hot.device).unsqueeze(1))
