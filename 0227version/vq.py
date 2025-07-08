@@ -366,8 +366,10 @@ class EuclideanCodebook(nn.Module):
 
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)
-        embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft.squeeze(0), indices).unsqueeze(0).unsqueeze(
-            -1)  # (1, B, 1)
+        print(f"embed_ind_soft = {embed_ind_soft.shape}, indices = {indices.shape}")
+        embed_ind = torch.einsum('bk,k->b', embed_ind_soft.squeeze(0), indices).unsqueeze(0)
+        # embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft.squeeze(0), indices).unsqueeze(0).unsqueeze(
+        #     -1)  # (1, B, 1)
 
         # Codebook usage info
         embed_ind_int = embed_ind.squeeze(-1).long()  # (1, B)
