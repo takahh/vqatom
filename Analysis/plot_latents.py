@@ -9,9 +9,9 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Downloads/10000_16/"
+DATA_PATH = "/Users/taka/Documents/infer_for_uk/10000_16/"
 OPATH = "/Users/taka/Documents/"
-SAMPLES = 700000
+SAMPLES = 2000000
 # DATA_PATH = "/"
 DIMENSION = 16
 N_NEIGHBORS = 2
@@ -116,7 +116,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import umap
 
-def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, pca_dim=16, opath="./outputs"):
+def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
     # 1. Concatenate for PCA
     combined = np.concatenate((latent_arr, cb_arr), axis=0)
     combined_pca = PCA(n_components=pca_dim).fit_transform(combined)
@@ -129,7 +129,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
     for zoom in [2, 5]:
         for spread, min_dist in [[1, 0]]:
             reducer = umap.UMAP(
-                n_neighbors=n_neighbors,
+                n_neighbors=10,
                 min_dist=min_dist,
                 spread=spread,
                 n_components=2,
@@ -139,7 +139,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
                 metric='euclidean',
                 verbose=True,
                 n_jobs=-1,
-                random_state=42
+                # random_state=42
             ).fit(combined_pca)
 
             latent_emb = reducer.embedding_[:latent_arr.shape[0]]
@@ -164,7 +164,7 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
             zoomed_cb = cb_emb[cb_mask]
 
             # Plotting
-            title = f"UMAP: neighbors={n_neighbors}, min_dist={min_dist}, spread={spread}, zoom={zoom}"
+            title = f"UMAP: neighbors={n_neighbors}, min_dist={min_dist}, spread={spread},\n samples {SAMPLES}, zoom={zoom}"
             bins = 100
             save_dir = f"{OPATH}/distri_images"
             os.makedirs(save_dir, exist_ok=True)
@@ -178,15 +178,15 @@ def plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=None, zoom=50, 
                 )
                 plt.colorbar(label='Density')
                 if i == 0:
-                    plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.9, marker='x')
+                    plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.5, marker='x')
 
                 plt.xlim(x_range)
                 plt.ylim(y_range)
                 plt.title(title + " (Zoomed)")
-                fname = f"{save_dir}/n{n_neighbors}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
+                fname = f"{save_dir}/n{10}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
                 print(fname)
-                plt.show()
                 plt.savefig(fname)
+                plt.show()
                 plt.close()
 
 
@@ -203,6 +203,12 @@ def process_epoch(epoch, samples):
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
+
+    # Shuffle
+    print("latent_arr.shape before")
+    print(latent_arr.shape)
+    # np.random.seed(0)  # For reproducibility, optional
+    np.random.shuffle(latent_arr)
     latent_arr = latent_arr[:samples]
     print("latent_arr.shape")
     print(latent_arr.shape)
@@ -217,8 +223,8 @@ def process_epoch(epoch, samples):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, n_neighbors=10, cb_size=cb_size)
-
+        plot_umap(cb_arr, latent_arr, epoch, 8)
+        #cb_arr, latent_arr, epoch, pca_dim=16
 
 def main():
     for epoch in range(EPOCH_START, EPOCH_END):
