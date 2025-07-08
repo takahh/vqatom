@@ -364,7 +364,8 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten)  # ❌ Ensure this function does NOT detach tensors
         embed = self.embed  # ✅ DO NOT detach embed
         init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
-        dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
+        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)
+        # dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
         embed_ind_soft = F.softmax(dist, dim=-1)
         embed_ind_hard_idx = dist.argmax(dim=-1)
