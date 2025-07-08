@@ -128,7 +128,7 @@ def kmeans(
     samples = samples.to("cuda")
     means = means.to("cuda")
     with torch.no_grad():
-        for k in range(1, num_clusters):
+        for k in range(1,  ):
             # Compute full distance to all means (H, N, num_clusters)
             if use_cosine_sim:
                 all_dists = 1 - (samples @ rearrange(means, 'h n d -> h d n'))  # (H, N, num_clusters)
@@ -178,7 +178,7 @@ def kmeans(
             print(f"[1 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
             print(f"[1 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
-            del dists, buckets, bins, bins_min_clamped, new_means, zero_mask
+            del dists, buckets, bins_min_clamped, new_means, zero_mask
 
     return means, bins  # [H, K, D], [H, K]
 
