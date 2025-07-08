@@ -142,10 +142,6 @@ def kmeans(
             next_centroid_idx = torch.multinomial(probs, 1)
             means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
 
-            print(f"[0 Iteration {k}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"[0 Iteration {k}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
-
         # Iterative optimization
         for _ in range(num_iters):
             if use_cosine_sim:
@@ -174,10 +170,6 @@ def kmeans(
                 means,
                 new_means
             )
-            buckets_flat = buckets.flatten()  # [H * N]
-            print(f"[1 Iteration {_}] Memory allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"[1 Iteration {_}] Memory reserved: {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
             del dists, buckets, bins_min_clamped, new_means, zero_mask
 
     return means, bins  # [H, K, D], [H, K]
