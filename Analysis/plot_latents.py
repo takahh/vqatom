@@ -9,7 +9,7 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/infer_for_uk/10000_16/"
+DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"

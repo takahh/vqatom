@@ -211,7 +211,7 @@ class ContrastiveLoss(nn.Module):
         else:
             self.use_dynamic_threshold = False
 
-    def forward(self, z, chunk, epoch):
+    def forward(self, z, chunk, logger):
         eps = 1e-6
         latent_dist_matrix = torch.cdist(z, z, p=2)
         # dynamic_threshold = torch.quantile(latent_dist_matrix, 0.1).item()  # e.g., 10th percentile distance
@@ -226,6 +226,7 @@ class ContrastiveLoss(nn.Module):
 
         if chunk % 10 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
+            logger.info(hist)
             print(hist)
 
         def calc_repel_loss(dmat, sigma=3, threshold=1):
@@ -380,6 +381,7 @@ class EuclideanCodebook(nn.Module):
         unique_clusters = torch.unique(embed_ind_int)
 
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
+        print("used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
         used_codebook = self.embed[:, used_codebook_indices, :]
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
@@ -597,7 +599,7 @@ class VectorQuantize(nn.Module):
         # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, attract_loss
         two_repel_loss, div_nega_loss, repel_loss, attract_loss = (
-            self.compute_contrastive_loss(latents_for_sil, chunk, epoch))
+            self.compute_contrastive_loss(latents_for_sil, chunk, logger))
         # spread_loss = spread_loss(latents_for_sil)
         if chunk == 0:
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
