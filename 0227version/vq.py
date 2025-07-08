@@ -349,37 +349,35 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
-        needs_codebook_dim = x.ndim < 4
-        if needs_codebook_dim:
+        if x.ndim < 4:
             x = rearrange(x, '... -> 1 ...')
         flatten = x.view(x.shape[0], -1, x.shape[-1])
-        # if self.training and chunk_i % 320 == 0:  # mine
-        # if chunk_i == 0:  # mine
-        #     self.init_embed_(flatten, logger)  # ❌ Ensure this function does NOT detach tensors
+
         if mode == "init_kmeans_final":
-            self.init_embed_(flatten)  # ❌ Ensure this function does NOT detach tensors
-        embed = self.embed  # ✅ DO NOT detach embed
-        init_cb = self.embed.clone().contiguous()  # ❌ No `.detach()`
+            self.init_embed_(flatten)
+
+        embed = self.embed
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)
-        # dist = (flatten.unsqueeze(2) - embed.unsqueeze(1)).pow(2).sum(dim=-1)  # Shape: (1, 128, 10)
         dist = -dist  # Negative similarity
-        embed_ind_soft = F.softmax(dist, dim=-1)
-        embed_ind_hard_idx = dist.argmax(dim=-1)
-        chunk_size = 1024  # adjust based on your GPU memory
-        embed_ind_hard_list = []
-        for i in range(0, embed_ind_hard_idx.shape[1], chunk_size):
-            chunk = embed_ind_hard_idx[:, i:i + chunk_size]
-            onehot_chunk = F.one_hot(chunk, num_classes=self.embed.shape[1]).float()
-            embed_ind_hard_list.append(onehot_chunk)
-        embed_ind_hard = torch.cat(embed_ind_hard_list, dim=1)
-        # embed_ind_hard = F.one_hot(embed_ind_hard_idx, num_classes=self.embed.shape[1]).float()
+
+        embed_ind_soft = F.softmax(dist, dim=-1)  # shape: (1, B, K)
+        embed_ind_hard_idx = dist.argmax(dim=-1)  # shape: (1, B)
+
+        # Simulate straight-through estimator, without one-hot
+        embed_ind_hard_idx_expanded = embed_ind_hard_idx.unsqueeze(-1)  # (1, B, 1)
+        embed_ind_hard = torch.zeros_like(embed_ind_soft).scatter_(-1, embed_ind_hard_idx_expanded, 1.0)
+
+        # Straight-through estimator: replace gradients of soft with hard
         embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
-        embed_ind = torch.matmul(embed_ind_one_hot, torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32,
-                                                                 device=embed_ind_one_hot.device).unsqueeze(1))
+
+        # Use einsum for weighted index computation
+        indices = torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device)
+        embed_ind = torch.einsum('nbk,k->nb', embed_ind_one_hot.squeeze(0), indices).unsqueeze(-1)
+        return embed_ind
+
         # --------------------
         # inserted to check
         # --------------------
