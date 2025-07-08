@@ -380,7 +380,8 @@ class EuclideanCodebook(nn.Module):
         unique_clusters = torch.unique(embed_ind_int)
 
         used_codebook_indices = torch.unique(embed_ind_hard_idx)
-        logger.info(f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+        if mode == "init_kmeans_final":
+            logger.info(f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
         used_codebook = self.embed[:, used_codebook_indices, :]
         embed_ind = embed_ind.view(1, -1, 1)
         quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
