@@ -14,7 +14,7 @@ OPATH = "/Users/taka/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
 DIMENSION = 16
-N_NEIGHBORS = 2
+N_NEIGHBORS = 10
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
@@ -119,17 +119,18 @@ import umap
 def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
     # 1. Concatenate for PCA
     combined = np.concatenate((latent_arr, cb_arr), axis=0)
-    combined_pca = PCA(n_components=pca_dim).fit_transform(combined)
+    # combined_pca = PCA(n_components=pca_dim).fit_transform(combined)
+    combined_pca = combined
 
     # Split PCA-transformed latent and codebook
     latent_pca = combined_pca[:latent_arr.shape[0]]
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for zoom in [2, 5]:
+    for zoom in [2]:
         for spread, min_dist in [[1, 0]]:
             reducer = umap.UMAP(
-                n_neighbors=10,
+                n_neighbors=N_NEIGHBORS,
                 min_dist=min_dist,
                 spread=spread,
                 n_components=2,
@@ -164,7 +165,7 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
             zoomed_cb = cb_emb[cb_mask]
 
             # Plotting
-            title = f"UMAP: neighbors={n_neighbors}, min_dist={min_dist}, spread={spread},\n samples {SAMPLES}, zoom={zoom}"
+            title = f"UMAP: neighbors={N_NEIGHBORS}, min_dist={min_dist}, spread={spread},\n samples {SAMPLES}, zoom={int(50/zoom)}"
             bins = 100
             save_dir = f"{OPATH}/distri_images"
             os.makedirs(save_dir, exist_ok=True)
@@ -223,7 +224,7 @@ def process_epoch(epoch, samples):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, 8)
+        plot_umap(cb_arr, latent_arr, epoch, 16)
         #cb_arr, latent_arr, epoch, pca_dim=16
 
 def main():
