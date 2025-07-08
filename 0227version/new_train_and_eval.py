@@ -327,7 +327,7 @@ def run_inductive(
         # --------------------------------
         # Save model
         # --------------------------------
-        if conf["train_or_infer"] == "infer":
+        if conf["train_or_infer"] == "analysis":
             pass
         else:
             state = copy.deepcopy(model.state_dict())
@@ -345,9 +345,9 @@ def run_inductive(
             start_num = 5
             end_num = 6
             # end_num = 31
-        # elif conf['train_or_infer'] == "train":
-        #     start_num = 75
-        #     end_num = 90
+        elif conf['train_or_infer'] == "analysis":
+            start_num = 0
+            end_num = 1
         elif conf['train_or_infer'] == "infer":
             start_num = 6
             end_num = 18
