@@ -349,8 +349,6 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-    import torch.nn.functional as F
-    from einops import rearrange
 
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
@@ -362,60 +360,51 @@ class EuclideanCodebook(nn.Module):
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)
 
-        embed = self.embed  # shape: (1, K, D)
+        embed = self.embed  # (1, K, D)
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K)
-        dist = -dist  # negative similarity
+        dist = -dist
 
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
-
-        # Soft index (weighted index) calculation
-        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
+        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)
         embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft.squeeze(0), indices).unsqueeze(0).unsqueeze(
             -1)  # (1, B, 1)
 
-        # Optionally: quantized latent vector via soft assignment (not index)
-        # quantized = torch.einsum('nbk,kd->nbd', embed_ind_soft.squeeze(0), embed.squeeze(0))
+        # Codebook usage info
+        embed_ind_int = embed_ind.squeeze(-1).long()  # (1, B)
+        used_codebook_indices = torch.unique(embed_ind_int)
 
-        # --------------------
-        # inserted to check
-        # --------------------
-        embed_ind_int = embed_ind.squeeze(-1).long()  # Shape: [B] or [H, N]
-        unique_clusters = torch.unique(embed_ind_int)
-
-        used_codebook_indices = torch.unique(embed_ind_hard_idx)
         if mode == "init_kmeans_final":
-            logger.info(f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            logger.info(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
-        used_codebook = self.embed[:, used_codebook_indices, :]
-        embed_ind = embed_ind.view(1, -1, 1)
-        quantize = batched_embedding(embed_ind, self.embed)  # ✅ Ensures gradients flow
-        embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind
-        device = flatten.device
-        quantize_unique = torch.unique(quantize, dim=0)
-        num_unique = quantize_unique.shape[0]
-        # if self.training:
+
+        # Quantize with soft index
+        quantize = batched_embedding(embed_ind, self.embed)  # [1, B, D], gradient-friendly
+        embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind  # straight-through trick
+
+        quantize_unique = torch.unique(quantize, dim=1)
+        num_unique = quantize_unique.shape[1]
 
         if self.training:
-            distances = torch.randn(1, flatten.shape[1], self.codebook_size)  # Distance to each codebook vector
-            temperature = 0.1  # Softmax temperature
-            # Soft assignment instead of one-hot (fixes gradient flow)
-            embed_probs = F.softmax(-distances / temperature, dim=-1)  # Softmax-based assignments
-            embed_onehot = embed_probs  # Fully differentiable soft assignment
-            embed_onehot = embed_onehot.squeeze(2) if embed_onehot.dim() == 4 else embed_onehot
-            embed_onehot = embed_onehot.to(device)
-            embed_ind = embed_ind.to(device)
-            quantize_unique = torch.unique(quantize, dim=0)
-            num_unique = quantize_unique.shape[0]
+            temperature = 0.1
+            distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
+            embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
+            embed_onehot = embed_probs  # [1, B, K]
+
             embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
             with torch.no_grad():
                 self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps) * self.cluster_size.sum()
+
+            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
+            cluster_size = cluster_size * self.cluster_size.sum()
             embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+
             self.embed.data.copy_(embed_normalized)
             self.expire_codes_(x)
-            del distances, embed_probs, embed_onehot, embed_sum, cluster_size, embed_normalized
-        torch.cuda.empty_cache()  # Frees unused GPU memory
-        return quantize, embed_ind, dist, self.embed, flatten, init_cb, num_unique, used_codebook
+
+        torch.cuda.empty_cache()
+        return quantize, embed_ind, dist, self.embed, flatten, self.embed.clone(), num_unique, self.embed[:,
+                                                                                               used_codebook_indices, :]
 
 
 class VectorQuantize(nn.Module):
