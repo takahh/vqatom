@@ -11,14 +11,16 @@ CANVAS_HEIGHT = 500
 DPI = 600
 EPOCH = 1
 FONT = 25
-PATH = "/Users/taka/Documents/infer_for_uk/10000_16/"
+PATH = "/Users/taka/Documents/img_fr_mols/10000_16/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"
-    if "mol" in filename and "latents" not in filename:
+    if ("mol_" in filename and "latents" not in filename):
+        print(f"{filename} - normal")
         arr = np.load(f"{filename}")
     else:
         arr = np.load(f"{filename}")["arr_0"]
+        print(f"{filename} - npz")
     # arr = np.squeeze(arr)
     return arr
 
@@ -396,6 +398,8 @@ def main():
     arr_latents = getdata(latent_file)       # assigned quantized code vec indices
     arr_adj_base = getdata(adj_base_file)       # assigned quantized code vec indices
     arr_feat = getdata(feat_file)       # assigned quantized code vec indices
+    print(arr_indices)
+    print(arr_latents)
     node_indices = [int(x) for x in arr_indices.tolist()]
     arr_src = getdata(src_file)
     arr_dst = getdata(dst_file)
