@@ -349,34 +349,32 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
+    import torch.nn.functional as F
+    from einops import rearrange
+
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
         if x.ndim < 4:
-            x = rearrange(x, '... -> 1 ...')
-        flatten = x.view(x.shape[0], -1, x.shape[-1])
+            x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
+        flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
 
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)
 
-        embed = self.embed
-        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)
-        dist = -dist  # Negative similarity
+        embed = self.embed  # shape: (1, K, D)
+        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K)
+        dist = -dist  # negative similarity
 
-        embed_ind_soft = F.softmax(dist, dim=-1)  # shape: (1, B, K)
-        embed_ind_hard_idx = dist.argmax(dim=-1)  # shape: (1, B)
+        embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
 
-        # Simulate straight-through estimator, without one-hot
-        embed_ind_hard_idx_expanded = embed_ind_hard_idx.unsqueeze(-1)  # (1, B, 1)
-        embed_ind_hard = torch.zeros_like(embed_ind_soft).scatter_(-1, embed_ind_hard_idx_expanded, 1.0)
+        # Soft index (weighted index) calculation
+        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
+        embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft.squeeze(0), indices).unsqueeze(0).unsqueeze(
+            -1)  # (1, B, 1)
 
-        # Straight-through estimator: replace gradients of soft with hard
-        embed_ind_one_hot = embed_ind_hard + (embed_ind_soft - embed_ind_soft.detach())
-
-        # Use einsum for weighted index computation
-        indices = torch.arange(embed_ind_one_hot.shape[-1], dtype=torch.float32, device=embed_ind_one_hot.device)
-        embed_ind = torch.einsum('nbk,k->nb', embed_ind_one_hot.squeeze(0), indices).unsqueeze(-1)
-        return embed_ind
+        # Optionally: quantized latent vector via soft assignment (not index)
+        # quantized = torch.einsum('nbk,kd->nbd', embed_ind_soft.squeeze(0), embed.squeeze(0))
 
         # --------------------
         # inserted to check
