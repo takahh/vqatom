@@ -635,7 +635,7 @@ class VectorQuantize(nn.Module):
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
-        spread_loss, embed_ind, sil_loss, two_repel_loss, div_nega_loss, repel_loss, attract_loss \
+        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         print(f"embed_ind {embed_ind.shape}")
         if len(embed_ind.shape) == 3:
