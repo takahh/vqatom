@@ -365,7 +365,6 @@ class EuclideanCodebook(nn.Module):
 
         hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
         logger.info(hist.cpu().tolist())
-        print(hist.cpu().tolist())
 
         dist = -dist  # negative distance = similarity
 
@@ -373,11 +372,7 @@ class EuclideanCodebook(nn.Module):
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
         # For monitoring codebook usage: use hard assignment
-        print("embed_ind_soft[:10, :]")
-        print(embed_ind_soft[:10, :])
         embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
-        print("embed_ind_hard[:10]")
-        print(embed_ind_hard[:10])
         used_codebook_indices = torch.unique(embed_ind_hard)
 
         # For training or downstream: use soft index
@@ -402,7 +397,7 @@ class EuclideanCodebook(nn.Module):
         # sil score
         # ------------
         from sklearn.metrics import silhouette_score
-        score = silhouette_score(x, embed_ind)
+        score = silhouette_score(x.cpu(), embed_ind.cpu())
         print(f"sil score {score}")
         print(f"Silhouette score: {score}")
 
