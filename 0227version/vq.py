@@ -398,11 +398,21 @@ class EuclideanCodebook(nn.Module):
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
 
+        # ------------
         # write down
+        # ------------
         import numpy as np
         np.savez(f"./naked_emb_ind", quantize_unique.cpu().numpy())
         np.savez(f"./naked_latent", x.cpu().numpy())
 
+        # ------------
+        # sil score
+        # ------------
+        from sklearn.metrics import silhouette_score
+        score = silhouette_score(x, embed_ind)
+        print(f"sil score {score}")
+
+        print(f"Silhouette score: {score}")
         if self.training:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
