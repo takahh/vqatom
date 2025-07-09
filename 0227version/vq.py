@@ -373,8 +373,8 @@ class EuclideanCodebook(nn.Module):
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
         # For monitoring codebook usage: use hard assignment
-        print("embed_ind_soft[:10]")
-        print(embed_ind_soft[:10])
+        print("embed_ind_soft[:10, :]")
+        print(embed_ind_soft[:10, :])
         embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
         print("embed_ind_hard[:10]")
         print(embed_ind_hard[:10])
