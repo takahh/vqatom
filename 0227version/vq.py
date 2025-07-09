@@ -397,7 +397,7 @@ class EuclideanCodebook(nn.Module):
         # sil score
         # ------------
         from sklearn.metrics import silhouette_score
-        score = silhouette_score(x.cpu(), embed_ind.cpu())
+        score = silhouette_score(x.cpu().squeeze(), embed_ind.cpu().squeeze())
         print(f"sil score {score}")
         print(f"Silhouette score: {score}")
 
