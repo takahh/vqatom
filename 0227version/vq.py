@@ -358,7 +358,7 @@ class EuclideanCodebook(nn.Module):
 
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)
-
+        print("kmeans is done ...")
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
         min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
@@ -367,7 +367,7 @@ class EuclideanCodebook(nn.Module):
         logger.info(hist.cpu().tolist())
 
         dist = -dist  # negative distance = similarity
-
+        print("dist is done...")
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
@@ -390,7 +390,7 @@ class EuclideanCodebook(nn.Module):
         # write down
         # ------------
         import numpy as np
-        np.savez(f"./naked_emb_ind", quantize_unique.cpu().numpy())
+        np.savez(f"./naked_emb_ind", embed.cpu().numpy())
         np.savez(f"./naked_latent", x.cpu().numpy())
 
         # ------------
