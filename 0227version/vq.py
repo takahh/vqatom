@@ -380,6 +380,8 @@ class EuclideanCodebook(nn.Module):
         if mode == "init_kmeans_final":
             logger.info(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            print(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
 
         # Quantize with soft index
