@@ -359,15 +359,19 @@ class EuclideanCodebook(nn.Module):
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)
 
-        embed = self.embed  # (1, K, D)
-        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K)
+        embed = self.embed  # (1, K, D)  K: codebook size
+        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
         dist = -dist  # negative distance = similarity
 
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
         # For monitoring codebook usage: use hard assignment
+        print("embed_ind_soft[:10]")
+        print(embed_ind_soft[:10])
         embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
+        print("embed_ind_hard[:10]")
+        print(embed_ind_hard[:10])
         used_codebook_indices = torch.unique(embed_ind_hard)
 
         counts = torch.bincount(embed_ind_hard, minlength=embed.shape[1])
