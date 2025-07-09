@@ -384,13 +384,6 @@ class EuclideanCodebook(nn.Module):
         embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft, indices)  # (1, B)
         embed_ind = embed_ind.unsqueeze(-1)  # (1, B, 1)
 
-        if mode == "init_kmeans_final":
-            logger.info(
-                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-            print(
-                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-            return 0
-
         # Quantize with soft index
         quantize = batched_embedding(embed_ind, self.embed)  # [1, B, D], gradient-friendly
         embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind  # straight-through trick
@@ -411,8 +404,15 @@ class EuclideanCodebook(nn.Module):
         from sklearn.metrics import silhouette_score
         score = silhouette_score(x, embed_ind)
         print(f"sil score {score}")
-
         print(f"Silhouette score: {score}")
+
+        if mode == "init_kmeans_final":
+            logger.info(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            print(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            return 0
+
         if self.training:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
