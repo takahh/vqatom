@@ -400,8 +400,8 @@ class EuclideanCodebook(nn.Module):
 
         # write down
         import numpy as np
-        np.savez(f"./naked_emb_ind_{epoch}", quantize_unique.cpu().tolist().numpy())
-        np.savez(f"./naked_latent_{epoch}", x.cpu().tolist().numpy())
+        np.savez(f"./naked_emb_ind", quantize_unique.cpu().tolist().numpy())
+        np.savez(f"./naked_latent", x.cpu().tolist().numpy())
 
         if self.training:
             temperature = 0.1
