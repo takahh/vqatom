@@ -9,7 +9,8 @@ from sklearn.decomposition import PCA
 
 np.set_printoptions(threshold=np.inf)
 
-DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
+# DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
+DATA_PATH = "/Users/taka/Downloads/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
@@ -197,8 +198,10 @@ def process_epoch(epoch, samples):
     # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
-    codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
+    codebook_file = f'{DATA_PATH}naked_emb_ind.npz'
     latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
+    codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
+    latent_file = f"{DATA_PATH}naked_latent.npz"
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
