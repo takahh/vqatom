@@ -373,6 +373,7 @@ class EuclideanCodebook(nn.Module):
 
         # Codebook usage info
         embed_ind_int = embed_ind.squeeze(-1).long()  # (1, B)
+        print(f"embed_ind_int = {embed_ind_int.shape}")
         used_codebook_indices = torch.unique(embed_ind_int)
 
         if mode == "init_kmeans_final":
