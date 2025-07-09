@@ -389,17 +389,24 @@ class EuclideanCodebook(nn.Module):
         # ------------
         # write down
         # ------------
+        print(f"write down ... embed and latents")
         import numpy as np
-        np.savez(f"./naked_emb_ind", embed.cpu().numpy())
+        np.savez(f"./naked_embed", embed.cpu().numpy())
         np.savez(f"./naked_latent", x.cpu().numpy())
 
         # ------------
         # sil score
-        # ------------
+        # ------------f
         from sklearn.metrics import silhouette_score
-        score = silhouette_score(x.cpu().squeeze(), embed_ind.cpu().squeeze())
-        print(f"sil score {score}")
-        print(f"Silhouette score: {score}")
+        from sklearn.utils import resample
+
+        # Sample only 1000 atoms for silhouette evaluation
+        x_sample, labels_sample = resample(
+            x.cpu().squeeze().numpy(), embed_ind.cpu().squeeze().numpy(),
+            n_samples=1000, random_state=42
+        )
+        score = silhouette_score(x_sample, labels_sample)
+        print(f"Silhouette (subsample): {score:.4f}")
 
         if mode == "init_kmeans_final":
             logger.info(
