@@ -128,7 +128,7 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for zoom in [2]:
+    for zoom in [50]:
         for spread, min_dist in [[1, 0]]:
             reducer = umap.UMAP(
                 n_neighbors=N_NEIGHBORS,

@@ -386,13 +386,13 @@ class EuclideanCodebook(nn.Module):
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
 
-        # ------------
-        # write down
-        # ------------
-        print(f"write down ... embed and latents")
-        import numpy as np
-        np.savez(f"./naked_embed", embed.cpu().detach().numpy())
-        np.savez(f"./naked_latent", x.cpu().numpy())
+        # # ------------
+        # # write down
+        # # ------------
+        # print(f"write down ... embed and latents")
+        # import numpy as np
+        # np.savez(f"./naked_embed", embed.cpu().detach().numpy())
+        # np.savez(f"./naked_latent", x.cpu().numpy())
 
         # ------------
         # sil score
@@ -406,7 +406,7 @@ class EuclideanCodebook(nn.Module):
             n_samples=1000, random_state=42
         )
         score = silhouette_score(x_sample, labels_sample)
-        print(f"Silhouette (subsample): {score:.4f}")
+        logger.info(f"Silhouette (subsample): {score:.4f}")
 
         if mode == "init_kmeans_final":
             logger.info(
@@ -665,7 +665,6 @@ class VectorQuantize(nn.Module):
         # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
         spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
-        print(f"embed_ind {embed_ind.shape}")
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
