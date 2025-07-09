@@ -1,26 +1,19 @@
 import numpy as np
 import matplotlib.pyplot as plt
+path = "/Users/taka/Downloads/log"
+sil_list = []
+with open(path, "r") as f:
+    for lines in f.readlines():
+        if "Silh" in lines:
+            sil_list.append(float(lines.split(" ")[-1].strip()))
 
-# Distance values from 0 to 10
-d_values = np.linspace(0, 10, 500)
-
-
-# Repel function
-def repel_strength(d, sigma):
-    return np.exp(-d ** 2 / (2 * sigma ** 2))
-
-
-# Sigma values to try
-sigmas = [3, 4, 5, 6]
 
 # Plot
 plt.figure(figsize=(8, 6))
-for sigma in sigmas:
-    plt.plot(d_values, repel_strength(d_values, sigma), label=f'sigma={sigma}')
+plt.plot(sil_list)
 
-plt.title("Repel Strength vs Distance for Different Sigma Values")
-plt.xlabel("Distance")
-plt.ylabel("Repel Strength (exp(-d² / (2σ²)))")
+plt.xlabel("")
+plt.ylabel("")
 plt.legend()
 plt.grid(True)
 plt.tight_layout()

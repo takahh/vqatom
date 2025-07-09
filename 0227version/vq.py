@@ -209,7 +209,7 @@ class ContrastiveLoss(nn.Module):
         sample = latent_dist_matrix.flatten()
         if sample.numel() > 1_000_000:
             sample = sample[torch.randperm(sample.numel())[:1_000_000]]
-        dynamic_threshold = torch.quantile(sample, 0.1).item()
+        dynamic_threshold = torch.quantile(sample, 0.3).item()
 
         # if chunk == 0:
         print(f"distance_matrix max {latent_dist_matrix.max()}, mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
@@ -226,15 +226,16 @@ class ContrastiveLoss(nn.Module):
 
         def calc_attractive_loss(dmat, sigma=1, threshold=1):
             attract_mask = dmat < threshold
-            attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
+            attract_term = (dmat[attract_mask] ** 2).mean()
+            # attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
 
-        if self.use_dynamic_threshold:
-            latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-            attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
-        else:
-            latent_repel_loss = calc_repel_loss(latent_dist_matrix)
-            attract_loss = calc_attractive_loss(latent_dist_matrix)
+        # if self.use_dynamic_threshold:
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
+        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        # else:
+        #     latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+        #     attract_loss = calc_attractive_loss(latent_dist_matrix)
         print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 1  # 0.005
         repel_weight = 10  # 0.005
@@ -365,13 +366,20 @@ class EuclideanCodebook(nn.Module):
         embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
         used_codebook_indices = torch.unique(embed_ind_hard)
 
-        # For training or downstream: use soft index
-        embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft, indices)  # (1, B)
-        embed_ind = embed_ind.unsqueeze(-1)  # (1, B, 1)
+        # [1, B, K] -> hard indices: [B]
+        embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
 
-        # Quantize with soft index
-        quantize = batched_embedding(embed_ind, self.embed)  # [1, B, D], gradient-friendly
-        embed_ind = (embed_ind.round() - embed_ind).detach() + embed_ind  # straight-through trick
+        # One-hot encode hard assignments
+        embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed.shape[1]).float()  # (B, K)
+
+        # Re-insert batch dim to match shape: [1, B, K]
+        embed_ind_hard_onehot = embed_ind_hard_onehot.unsqueeze(0)
+
+        # Straight-through estimator: combine hard and soft
+        embed_ind_onehot = embed_ind_hard_onehot + (embed_ind_soft - embed_ind_soft.detach())
+
+        # Soft quantized vector (with gradient)
+        quantize = torch.einsum('nbk,nkd->nbd', embed_ind_onehot, self.embed)  # (1, B, D)
 
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
