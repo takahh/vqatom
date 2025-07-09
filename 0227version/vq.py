@@ -392,7 +392,7 @@ class EuclideanCodebook(nn.Module):
 
         # Sample only 1000 atoms for silhouette evaluation
         x_sample, labels_sample = resample(
-            x.cpu().squeeze().numpy(), embed_ind.cpu().squeeze().numpy(),
+            x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
             n_samples=1000, random_state=42
         )
         score = silhouette_score(x_sample, labels_sample)
