@@ -349,7 +349,6 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
@@ -362,17 +361,18 @@ class EuclideanCodebook(nn.Module):
 
         embed = self.embed  # (1, K, D)
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K)
-        dist = -dist
-
+        dist = -dist  # negative distance = similarity
 
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
-        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)
-        embed_ind_hard = embed_ind_soft.argmax(dim=-1)  # (B,)
+        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
+
+        # For monitoring codebook usage: use hard assignment
+        embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
         used_codebook_indices = torch.unique(embed_ind_hard)
-        print(f"embed_ind_soft = {embed_ind_soft.shape}, indices = {indices.shape}")
-        embed_ind = torch.einsum('bk,k->b', embed_ind_soft.squeeze(0), indices).unsqueeze(0)
-        # embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft.squeeze(0), indices).unsqueeze(0).unsqueeze(
-        #     -1)  # (1, B, 1)
+
+        # For training or downstream: use soft index
+        embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft, indices)  # (1, B)
+        embed_ind = embed_ind.unsqueeze(-1)  # (1, B, 1)
 
         if mode == "init_kmeans_final":
             logger.info(
