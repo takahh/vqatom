@@ -232,7 +232,7 @@ class ContrastiveLoss(nn.Module):
 
         # if self.use_dynamic_threshold:
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-        attract_loss = calc_attractive_loss(latent_dist_matrix)
+        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         # else:
         #     latent_repel_loss = calc_repel_loss(latent_dist_matrix)
         #     attract_loss = calc_attractive_loss(latent_dist_matrix)
@@ -383,6 +383,7 @@ class EuclideanCodebook(nn.Module):
 
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
+        embed_ind = embed_ind_hard  # If you want to explicitly name it
 
         # # ------------
         # # write down
