@@ -370,6 +370,9 @@ class EuclideanCodebook(nn.Module):
         embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
         used_codebook_indices = torch.unique(embed_ind_hard)
 
+        counts = torch.bincount(embed_ind_hard, minlength=embed.shape[1])
+        print("Min/Max/Mean count per code:", counts.min().item(), counts.max().item(), counts.float().mean().item())
+
         # For training or downstream: use soft index
         embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft, indices)  # (1, B)
         embed_ind = embed_ind.unsqueeze(-1)  # (1, B, 1)
