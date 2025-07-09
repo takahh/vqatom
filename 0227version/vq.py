@@ -185,11 +185,13 @@ def batched_embedding(indices, embed):
     indices = indices.view(-1, 1)  # Ensure shape (128, 1)
 
     # **Use `indices` Directly Instead of Recomputing**
-    soft_weights = F.one_hot(indices.squeeze(-1).long(), num_classes=embed.shape[0]).float()
-    soft_weights = soft_weights + (indices - indices.detach())  # **STE trick to keep gradients**
+    quantized = F.embedding(indices.squeeze(-1), embed.squeeze(0))  # (B, D)
 
-    # **Use Matmul for Differentiable Soft Embedding Lookup**
-    quantized = torch.matmul(soft_weights, embed)  # Shape: (128, 64)
+    # soft_weights = F.one_hot(indices.squeeze(-1).long(), num_classes=embed.shape[0]).float()
+    # soft_weights = soft_weights + (indices - indices.detach())  # **STE trick to keep gradients**
+    #
+    # # **Use Matmul for Differentiable Soft Embedding Lookup**
+    # quantized = torch.matmul(soft_weights, embed)  # Shape: (128, 64)
 
     return quantized
 
