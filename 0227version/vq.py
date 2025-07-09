@@ -361,6 +361,12 @@ class EuclideanCodebook(nn.Module):
 
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
+        min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
+
+        hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
+        logger.info(hist.cpu().tolist())
+        print(hist.cpu().tolist())
+
         dist = -dist  # negative distance = similarity
 
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
@@ -373,9 +379,6 @@ class EuclideanCodebook(nn.Module):
         print("embed_ind_hard[:10]")
         print(embed_ind_hard[:10])
         used_codebook_indices = torch.unique(embed_ind_hard)
-
-        counts = torch.bincount(embed_ind_hard, minlength=embed.shape[1])
-        print("Min/Max/Mean count per code:", counts.min().item(), counts.max().item(), counts.float().mean().item())
 
         # For training or downstream: use soft index
         embed_ind = torch.einsum('nbk,k->nb', embed_ind_soft, indices)  # (1, B)
