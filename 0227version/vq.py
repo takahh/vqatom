@@ -224,7 +224,7 @@ class ContrastiveLoss(nn.Module):
             repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
             return repel_loss
 
-        def calc_attractive_loss(dmat, sigma=1, threshold=1):
+        def calc_attractive_loss(dmat, threshold=1):
             attract_mask = dmat < threshold
             attract_term = (dmat[attract_mask] ** 2).mean()
             # attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
