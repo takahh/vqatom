@@ -640,7 +640,7 @@ class VectorQuantize(nn.Module):
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
-            embed_ind = rearrange(embed_ind, 'b 1 -> b')
+            embed_ind = embed_ind.flatten()
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
