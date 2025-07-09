@@ -398,6 +398,11 @@ class EuclideanCodebook(nn.Module):
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
 
+        # write down
+        import numpy as np
+        np.savez(f"./naked_emb_ind_{epoch}", quantize_unique.cpu().tolist().numpy())
+        np.savez(f"./naked_latent_{epoch}", x.cpu().tolist().numpy())
+
         if self.training:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
