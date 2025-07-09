@@ -273,6 +273,7 @@ def run_inductive(
                         = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                     all_latents.append(latents.cpu())  # move to CPU if needed to save memory
             all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+            print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
             # -------------------------------------------------------------------
             # Run k-means on the collected latent vectors (goes to the deepest)
             # -------------------------------------------------------------------
