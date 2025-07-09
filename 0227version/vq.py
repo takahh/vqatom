@@ -232,7 +232,7 @@ class ContrastiveLoss(nn.Module):
 
         # if self.use_dynamic_threshold:
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        attract_loss = calc_attractive_loss(latent_dist_matrix)
         # else:
         #     latent_repel_loss = calc_repel_loss(latent_dist_matrix)
         #     attract_loss = calc_attractive_loss(latent_dist_matrix)
