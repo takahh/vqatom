@@ -391,7 +391,7 @@ class EuclideanCodebook(nn.Module):
         # ------------
         print(f"write down ... embed and latents")
         import numpy as np
-        np.savez(f"./naked_embed", embed.detach().numpy())
+        np.savez(f"./naked_embed", embed.cpu().detach().numpy())
         np.savez(f"./naked_latent", x.cpu().numpy())
 
         # ------------
