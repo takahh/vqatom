@@ -209,7 +209,7 @@ class ContrastiveLoss(nn.Module):
         sample = latent_dist_matrix.flatten()
         if sample.numel() > 1_000_000:
             sample = sample[torch.randperm(sample.numel())[:1_000_000]]
-        dynamic_threshold = torch.quantile(sample, 0.5).item()
+        dynamic_threshold = torch.quantile(sample, 0.2).item()
 
         # if chunk == 0:
         print(f"distance_matrix max {latent_dist_matrix.max()}, mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
@@ -218,39 +218,38 @@ class ContrastiveLoss(nn.Module):
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             logger.info(hist.cpu().tolist())
 
-        def calc_repel_loss(dmat, sigma=3, threshold=1):
-            # attract_mask = dmat < threshold
-            # repel_mask = ~attract_mask
-            # repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
-            repel_loss = torch.exp(-dmat ** 2 / (2 * sigma ** 2)).mean()
-            return repel_loss
+        # def calc_repel_loss(dmat, sigma=3, threshold=1):
+        #     # attract_mask = dmat < threshold
+        #     # repel_mask = ~attract_mask
+        #     # repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
+        #     repel_loss = torch.exp(-dmat ** 2 / (2 * sigma ** 2)).mean()
+        #     return repel_loss
 
-        def calc_attractive_loss(dmat, sigma=1, threshold=1):
+        def calc_attractive_loss(dmat, threshold=1):
             attract_mask = dmat < threshold
-            # attract_term = (dmat[attract_mask] ** 2).mean()
-            attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
+            attract_term = (dmat[attract_mask] ** 2).mean()
             return attract_term
 
-        # def calc_repel_loss(dmat, center=2.0, sigma=3.0):
-        #     """
-        #     Bell curve centered at center, strongest repulsion there.
-        #     """
-        #     bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
-        #     return bell.mean()
+        def calc_repel_loss(dmat, center=2.0, sigma=3.0):
+            """
+            Bell curve centered at center, strongest repulsion there.
+            """
+            bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
+            return bell.mean()
 
         # if self.use_dynamic_threshold:
         # latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-        # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         # else:
         #     latent_repel_loss = calc_repel_loss(latent_dist_matrix)
         #     attract_loss = calc_attractive_loss(latent_dist_matrix)
         # print(f"latent_repel_loss {latent_repel_loss}, attract_loss {attract_loss}")
         attract_weight = 1  # 0.005
-        repel_weight = 10  # 0.005
+        repel_weight = 1  # 0.005
         # print("repel_weight * latent_repel_loss + attract_weight * attract_loss")
         # print(f"{repel_weight * latent_repel_loss}, {attract_weight * attract_loss}")
-        final_loss = repel_weight * latent_repel_loss
+        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
         print(f"final loss {final_loss.item()}, latent_repel_loss {latent_repel_loss}")
         neg_loss = 1
 
