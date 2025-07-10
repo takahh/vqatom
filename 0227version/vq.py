@@ -400,7 +400,7 @@ class EuclideanCodebook(nn.Module):
         print(f"write down ... embed and latents")
         import numpy as np
         np.savez(f"./naked_embed_{epoch}", embed.cpu().detach().numpy())
-        np.savez(f"./naked_latent_{epoch}", x.cpu().numpy())
+        np.savez(f"./naked_latent_{epoch}", x.cpu().detach().numpy())
 
         # ------------
         # sil score
