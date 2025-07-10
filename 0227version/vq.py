@@ -212,11 +212,12 @@ class ContrastiveLoss(nn.Module):
         dynamic_threshold = torch.quantile(sample, 0.2).item()
 
         # if chunk == 0:
-        print(f"distance_matrix max {latent_dist_matrix.max()}, mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
+        # print(f"distance_matrix max {latent_dist_matrix.max()}, mean {latent_dist_matrix.mean()}, min {latent_dist_matrix.min()}")
 
         if chunk % 10 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             logger.info(hist.cpu().tolist())
+            print(hist.cpu().tolist())
 
         # def calc_repel_loss(dmat, sigma=3, threshold=1):
         #     # attract_mask = dmat < threshold
@@ -359,7 +360,6 @@ class EuclideanCodebook(nn.Module):
 
         if mode == "init_kmeans_final":
             self.init_embed_(flatten)
-        print("kmeans is done ...")
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
         min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
@@ -368,7 +368,6 @@ class EuclideanCodebook(nn.Module):
         # logger.info(hist.cpu().tolist())
 
         dist = -dist  # negative distance = similarity
-        print("dist is done...")
         embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
         indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
