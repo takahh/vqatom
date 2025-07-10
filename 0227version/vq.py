@@ -612,16 +612,16 @@ class VectorQuantize(nn.Module):
     def commitment_loss(self, encoder_outputs, codebook, temperature=1.0):
         # encoder_outputs: [B, D], codebook: [K, D]
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
-
-        # Compute per-sample mean distances
-        mean_dist = distances.mean(dim=1, keepdim=True)  # [B, 1]
-
-        # Mask: keep only distances < mean (i.e., close codebooks)
-        mask = distances < mean_dist  # [B, K]
+        #
+        # # Compute per-sample mean distances
+        # mean_dist = distances.mean(dim=1, keepdim=True)  # [B, 1]
+        #
+        # # Mask: keep only distances < mean (i.e., close codebooks)
+        # mask = distances < mean_dist  # [B, K]
 
         # Apply softmax only over valid entries (masked)
-        masked_dist = distances.masked_fill(~mask, float('inf'))  # large value to suppress bad entries
-        soft_assignments = F.softmax(-masked_dist / temperature, dim=-1)  # [B, K]
+        # masked_dist = distances.masked_fill(~mask, float('inf'))  # large value to suppress bad entries
+        soft_assignments = F.softmax(-distances / temperature, dim=-1)  # [B, K]
 
         # Renormalize (since masked entries were set to inf)
         soft_assignments = soft_assignments / soft_assignments.sum(dim=-1, keepdim=True).clamp(min=1e-8)
