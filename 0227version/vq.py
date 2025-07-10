@@ -231,17 +231,17 @@ class ContrastiveLoss(nn.Module):
             attract_term = torch.exp(-dmat[attract_mask] ** (-2) / (2 * sigma ** 2)).mean()
             return attract_term
 
-        def calc_repel_loss(dmat, center=2.0, sigma=3.0):
-            """
-            Bell curve centered at center, strongest repulsion there.
-            """
-            bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
-            return bell.mean()
+        # def calc_repel_loss(dmat, center=2.0, sigma=3.0):
+        #     """
+        #     Bell curve centered at center, strongest repulsion there.
+        #     """
+        #     bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
+        #     return bell.mean()
 
         # if self.use_dynamic_threshold:
         # latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
         # else:
         #     latent_repel_loss = calc_repel_loss(latent_dist_matrix)
         #     attract_loss = calc_attractive_loss(latent_dist_matrix)
@@ -417,6 +417,9 @@ class EuclideanCodebook(nn.Module):
                 x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
                 n_samples=1000, random_state=42
             )
+            # Jul09 17-57-17: [501238.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            # Jul09 17-57-17: Silhouette (subsample): 0.1447
+            # Jul09 17-57-17: -- epoch 3: used_codebook_indices.shape torch.Size([9998]) -----------------
             score = silhouette_score(x_sample, labels_sample)
             logger.info(f"Silhouette (subsample): {score:.4f}")
             logger.info(
