@@ -609,16 +609,31 @@ class VectorQuantize(nn.Module):
             logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
         return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
+    def commitment_loss(self, encoder_outputs, codebook, temperature=1.0):
+        # encoder_outputs: [B, D], codebook: [K, D]
+        distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
 
-    def commitment_loss(self, encoder_outputs, codebook, temperature=1):
-        distances = torch.cdist(encoder_outputs, codebook)
-        soft_assignments = F.softmax(-distances / temperature, dim=-1)
-        # print(f"soft_assignments: {soft_assignments[:10]}")
-        quantized = torch.einsum('bn,nk->bk', soft_assignments, codebook)
+        # Compute per-sample mean distances
+        mean_dist = distances.mean(dim=1, keepdim=True)  # [B, 1]
+
+        # Mask: keep only distances < mean (i.e., close codebooks)
+        mask = distances < mean_dist  # [B, K]
+
+        # Apply softmax only over valid entries (masked)
+        masked_dist = distances.masked_fill(~mask, float('inf'))  # large value to suppress bad entries
+        soft_assignments = F.softmax(-masked_dist / temperature, dim=-1)  # [B, K]
+
+        # Renormalize (since masked entries were set to inf)
+        soft_assignments = soft_assignments / soft_assignments.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        # Weighted sum over selected codebooks
+        quantized = torch.einsum('bk,kd->bd', soft_assignments, codebook)  # [B, D]
+
+        # Losses
         codebook_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
         latent_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
-        return latent_loss, codebook_loss
 
+        return latent_loss, codebook_loss
 
     def forward(self, x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
