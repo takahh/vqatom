@@ -395,21 +395,17 @@ class EuclideanCodebook(nn.Module):
         embed_ind = embed_ind_hard  # If you want to explicitly name it
 
         # ------------
-        # write down
-        # ------------
-        print(f"write down ... embed and latents")
-        import numpy as np
-        np.savez(f"./naked_embed_{epoch}", embed.cpu().detach().numpy())
-        np.savez(f"./naked_latent_{epoch}", x.cpu().detach().numpy())
-
-        # ------------
         # sil score
-        # ------------f
+        # ------------
         from sklearn.metrics import silhouette_score
         from sklearn.utils import resample
 
 
         if mode == "init_kmeans_final":
+            print(f"write down ... embed and latents")
+            import numpy as np
+            np.savez(f"./naked_embed_{epoch}", embed.cpu().detach().numpy())
+            np.savez(f"./naked_latent_{epoch}", x.cpu().detach().numpy())
             # Sample only 1000 atoms for silhouette evaluation
             x_sample, labels_sample = resample(
                 x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
