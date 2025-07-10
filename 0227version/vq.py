@@ -420,6 +420,7 @@ class EuclideanCodebook(nn.Module):
             # Jul09 17-57-17: -- epoch 3: used_codebook_indices.shape torch.Size([9998]) -----------------
             score = silhouette_score(x_sample, labels_sample)
             logger.info(f"Silhouette (subsample): {score:.4f}")
+            print(f"Silhouette (subsample): {score:.4f}")
             logger.info(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             print(
