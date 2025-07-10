@@ -219,8 +219,8 @@ class ContrastiveLoss(nn.Module):
             logger.info(hist.cpu().tolist())
 
         def calc_repel_loss(dmat, sigma=3, threshold=1):
-            attract_mask = dmat < threshold
-            repel_mask = ~attract_mask
+            # attract_mask = dmat < threshold
+            # repel_mask = ~attract_mask
             # repel_loss = torch.exp(-dmat[repel_mask] ** 2 / (2 * sigma ** 2)).mean()
             repel_loss = torch.exp(-dmat ** 2 / (2 * sigma ** 2)).mean()
             return repel_loss
@@ -365,8 +365,8 @@ class EuclideanCodebook(nn.Module):
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
         min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
 
-        hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
-        logger.info(hist.cpu().tolist())
+        # hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
+        # logger.info(hist.cpu().tolist())
 
         dist = -dist  # negative distance = similarity
         print("dist is done...")
