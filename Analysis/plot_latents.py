@@ -128,7 +128,7 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for zoom in [50]:
+    for zoom in [2]:
         for spread, min_dist in [[1, 0]]:
             reducer = umap.UMAP(
                 n_neighbors=N_NEIGHBORS,
@@ -198,10 +198,10 @@ def process_epoch(epoch, samples):
     # codebook_file = "/Users/taka/PycharmProjects/vqatom/Analysis/kmeans_centers.npy"
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
 
-    codebook_file = f'{DATA_PATH}naked_emb_ind.npz'
+    codebook_file = f'{DATA_PATH}naked_embed_1.npz'
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
-    latent_file = f"{DATA_PATH}naked_latent.npz"
+    latent_file = f"{DATA_PATH}naked_latent_1.npz"
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
