@@ -400,15 +400,15 @@ class EuclideanCodebook(nn.Module):
         from sklearn.metrics import silhouette_score
         from sklearn.utils import resample
 
-        # Sample only 1000 atoms for silhouette evaluation
-        x_sample, labels_sample = resample(
-            x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
-            n_samples=1000, random_state=42
-        )
-        score = silhouette_score(x_sample, labels_sample)
-        logger.info(f"Silhouette (subsample): {score:.4f}")
 
         if mode == "init_kmeans_final":
+            # Sample only 1000 atoms for silhouette evaluation
+            x_sample, labels_sample = resample(
+                x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
+                n_samples=1000, random_state=42
+            )
+            score = silhouette_score(x_sample, labels_sample)
+            logger.info(f"Silhouette (subsample): {score:.4f}")
             logger.info(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             print(
