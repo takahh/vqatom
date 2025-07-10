@@ -250,7 +250,7 @@ class ContrastiveLoss(nn.Module):
         # print("repel_weight * latent_repel_loss + attract_weight * attract_loss")
         # print(f"{repel_weight * latent_repel_loss}, {attract_weight * attract_loss}")
         final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        print(f"final loss {final_loss.item()}, latent_repel_loss {latent_repel_loss}")
+        print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, final_loss
