@@ -693,7 +693,7 @@ class VectorQuantize(nn.Module):
         #     # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         # else:
         #     # loss = repel_loss + self.spread_weight * spread_loss
-        print(f"commit loss {commit_loss} two repel {two_repel_loss}")
+        # print(f"commit loss {commit_loss} two repel {two_repel_loss}")
         loss = two_repel_loss
         if need_transpose:
             quantize = rearrange(quantize, 'b n d -> b d n')
