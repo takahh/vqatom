@@ -206,7 +206,7 @@ class ContrastiveLoss(nn.Module):
         sample = latent_dist_matrix.flatten()
         if sample.numel() > 1_000_000:
             sample = sample[torch.randperm(sample.numel())[:1_000_000]]
-        dynamic_threshold = torch.quantile(sample, 0.2).item()
+        dynamic_threshold = torch.quantile(sample, 0.1).item()
 
         if chunk % 10 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
@@ -222,12 +222,13 @@ class ContrastiveLoss(nn.Module):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
-        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         attract_weight = 0.1  # 0.005
         repel_weight = 1  # 0.005
-        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
+        # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        final_loss = repel_weight * latent_repel_loss
+        # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
 
         return final_loss, neg_loss, latent_repel_loss, final_loss
@@ -375,7 +376,6 @@ class EuclideanCodebook(nn.Module):
         # ------------
         from sklearn.metrics import silhouette_score
         from sklearn.utils import resample
-
 
         if mode == "init_kmeans_final":
             print(f"write down ... embed and latents")
