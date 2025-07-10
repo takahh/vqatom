@@ -116,7 +116,7 @@ def kmeans(
         use_cosine_sim=False,
         all_reduce_fn=noop
 ):
-    num_iters = 200
+    num_iters = 30
     num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     # num_iters = 30
 
@@ -394,13 +394,13 @@ class EuclideanCodebook(nn.Module):
         num_unique = quantize_unique.shape[1]
         embed_ind = embed_ind_hard  # If you want to explicitly name it
 
-        # # ------------
-        # # write down
-        # # ------------
-        # print(f"write down ... embed and latents")
-        # import numpy as np
-        # np.savez(f"./naked_embed", embed.cpu().detach().numpy())
-        # np.savez(f"./naked_latent", x.cpu().numpy())
+        # ------------
+        # write down
+        # ------------
+        print(f"write down ... embed and latents")
+        import numpy as np
+        np.savez(f"./naked_embed_{epoch}", embed.cpu().detach().numpy())
+        np.savez(f"./naked_latent_{epoch}", x.cpu().numpy())
 
         # ------------
         # sil score
