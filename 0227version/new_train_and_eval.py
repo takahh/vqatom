@@ -29,7 +29,11 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    # -----------------
+    # update parameters
+    # -----------------
     scaler.step(optimizer)
+
     scaler.update()
     optimizer.zero_grad()
     latent_list.append(latent_train.detach().cpu())
