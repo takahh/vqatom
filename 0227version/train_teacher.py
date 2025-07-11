@@ -293,7 +293,7 @@ def run(args):
         thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         best_epoch_dict = {'10000_16': 8}
         model.load_state_dict(torch.load(f"/vqatom/0227version/model_epoch_{best_epoch_dict[thiskey]}.pth", weights_only=False, map_location=device))
-        buffer_dict = torch.load(f"/vqatom/0227version/model_buffers_{best_epoch_dict[thiskey]}.pth", map_location=device)
+        buffer_dict = torch.load(f"/vqatom/0227version/model_buffers_{best_epoch_dict[thiskey]}.pth", map_location=device, weights_only=False)
         model.__dict__.update(buffer_dict)
         print(f"LOADED best epoch number {best_epoch_dict[thiskey]} model ^^^^^^^^^^^^^")
 
