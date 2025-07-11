@@ -616,7 +616,7 @@ class VectorQuantize(nn.Module):
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
         return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
-    def commitment_loss_straight_through(encoder_outputs, codebook):
+    def commitment_loss(encoder_outputs, codebook):
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
         indices = distances.argmin(dim=-1)  # [B]
 
