@@ -11,7 +11,7 @@ CANVAS_HEIGHT = 500
 DPI = 600
 EPOCH = 1
 FONT = 25
-PATH = "/Users/taka/Documents/img_fr_mols/10000_16/"
+PATH = "/Users/taka/Documents/analysis/10000_16/"
 
 def getdata(filename):
     # filename = "out_emb_list.npz"

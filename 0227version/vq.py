@@ -208,7 +208,7 @@ class ContrastiveLoss(nn.Module):
             sample = sample[torch.randperm(sample.numel())[:1_000_000]]
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
-        if chunk % 10 == 0:
+        if chunk % 32 == 0:
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             logger.info(hist.cpu().tolist())
             print(hist.cpu().tolist())
@@ -222,12 +222,12 @@ class ContrastiveLoss(nn.Module):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
-        attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         attract_weight = 1  # 0.005
         repel_weight = 0.1  # 0.005
-        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        # final_loss = repel_weight * latent_repel_loss
+        # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        final_loss = repel_weight * latent_repel_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
@@ -616,27 +616,20 @@ class VectorQuantize(nn.Module):
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
         return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
-    def commitment_loss(self, encoder_outputs, codebook, temperature=1.0):
-        # encoder_outputs: [B, D], codebook: [K, D]
+    def commitment_loss_straight_through(encoder_outputs, codebook):
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
-        #
-        # # Compute per-sample mean distances
-        # mean_dist = distances.mean(dim=1, keepdim=True)  # [B, 1]
-        #
-        # # Mask: keep only distances < mean (i.e., close codebooks)
-        # mask = distances < mean_dist  # [B, K]
+        indices = distances.argmin(dim=-1)  # [B]
 
-        # Apply softmax only over valid entries (masked)
-        # masked_dist = distances.masked_fill(~mask, float('inf'))  # large value to suppress bad entries
-        soft_assignments = F.softmax(-distances / temperature, dim=-1)  # [B, K]
+        # Hard quantized
+        quantized_hard = codebook[indices]  # [B, D]
 
-        # Renormalize (since masked entries were set to inf)
-        soft_assignments = soft_assignments / soft_assignments.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        # Soft quantized for gradient flow
+        soft_assignments = F.softmax(-distances, dim=-1)  # [B, K]
+        quantized_soft = torch.einsum('bk,kd->bd', soft_assignments, codebook)  # [B, D]
 
-        # Weighted sum over selected codebooks
-        quantized = torch.einsum('bk,kd->bd', soft_assignments, codebook)  # [B, D]
+        # Straight-through: use hard in forward, soft in backward
+        quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
 
-        # Losses
         codebook_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
         latent_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
 
@@ -682,7 +675,7 @@ class VectorQuantize(nn.Module):
         # if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
         #     # print(f"commit loss {commit_loss} .....")
         # if epoch > 5:
-        decay_rate = 0.95
+        decay_rate = 0.6
         repel_weight = decay_rate ** epoch
         loss = commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss
