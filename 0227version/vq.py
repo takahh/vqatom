@@ -201,7 +201,7 @@ class ContrastiveLoss(nn.Module):
         else:
             self.use_dynamic_threshold = False
 
-    def forward(self, z, chunk, logger):
+    def forward(self, z, chunk, logger, codebook):
         latent_dist_matrix = torch.cdist(z, z, p=2)
         sample = latent_dist_matrix.flatten()
         if sample.numel() > 1_000_000:
@@ -212,22 +212,53 @@ class ContrastiveLoss(nn.Module):
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             logger.info(hist.cpu().tolist())
             print(hist.cpu().tolist())
+        import torch
+        import torch.nn.functional as F
 
-        def calc_attractive_loss(dmat, threshold=1):
-            attract_mask = dmat < threshold
-            attract_term = (dmat[attract_mask] ** 2).mean()
-            return attract_term
+        def calc_attract_loss(z, cb, temperature=1.0):
+            """
+            z         : [B, D] - latent vectors
+            codebook  : [K, D] - codebook embeddings
+            temperature : scaling for soft assignment sharpness
+
+            Returns:
+                attract_loss : scalar
+            """
+            # Step 1: Compute soft assignment weights
+            distances = torch.cdist(z, cb, p=2)  # [B, K]
+            soft_assign = F.softmax(-distances / temperature, dim=-1)  # [B, K]
+
+            # Step 2: Compute weighted centroids (cluster means)
+            soft_assign_T = soft_assign.transpose(0, 1)  # [K, B]
+            weighted_sum = soft_assign_T @ z  # [K, D]
+            cluster_mass = soft_assign_T.sum(dim=1, keepdim=True) + 1e-8
+            cluster_mean = weighted_sum / cluster_mass  # [K, D]
+
+            # Step 3: Distance between each z and its assigned centroids
+            z_expand = z.unsqueeze(1)  # [B, 1, D]
+            means_expand = cluster_mean.unsqueeze(0)  # [1, K, D]
+            l2_dist = ((z_expand - means_expand) ** 2).sum(dim=-1)  # [B, K]
+
+            # Step 4: Weighted attraction loss
+            attract_loss = (soft_assign * l2_dist).sum(dim=-1).mean()  # scalar
+
+            return attract_loss
+
+        # def calc_attractive_loss(dmat, threshold=1):
+        #     attract_mask = dmat < threshold
+        #     attract_term = (dmat[attract_mask] ** 2).mean()
+        #     return attract_term
 
         def calc_repel_loss(dmat, center=2.0, sigma=3.0):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
-        # attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
+        attract_loss = calc_attract_loss(z, codebook)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         attract_weight = 1  # 0.005
         repel_weight = 0.1  # 0.005
-        # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        final_loss = repel_weight * latent_repel_loss
+        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        # final_loss = repel_weight * latent_repel_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
@@ -610,7 +641,7 @@ class VectorQuantize(nn.Module):
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, attract_loss
         two_repel_loss, div_nega_loss, repel_loss, attract_loss = (
-            self.compute_contrastive_loss(latents_for_sil, chunk, logger))
+            self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")

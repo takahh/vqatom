@@ -6,9 +6,9 @@ print(rdkit.__version__)
 from rdkit import Chem
 print(Chem.__file__)
 
-CANVAS_WIDTH = 1200
-CANVAS_HEIGHT = 500
-DPI = 600
+CANVAS_WIDTH = 600
+CANVAS_HEIGHT = 250
+DPI = 3000
 EPOCH = 1
 FONT = 25
 PATH = "/Users/taka/Documents/analysis/10000_16/"
