@@ -121,6 +121,8 @@ class EquivariantThreeHopGINE(nn.Module):
         self.vq = VectorQuantize(
             dim=args.hidden_dim,
             codebook_size=args.codebook_size,
+            decay=0.8,
+            threshold_ema_dead_code=2,
         )
         # Bond weight layer
         self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
