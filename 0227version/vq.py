@@ -224,7 +224,7 @@ class ContrastiveLoss(nn.Module):
 
         attract_loss = calc_attractive_loss(latent_dist_matrix, dynamic_threshold)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
-        attract_weight = 1  # 0.005
+        # attract_weight = 1  # 0.005
         repel_weight = 0.1  # 0.005
         # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
         final_loss = repel_weight * latent_repel_loss
@@ -601,14 +601,14 @@ class VectorQuantize(nn.Module):
 
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
-        # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
+        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
         # final_loss, neg_loss, latent_repel_loss, attract_loss
         two_repel_loss, div_nega_loss, repel_loss, attract_loss = (
             self.compute_contrastive_loss(latents_for_sil, chunk, logger))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
+        return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
 
     def commitment_loss(self, encoder_outputs, codebook, temperature=1.0):
         # encoder_outputs: [B, D], codebook: [K, D]
@@ -676,9 +676,10 @@ class VectorQuantize(nn.Module):
         # if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
         #     # print(f"commit loss {commit_loss} .....")
         # if epoch > 5:
-        total_stepa = 32 * (epoch - 1) + chunk_i
-        repel_weight = max(1.0 - total_stepa / 320, 0.0)  # decays from 1.0 to 0.0
+        decay_rate = 0.8
+        repel_weight = decay_rate ** epoch
         loss = 0.1 * commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
+        # loss = 0.1 * commit_loss + 0.1 * codebook_loss
 
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
         print(f"commit loss {self.commitment_weight * commit_loss} two repel {two_repel_loss}")
