@@ -92,9 +92,9 @@ class ContrastiveLoss(nn.Module):
 
 # VectorQuantize wrapper
 class VectorQuantize(nn.Module):
-    def __init__(self, dim, codebook_size, commitment_weight=1.0, codebook_weight=0.1):
+    def __init__(self, dim, codebook_size, commitment_weight=1.0, codebook_weight=0.1, decay=0.1):
         super().__init__()
-        self.codebook = EuclideanCodebook(dim, codebook_size)
+        self.codebook = EuclideanCodebook(dim, codebook_size, decay=decay)
         self.commitment_weight = commitment_weight
         self.codebook_weight = codebook_weight
         self.contrastive = ContrastiveLoss()
