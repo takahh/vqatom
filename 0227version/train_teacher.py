@@ -291,7 +291,7 @@ def run(args):
 
     if conf["train_or_infer"] != "hptune" or conf["use_checkpoint"] == True:
         thiskey = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-        best_epoch_dict = {'10000_16': 1}
+        best_epoch_dict = {'10000_16': 8}
         model.load_state_dict(torch.load(f"/vqatom/0227version/model_epoch_{best_epoch_dict[thiskey]}.pth", weights_only=False, map_location=device))
         buffer_dict = torch.load(f"/vqatom/0227version/model_buffers_{best_epoch_dict[thiskey]}.pth", map_location=device)
         model.__dict__.update(buffer_dict)
