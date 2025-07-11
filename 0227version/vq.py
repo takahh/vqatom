@@ -678,7 +678,7 @@ class VectorQuantize(nn.Module):
         # if epoch > 5:
         decay_rate = 0.8
         repel_weight = decay_rate ** epoch
-        loss = 0.1 * commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
+        loss = commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss
 
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
