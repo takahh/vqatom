@@ -377,20 +377,26 @@ class EuclideanCodebook(nn.Module):
         # ------------
         from sklearn.metrics import silhouette_score
         from sklearn.utils import resample
+        import numpy as np
 
         if mode == "init_kmeans_final":
-            print(f"write down ... embed and latents")
-            import numpy as np
-            np.savez(f"./naked_embed_{epoch}", embed.cpu().detach().numpy())
-            np.savez(f"./naked_latent_{epoch}", x.cpu().detach().numpy())
-            # Sample only 1000 atoms for silhouette evaluation
+            print(f"Saving embeddings and latents at epoch {epoch}...")
+
+            # Save full arrays
+            np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
+            np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
+
+            # Sample 1000 points for silhouette score calculation
+            x_np = x.cpu().squeeze().detach().numpy()
+            labels_np = embed_ind.cpu().squeeze().detach().numpy()
+
             x_sample, labels_sample = resample(
-                x.cpu().squeeze().detach().numpy(), embed_ind.cpu().squeeze().detach().numpy(),
-                n_samples=1000, random_state=42
+                x_np, labels_np, n_samples=1000, random_state=42
             )
-            score = silhouette_score(x_sample, labels_sample)
-            logger.info(f"Silhouette (subsample): {score:.4f}")
-            print(f"Silhouette (subsample): {score:.4f}")
+
+            sil_score = silhouette_score(x_sample, labels_sample)
+            print(f"Silhouette Score (subsample): {sil_score:.4f}")
+
             logger.info(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             print(
