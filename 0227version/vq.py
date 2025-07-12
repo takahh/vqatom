@@ -373,21 +373,24 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten)
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
-        min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
+        # min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
 
         # hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
         # logger.info(hist.cpu().tolist())
 
-        dist = -dist  # negative distance = similarity
-        embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
-        indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
+        # dist = -dist  # negative distance = similarity
+        # embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
+        # indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
 
-        # For monitoring codebook usage: use hard assignment
-        embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
-        used_codebook_indices = torch.unique(embed_ind_hard)
+        # # For monitoring codebook usage: use hard assignment
+        # embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
+        # used_codebook_indices = torch.unique(embed_ind_hard)
+
+        min_dists_sq, embed_ind_hard = torch.min(dist, dim=-1)  # (1, B)
+        used_codebook_indices = torch.unique(embed_ind_hard.squeeze(0))
 
         # [1, B, K] -> hard indices: [B]
-        embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
+        # embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
 
         # One-hot encode hard assignments
         embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed.shape[1]).float()  # (B, K)
@@ -396,10 +399,10 @@ class EuclideanCodebook(nn.Module):
         embed_ind_hard_onehot = embed_ind_hard_onehot.unsqueeze(0)
 
         # Straight-through estimator: combine hard and soft
-        embed_ind_onehot = embed_ind_hard_onehot + (embed_ind_soft - embed_ind_soft.detach())
+        # embed_ind_onehot = embed_ind_hard_onehot + (embed_ind_soft - embed_ind_soft.detach())
 
         # Soft quantized vector (with gradient)
-        quantize = torch.einsum('nbk,nkd->nbd', embed_ind_onehot, self.embed)  # (1, B, D)
+        quantize = torch.einsum('nbk,nkd->nbd', embed_ind_hard_onehot, self.embed)  # (1, B, D)
 
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
@@ -710,8 +713,8 @@ class VectorQuantize(nn.Module):
         #     # print(f"commit loss {commit_loss} .....")
         # if epoch > 5:
         decay_rate = 0.7
-        repel_weight = decay_rate ** epoch
-        loss = commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
+        repel_weight = decay_rate ** epoch * 0.1
+        loss = 0.1 * commit_loss + codebook_loss + repel_weight * two_repel_loss
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss
 
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
