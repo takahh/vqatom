@@ -217,6 +217,12 @@ class ContrastiveLoss(nn.Module):
 
         import torch.nn.functional as F
 
+        def repel_codebooks(codebook, sigma=1.0):
+            dmat = torch.cdist(codebook, codebook, p=2)
+            mask = ~torch.eye(codebook.size(0), dtype=torch.bool, device=codebook.device)
+            repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))
+            return repel[mask].mean()
+
         def calc_attract_loss(z, cb, temperature=1.0):
             """
             z         : [B, D] - latent vectors
@@ -260,7 +266,8 @@ class ContrastiveLoss(nn.Module):
         attract_weight = 1  # 0.005
         repel_weight = 0.01  # 0.005
         # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        final_loss = repel_weight * latent_repel_loss
+        cb_loss = repel_codebooks(codebook)
+        final_loss = repel_weight * latent_repel_loss + 1 * cb_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
