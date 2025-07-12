@@ -253,12 +253,12 @@ class ContrastiveLoss(nn.Module):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
-        attract_loss = calc_attract_loss(z, codebook)
+        # attract_loss = calc_attract_loss(z, codebook)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix, dynamic_threshold)
         attract_weight = 1  # 0.005
         repel_weight = 0.1  # 0.005
-        final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        # final_loss = repel_weight * latent_repel_loss
+        # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        final_loss = repel_weight * latent_repel_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
@@ -706,7 +706,7 @@ class VectorQuantize(nn.Module):
         # if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
         #     # print(f"commit loss {commit_loss} .....")
         # if epoch > 5:
-        decay_rate = 0.6
+        decay_rate = 0.7
         repel_weight = decay_rate ** epoch
         loss = commit_loss + 0.1 * codebook_loss + repel_weight * two_repel_loss
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss
