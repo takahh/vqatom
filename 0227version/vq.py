@@ -411,7 +411,8 @@ class EuclideanCodebook(nn.Module):
 
         # Soft quantized vector (with gradient)
         print(f"embed_ind_hard_onehot {embed_ind_hard_onehot.shape}, self.embed {self.embed.shape}")
-        quantize = torch.einsum('nbk,nkd->nbd', embed_ind_hard_onehot, self.embed.squeeze())  # (1, B, D)
+        # quantize = torch.einsum('nbk,nkd->nbd', embed_ind_hard_onehot, self.embed.squeeze())  # (1, B, D)
+        quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed.squeeze(0))
 
         quantize_unique = torch.unique(quantize, dim=1)
         num_unique = quantize_unique.shape[1]
