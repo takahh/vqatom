@@ -216,12 +216,12 @@ class ContrastiveLoss(nn.Module):
             print(hist.cpu().tolist())
 
         import torch.nn.functional as F
-
         def repel_codebooks(codebook, sigma=1.0):
-            dmat = torch.cdist(codebook, codebook, p=2)
-            mask = ~torch.eye(codebook.size(0), dtype=torch.bool, device=codebook.device)
-            repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))
-            print(f"mask {mask.shape}, repel {repel.shape}")
+            dmat = torch.cdist(codebook, codebook, p=2)  # [1, K, K]
+            K = codebook.size(1)
+            mask = ~torch.eye(K, dtype=torch.bool, device=codebook.device)  # [K, K]
+            mask = mask.unsqueeze(0)  # [1, K, K] to match repel shape
+            repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))  # [1, K, K]
             return repel[mask].mean()
 
         def calc_attract_loss(z, cb, temperature=1.0):
