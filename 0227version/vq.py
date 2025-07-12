@@ -202,6 +202,7 @@ class ContrastiveLoss(nn.Module):
             self.use_dynamic_threshold = False
 
     def forward(self, z, chunk, logger, codebook):
+        import torch
         latent_dist_matrix = torch.cdist(z, z, p=2)
         sample = latent_dist_matrix.flatten()
         if sample.numel() > 1_000_000:
@@ -209,10 +210,11 @@ class ContrastiveLoss(nn.Module):
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
         if chunk % 32 == 0:
+            import torch
             hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
             logger.info(hist.cpu().tolist())
             print(hist.cpu().tolist())
-        import torch
+
         import torch.nn.functional as F
 
         def calc_attract_loss(z, cb, temperature=1.0):
