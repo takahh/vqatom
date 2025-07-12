@@ -221,6 +221,7 @@ class ContrastiveLoss(nn.Module):
             dmat = torch.cdist(codebook, codebook, p=2)
             mask = ~torch.eye(codebook.size(0), dtype=torch.bool, device=codebook.device)
             repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))
+            print(f"mask {mask.shape}, repel {repel.shape}")
             return repel[mask].mean()
 
         def calc_attract_loss(z, cb, temperature=1.0):
