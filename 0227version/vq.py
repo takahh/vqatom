@@ -403,7 +403,8 @@ class EuclideanCodebook(nn.Module):
         embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed.shape[1]).float()  # (B, K)
 
         # Re-insert batch dim to match shape: [1, B, K]
-        embed_ind_hard_onehot = embed_ind_hard_onehot.unsqueeze(0)
+        # embed_ind_hard_onehot = embed_ind_hard_onehot.unsqueeze(0)
+        embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
 
         # Straight-through estimator: combine hard and soft
         # embed_ind_onehot = embed_ind_hard_onehot + (embed_ind_soft - embed_ind_soft.detach())
