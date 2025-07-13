@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 np.set_printoptions(threshold=np.inf)
 
 # DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
-DATA_PATH = "/Users/taka/Downloads/final_data/"
+DATA_PATH = "/Users/taka/Downloads/"
 OPATH = "/Users/taka/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
@@ -19,15 +19,16 @@ N_NEIGHBORS = 10
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 8
-EPOCH_END = EPOCH_START + 1
+EPOCH_START = 2
+EPOCH_END = EPOCH_START + 4
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 
 def load_npz_array(filename):
     """Load and return the array from a .npz file."""
     arr = np.load(filename, allow_pickle=True)
-    arr = arr["arr_0"]
+    print(arr)
+    arr = arr["embed"]
     return np.squeeze(arr)
 
 def load_npz_array_multi(filename):
@@ -128,7 +129,7 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for zoom in [2, 5, 10]:
+    for zoom in [10]:
         for spread, min_dist in [[1, 0.1]]:
             reducer = umap.UMAP(
                 n_neighbors=N_NEIGHBORS,

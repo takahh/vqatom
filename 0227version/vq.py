@@ -722,13 +722,11 @@ class VectorQuantize(nn.Module):
         args = get_args()
         # if epoch > self.epoch_at_mode_shift or args.use_checkpoint == True:
         #     # print(f"commit loss {commit_loss} .....")
-        # if epoch > 5:
-        decay_rate = 0.4
-        repel_weight = decay_rate ** epoch * 0.1
-        loss = 0.1 * commit_loss + codebook_loss + repel_weight * two_repel_loss
-        # loss = 0.1 * commit_loss + 0.1 * codebook_loss
-
-        if epoch >= 5:
+        if epoch < 5:
+            repel_weight = 1
+            loss = repel_weight * two_repel_loss
+        elif epoch >= 5:
+            loss = 0.1 * commit_loss
             self._codebook.embed.requires_grad_(False)
 
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
