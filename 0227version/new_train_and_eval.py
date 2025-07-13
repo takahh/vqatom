@@ -463,7 +463,7 @@ def run_inductive(
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
                 f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - attract_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
+                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
             # Log training losses
             #
             # [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
@@ -473,7 +473,7 @@ def run_inductive(
                 f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
                 f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
                 f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - attract_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
+                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
             print("used_cb_vectors_all_epochs.shape")
             print(used_cb_vectors_all_epochs.shape)
             # -----------------------------
@@ -511,11 +511,11 @@ def run_inductive(
               f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
               f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
               f"test - repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-              f"test - attract_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
+              f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
         # Log testing losses
         logger.info(
             f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
             f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
             f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             f"test - repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-            f"test - attract_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
+            f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")

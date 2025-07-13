@@ -273,7 +273,7 @@ class ContrastiveLoss(nn.Module):
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
 
-        return final_loss, neg_loss, latent_repel_loss, final_loss
+        return final_loss, neg_loss, latent_repel_loss, cb_loss
 
 
 import torch.nn.functional as F
@@ -656,13 +656,13 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        # final_loss, neg_loss, latent_repel_loss, attract_loss
-        two_repel_loss, div_nega_loss, repel_loss, attract_loss = (
+        # final_loss, neg_loss, latent_repel_loss, cb_loss
+        two_repel_loss, div_nega_loss, repel_loss, cb_loss = (
             self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
+        return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_loss)
 
     def commitment_loss(self, encoder_outputs, codebook):
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
@@ -707,7 +707,7 @@ class VectorQuantize(nn.Module):
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
-        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss \
+        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -748,4 +748,4 @@ class VectorQuantize(nn.Module):
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
         return (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
-                num_unique, repel_loss, attract_loss)
+                num_unique, repel_loss, cb_repel_loss)
