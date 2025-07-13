@@ -432,7 +432,7 @@ class EuclideanCodebook(nn.Module):
             # Save full arrays
             np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
             np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
-        return 0
+            return 0
 
         # Sample 1000 points for silhouette score calculation
         x_np = x.cpu().squeeze().detach().numpy()
