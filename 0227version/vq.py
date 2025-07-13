@@ -377,7 +377,7 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
 
-        if mode == "init_kmeans_final":
+        if mode == "init_kmeans_final" and epoch < 5:
             self.init_embed_(flatten)
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
@@ -432,24 +432,24 @@ class EuclideanCodebook(nn.Module):
             # Save full arrays
             np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
             np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
+
+            # Sample 1000 points for silhouette score calculation
+            x_np = x.cpu().squeeze().detach().numpy()
+            labels_np = embed_ind.cpu().squeeze().detach().numpy()
+
+            x_sample, labels_sample = resample(
+                x_np, labels_np, n_samples=1000, random_state=42
+            )
+
+            sil_score = silhouette_score(x_sample, labels_sample)
+            print(f"Silhouette Score (subsample): {sil_score:.4f}")
+            logger.info(f"Silhouette Score (subsample): {sil_score:.4f}")
+
+            logger.info(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+            print(
+                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
-
-        # Sample 1000 points for silhouette score calculation
-        x_np = x.cpu().squeeze().detach().numpy()
-        labels_np = embed_ind.cpu().squeeze().detach().numpy()
-
-        x_sample, labels_sample = resample(
-            x_np, labels_np, n_samples=1000, random_state=42
-        )
-
-        sil_score = silhouette_score(x_sample, labels_sample)
-        print(f"Silhouette Score (subsample): {sil_score:.4f}")
-        logger.info(f"Silhouette Score (subsample): {sil_score:.4f}")
-
-        logger.info(
-            f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-        print(
-            f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
 
         if self.training:
             temperature = 0.1
