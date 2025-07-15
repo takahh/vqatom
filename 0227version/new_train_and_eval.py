@@ -306,7 +306,7 @@ def run_inductive(
                 else:
                     chunk_size = conf["chunk_size2"]  # in 10,000 molecules
                 for i in range(0, len(glist), chunk_size):
-                    # print_memory_usage(f"idx {idx}")
+                    print_memory_usage(f"idx {idx}")
                     chunk = glist[i:i + chunk_size]  # including 2-hop and 3-hop
                     # all_chunks = glist
                     batched_graph = dgl.batch(chunk)
