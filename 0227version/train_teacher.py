@@ -151,6 +151,9 @@ def get_args():
     parser.add_argument(
         "--chunk_size", type=int, default=200
     )
+    parser.add_argument(
+        "--chunk_size2", type=int, default=1000
+    )
     """Optimization"""
     parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
     parser.add_argument("--learning_rate", type=float, default=0.0001) # default=0.0001)
