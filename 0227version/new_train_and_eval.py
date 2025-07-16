@@ -323,12 +323,12 @@ def run_inductive(
                     gc.collect()
                     torch.cuda.empty_cache()
                     args = get_args()
-                    if args.get_umap_data:
-                        cb_new = model.vq._codebook.embed
-                        np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-                        latents = torch.squeeze(latents)
-                        # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
-                        np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
+                    # if args.get_umap_data:
+                    cb_new = model.vq._codebook.embed
+                    np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
+                    latents = torch.squeeze(latents)
+                    # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
+                    np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
                     loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
                     del latents, loss, loss_list_train, latent_train, latents, cb_num_unique
                     gc.collect()
