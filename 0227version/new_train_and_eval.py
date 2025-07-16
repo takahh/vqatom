@@ -270,6 +270,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print("TRAIN ---------------")
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+
+                # ------------- remove thi soon --------------
+                if idx == 1:
+                    break
+                # ------------- remove thi soon --------------
                 if idx == 5:
                     break
                 print(f"idx {idx}")
