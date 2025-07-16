@@ -284,7 +284,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     cb_unique_num_list.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
 
                     # cleanup
-                    del batched_graph, batched_feats, chunk, latent_train, latents, loss, loss_list_train, cb_num_unique
+                    del batched_graph, batched_feats, chunk, latents, loss, loss_list_train, cb_num_unique
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
