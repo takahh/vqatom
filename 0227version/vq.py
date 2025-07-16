@@ -719,10 +719,10 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 5
+        EPOCH_TO_SHIFT = 2
         # ----------------------------------
         if epoch >= EPOCH_TO_SHIFT:
-            commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
+            commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
         else:
             commit_loss = torch.tensor(1)
         # ---------------------------------------------
