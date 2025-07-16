@@ -280,7 +280,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
                     # ------------- remove thi soon --------------
-                    if i == 1:
+                    if i == chunk_size:
                         break
                     # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
@@ -347,7 +347,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             for i in range(0, len(glist), chunk_size):
 
                 # ------------- remove thi soon --------------
-                if i == 1:
+                if i == chunk_size:
                     break
                 # ------------- remove thi soon --------------
                 chunk = glist[i:i + chunk_size]
