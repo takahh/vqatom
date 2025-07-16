@@ -311,6 +311,13 @@ def run_inductive(
 
                     torch.cuda.synchronize()
 
+                # After processing all chunks:
+                for g in glist:
+                    g.ndata.clear()
+                    g.edata.clear()
+                del glist, glist_base
+                gc.collect()
+
         # --------------------------------
         # Save model
         # --------------------------------
