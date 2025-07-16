@@ -516,4 +516,7 @@ def run_inductive(
         ind_list.clear()
         gc.collect()
         torch.cuda.empty_cache()
+        import objgraph
+        objgraph.show_growth(limit=20)
+
 
