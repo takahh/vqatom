@@ -505,3 +505,15 @@ def run_inductive(
             f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
             f"test - repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
             f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
+
+        # Clear large epoch-level lists to free memory
+        loss_list_list_train.clear()
+        loss_list_list_test.clear()
+        loss_list.clear()
+        cb_unique_num_list.clear()
+        cb_unique_num_list_test.clear()
+        latent_list.clear()
+        ind_list.clear()
+        gc.collect()
+        torch.cuda.empty_cache()
+
