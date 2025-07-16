@@ -707,25 +707,28 @@ class VectorQuantize(nn.Module):
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
-        # spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
-        #     = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
+        if epoch < 5:
+            spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
+                = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
             embed_ind = embed_ind.flatten()
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
+
+        if epoch >= 5:
+            commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
-        # if epoch < 5:
-        #     repel_weight = 1
-        #     loss = repel_weight * two_repel_loss
-        # elif epoch >= 5:
-        loss = 0.1 * commit_loss
-        self._codebook.embed.requires_grad_(False)
+        if epoch < 5:
+            repel_weight = 1
+            loss = repel_weight * two_repel_loss
+        elif epoch >= 5:
+            loss = 0.1 * commit_loss
+            self._codebook.embed.requires_grad_(False)
 
         # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
         print(f"commit loss {self.commitment_weight * commit_loss}")
