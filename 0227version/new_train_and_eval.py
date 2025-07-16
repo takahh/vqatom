@@ -245,7 +245,7 @@ def run_inductive(
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     for epoch in range(1, conf["max_epoch"] + 1):
-        loss_list_list_train = [[]] * 11
+        loss_list_list_train = [[] for _ in range(11)]
         loss_list_list_test = [[]] * 11
         loss_list = []
         cb_unique_num_list = []
@@ -295,41 +295,50 @@ def run_inductive(
             # make initted FALSE to run kmeans at the beginning in every epoch in train
             model.vq._codebook.initted.data.copy_(torch.Tensor([False]))
             print("TRAIN ---------------")
+            # Initialize properly
+            loss_list_list_train = [[] for _ in range(11)]
+
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
                 print(f"idx {idx}")
 
-                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-                if epoch < 5:
-                    chunk_size = conf["chunk_size"]  # in 10,000 molecules
-                else:
-                    chunk_size = conf["chunk_size2"]  # in 10,000 molecules
+                glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
+                chunk_size = conf["chunk_size"] if epoch < 5 else conf["chunk_size2"]
+
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
-                    chunk = glist[i:i + chunk_size]  # including 2-hop and 3-hop
-                    # all_chunks = glist
+                    chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
-                    # batched_graph_all = dgl.batch(all_chunks)
-                    # Ensure node features are correctly extracted
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
+
                     loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i/chunk_size), logger, idx)
+                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, idx
+                    )
+
+                    # Convert loss_list_train tensors to floats
+                    loss_list_train = [l.detach().cpu().item() for l in loss_list_train]
+
+                    # Append without recreating lists
+                    for j, val in enumerate(loss_list_train):
+                        loss_list_list_train[j].append(val)
+
                     cb_unique_num_list.append(cb_num_unique)
-                    loss_list.append(loss.detach().cpu().item())  # Ensures loss does not retain computation graph
+                    loss_list.append(loss.detach().cpu().item())
+
                     torch.cuda.synchronize()
                     del batched_graph, batched_feats, chunk
                     gc.collect()
                     torch.cuda.empty_cache()
-                    # args = get_args()
-                    # if args.get_umap_data:
+
+                    # Save latents if needed
                     cb_new = model.vq._codebook.embed
                     np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
                     latents = torch.squeeze(latents)
-                    # random_indices = np.random.choice(latent_train.shape[0], 20000, replace=False)
                     np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
-                    loss_list_list_train = [x + [y] for x, y in zip(loss_list_list_train, loss_list_train)]
+
+                    # Free up memory
                     del latents, loss, loss_list_train, latent_train, cb_num_unique
                     gc.collect()
                     torch.cuda.empty_cache()
