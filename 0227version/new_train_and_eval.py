@@ -437,5 +437,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         device = torch.device("cuda")
         model.load_state_dict(state)
         model.to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
 
 
