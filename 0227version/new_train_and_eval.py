@@ -279,6 +279,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
+                    if i == 1:
+                        break
 
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
