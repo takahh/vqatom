@@ -701,14 +701,14 @@ class VectorQuantize(nn.Module):
             self._codebook(x, logger, chunk_i, epoch, mode)
             return 0
         else:
-            quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
+            　quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
-        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
+        # spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
+        #     = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
@@ -743,5 +743,12 @@ class VectorQuantize(nn.Module):
                 quantize = rearrange(quantize, '1 b d -> b d')
             if len(embed_ind.shape) == 2:
                 embed_ind = rearrange(embed_ind, 'b 1 -> b')
+        # delete this soon ------------------------------------
+        div_nega_loss = commit_loss
+        sil_loss = commit_loss
+        repel_loss = commit_loss
+        cb_repel_loss = commit_loss
+        # delete this soon ------------------------------------
+
         return (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
                 num_unique, repel_loss, cb_repel_loss)
