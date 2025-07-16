@@ -221,6 +221,9 @@ def print_memory_usage(tag=""):
     process = psutil.Process(os.getpid())
     mem = process.memory_info().rss / (1024 ** 2)  # in MB
     print(f"[{tag}] Memory Usage: {mem:.2f} MB")
+    allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # MB
+    reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
+    print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
 
 
 def run_inductive(
