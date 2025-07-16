@@ -225,27 +225,19 @@ def print_memory_usage(tag=""):
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
 
+def run_inductive(conf, model, optimizer, accumulation_steps, logger):
+    import gc, itertools, torch, os
+    from collections import Counter
 
-def run_inductive(
-        conf,
-        model,
-        optimizer,
-        accumulation_steps,
-        logger):
-    import gc
-    import torch
-    import itertools
     # ----------------------------
-    # define train and test list
+    # dataset and dataloader
     # ----------------------------
-    # Initialize dataset and dataloader
-    if conf['train_or_infer'] == "hptune" or conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "use_nonredun_cb_infer":
-        datapath = DATAPATH
-    else:
-        datapath = DATAPATH_INFER
+    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
     for epoch in range(1, conf["max_epoch"] + 1):
         print(f"epoch {epoch} ------------------------------")
 
@@ -256,8 +248,11 @@ def run_inductive(
         cb_unique_num_list = []
         cb_unique_num_list_test = []
 
+        # ---------------------------
+        # TRAIN
+        # ---------------------------
         if conf["train_or_infer"] in ("hptune", "train"):
-            # re-init codebook each epoch
+            # re-init codebook
             model.vq._codebook.initted.data.copy_(torch.tensor([False], device=model.vq._codebook.initted.device))
             print("TRAIN ---------------")
 
@@ -266,14 +261,12 @@ def run_inductive(
                     break
                 print(f"idx {idx}")
 
-                # build DGL graphs
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
                 chunk_size = conf["chunk_size"] if epoch < 5 else conf["chunk_size2"]
 
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
 
-                    # batch graph
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
@@ -284,239 +277,131 @@ def run_inductive(
                         model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, idx
                     )
 
-                    # ensure plain floats for storage
-                    clean_losses = [
-                        l.detach().cpu().item() if hasattr(l, "detach") else float(l)
-                        for l in loss_list_train
-                    ]
+                    # record scalar losses
+                    clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
+                                    for l in loss_list_train]
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
-
-                    cb_unique_num_list.append(cb_num_unique)
                     loss_list.append(loss.detach().cpu().item())
+                    cb_unique_num_list.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
 
-                    # free per‑chunk data
-                    del batched_graph, batched_feats, chunk, latent_train
-                    # latents = torch.squeeze(latents)
-
-                    # # (optional) only save latents once per epoch to reduce overhead
-                    # if i == 0 and idx == 0:
-                    #     np.savez(f"./init_codebook_{epoch}", model.vq._codebook.embed.cpu().detach().numpy())
-                    #     np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
-
-                    # free large tensors explicitly
-                    del latents, loss, loss_list_train, cb_num_unique
+                    # cleanup
+                    del batched_graph, batched_feats, chunk, latent_train, latents, loss, loss_list_train, cb_num_unique
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
 
-                # After processing all chunks:
+                # cleanup glist
                 for g in glist:
                     g.ndata.clear()
                     g.edata.clear()
                 del glist, glist_base
                 gc.collect()
 
-        # --------------------------------
-        # Save model
-        # --------------------------------
-        if conf["train_or_infer"] == "analysis":
-            pass
-        else:
+        # ---------------------------
+        # SAVE MODEL
+        # ---------------------------
+        if conf["train_or_infer"] != "analysis":
             state = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
-            torch.save(model.__dict__, f"model_buffers_{epoch}.pth")
+            # torch.save(model.__dict__, f"model_buffers_{epoch}.pth")  # ⚠️ removed to avoid leaks
             model.load_state_dict(state)
-        # --------------------------------
-        # Test
-        # --------------------------------
+
+        # ---------------------------
+        # TEST
+        # ---------------------------
         test_loss_list = []
-        ind_list = []
-        latent_list = []
         quantized = None
         if conf['train_or_infer'] == "hptune":
-            start_num = 5
-            end_num = 6
-            # end_num = 31
+            start_num, end_num = 5, 6
         elif conf['train_or_infer'] == "analysis":
             dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-            start_num = 0
-            end_num = 1
-        elif conf['train_or_infer'] == "infer":
-            start_num = 6
-            end_num = 18
-            end_num = 10
+            start_num, end_num = 0, 1
+        else:  # infer
+            start_num, end_num = 6, 10
         print(f"start num {start_num}, end num {end_num}")
 
-        # ------------------------------------------
-        # Infer 時、対象データ全体で
-        # ------------------------------------------
+        ind_counts = Counter()
+
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
-            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-            chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
+            chunk_size = conf["chunk_size"]
+
             for i in range(0, len(glist), chunk_size):
                 chunk = glist[i:i + chunk_size]
-                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+                chunk_base = glist_base[i:i + chunk_size]
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
-                # Ensure node features are correctly extracted
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
-                # model, g, feats, epoch, logger, g_base
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique \
-                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
-                cb_unique_num_list_test.append(cb_num_unique)
-                # model.reset_kmeans()
-                test_loss_list.append(test_loss.cpu().item())  # Ensures loss does not retain computation graph
-                torch.cuda.synchronize()
-                del batched_graph, batched_feats, chunk
+
+                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique = \
+                    evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
+
+                test_loss_list.append(test_loss.cpu().item())
+                cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
+                loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
+
+                # optionally save small parts per chunk instead of keeping in lists
+                try:
+                    ind_chunk = sample_list_test[0].cpu().numpy()
+                    latent_chunk = sample_list_test[2].cpu().numpy()
+                    # save per chunk to avoid huge accumulation
+                    np.savez(f"./tmp_ind_{epoch}_{idx}_{i}.npz", ind_chunk=ind_chunk)
+                    np.savez(f"./tmp_latent_{epoch}_{idx}_{i}.npz", latent_chunk=latent_chunk)
+                    # count indices
+                    ind_counts.update(ind_chunk.flatten().tolist())
+                except Exception as e:
+                    print(f"[WARN] collecting chunk failed: {e}")
+
+                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
                 gc.collect()
                 torch.cuda.empty_cache()
-                loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
-                try:
-                    ind_chunk = sample_list_test[0].cpu().tolist()
-                    # print(f"len(ind_chunk) = {len(ind_chunk)}")
-                    ind_list.append(ind_chunk)
-                    latent_chunk = sample_list_test[2].cpu().tolist()
-                    # print(f"sample_list_test[2].shape {sample_list_test[2].shape}")
-                    latent_list.append(latent_chunk)
-                except IndexError:
-                    print("INDEX ERROR in collecting ind_list !!!!!!!")
-                    pass
+
+            # cleanup graphs after idx
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base
+            gc.collect()
 
             args = get_args()
             if args.get_umap_data:
                 cb_new = model.vq._codebook.embed
                 np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-        # -------------------------------------------
-        # Count Codebook Frequency and used Codebook
-        # -------------------------------------------
-        args = get_args()
-        if args.train_or_infer == 'use_nonredun_cb_infer':
-            ind_list = [item for sublist in ind_list for item in sublist]
-            ind_list = [item for sublist in ind_list for item in sublist]
-        flat = [item for sublist in ind_list for item in sublist]
-        print(f"len(flat) = {len(flat)}")
-        unique_flat = list(set(flat))
-        print(f"len(unique_flat) = {len(unique_flat)}")
-        count = Counter(flat)
-        import json
-        flat = torch.tensor(flat)  # or torch.tensor(flat, dtype=torch.long)
-        unique_sorted_indices = torch.unique(flat, sorted=True).long()
-        used_cb_vectors_all_epochs = model.vq._codebook.embed[0][unique_sorted_indices]
-        num_zero_keys = 1 if 0.0 in count else 0
-        VOCAB_SIZE = conf["codebook_size"]
-        all_keys = set(range(VOCAB_SIZE))
-        observed_keys = set(count.keys())
-        missing_keys = all_keys - observed_keys
-        num_missing_keys = len(missing_keys)
-        num_observed = len(observed_keys)
-        unique_vectors = torch.unique(model.vq._codebook.embed[0], dim=0)
-        num_unique_vectors = unique_vectors.size(0)
-        logger.info(f"{num_unique_vectors} is num_unique_vectors")
-        print(f"Number of observed keys in the test set: {num_observed}")
-        print(f"Number of zero keys: {num_zero_keys}")
-        print(f"Number of unused keys: {num_missing_keys}")
-        logger.info(f"Number of observed keys: {num_observed}")
-        logger.info(f"Number of zero keys: {num_zero_keys}")
-        logger.info(f"Number of unused keys: {num_missing_keys}")
 
-        # -------------------------------
-        # Save loss information and else
-        # -------------------------------
-        import os
+        # ---------------------------
+        # stats and save
+        # ---------------------------
+        flat = list(ind_counts.elements())
+        print(f"len(flat) = {len(flat)}, unique = {len(set(flat))}")
+        used_cb_vectors_all_epochs = model.vq._codebook.embed[0][torch.unique(torch.tensor(flat), sorted=True).long()]
+
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
-        if conf['train_or_infer'] == "hptune" or conf['train_or_infer'] == "train":
-            # ---------------------------
-            # unique cb per minibatch
-            # ---------------------------
-            print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
-                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
-            logger.info(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}, "
-                f"unique_cb_vecs mean: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs min: {min(cb_unique_num_list): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list): 9f},")
-            # ---------------------------
-            # losses of train
-            # ---------------------------
-            print(
-                f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
-                f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
-                f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
-                f"train - unique_cb_vecs: {sum(cb_unique_num_list) / len(cb_unique_num_list): 9f},"
-                f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
-            # Log training losses
-            #
-            # [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
-            #                     repel_loss.item(), attract_loss.item()]
-            logger.info(
-                f"train - commit_loss: {sum(loss_list_list_train[1]) / len(loss_list_list_train[1]): 9f}, "
-                f"train - cb_loss: {sum(loss_list_list_train[2]) / len(loss_list_list_train[2]): 9f},"
-                f"train - sil_loss: {sum(loss_list_list_train[3]) / len(loss_list_list_train[3]): 9f},"
-                f"train - repel_loss: {sum(loss_list_list_train[4]) / len(loss_list_list_train[4]): 9f},"
-                f"train - cb_repel_loss: {sum(loss_list_list_train[5]) / len(loss_list_list_train[5]): 9f},")
-            print("used_cb_vectors_all_epochs.shape")
-            print(used_cb_vectors_all_epochs.shape)
-            # -----------------------------
-            # write latents and cb vectors
-            # -----------------------------
-            np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
+
+        # log stats
+        print(f"test - commit_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f}, "
+              f"test - cb_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
+        logger.info(f"test - commit_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f}, "
+                    f"test - cb_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
+
+        if conf['train_or_infer'] in ("hptune", "train"):
+            print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
 
-        elif conf['train_or_infer'] == "infer" or conf['train_or_infer'] == "analysis":
-            logger.info(f"epoch {epoch}:"
-                f"unique_cb_vecs mean: {sum(cb_unique_num_list_test) / len(cb_unique_num_list_test): 9f},"
-                f"unique_cb_vecs min: {min(cb_unique_num_list_test): 9f},"
-                f"unique_cb_vecs max: {max(cb_unique_num_list_test): 9f},")
-            print("used_cb_vectors_all_epochs.shape")
-            print(used_cb_vectors_all_epochs.shape)
-            np.savez(f"./{kw}/sample_emb_ind_{epoch}", sample_list_test[0].cpu())
-            np.savez(f"./{kw}/sample_node_feat_{epoch}", sample_list_test[1].cpu())
-            np.savez(f"./{kw}/latents_mol_{epoch}", sample_list_test[2].cpu())
-            np.savez(f"./{kw}/sample_bond_num_{epoch}", sample_list_test[3].cpu())
-            np.savez(f"./{kw}/sample_src_{epoch}", sample_list_test[4].cpu())
-            np.savez(f"./{kw}/latents_all_{epoch}.npz", **{f"arr_{i}": arr for i, arr in enumerate(latent_list)})
-            np.savez(f"./{kw}/sample_dst_{epoch}", sample_list_test[5].cpu())
-            np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
-            np.savez(f"./{kw}/quantized_{epoch}", quantized.detach().cpu().numpy())
-            kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
-            with open(f"./{kw}/ind_frequencies.json", 'w') as f:
-                json.dump(dict(count), f)
-            np.savez(f"./{kw}/sample_adj_base_{epoch}", sample_list_test[6].cpu())
-
-        # ---------------------------
-        # losses of evaluation
-        # ---------------------------
-        print(
-              f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
-              f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
-              f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
-              f"test - repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-              f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
-        # Log testing losses
-        logger.info(
-            f"test - commit_loss: {sum(loss_list_list_test[1]) / len(loss_list_list_test[1]): 9f}, "
-            f"test - cb_loss: {sum(loss_list_list_test[2]) / len(loss_list_list_test[2]): 9f},"
-            f"test - sil_loss: {sum(loss_list_list_test[3]) / len(loss_list_list_test[3]): 9f},"
-            f"test - repel_loss: {sum(loss_list_list_test[4]) / len(loss_list_list_test[4]): 9f},"
-            f"test - cb_repel_loss: {sum(loss_list_list_test[5]) / len(loss_list_list_test[5]): 9f},")
-
-        # Clear large epoch-level lists to free memory
+        # cleanup big lists
         loss_list_list_train.clear()
         loss_list_list_test.clear()
         loss_list.clear()
         cb_unique_num_list.clear()
         cb_unique_num_list_test.clear()
-        latent_list.clear()
-        ind_list.clear()
         gc.collect()
         torch.cuda.empty_cache()
+
+        # debug growth
         import objgraph
-        objgraph.show_growth(limit=20)
+        objgraph.show_growth(limit=10)
 
 
