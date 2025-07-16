@@ -322,7 +322,7 @@ def run_inductive(
                     del batched_graph, batched_feats, chunk
                     gc.collect()
                     torch.cuda.empty_cache()
-                    args = get_args()
+                    # args = get_args()
                     # if args.get_umap_data:
                     cb_new = model.vq._codebook.embed
                     np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
