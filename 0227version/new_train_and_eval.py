@@ -8,35 +8,51 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
-
 def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    # Ensure model is on device
+    model = model.to(device)
     model.train()
+
+    # Move graph and features to device
     g = g.to(device)
+    g.ndata['feat'] = g.ndata['feat'].to(device) if 'feat' in g.ndata else g.ndata['feat']
     feats = feats.to(device)
 
+    # Gradient scaler for mixed precision
     scaler = torch.cuda.amp.GradScaler(init_scale=1e2)
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
 
+    # Forward pass
     with torch.cuda.amp.autocast():
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique = \
-            model(g, feats, chunk_i, logger, epoch)
+        outputs = model(g, feats, chunk_i, logger, epoch)
+        (_, logits, loss, _, cb, loss_list3,
+         latent_train, quantized, latents,
+         sample_list_train, num_unique) = outputs
 
-    model.vq._codebook.embed.data.copy_(cb)
+    # Sync codebook weights
+    model.vq._codebook.embed.data.copy_(cb.to(device))
+
+    # Free some unused outputs early
     del logits, quantized
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()  # remove in production
 
-    # backward
+    # Backward pass
     scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     scaler.step(optimizer)
     scaler.update()
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
 
-    # return just the tensor, not wrapped in a list
-    return loss, loss_list3, latent_train.detach().cpu(), latents, num_unique
+    # Return only what’s needed
+    return (
+        loss.detach(),                     # keep as tensor if you want
+        [l.item() if hasattr(l, 'item') else l for l in loss_list3],
+        latent_train.detach().cpu(),       # safe on CPU
+        latents.detach().cpu() if torch.is_tensor(latents) else latents,
+        num_unique
+    )
 
 def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
