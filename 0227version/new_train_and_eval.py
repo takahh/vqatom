@@ -271,10 +271,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                # ------------- remove thi soon --------------
-                if idx == 1:
-                    break
-                # ------------- remove thi soon --------------
+                # # ------------- remove thi soon --------------
+                # if idx == 1:
+                #     break
+                # # ------------- remove thi soon --------------
                 if idx == 5:
                     break
                 print(f"idx {idx}")
@@ -284,10 +284,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
-                    # ------------- remove thi soon --------------
-                    if i == chunk_size:
-                        break
-                    # ------------- remove thi soon --------------
+                    # # ------------- remove thi soon --------------
+                    # if i == chunk_size:
+                    #     break
+                    # # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
@@ -351,10 +351,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             for i in range(0, len(glist), chunk_size):
 
-                # ------------- remove thi soon --------------
-                if i == chunk_size:
-                    break
-                # ------------- remove thi soon --------------
+                # # ------------- remove thi soon --------------
+                # if i == chunk_size:
+                #     break
+                # # ------------- remove thi soon --------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]
                 batched_graph = dgl.batch(chunk)
@@ -428,28 +428,28 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         torch.cuda.empty_cache()
 
         # debug growth
-        import objgraph
-        objgraph.show_growth(limit=10)
+        # import objgraph
+        # objgraph.show_growth(limit=10)
         # del model
         gc.collect()
         torch.cuda.empty_cache()
 
-        for name, buf in model.named_buffers():
-            print(f"{name}: {buf.shape} {buf.device}")
-        for name, p in model.named_parameters():
-            print(f"{name}: {p.shape} {p.device}")
+        # for name, buf in model.named_buffers():
+        #     print(f"{name}: {buf.shape} {buf.device}")
+        # for name, p in model.named_parameters():
+        #     print(f"{name}: {p.shape} {p.device}")
 
-        state = copy.deepcopy(model.state_dict())
-        del model
-        gc.collect()
-        torch.cuda.empty_cache()
-        from models import EquivariantThreeHopGINE
-        # Recreate fresh model and load weights
-        model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim,
-                                        out_feats=args.hidden_dim, args=args)
-        device = torch.device("cuda")
-        model.load_state_dict(state)
-        model.to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
+        # state = copy.deepcopy(model.state_dict())
+        # del model
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # from models import EquivariantThreeHopGINE
+        # # Recreate fresh model and load weights
+        # model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim,
+        #                                 out_feats=args.hidden_dim, args=args)
+        # device = torch.device("cuda")
+        # model.load_state_dict(state)
+        # model.to(device)
+        # optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
 
 
