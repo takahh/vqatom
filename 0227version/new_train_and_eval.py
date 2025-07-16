@@ -38,14 +38,12 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     # return just the tensor, not wrapped in a list
     return loss, loss_list3, latent_train.detach().cpu(), latents, num_unique
 
-
 def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
-    loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
-    # with torch.no_grad(), autocast():
-    with (torch.no_grad()):  # data, features, chunk_i, logger=None, epoch=None, batched
+
+    with torch.no_grad():
         if mode == "init_kmeans_loop":
             latents = model(g, feats, chunk_i, logger, epoch, g_base, mode)
             return latents
@@ -53,15 +51,32 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
             model(g, feats, chunk_i, logger, epoch, g_base, mode)
             return 0
         else:
-            _, logits, test_loss, _, cb, test_loss_list3, latent_train, quantized, test_latents, sample_list_test,\
-            num_unique = model(g, feats, chunk_i, logger, epoch, g_base, mode)  # g is blocks
-    latent_list.append(latent_train.detach().cpu())
-    cb_list.append(cb.detach().cpu())
-    test_latents = test_latents.detach().cpu()
+            (
+                _,
+                logits,
+                test_loss,
+                _,
+                cb,
+                test_loss_list3,
+                latent_train,
+                quantized,
+                test_latents,
+                sample_list_test,
+                num_unique,
+            ) = model(g, feats, chunk_i, logger, epoch, g_base, mode)
+
+    # detach and move to cpu
+    latent_train_cpu = latent_train.detach().cpu()
+    cb_cpu = cb.detach().cpu()
+    test_latents_cpu = test_latents.detach().cpu()
     test_loss = test_loss.to(device)
-    del logits
+
+    # cleanup
+    del logits, latent_train, cb, test_latents
     torch.cuda.empty_cache()
-    return test_loss, test_loss_list3, latent_list, test_latents, sample_list_test, quantized, num_unique
+
+    # return single tensors, not lists
+    return test_loss, test_loss_list3, latent_train_cpu, test_latents_cpu, sample_list_test, quantized, num_unique
 
 
 class MoleculeGraphDataset(Dataset):
@@ -334,7 +349,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
 
-                test_loss, loss_list_test, latent_train, latents, sample_list_test, quantized, cb_num_unique = \
+                test_loss, loss_list_test, latent_train_cpu, latents_cpu, sample_list_test, quantized, cb_num_unique = \
                     evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
 
                 test_loss_list.append(test_loss.cpu().item())
@@ -348,6 +363,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     # save per chunk to avoid huge accumulation
                     np.savez(f"./tmp_ind_{epoch}_{idx}_{i}.npz", ind_chunk=ind_chunk)
                     np.savez(f"./tmp_latent_{epoch}_{idx}_{i}.npz", latent_chunk=latent_chunk)
+                    del latent_chunk
                     # count indices
                     ind_counts.update(ind_chunk.flatten().tolist())
                 except Exception as e:
