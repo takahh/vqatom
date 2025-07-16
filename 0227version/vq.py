@@ -2,7 +2,6 @@ import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from torch import nn, einsum
 
-from Analysis.mol_image_generate import EPOCH
 from train_teacher import get_args
 
 
