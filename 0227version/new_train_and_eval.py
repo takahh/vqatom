@@ -315,7 +315,7 @@ def run_inductive(
                 for g in glist:
                     g.ndata.clear()
                     g.edata.clear()
-                del glist, glist_base
+                del glist, glist_base, batched_graph, batched_feats, chunk, latent_train
                 gc.collect()
 
         # --------------------------------
