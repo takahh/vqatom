@@ -403,13 +403,14 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # debug growth
         import objgraph
         objgraph.show_growth(limit=10)
-        del model
+        # del model
         gc.collect()
         torch.cuda.empty_cache()
 
-        from models import EquivariantThreeHopGINE
-        # in_feats, hidden_feats, out_feats, args
-        model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim,
-                                        out_feats=args.hidden_dim, args=args)
+        for name, buf in model.named_buffers():
+            print(f"{name}: {buf.shape} {buf.device}")
+        for name, p in model.named_parameters():
+            print(f"{name}: {p.shape} {p.device}")
+
 
 
