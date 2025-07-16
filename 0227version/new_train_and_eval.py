@@ -318,8 +318,10 @@ def run_inductive(
                     )
 
                     # Convert loss_list_train tensors to floats
-                    loss_list_train = [l.detach().cpu().item() for l in loss_list_train]
-
+                    loss_list_train = [
+                        l.detach().cpu().item() if hasattr(l, "detach") else float(l)
+                        for l in loss_list_train
+                    ]
                     # Append without recreating lists
                     for j, val in enumerate(loss_list_train):
                         loss_list_list_train[j].append(val)
