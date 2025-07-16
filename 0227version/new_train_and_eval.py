@@ -9,36 +9,34 @@ from collections import Counter
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
 
-
 def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.train()
-    g.to(device)
-    feats.to(device)
-    loss_list, latent_list, cb_list, loss_list_list = [], [], [], []
-    scaler = torch.cuda.amp.GradScaler(init_scale=1e2)  # Try lower scale like 1e1
+    g = g.to(device)
+    feats = feats.to(device)
+
+    scaler = torch.cuda.amp.GradScaler(init_scale=1e2)
     optimizer.zero_grad()
-    with (torch.cuda.amp.autocast()):
-        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique \
-        = model(g, feats, chunk_i, logger, epoch)  # g is blocks
+
+    with torch.cuda.amp.autocast():
+        _, logits, loss, _, cb, loss_list3, latent_train, quantized, latents, sample_list_train, num_unique = \
+            model(g, feats, chunk_i, logger, epoch)
+
     model.vq._codebook.embed.data.copy_(cb)
-    loss = loss.to(device)
     del logits, quantized
     torch.cuda.empty_cache()
-    scaler.scale(loss).backward(retain_graph=False)  # Ensure this is False unless needed
+
+    # backward
+    scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    # -----------------
-    # update parameters
-    # -----------------
     scaler.step(optimizer)
-
     scaler.update()
     optimizer.zero_grad()
-    latent_list.append(latent_train.detach().cpu())
-    cb_list.append(cb.detach().cpu())
-    return loss, loss_list3, latent_list, latents, num_unique
+
+    # return just the tensor, not wrapped in a list
+    return loss, loss_list3, latent_train.detach().cpu(), latents, num_unique
 
 
 def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
@@ -273,7 +271,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                         batched_feats = batched_graph.ndata["feat"]
 
                     # train step
-                    loss, loss_list_train, latent_train, latents, cb_num_unique = train_sage(
+                    loss, loss_list_train, latent_train_cpu, latents, cb_num_unique = train_sage(
                         model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, idx
                     )
 
