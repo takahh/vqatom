@@ -299,10 +299,10 @@ def run_inductive(
                     del batched_graph, batched_feats, chunk, latent_train
                     latents = torch.squeeze(latents)
 
-                    # (optional) only save latents once per epoch to reduce overhead
-                    if i == 0 and idx == 0:
-                        np.savez(f"./init_codebook_{epoch}", model.vq._codebook.embed.cpu().detach().numpy())
-                        np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
+                    # # (optional) only save latents once per epoch to reduce overhead
+                    # if i == 0 and idx == 0:
+                    #     np.savez(f"./init_codebook_{epoch}", model.vq._codebook.embed.cpu().detach().numpy())
+                    #     np.savez(f"./latents_{epoch}", latents.cpu().detach().numpy())
 
                     # free large tensors explicitly
                     del latents, loss, loss_list_train, cb_num_unique
