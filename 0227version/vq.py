@@ -725,10 +725,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
-        if epoch < 5:
+        if epoch < 2:
             repel_weight = 1
             loss = repel_weight * two_repel_loss
-        elif epoch >= 5:
+        elif epoch >= 2:
             loss = 0.1 * commit_loss
             self._codebook.embed.requires_grad_(False)
 

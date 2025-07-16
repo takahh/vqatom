@@ -280,7 +280,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"idx {idx}")
 
                 glist_base, glist = convert_to_dgl(adj_batch, attr_batch)
-                chunk_size = conf["chunk_size"] if epoch < 5 else conf["chunk_size2"]
+                chunk_size = conf["chunk_size"] if epoch < 2 else conf["chunk_size2"]
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
