@@ -720,7 +720,7 @@ class VectorQuantize(nn.Module):
         if epoch >= 5:
             commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
         else:
-            commit_loss = None
+            commit_loss = torch.tensor(1)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
