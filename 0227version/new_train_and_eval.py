@@ -449,6 +449,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # del model
         gc.collect()
         torch.cuda.empty_cache()
+        print(next(model.parameters()).device)  # should say cuda:0
 
         # for name, buf in model.named_buffers():
         #     print(f"{name}: {buf.shape} {buf.device}")
