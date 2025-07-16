@@ -426,5 +426,16 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         for name, p in model.named_parameters():
             print(f"{name}: {p.shape} {p.device}")
 
+        state = copy.deepcopy(model.state_dict())
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
+        from models import EquivariantThreeHopGINE
+        # Recreate fresh model and load weights
+        model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim,
+                                        out_feats=args.hidden_dim, args=args)
+        device = torch.device("cuda")
+        model.load_state_dict(state)
+        model.to(device)
 
 
