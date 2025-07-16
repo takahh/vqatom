@@ -279,9 +279,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
+                    # ------------- remove thi soon --------------
                     if i == 1:
                         break
-
+                    # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
@@ -344,6 +345,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             chunk_size = conf["chunk_size"]
 
             for i in range(0, len(glist), chunk_size):
+
+                # ------------- remove thi soon --------------
+                if i == 1:
+                    break
+                # ------------- remove thi soon --------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]
                 batched_graph = dgl.batch(chunk)
