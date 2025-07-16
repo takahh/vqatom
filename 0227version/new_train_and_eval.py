@@ -297,7 +297,7 @@ def run_inductive(
 
                     # free per‑chunk data
                     del batched_graph, batched_feats, chunk, latent_train
-                    latents = torch.squeeze(latents)
+                    # latents = torch.squeeze(latents)
 
                     # # (optional) only save latents once per epoch to reduce overhead
                     # if i == 0 and idx == 0:
@@ -308,14 +308,13 @@ def run_inductive(
                     del latents, loss, loss_list_train, cb_num_unique
                     gc.collect()
                     torch.cuda.empty_cache()
-
                     torch.cuda.synchronize()
 
                 # After processing all chunks:
                 for g in glist:
                     g.ndata.clear()
                     g.edata.clear()
-                del glist, glist_base, batched_graph, batched_feats, chunk, latent_train
+                del glist, glist_base
                 gc.collect()
 
         # --------------------------------
