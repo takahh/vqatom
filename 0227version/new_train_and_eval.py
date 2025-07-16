@@ -276,42 +276,42 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         loss_list = []
         cb_unique_num_list = []
         cb_unique_num_list_test = []
-        # # ------------------------------------------
-        # # 2 batch data で kmeans, CB 確定
-        # # ------------------------------------------
-        # if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
-        #     kmeans_start_num = 6
-        #     # kmeans_end_num = 18
-        #     kmeans_end_num = 7
-        # if conf["train_or_infer"] == "analysis":
-        #     kmeans_start_num = 0
-        #     kmeans_end_num = 1
-        # # ------------------------------------------
-        # # Collect latent vectors (goes to model.py)
-        # # ------------------------------------------
-        # all_latents = []
-        # for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
-        #                                               start=kmeans_start_num):
-        #     glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
-        #     chunk_size = conf["chunk_size"]  # in 10,000 molecules
-        #     for i in range(0, len(glist), chunk_size):
-        #         # print(f"init kmeans idx {i}/{len(glist) - 1}")
-        #         chunk = glist[i:i + chunk_size]
-        #         chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
-        #         batched_graph = dgl.batch(chunk)
-        #         batched_graph_base = dgl.batch(chunk_base)
-        #         with torch.no_grad():
-        #             batched_feats = batched_graph.ndata["feat"]
-        #         latents \
-        #             = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
-        #         all_latents.append(latents.cpu())  # move to CPU if needed to save memory
-        # all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
-        # print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
-        # # -------------------------------------------------------------------
-        # # Run k-means on the collected latent vectors (goes to the deepest)
-        # # -------------------------------------------------------------------
-        # evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
-        # print("initial kmeans done")
+        # ------------------------------------------
+        # 2 batch data で kmeans, CB 確定
+        # ------------------------------------------
+        if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
+            kmeans_start_num = 6
+            # kmeans_end_num = 18
+            kmeans_end_num = 7
+        if conf["train_or_infer"] == "analysis":
+            kmeans_start_num = 0
+            kmeans_end_num = 1
+        # ------------------------------------------
+        # Collect latent vectors (goes to model.py)
+        # ------------------------------------------
+        all_latents = []
+        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
+                                                      start=kmeans_start_num):
+            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            for i in range(0, len(glist), chunk_size):
+                # print(f"init kmeans idx {i}/{len(glist) - 1}")
+                chunk = glist[i:i + chunk_size]
+                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+                batched_graph = dgl.batch(chunk)
+                batched_graph_base = dgl.batch(chunk_base)
+                with torch.no_grad():
+                    batched_feats = batched_graph.ndata["feat"]
+                latents \
+                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
+                all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+        all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+        print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
+        # -------------------------------------------------------------------
+        # Run k-means on the collected latent vectors (goes to the deepest)
+        # -------------------------------------------------------------------
+        evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
+        print("initial kmeans done")
 
         # ---------------------------
         # TRAIN
@@ -323,10 +323,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                # ------------- remove thi soon --------------
-                if idx == 1:
-                    break
-                # ------------- remove thi soon --------------
+                # # ------------- remove thi soon --------------
+                # if idx == 1:
+                #     break
+                # # ------------- remove thi soon --------------
                 if idx == 5:
                     break
                 print(f"idx {idx}")
@@ -336,10 +336,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
-                    # ------------- remove thi soon --------------
-                    if i == chunk_size:
-                        break
-                    # ------------- remove thi soon --------------
+                    # # ------------- remove thi soon --------------
+                    # if i == chunk_size:
+                    #     break
+                    # # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
