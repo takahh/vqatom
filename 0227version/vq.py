@@ -1,6 +1,8 @@
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from torch import nn, einsum
+
+from Analysis.mol_image_generate import EPOCH
 from train_teacher import get_args
 
 
@@ -717,7 +719,10 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        if epoch >= 2:
+        # ------- change if needed ---------
+        EPOCH_TO_SHIFT = 5
+        # ----------------------------------
+        if epoch >= EPOCH_TO_SHIFT:
             commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), quantize.squeeze())
         else:
             commit_loss = torch.tensor(1)
@@ -725,10 +730,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
-        if epoch < 2:
+        if epoch < EPOCH_TO_SHIFT:
             repel_weight = 1
             loss = repel_weight * two_repel_loss
-        elif epoch >= 2:
+        elif epoch >= EPOCH_TO_SHIFT:
             loss = 0.1 * commit_loss
             self._codebook.embed.requires_grad_(False)
 
