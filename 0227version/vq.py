@@ -303,6 +303,7 @@ class EuclideanCodebook(nn.Module):
         self.codebook_size = codebook_size
         self.num_codebooks = num_codebooks
         args = get_args()
+        self.samples_latent_in_kmeans = args.samples_latent_in_kmeans
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.train_or_infer = args.train_or_infer
         # if args.train_or_infer == "infer":
@@ -439,7 +440,7 @@ class EuclideanCodebook(nn.Module):
             labels_np = embed_ind.cpu().squeeze().detach().numpy()
 
             x_sample, labels_sample = resample(
-                x_np, labels_np, n_samples=1000, random_state=42
+                x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
             )
 
             sil_score = silhouette_score(x_sample, labels_sample)
@@ -719,7 +720,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 2
+        EPOCH_TO_SHIFT = 5
         # ----------------------------------
         if epoch >= EPOCH_TO_SHIFT:
             commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
