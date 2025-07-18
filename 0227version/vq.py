@@ -480,15 +480,18 @@ class EuclideanCodebook(nn.Module):
             np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
 
             # Sample 1000 points for silhouette score calculation
-            # x_np = x.cpu().squeeze().detach().numpy()
-            # labels_np = embed_ind.cpu().squeeze().detach().numpy()
+            x_np = x.cpu().squeeze().detach().numpy()
+            labels_np = embed_ind.cpu().squeeze().detach().numpy()
 
-            # x_sample, labels_sample = resample(
-            #     x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
-            # )
+            x_sample, labels_sample = resample(
+                x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
+            )
+            # x_sample and labels_sample are NumPy arrays after resample
+            x = torch.from_numpy(x_sample).float().to('cuda')  # move to GPU if needed
+            labels = torch.from_numpy(labels_sample).long().to('cuda')
 
             # sil_score = silhouette_score(x_sample, labels_sample)
-            sil_score = self.silhouette_score_torch(x.squeeze(), embed_ind.squeeze())
+            sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
             print(f"Silhouette Score (subsample): {sil_score:.4f}")
             logger.info(f"Silhouette Score (subsample): {sil_score:.4f}")
 
