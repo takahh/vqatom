@@ -372,6 +372,50 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
+
+    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor):
+        """
+        X: [N, D] float tensor on GPU
+        labels: [N] int tensor on GPU
+        Returns: scalar silhouette score (float)
+        """
+
+        # pairwise distance matrix (N x N)
+        # If N is large, consider chunking!
+        X = X.squeeze()
+        labels = labels.squeeze()
+        dists = torch.cdist(X, X, p=2)  # GPU accelerated
+
+        N = X.shape[0]
+        sil_samples = torch.empty(N, device=X.device)
+
+        unique_labels = labels.unique()
+        for i in range(N):
+            same_mask = (labels == labels[i])
+            same_mask[i] = False  # exclude self
+
+            # mean intra-cluster distance a(i)
+            if same_mask.any():
+                a_i = dists[i][same_mask].mean()
+            else:
+                a_i = torch.tensor(0.0, device=X.device)
+
+            # mean distance to all other clusters
+            b_i_vals = []
+            for lab in unique_labels:
+                if lab == labels[i]:
+                    continue
+                mask = (labels == lab)
+                if mask.any():
+                    b_i_vals.append(dists[i][mask].mean())
+            b_i = torch.stack(b_i_vals).min() if b_i_vals else torch.tensor(0.0, device=X.device)
+
+            denom = torch.max(a_i, b_i)
+            sil_samples[i] = (b_i - a_i) / denom if denom > 0 else 0.0
+
+        return sil_samples.mean().item()
+
+    import torch
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
@@ -443,7 +487,8 @@ class EuclideanCodebook(nn.Module):
                 x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
             )
 
-            sil_score = silhouette_score(x_sample, labels_sample)
+            # sil_score = silhouette_score(x_sample, labels_sample)
+            sil_score = self.silhouette_score_torch(x_sample, labels_sample)
             print(f"Silhouette Score (subsample): {sil_score:.4f}")
             logger.info(f"Silhouette Score (subsample): {sil_score:.4f}")
 
