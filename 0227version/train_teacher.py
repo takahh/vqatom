@@ -222,7 +222,6 @@ def run(args):
     # print("Is GPU available?", torch.cuda.is_available())
     # print("Current device:", torch.cuda.current_device())
     if torch.cuda.is_available() and args.device >= 0:
-        print(f"$$$$$$$$$$$$$$$$$$$  USING GPU !!!!! $$$$$$$$$$$$$$$$$$$")
         device = torch.device("cuda:" + str(args.device))
     else:
         print(f"$$$$$$$$$$$$$$$$$$$  USING CPU ????? $$$$$$$$$$$$$$$$$$$")
@@ -232,7 +231,6 @@ def run(args):
         args.output_path = Path.cwd().joinpath(
             args.output_path, "noisy_features", f"noise_{args.feature_noise}"
         )
-    print(f"cb size is {args.codebook_size} -----------------")
     if args.feature_aug_k > 0:
         args.output_path = Path.cwd().joinpath(
             args.output_path, "aug_features", f"aug_hop_{args.feature_aug_k}"
