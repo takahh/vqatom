@@ -372,8 +372,7 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-
-    def silhouette_score_torch(X: torch.Tensor, labels: torch.Tensor) -> float:
+    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor) -> float:
         """
         Efficient silhouette score for large N using vectorized PyTorch ops.
 
