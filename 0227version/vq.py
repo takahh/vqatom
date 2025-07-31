@@ -373,47 +373,91 @@ class EuclideanCodebook(nn.Module):
 
     import torch
 
-    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor):
+    def silhouette_score_torch(X: torch.Tensor, labels: torch.Tensor) -> float:
         """
+        Efficient silhouette score for large N using vectorized PyTorch ops.
+
         X: [N, D] float tensor on GPU
         labels: [N] int tensor on GPU
         Returns: scalar silhouette score (float)
         """
-        print(f"running sil score calculation")
-        # pairwise distance matrix (N x N)
-        # If N is large, consider chunking!
         X = X.squeeze()
         labels = labels.squeeze()
-        dists = torch.cdist(X, X, p=2)  # GPU accelerated
 
         N = X.shape[0]
-        sil_samples = torch.empty(N, device=X.device)
+        dists = torch.cdist(X, X, p=2)  # [N, N]
 
         unique_labels = labels.unique()
+        K = unique_labels.size(0)
+
+        # Create [N, N] mask for each cluster
+        label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # [N, N]
+        eye = torch.eye(N, dtype=torch.bool, device=X.device)
+        same_cluster_mask = label_eq & ~eye  # exclude self
+
+        a_i = torch.zeros(N, device=X.device)
         for i in range(N):
-            same_mask = (labels == labels[i])
-            same_mask[i] = False  # exclude self
+            mask = same_cluster_mask[i]
+            if mask.any():
+                a_i[i] = dists[i, mask].mean()
 
-            # mean intra-cluster distance a(i)
-            if same_mask.any():
-                a_i = dists[i][same_mask].mean()
-            else:
-                a_i = torch.tensor(0.0, device=X.device)
+        # b_i: minimum mean distance to points in other clusters
+        b_i = torch.full((N,), float('inf'), device=X.device)
+        for label in unique_labels:
+            cluster_mask = labels == label  # [N]
+            if cluster_mask.sum() == 0:
+                continue
+            cluster_dists = dists[:, cluster_mask]  # [N, N_label]
+            cluster_mean = cluster_dists.mean(dim=1)  # [N]
+            is_same_label = (labels == label).float()
+            b_i = torch.where(is_same_label.bool(), b_i, torch.min(b_i, cluster_mean))
 
-            # mean distance to all other clusters
-            b_i_vals = []
-            for lab in unique_labels:
-                if lab == labels[i]:
-                    continue
-                mask = (labels == lab)
-                if mask.any():
-                    b_i_vals.append(dists[i][mask].mean())
-            b_i = torch.stack(b_i_vals).min() if b_i_vals else torch.tensor(0.0, device=X.device)
+        sil = (b_i - a_i) / torch.maximum(a_i, b_i)
+        sil[torch.isnan(sil)] = 0.0
+        return sil.mean().item()
 
-            denom = torch.max(a_i, b_i)
-            sil_samples[i] = (b_i - a_i) / denom if denom > 0 else 0.0
-
-        return sil_samples.mean().item()
+    # # old, slow
+    # def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor):
+    #     """
+    #     X: [N, D] float tensor on GPU
+    #     labels: [N] int tensor on GPU
+    #     Returns: scalar silhouette score (float)
+    #     """
+    #     print(f"running sil score calculation")
+    #     # pairwise distance matrix (N x N)
+    #     # If N is large, consider chunking!
+    #     X = X.squeeze()
+    #     labels = labels.squeeze()
+    #     dists = torch.cdist(X, X, p=2)  # GPU accelerated
+    #
+    #     N = X.shape[0]
+    #     sil_samples = torch.empty(N, device=X.device)
+    #
+    #     unique_labels = labels.unique()
+    #     for i in range(N):
+    #         same_mask = (labels == labels[i])
+    #         same_mask[i] = False  # exclude self
+    #
+    #         # mean intra-cluster distance a(i)
+    #         if same_mask.any():
+    #             a_i = dists[i][same_mask].mean()
+    #         else:
+    #             a_i = torch.tensor(0.0, device=X.device)
+    #
+    #         # mean distance to all other clusters
+    #         b_i_vals = []
+    #         for lab in unique_labels:
+    #             if lab == labels[i]:
+    #                 continue
+    #             mask = (labels == lab)
+    #             if mask.any():
+    #                 b_i_vals.append(dists[i][mask].mean())
+    #         b_i = torch.stack(b_i_vals).min() if b_i_vals else torch.tensor(0.0, device=X.device)
+    #
+    #         denom = torch.max(a_i, b_i)
+    #         sil_samples[i] = (b_i - a_i) / denom if denom > 0 else 0.0
+    #
+    #     return sil_samples.mean().item()
 
     import torch
     @torch.amp.autocast('cuda', enabled=False)
