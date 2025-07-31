@@ -379,7 +379,7 @@ class EuclideanCodebook(nn.Module):
         labels: [N] int tensor on GPU
         Returns: scalar silhouette score (float)
         """
-
+        print(f"running sil score calculationk")
         # pairwise distance matrix (N x N)
         # If N is large, consider chunking!
         X = X.squeeze()
