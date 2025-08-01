@@ -813,7 +813,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 2
+        EPOCH_TO_SHIFT = 3
         # ----------------------------------
 
         # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
