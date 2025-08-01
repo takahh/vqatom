@@ -814,6 +814,10 @@ class VectorQuantize(nn.Module):
         # ------- change if needed ---------
         EPOCH_TO_SHIFT = 2
         # ----------------------------------
+
+        # ------------DELETE THIS SOON !!!!!!!!! ----------------------
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
+        # ------------DELETE THIS SOON !!!!!!!!! ----------------------
         if epoch >= EPOCH_TO_SHIFT:
             commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
         else:
