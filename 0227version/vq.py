@@ -757,11 +757,11 @@ class VectorQuantize(nn.Module):
         return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_loss)
 
     def commitment_loss(self, encoder_outputs, codebook):
+        codebook = codebook.squeeze()
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
         indices = distances.argmin(dim=-1)  # [B]
         print("indices range:", indices.min().item(), indices.max().item())
         print(f"codebook.shape {codebook.shape}")
-        codebook = codebook.squeeze()
 
         # Hard quantized
         quantized_hard = codebook[indices]  # [B, D]
