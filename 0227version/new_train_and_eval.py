@@ -323,10 +323,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                # # ------------- remove thi soon --------------
-                # if idx == 1:
-                #     break
-                # # ------------- remove thi soon --------------
+                # ------------- remove thi soon --------------
+                if idx == 1:
+                    break
+                # ------------- remove thi soon --------------
                 if idx == 5:
                     break
                 print(f"idx {idx}")
@@ -336,10 +336,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     print_memory_usage(f"idx {idx}")
-                    # # ------------- remove thi soon --------------
-                    # if i == chunk_size:
-                    #     break
-                    # # ------------- remove thi soon --------------
+                    # ------------- remove thi soon --------------
+                    if i == chunk_size:
+                        break
+                    # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
                     with torch.no_grad():
@@ -403,10 +403,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             for i in range(0, len(glist), chunk_size):
 
-                # # ------------- remove thi soon --------------
-                # if i == chunk_size:
-                #     break
-                # # ------------- remove thi soon --------------
+                # ------------- remove thi soon --------------
+                if i == chunk_size:
+                    break
+                # ------------- remove thi soon --------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]
                 batched_graph = dgl.batch(chunk)
