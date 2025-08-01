@@ -759,6 +759,8 @@ class VectorQuantize(nn.Module):
     def commitment_loss(self, encoder_outputs, codebook):
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
         indices = distances.argmin(dim=-1)  # [B]
+        print("indices range:", indices.min().item(), indices.max().item())
+        print("codebook size:", codebook.size(0))
 
         # Hard quantized
         quantized_hard = codebook[indices]  # [B, D]
@@ -810,7 +812,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 5
+        EPOCH_TO_SHIFT = 2
         # ----------------------------------
         if epoch >= EPOCH_TO_SHIFT:
             commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
