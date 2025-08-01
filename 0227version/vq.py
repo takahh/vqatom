@@ -760,7 +760,8 @@ class VectorQuantize(nn.Module):
         distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
         indices = distances.argmin(dim=-1)  # [B]
         print("indices range:", indices.min().item(), indices.max().item())
-        print("codebook size:", codebook.size(0))
+        print(f"codebook.shape {codebook.shape}")
+        codebook = codebook.squeeze()
 
         # Hard quantized
         quantized_hard = codebook[indices]  # [B, D]
