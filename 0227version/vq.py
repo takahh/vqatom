@@ -830,7 +830,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 3
+        EPOCH_TO_SHIFT = 4
         # ----------------------------------
 
         # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
@@ -845,7 +845,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         if epoch < EPOCH_TO_SHIFT:
-            loss = 0.1 * commit_loss
+            loss = 0.01 * two_repel_loss
             self._codebook.embed.requires_grad_(False)
         elif epoch >= EPOCH_TO_SHIFT:
             loss =  0.1 * commit_loss + 0.01 * two_repel_loss
