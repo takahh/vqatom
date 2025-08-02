@@ -273,6 +273,13 @@ class ContrastiveLoss(nn.Module):
             w_high = torch.sigmoid(sharpness * (high - dmat))
             return w_low * w_high  # shape same as dmat
 
+        def soft_middle_weight_half(dmat, low, sharpness=20.0):
+            """
+            Smooth weights near 1 for distances in [low, high], tapering outside.
+            """
+            w_low = torch.sigmoid(sharpness * (dmat - low))
+            return w_low  # shape same as dmat
+
         def calc_repel_loss(dmat, low, high, center=2.0, sigma=3.0):
             weights = soft_middle_weight(dmat, low, high)  # soft mask in middle range
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))  # bell curve repel
@@ -280,7 +287,15 @@ class ContrastiveLoss(nn.Module):
             # Normalize by sum of weights to keep scale consistent
             return weighted_bell.sum() / (weights.sum() + 1e-8)
 
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix, lower_thresh, upper_thresh)
+        def calc_repel_loss_half(dmat, low, center=2.0, sigma=3.0):
+            weights_except_low = soft_middle_weight_half(dmat, low)  # soft mask in middle range
+            bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))  # bell curve repel
+            weighted_bell = weights_except_low * bell
+            # Normalize by sum of weights to keep scale consistent
+            return weighted_bell.sum() / (weights_except_low.sum() + 1e-8)
+
+        latent_repel_loss_mid = calc_repel_loss(latent_dist_matrix, lower_thresh, upper_thresh)
+        latent_repel_loss_mid_high = calc_repel_loss_half(latent_dist_matrix, lower_thresh)
 
         attract_weight = 1  # or your preferred weight
         repel_weight = 1  # 0.005
@@ -291,7 +306,7 @@ class ContrastiveLoss(nn.Module):
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
 
-        return final_loss, neg_loss, latent_repel_loss, cb_loss
+        return final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss_mid_high
 
 
 import torch.nn.functional as F
@@ -766,13 +781,13 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        # final_loss, neg_loss, latent_repel_loss, cb_loss
-        two_repel_loss, div_nega_loss, repel_loss, cb_loss = (
+        # final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss_mid_high
+        two_repel_loss, div_nega_loss, repel_loss_mid, cb_loss, repel_loss_mid_high = (
             self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_loss)
+        return (repel_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
 
     def commitment_loss(self, encoder_outputs, codebook):
         codebook = codebook.squeeze()
@@ -819,8 +834,8 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        # (repel_loss, embed_ind, repel_loss, repel_loss, div_nega_loss, two_repel_loss, attract_loss)
-        spread_loss, embed_ind, sil_loss, repel_loss, div_nega_loss, two_repel_loss, cb_repel_loss \
+        # repel_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        spread_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_repel_loss, repel_loss_mid_high \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -845,10 +860,10 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         if epoch < EPOCH_TO_SHIFT:
-            loss = 0.01 * two_repel_loss
+            loss = 0.1 * repel_loss_mid_high
             self._codebook.embed.requires_grad_(False)
         elif epoch >= EPOCH_TO_SHIFT:
-            loss =  0.1 * commit_loss + 0.01 * two_repel_loss
+            loss =  0.1 * commit_loss + 0.01 * repel_loss_mid
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
             print(f"commit loss {self.commitment_weight * commit_loss}")
