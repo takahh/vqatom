@@ -818,20 +818,19 @@ class VectorQuantize(nn.Module):
         # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
         # commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
         # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
-        if epoch >= EPOCH_TO_SHIFT:
-            commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
-        else:
-            commit_loss = torch.tensor(1)
+        # if epoch >= EPOCH_TO_SHIFT:
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
+        # else:
+        #     commit_loss = torch.tensor(1)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
         if epoch < EPOCH_TO_SHIFT:
-            repel_weight = 1
-            loss = repel_weight * two_repel_loss
-        elif epoch >= EPOCH_TO_SHIFT:
-            loss = 0.1 * commit_loss + 0.05 * two_repel_loss
+            loss = 0.1 * commit_loss
             self._codebook.embed.requires_grad_(False)
+        elif epoch >= EPOCH_TO_SHIFT:
+            loss =  0.1 * commit_loss + 0.01 * two_repel_loss
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
             print(f"commit loss {self.commitment_weight * commit_loss}")
