@@ -301,7 +301,7 @@ class ContrastiveLoss(nn.Module):
         repel_weight = 1  # 0.005
         # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
         cb_loss = repel_codebooks(codebook)
-        final_loss = repel_weight * latent_repel_loss + 1 * cb_loss
+        final_loss = repel_weight * latent_repel_loss_mid
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
@@ -787,7 +787,7 @@ class VectorQuantize(nn.Module):
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        return (repel_loss_mid, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
 
     def commitment_loss(self, encoder_outputs, codebook):
         codebook = codebook.squeeze()
@@ -834,7 +834,7 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        # repel_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        # repel_loss_mid, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
         spread_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_repel_loss, repel_loss_mid_high \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
