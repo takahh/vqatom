@@ -466,7 +466,8 @@ class EuclideanCodebook(nn.Module):
             x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
 
-        if mode == "init_kmeans_final" and epoch < 5:
+        if mode == "init_kmeans_final":
+            # if mode == "init_kmeans_final" and epoch < 5:
             self.init_embed_(flatten)
         print(f"init_embed is done")
         embed = self.embed  # (1, K, D)  K: codebook size
