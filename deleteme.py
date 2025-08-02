@@ -1,20 +1,29 @@
-import numpy as np
+import torch
 import matplotlib.pyplot as plt
 
-# Parameters
-sigma = 3
-center = 0.0
+def soft_middle_weight(dmat, low, high, sharpness=20.0):
+    w_low = torch.sigmoid(sharpness * (dmat - low))
+    w_high = torch.sigmoid(sharpness * (high - dmat))
+    return w_low * w_high
 
-# Create a range of distances
-dmat = np.linspace(-10, 10, 1000)
+# Generate a range of distances
+dists = torch.linspace(0, 20, steps=1000)
+low = 3.0
+high = 7.0
+sharpness = 20.0
 
-# Compute the bell-shaped curve
-bell = np.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
+# Compute weights
+weights = soft_middle_weight(dists, low, high, sharpness).numpy()
 
-# Plotting
-plt.plot(dmat, bell)
-plt.title("Bell-shaped Curve (σ = 3)")
-plt.xlabel("Distance")
-plt.ylabel("Value")
+# Plot
+plt.figure(figsize=(8, 5))
+plt.plot(dists.numpy(), weights, label=f"low={low}, high={high}, sharpness={sharpness}")
+plt.axvline(low, color='gray', linestyle='--', label='low threshold')
+plt.axvline(high, color='gray', linestyle='--', label='high threshold')
+plt.title("Soft Middle Weight Function")
+plt.xlabel("Pairwise Distance")
+plt.ylabel("Weight")
+plt.legend()
 plt.grid(True)
+plt.tight_layout()
 plt.show()

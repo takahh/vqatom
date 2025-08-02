@@ -486,7 +486,7 @@ class EuclideanCodebook(nn.Module):
         if mode == "init_kmeans_final":
             # if mode == "init_kmeans_final" and epoch < 5:
             self.init_embed_(flatten)
-        print(f"init_embed is done")
+            print(f"init_embed is done")
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
         # min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
