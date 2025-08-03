@@ -300,6 +300,7 @@ class ContrastiveLoss(nn.Module):
         # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
         cb_loss = repel_codebooks(codebook)
         final_loss = repel_weight * latent_repel_loss_mid
+        latent_repel_loss += cb_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
