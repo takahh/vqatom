@@ -287,13 +287,15 @@ class ContrastiveLoss(nn.Module):
             # Normalize by sum of weights to keep scale consistent
             return weighted_bell.sum()
 
+        def repel_from_zero(dmat, margin=1.0):
+            return torch.relu(margin - dmat).mean()
 
         def calc_repel_loss(dmat, center=2.0, sigma=3.0):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
         latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh)
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix) + repel_from_zero(latent_dist_matrix)
 
         attract_weight = 1  # or your preferred weight
         repel_weight = 1  # 0.005
