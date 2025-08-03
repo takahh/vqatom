@@ -859,10 +859,10 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         if epoch < EPOCH_TO_SHIFT:
-            loss = 0.01 * repel_loss
+            loss = 0.1 * repel_loss
             # self._codebook.embed.requires_grad_(False)
         elif epoch >= EPOCH_TO_SHIFT:
-            loss =  0.01 * repel_loss_mid
+            loss =  0.1 * repel_loss_mid
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
             print(f"commit loss {self.commitment_weight * commit_loss}")
