@@ -264,6 +264,7 @@ class ContrastiveLoss(nn.Module):
         upper_q = 0.7
         lower_thresh = torch.quantile(sample, lower_q)
         upper_thresh = torch.quantile(sample, upper_q)
+        center = (lower_thresh + upper_thresh) / 2
 
         def soft_middle_weight(dmat, low, high, sharpness=20.0):
             """
@@ -285,7 +286,7 @@ class ContrastiveLoss(nn.Module):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))  # bell curve repel
             weighted_bell = weights * bell
             # Normalize by sum of weights to keep scale consistent
-            return weighted_bell.sum()
+            return weighted_bell.sum() / (weights.sum() + 1e-8)
 
         def repel_from_zero(dmat, margin=1.0):
             return torch.relu(margin - dmat).mean()
@@ -294,8 +295,8 @@ class ContrastiveLoss(nn.Module):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
             return bell.mean()
 
-        latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh)
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix) + repel_from_zero(latent_dist_matrix)
+        latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh, center)
+        latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
 
         attract_weight = 1  # or your preferred weight
         repel_weight = 1  # 0.005
