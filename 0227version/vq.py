@@ -297,14 +297,15 @@ class ContrastiveLoss(nn.Module):
 
         latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh, center)
         repel_from_2 = calc_repel_loss(latent_dist_matrix)
-        latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
+        cb_loss = repel_codebooks(codebook)
+        latent_repel_loss = repel_from_zero(latent_dist_matrix) + cb_loss
+        # latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
 
         attract_weight = 1  # or your preferred weight
         repel_weight = 1  # 0.005
         # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
-        cb_loss = repel_codebooks(codebook)
         final_loss = repel_weight * latent_repel_loss_mid
-        latent_repel_loss += cb_loss
+        # latent_repel_loss += cb_loss
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
@@ -862,10 +863,10 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
-        if epoch < EPOCH_TO_SHIFT:
-            loss = repel_loss
+        if epoch < 10:
+            loss = repel_loss * (1/epoch)
             # self._codebook.embed.requires_grad_(False)
-        elif epoch >= EPOCH_TO_SHIFT:
+        elif epoch >= 10:
             loss = repel_loss_from_2
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
