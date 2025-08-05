@@ -298,7 +298,7 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh, center)
         repel_from_2 = calc_repel_loss(latent_dist_matrix)
         cb_loss = repel_codebooks(codebook)
-        latent_repel_loss = repel_from_zero(latent_dist_matrix) + cb_loss
+        latent_repel_loss = repel_from_zero(latent_dist_matrix, lower_thresh) + cb_loss
         # latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
 
         attract_weight = 1  # or your preferred weight
