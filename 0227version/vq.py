@@ -296,6 +296,7 @@ class ContrastiveLoss(nn.Module):
             return bell.mean()
 
         latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh, center)
+        repel_from_2 = calc_repel_loss(latent_dist_matrix)
         latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
 
         attract_weight = 1  # or your preferred weight
@@ -308,7 +309,7 @@ class ContrastiveLoss(nn.Module):
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
 
-        return final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss
+        return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
 
 import torch.nn.functional as F
@@ -783,13 +784,13 @@ class VectorQuantize(nn.Module):
         embed_ind_for_sil = torch.squeeze(embed_ind)
         latents_for_sil = torch.squeeze(latents)
         sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        # final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss_mid_high
-        two_repel_loss, div_nega_loss, repel_loss_mid, cb_loss, repel_loss_mid_high = (
+        # final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss
+        two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
             self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss_mid, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        return (repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
 
     def commitment_loss(self, encoder_outputs, codebook):
         codebook = codebook.squeeze()
@@ -836,8 +837,8 @@ class VectorQuantize(nn.Module):
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
-        # repel_loss_mid, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
-        spread_loss, embed_ind, sil_loss, repel_loss_mid, div_nega_loss, two_repel_loss, cb_repel_loss, repel_loss \
+        # repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_repel_loss, repel_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -847,7 +848,7 @@ class VectorQuantize(nn.Module):
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
         # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 8
+        EPOCH_TO_SHIFT = 2
         # ----------------------------------
 
         # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
@@ -865,7 +866,7 @@ class VectorQuantize(nn.Module):
             loss = repel_loss
             # self._codebook.embed.requires_grad_(False)
         elif epoch >= EPOCH_TO_SHIFT:
-            loss = repel_loss * (1/epoch)
+            loss = repel_loss_from_2
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
             print(f"commit loss {self.commitment_weight * commit_loss}")
