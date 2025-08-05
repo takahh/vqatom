@@ -864,7 +864,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         if epoch < 10:
-            loss = repel_loss * (1/epoch)
+            loss = repel_loss * (1/(epoch + 1))
             # self._codebook.embed.requires_grad_(False)
         elif epoch >= 10:
             loss = repel_loss_from_2
