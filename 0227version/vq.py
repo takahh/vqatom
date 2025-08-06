@@ -289,7 +289,9 @@ class ContrastiveLoss(nn.Module):
             return weighted_bell.sum() / (weights.sum() + 1e-8)
 
         def repel_from_zero(dmat, margin=1.0):
-            return torch.relu(margin - dmat).mean()
+            margin = margin.detach()  # keep value, avoid weird gradient behavior
+            loss = torch.relu(margin - dmat).mean()
+            return loss
 
         def calc_repel_loss(dmat, center=2.0, sigma=3.0):
             bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
@@ -309,7 +311,7 @@ class ContrastiveLoss(nn.Module):
         # final_loss = repel_weight * latent_repel_loss
         # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
-
+        # 最後の　latent_repel_loss　を使用中
         return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
 
