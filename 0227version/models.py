@@ -133,7 +133,15 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln1 = nn.LayerNorm(args.hidden_dim)
         self.ln2 = nn.LayerNorm(args.hidden_dim)
         self.ln3 = nn.LayerNorm(args.hidden_dim)
-        self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
+        # self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
+        self.linear_1 = nn.Sequential(
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(inplace=True),
+            # nn.Dropout(0.1),
+            nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(inplace=True)
+        )
+
         self.train_or_infer = args.train_or_infer
 
     def reset_kmeans(self):
