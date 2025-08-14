@@ -135,11 +135,13 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln3 = nn.LayerNorm(args.hidden_dim)
         # self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
         self.linear_1 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
-            nn.ReLU(inplace=True),
+            nn.Linear(hidden_feats, 2 * hidden_feats),
+            nn.ReLU(),
             # nn.Dropout(0.1),
-            nn.Linear(hidden_feats, hidden_feats),
-            nn.ReLU(inplace=True)
+            nn.Linear(2 * hidden_feats, 2 * hidden_feats),
+            nn.ReLU(),
+            nn.Linear(2 * hidden_feats, hidden_feats),
+            nn.ReLU()
         )
 
         self.train_or_infer = args.train_or_infer
