@@ -582,7 +582,7 @@ class EuclideanCodebook(nn.Module):
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
 
-        if self.training:
+        if self.training and epoch >= 3:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
             embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
