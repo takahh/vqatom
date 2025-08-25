@@ -69,6 +69,26 @@ class AtomEmbedding(nn.Module):
         self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
         self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=4)
         self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
+        self.func_embed_0 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_1 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_2 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_3 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_4 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_5 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_6 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_7 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_8 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_9 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_10 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_11 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_12 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_13 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_14 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_15 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_16 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_17 = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.h_don_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.h_acc_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
 
     def forward(self, atom_inputs):
         """
@@ -88,7 +108,31 @@ class AtomEmbedding(nn.Module):
         x5 = self.hybrid_embed(atom_inputs[:, 5].long())
         x6 = self.hydrogen_embed(atom_inputs[:, 6].long())
 
-        out = torch.cat([x0, x1, x2, x3, x4, x5, x6], dim=-1)  # shape: [num_atoms, total_embedding_dim]
+        # functional group flags
+        x7 = self.fun_embed_0(atom_inputs[:, 7].long())
+        x8 = self.fun_embed_1(atom_inputs[:, 8].long())
+        x9 = self.fun_embed_2(atom_inputs[:, 9].long())
+        x10 = self.fun_embed_3(atom_inputs[:, 10].long())
+        x11 = self.fun_embed_3(atom_inputs[:, 11].long())
+        x12 = self.fun_embed_3(atom_inputs[:, 12].long())
+        x13 = self.fun_embed_3(atom_inputs[:, 13].long())
+        x14 = self.fun_embed_3(atom_inputs[:, 14].long())
+        x15 = self.fun_embed_3(atom_inputs[:, 15].long())
+        x16 = self.fun_embed_3(atom_inputs[:, 16].long())
+        x17 = self.fun_embed_3(atom_inputs[:, 17].long())
+        x18 = self.fun_embed_3(atom_inputs[:, 18].long())
+        x19 = self.fun_embed_3(atom_inputs[:, 19].long())
+        x20 = self.fun_embed_3(atom_inputs[:, 20].long())
+        x21 = self.fun_embed_3(atom_inputs[:, 21].long())
+        x22 = self.fun_embed_3(atom_inputs[:, 22].long())
+        x23 = self.fun_embed_3(atom_inputs[:, 23].long())
+        x24 = self.fun_embed_3(atom_inputs[:, 24].long())
+
+        x25 = self.h_don_embed(atom_inputs[:, 25].long())  # 2 numbers
+        x26 = self.h_acc_embed(atom_inputs[:, 26].long())  # 2 numbers
+
+        out = torch.cat([x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14,
+                         x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26], dim=-1)  # shape: [num_atoms, total_embedding_dim]
         return out
 
 
