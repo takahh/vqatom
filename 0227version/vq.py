@@ -865,17 +865,17 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         args = get_args()
-        alpha = 1 / ((epoch + 1) ** 2)
-        if epoch < 3:
-            loss = repel_loss * alpha
-        elif epoch >= 3:
-            # self._codebook.embed.requires_grad_(False)
-            print(f"repel {repel_loss}") # or some decaying schedule
-            beta = 10
-            loss = beta * (commit_loss) + codebook_loss
+        # alpha = 1 / ((epoch + 1) ** 2)
+        # if epoch < 3:
+        #     loss = repel_loss * alpha
+        # elif epoch >= 3:
+        # self._codebook.embed.requires_grad_(False)
+        print(f"repel {repel_loss}") # or some decaying schedule
+        beta = 10
+        loss = beta * (commit_loss) + codebook_loss
 
-            # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
-            print(f"commit loss {self.commitment_weight * commit_loss}")
+        # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
+        print(f"commit loss {self.commitment_weight * commit_loss}")
         # else:
         #     # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
         # else:
