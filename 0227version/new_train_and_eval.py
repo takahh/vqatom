@@ -139,10 +139,10 @@ def convert_to_dgl(adj_batch, attr_batch):
         args = get_args()
         if args.train_or_infer == 'analysis':
             adj_matrices = adj_batch[i].view(-1, 100, 100)
-            attr_matrices = attr_batch[i].view(-1, 100, 7)
+            attr_matrices = attr_batch[i].view(-1, 100, 27)
         else:
             adj_matrices = adj_batch[i].view(-1, 100, 100)
-            attr_matrices = attr_batch[i].view(-1, 100, 7)
+            attr_matrices = attr_batch[i].view(-1, 100, 27)
 
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
