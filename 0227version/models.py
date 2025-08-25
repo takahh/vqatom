@@ -142,7 +142,7 @@ class EquivariantThreeHopGINE(nn.Module):
         if args is None:
             args = get_args()  # Ensure this function is defined elsewhere
         self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(88, args.hidden_dim)
+        self.linear_0 = nn.Linear(168, args.hidden_dim)
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
