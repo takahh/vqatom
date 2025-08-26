@@ -798,7 +798,7 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
 
-    def _pairwise_sq_dists(x, y):
+    def _pairwise_sq_dists(self, x, y):
         # x: [B, D], y: [K, D]
         # computes ||x - y||^2 without sqrt (better gradients / numerics)
         x2 = (x ** 2).sum(dim=1, keepdim=True)  # [B, 1]
@@ -808,6 +808,7 @@ class VectorQuantize(nn.Module):
         return d2
 
     def commitment_loss(
+            self,
             encoder_outputs,  # [B, D]
             codebook,  # [K, D] or [1, K, D]
             beta=0.25,  # commitment weight
