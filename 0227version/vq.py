@@ -798,7 +798,7 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
 
-    def _pairwise_sq_dists(self, x, y):
+    def pairwise_sq_dists(self, x, y):
         # x: [B, D], y: [K, D]
         # computes ||x - y||^2 without sqrt (better gradients / numerics)
         x2 = (x ** 2).sum(dim=1, keepdim=True)  # [B, 1]
@@ -825,7 +825,7 @@ class VectorQuantize(nn.Module):
             codebook = F.normalize(codebook, dim=-1)
 
         # Use squared distances for smoother gradients
-        d2 = _pairwise_sq_dists(encoder_outputs, codebook)  # [B, K]
+        d2 = self.pairwise_sq_dists(encoder_outputs, codebook)  # [B, K]
         # Hard assign on true Euclidean distance (sqrt only for argmin; gradients use d2)
         indices = d2.argmin(dim=-1)  # [B]
         quantized_hard = codebook[indices]  # [B, D]
