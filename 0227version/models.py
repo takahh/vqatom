@@ -62,7 +62,7 @@ import torch.nn as nn
 class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
-        self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=64)   # element
+        self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=16)   # element
         self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
         self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
         self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
@@ -142,7 +142,7 @@ class EquivariantThreeHopGINE(nn.Module):
         if args is None:
             args = get_args()  # Ensure this function is defined elsewhere
         self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(168, args.hidden_dim)
+        self.linear_0 = nn.Linear(120, args.hidden_dim)
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
             nn.Linear(args.hidden_dim, hidden_feats),
