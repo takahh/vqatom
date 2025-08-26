@@ -795,25 +795,71 @@ class VectorQuantize(nn.Module):
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
         return (repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
 
-    def commitment_loss(self, encoder_outputs, codebook):
-        codebook = codebook.squeeze()
-        distances = torch.cdist(encoder_outputs, codebook)  # [B, K]
-        indices = distances.argmin(dim=-1)  # [B]
-        print("indices range:", indices.min().item(), indices.max().item())
-        print(f"codebook.shape {codebook.shape}")
+    import torch
+    import torch.nn.functional as F
 
-        # Hard quantized
+    def _pairwise_sq_dists(x, y):
+        # x: [B, D], y: [K, D]
+        # computes ||x - y||^2 without sqrt (better gradients / numerics)
+        x2 = (x ** 2).sum(dim=1, keepdim=True)  # [B, 1]
+        y2 = (y ** 2).sum(dim=1, keepdim=True).t()  # [1, K]
+        # Clamp to avoid tiny negatives from fp errors
+        d2 = torch.clamp(x2 + y2 - 2.0 * x @ y.t(), min=0.0)
+        return d2
+
+    def commitment_loss(
+            encoder_outputs,  # [B, D]
+            codebook,  # [K, D] or [1, K, D]
+            beta=0.25,  # commitment weight
+            use_l2_normalize=False,
+            temperature=None,  # if None: auto-tune from median distance
+    ):
+        # Squeeze and ensure shapes
+        codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook  # [K, D]
+        assert encoder_outputs.dim() == 2 and codebook.dim() == 2
+
+        # Optional unit-norm stabilization (often helps when distances “blow up”)
+        if use_l2_normalize:
+            encoder_outputs = F.normalize(encoder_outputs, dim=-1)
+            codebook = F.normalize(codebook, dim=-1)
+
+        # Use squared distances for smoother gradients
+        d2 = _pairwise_sq_dists(encoder_outputs, codebook)  # [B, K]
+        # Hard assign on true Euclidean distance (sqrt only for argmin; gradients use d2)
+        indices = d2.argmin(dim=-1)  # [B]
         quantized_hard = codebook[indices]  # [B, D]
 
-        # Soft quantized for gradient flow
-        soft_assignments = F.softmax(-distances, dim=-1)  # [B, K]
-        quantized_soft = torch.einsum('bk,kd->bd', soft_assignments, codebook)  # [B, D]
+        # Temperature for soft assignments (auto-set to median distance scale if not given)
+        if temperature is None:
+            # robust scale: median of sqrt distances; add eps to avoid div-by-zero
+            with torch.no_grad():
+                med = torch.sqrt(d2.detach()).median()
+            tau = (med + 1e-6).item()
+        else:
+            tau = float(temperature)
 
-        # Straight-through: use hard in forward, soft in backward
+        # Soft assignments using (negative) *Euclidean* distance scaled by tau
+        # NOTE: don’t use squared distance here—use sqrt(d2) for better locality
+        distances = torch.sqrt(torch.clamp(d2, min=1e-12))
+        logits = -distances / max(tau, 1e-6)
+        soft_assign = F.softmax(logits, dim=-1)  # [B, K]
+        quantized_soft = soft_assign @ codebook  # [B, D]
+
+        # Straight-through trick: forward uses hard, backward uses soft
         quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
 
-        codebook_loss = F.mse_loss(encoder_outputs.detach(), quantized, reduction='mean')
-        latent_loss = F.mse_loss(encoder_outputs, quantized.detach(), reduction='mean')
+        # Losses:
+        #  - codebook_loss: moves code vectors toward encoder outputs
+        #  - latent_loss (commitment): keeps encoder outputs close to chosen codes
+        codebook_loss = F.mse_loss(quantized, encoder_outputs.detach())
+        latent_loss = beta * F.mse_loss(encoder_outputs, quantized.detach())
+
+        # Some useful debug prints
+        if torch.rand(()) < 0.02:  # print occasionally
+            with torch.no_grad():
+                print(f"indices range: {indices.min().item()} .. {indices.max().item()} / K={codebook.shape[0]}")
+                print(f"median dist: {distances.median().item():.4f}, tau={tau:.4f}")
+                print(f"softmax max prob (mean over batch): {soft_assign.max(dim=-1).values.mean().item():.3f}")
 
         return latent_loss, codebook_loss
 
