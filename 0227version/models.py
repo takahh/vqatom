@@ -252,8 +252,8 @@ class EquivariantThreeHopGINE(nn.Module):
             h = self.ln1(h)
             h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
             h = self.ln2(h)
-            h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
-            h = self.ln3(h)
+            # h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
+            # h = self.ln3(h)
             h = h + self.linear_1(h)
             # h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
             # norms = h.norm(dim=1)
