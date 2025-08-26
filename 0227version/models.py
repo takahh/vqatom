@@ -62,7 +62,7 @@ import torch.nn as nn
 class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
-        self.element_embed = nn.Embedding(num_embeddings=100, embedding_dim=16)   # element
+        self.element_embed = nn.Embedding(num_embeddings=120, embedding_dim=16)   # element
         self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
         self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
         self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
