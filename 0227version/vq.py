@@ -692,7 +692,14 @@ class VectorQuantize(nn.Module):
             threshold_ema_dead_code=threshold_ema_dead_code,
             use_ddp=sync_codebook,
             learnable_codebook=has_codebook_orthogonal_loss,
-            sample_codebook_temp=sample_codebook_temp
+            sample_codebook_temp=sample_codebook_temp,
+            use_cosine=False,
+            target_radius=3.0,  # soft cap for ||z||
+            radius_weight=1e-3,  # weight for norm regularizer
+            tau_init=0.5,  # starting temperature (distance scale)
+            tau_min=0.05, tau_max=2.0,  # clamp for temperature
+            tau_ema=0.9,  # EMA for temperature
+            codebook_max_norm=None  # e.g., 4.0 to clamp code vectors
         )
         args = get_args()
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
@@ -700,6 +707,14 @@ class VectorQuantize(nn.Module):
         self.accept_image_fmap = accept_image_fmap
         self.channel_last = channel_last
         self.compute_contrastive_loss = ContrastiveLoss(dim, 136)
+
+        self.use_cosine = use_cosine
+        self.target_radius = float(target_radius)
+        self.radius_weight = float(radius_weight)
+        self.register_buffer("_tau", torch.tensor(float(tau_init)))
+        self.tau_min, self.tau_max = float(tau_min), float(tau_max)
+        self.tau_ema = float(tau_ema)
+        self.codebook_max_norm = codebook_max_norm
 
     @property
     def codebook(self):
