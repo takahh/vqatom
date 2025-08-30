@@ -850,7 +850,7 @@ class VectorQuantize(nn.Module):
         # Keep latents roughly centered to reduce drift
         z = self._center_batch(encoder_outputs)
 
-        if self.use_cosine:
+        if use_cosine:
             # Cosine (unit-norm) path: very stable; distances in [-1, 1]
             z_n = F.normalize(z, dim=-1)
             cb_n = F.normalize(codebook, dim=-1)
