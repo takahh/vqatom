@@ -655,6 +655,7 @@ class VectorQuantize(nn.Module):
         self.project_out = nn.Linear(codebook_input_dim, dim) if requires_projection else nn.Identity()
 
         self.eps = eps
+        self.tau_ema = 0.9
         self.commitment_weight = commitment_weight
         self.codebook_weight = codebook_weight
 
