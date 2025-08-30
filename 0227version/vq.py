@@ -832,6 +832,7 @@ class VectorQuantize(nn.Module):
         codebook,         # [K, D] or [1, K, D]
         beta=0.25,
         temperature=None,       # if not None, overrides EMA
+        use_cosine=False
     ):
         codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook
         assert encoder_outputs.dim() == 2 and codebook.dim() == 2
