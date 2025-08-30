@@ -839,12 +839,12 @@ class VectorQuantize(nn.Module):
         K, Dk = codebook.shape
         assert D == Dk, f"latent D={D} != codebook D={Dk}"
 
-        # Optional codebook norm clamp to avoid run-away norms in codes
-        if (self.codebook_max_norm is not None) and self.training:
-            with torch.no_grad():
-                norms = torch.linalg.norm(codebook, dim=-1, keepdim=True)
-                scale = torch.clamp(self.codebook_max_norm / (norms + 1e-8), max=1.0)
-                codebook.mul_(scale)
+        # # Optional codebook norm clamp to avoid run-away norms in codes
+        # if (self.codebook_max_norm is not None) and self.training:
+        #     with torch.no_grad():
+        #         norms = torch.linalg.norm(codebook, dim=-1, keepdim=True)
+        #         scale = torch.clamp(self.codebook_max_norm / (norms + 1e-8), max=1.0)
+        #         codebook.mul_(scale)
 
         # Keep latents roughly centered to reduce drift
         z = self._center_batch(encoder_outputs)
