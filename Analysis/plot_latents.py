@@ -14,13 +14,13 @@ DATA_PATH = "/Users/takayukikimura/Downloads/"
 OPATH = "/Users/takayukikimura/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
-DIMENSION = 16
+DIMENSION = 32
 N_NEIGHBORS = 10
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 3
-EPOCH_END = EPOCH_START + 3
+EPOCH_START = 7
+EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
 

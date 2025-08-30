@@ -916,7 +916,7 @@ class VectorQuantize(nn.Module):
         if epoch < 3:
             loss = repel_loss * alpha
         elif epoch >= 3:
-            # self._codebook.embed.requires_grad_(False)
+            self._codebook.embed.requires_grad_(False)
             print(f"repel {repel_loss}") # or some decaying schedule
             beta = 10
             loss = beta * (commit_loss)
