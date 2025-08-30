@@ -807,62 +807,109 @@ class VectorQuantize(nn.Module):
         d2 = torch.clamp(x2 + y2 - 2.0 * x @ y.t(), min=0.0)
         return d2
 
+    @staticmethod
+    def pairwise_sq_dists(x, y):  # [B,D], [K,D] -> [B,K]
+        # robust and efficient squared Euclidean
+        x2 = (x*x).sum(dim=-1, keepdim=True)       # [B,1]
+        y2 = (y*y).sum(dim=-1).unsqueeze(0)        # [1,K]
+        xy = x @ y.t()                              # [B,K]
+        d2 = x2 + y2 - 2*xy
+        return torch.clamp(d2, min=0.0)
+
+    def _latent_radius_loss(self, z):
+        # Penalize norms above a target radius (no penalty inside the ball)
+        norms = torch.linalg.norm(z, dim=-1)
+        excess = F.relu(norms - self.target_radius)
+        return (excess * excess).mean()
+
+    def _center_batch(self, z):
+        # small mean-shift to keep z centered (doesn’t block gradients)
+        return z - z.mean(dim=0, keepdim=True)
+
     def commitment_loss(
-            self,
-            encoder_outputs,  # [B, D]
-            codebook,  # [K, D] or [1, K, D]
-            beta=0.25,  # commitment weight
-            use_l2_normalize=False,
-            temperature=None,  # if None: auto-tune from median distance
+        self,
+        encoder_outputs,  # [B, D]
+        codebook,         # [K, D] or [1, K, D]
+        beta=0.25,
+        temperature=None,       # if not None, overrides EMA
     ):
-        # Squeeze and ensure shapes
-        codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook  # [K, D]
+        codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook
         assert encoder_outputs.dim() == 2 and codebook.dim() == 2
+        B, D = encoder_outputs.shape
+        K, Dk = codebook.shape
+        assert D == Dk, f"latent D={D} != codebook D={Dk}"
 
-        # Optional unit-norm stabilization (often helps when distances “blow up”)
-        if use_l2_normalize:
-            encoder_outputs = F.normalize(encoder_outputs, dim=-1)
-            codebook = F.normalize(codebook, dim=-1)
+        # Optional codebook norm clamp to avoid run-away norms in codes
+        if (self.codebook_max_norm is not None) and self.training:
+            with torch.no_grad():
+                norms = torch.linalg.norm(codebook, dim=-1, keepdim=True)
+                scale = torch.clamp(self.codebook_max_norm / (norms + 1e-8), max=1.0)
+                codebook.mul_(scale)
 
-        # Use squared distances for smoother gradients
-        d2 = self.pairwise_sq_dists(encoder_outputs, codebook)  # [B, K]
-        # Hard assign on true Euclidean distance (sqrt only for argmin; gradients use d2)
-        indices = d2.argmin(dim=-1)  # [B]
-        quantized_hard = codebook[indices]  # [B, D]
+        # Keep latents roughly centered to reduce drift
+        z = self._center_batch(encoder_outputs)
 
-        # Temperature for soft assignments (auto-set to median distance scale if not given)
-        if temperature is None:
-            # robust scale: median of sqrt distances; add eps to avoid div-by-zero
+        if self.use_cosine:
+            # Cosine (unit-norm) path: very stable; distances in [-1, 1]
+            z_n = F.normalize(z, dim=-1)
+            cb_n = F.normalize(codebook, dim=-1)
+
+            # Use cosine “distance” as 1 - cos sim
+            sim = z_n @ cb_n.t()                     # [B,K]
+            logits = sim / 0.07                      # fixed temperature in cosine land (tweakable)
+            soft_assign = F.softmax(logits, dim=-1)  # [B,K]
+            indices = logits.argmax(dim=-1)          # [B]
+            quantized_hard = codebook[indices]       # decode with raw codebook (keeps magnitude info)
+            quantized_soft = soft_assign @ codebook
+
+        else:
+            # Euclidean path with squared distances for stable gradients
+            d2 = self.pairwise_sq_dists(z, codebook)     # [B,K]
+            indices = d2.argmin(dim=-1)
+            quantized_hard = codebook[indices]
+
+            # Temperature handling: decouple from raw (growing) distance scale via EMA + clamp
             with torch.no_grad():
                 med = torch.sqrt(d2.detach()).median()
-            tau = (med + 1e-6).item()
-        else:
-            tau = float(temperature)
+                tau_obs = float(med + 1e-6)
+                # EMA update
+                tau_new = self.tau_ema * float(self._tau.item()) + (1.0 - self.tau_ema) * tau_obs
+                tau_new = float(min(max(tau_new, self.tau_min), self.tau_max))
+                self._tau.fill_(tau_new)
 
-        # Soft assignments using (negative) *Euclidean* distance scaled by tau
-        # NOTE: don’t use squared distance here—use sqrt(d2) for better locality
-        distances = torch.sqrt(torch.clamp(d2, min=1e-12))
-        logits = -distances / max(tau, 1e-6)
-        soft_assign = F.softmax(logits, dim=-1)  # [B, K]
-        quantized_soft = soft_assign @ codebook  # [B, D]
+            tau_eff = float(self._tau.item()) if (temperature is None) else float(temperature)
+            tau_eff = min(max(tau_eff, self.tau_min), self.tau_max)
 
-        # Straight-through trick: forward uses hard, backward uses soft
+            # Use true Euclidean in the softmax logits (better locality than d2)
+            distances = torch.sqrt(torch.clamp(d2, min=1e-12))
+            logits = -distances / tau_eff
+            soft_assign = F.softmax(logits, dim=-1)
+            quantized_soft = soft_assign @ codebook
+
+        # Straight-through: forward hard, backward soft
         quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
 
-        # Losses:
-        #  - codebook_loss: moves code vectors toward encoder outputs
-        #  - latent_loss (commitment): keeps encoder outputs close to chosen codes
-        codebook_loss = F.mse_loss(quantized, encoder_outputs.detach())
-        latent_loss = beta * F.mse_loss(encoder_outputs, quantized.detach())
+        # Codebook update pulls code vectors toward (detached) latents
+        codebook_loss = F.mse_loss(quantized, z.detach())
 
-        # Some useful debug prints
-        if torch.rand(()) < 0.02:  # print occasionally
+        # Commitment pulls latents toward chosen code (detached)
+        latent_loss = beta * F.mse_loss(z, quantized.detach())
+
+        # Radius regularizer to prevent latent norm explosion (Euclidean path only—or keep for both)
+        radius_loss = self._latent_radius_loss(z) * self.radius_weight
+
+        # Total (return separated pieces so you can log them)
+        total_latent_loss = latent_loss + radius_loss
+
+        if self.training and torch.rand(()) < 0.02:
             with torch.no_grad():
-                print(f"indices range: {indices.min().item()} .. {indices.max().item()} / K={codebook.shape[0]}")
-                print(f"median dist: {distances.median().item():.4f}, tau={tau:.4f}")
-                print(f"softmax max prob (mean over batch): {soft_assign.max(dim=-1).values.mean().item():.3f}")
+                maxp = soft_assign.max(dim=-1).values.mean().item()
+                if self.use_cosine:
+                    print(f"[COS] K={K} max prob ~{maxp:.3f}")
+                else:
+                    print(f"[EUC] K={K} tau={tau_eff:.3f} max prob ~{maxp:.3f}")
 
-        return latent_loss, codebook_loss
+        return total_latent_loss, codebook_loss
 
     def forward(self, x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
