@@ -641,7 +641,14 @@ class VectorQuantize(nn.Module):
             orthogonal_reg_active_codes_only=False,
             orthogonal_reg_max_codes=None,
             sample_codebook_temp=0.,
-            sync_codebook=False
+            sync_codebook=False,
+            use_cosine=False,
+            target_radius=3.0,  # soft cap for ||z||
+            radius_weight=1e-3,  # weight for norm regularizer
+            tau_init=0.5,  # starting temperature (distance scale)
+            tau_min=0.05,
+            tau_max=2.0,  # clamp for temperature
+            tau_ema=0.9,  # EMA for temperature
     ):
         super().__init__()
         self.dim = dim
@@ -678,7 +685,7 @@ class VectorQuantize(nn.Module):
         self.pair_weight = pair_weight
         self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
         self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
-
+        codebook_max_norm = None  # e.g., 4.0 to clamp code vectors
         codebook_class = EuclideanCodebook # if not use_cosine_sim else CosineSimCodebook
         self._codebook = codebook_class(
             dim=codebook_dim,
@@ -693,13 +700,6 @@ class VectorQuantize(nn.Module):
             use_ddp=sync_codebook,
             learnable_codebook=has_codebook_orthogonal_loss,
             sample_codebook_temp=sample_codebook_temp,
-            use_cosine=False,
-            target_radius=3.0,  # soft cap for ||z||
-            radius_weight=1e-3,  # weight for norm regularizer
-            tau_init=0.5,  # starting temperature (distance scale)
-            tau_min=0.05, tau_max=2.0,  # clamp for temperature
-            tau_ema=0.9,  # EMA for temperature
-            codebook_max_norm=None  # e.g., 4.0 to clamp code vectors
         )
         args = get_args()
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
