@@ -161,7 +161,6 @@ class EquivariantThreeHopGINE(nn.Module):
         self.gine3 = GINEConv(nn3, edge_dim=1)
         self.gine4 = GINEConv(nn4, edge_dim=1)
         # Vector quantization layer
-        #     def __init__(self, dim, codebook_size, commitment_weight=1.0, codebook_weight=0.1, decay=0.1):
         self.vq = VectorQuantize(
             dim=args.hidden_dim,
             codebook_size=args.codebook_size,
@@ -262,6 +261,7 @@ class EquivariantThreeHopGINE(nn.Module):
         if mode == "init_kmeans_loop":
             return h
         if mode == None:
+            # x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
             quantize_output = self.vq(
                 h, init_feat, logger, chunk_i, epoch, mode
             )

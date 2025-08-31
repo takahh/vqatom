@@ -25,6 +25,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
 
     # Forward pass
     with torch.cuda.amp.autocast():
+        # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
         outputs = model(g, feats, chunk_i, logger, epoch)
         (_, logits, loss, _, cb, loss_list3,
          latent_train, quantized, latents,
@@ -346,8 +347,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                         batched_feats = batched_graph.ndata["feat"]
 
                     # train step
+                    # (model, g, feats, optimizer, chunk_i, logger, epoch):
                     loss, loss_list_train, latent_train_cpu, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, idx
+                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, epoch
                     )
 
                     # record scalar losses
