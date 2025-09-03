@@ -400,15 +400,6 @@ class EuclideanCodebook(nn.Module):
         batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
         self.replace(batch_samples, batch_mask=expired_codes)
 
-    def expire_codes_(self, batch_samples):
-        if self.threshold_ema_dead_code == 0:
-            return
-        expired_codes = self.cluster_size < self.threshold_ema_dead_code
-        if not torch.any(expired_codes):
-            return
-        batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
-        self.replace(batch_samples, batch_mask=expired_codes)
-
     import torch
     def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor) -> float:
         """
@@ -582,7 +573,7 @@ class EuclideanCodebook(nn.Module):
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
 
-        if self.training and epoch < 100:
+        if self.training and epoch < 30:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
             embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
@@ -946,6 +937,7 @@ class VectorQuantize(nn.Module):
             self._codebook(x, logger, chunk_i, epoch, mode)
             return 0
         else:
+            #     ( x, logger=None, chunk_i=None, epoch=None, mode=None):
             quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
