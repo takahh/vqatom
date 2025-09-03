@@ -969,6 +969,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         alpha = 1 / ((epoch + 1) ** 2)
+        repel_loss *= alpha
         if epoch < 3:
             # logger.info("~~~~~~~ using repel loss ~~~~~~~~~~~")
             loss = repel_loss
@@ -976,7 +977,7 @@ class VectorQuantize(nn.Module):
             # self._codebook.embed.requires_grad_(False)
             print(f"repel {repel_loss}") # or some decaying schedule
             # logger.info("~~~~~~~ using commit loss ~~~~~~~~~~~")
-            beta = 0.1
+            beta = 1
             loss = beta * (commit_loss) + repel_loss
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
