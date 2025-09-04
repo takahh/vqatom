@@ -972,15 +972,15 @@ class VectorQuantize(nn.Module):
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss = mid_repel_loss
         repel_loss *= alpha
-        # if epoch < 3:
-        #     # logger.info("~~~~~~~ using repel loss ~~~~~~~~~~~")
-        #     loss = repel_loss
-        # elif epoch >= 3:
-        #     # self._codebook.embed.requires_grad_(False)
-        #     print(f"repel {repel_loss}") # or some decaying schedule
-        #     # logger.info("~~~~~~~ using commit loss ~~~~~~~~~~~")
-        beta = 0.01
-        loss = beta * (commit_loss) + repel_loss
+        if epoch < 3:
+            # logger.info("~~~~~~~ using repel loss ~~~~~~~~~~~")
+            loss = repel_loss
+        elif epoch >= 3:
+            # self._codebook.embed.requires_grad_(False)
+            print(f"repel {repel_loss}") # or some decaying schedule
+            # logger.info("~~~~~~~ using commit loss ~~~~~~~~~~~")
+            beta = 0.001
+            loss = beta * (commit_loss) + repel_loss
 
             # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
             # print(f"commit loss {self.commitment_weight * commit_loss}")
