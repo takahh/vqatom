@@ -260,8 +260,8 @@ class ContrastiveLoss(nn.Module):
         #     return attract_term
 
         # Compute lower and upper quantiles for middle 40%
-        lower_q = 0.3
-        upper_q = 0.7
+        lower_q = 0.7
+        upper_q = 0.9
         lower_thresh = torch.quantile(sample, lower_q)
         upper_thresh = torch.quantile(sample, upper_q)
         center = (lower_thresh + upper_thresh) / 2
