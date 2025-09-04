@@ -901,7 +901,8 @@ class VectorQuantize(nn.Module):
         codebook_loss = F.mse_loss(quantized, z.detach())
 
         # Commitment pulls latents toward chosen code (detached)
-        latent_loss = beta * F.mse_loss(z, quantized.detach())
+        # latent_loss = beta * F.mse_loss(z, quantized.detach())
+        latent_loss = beta * (z - quantized.detach()).abs().mean()  # L1 距離（線形）
 
         # Radius regularizer to prevent latent norm explosion (Euclidean path only—or keep for both)
         radius_loss = self._latent_radius_loss(z) * self.radius_weight
@@ -944,7 +945,7 @@ class VectorQuantize(nn.Module):
         quantize = x_tmp + (quantize - x_tmp)
         codebook = self._codebook.embed
         # repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
-        repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_repel_loss, repel_loss \
+        repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, mid_repel_loss, cb_repel_loss, two_repel_loss \
             = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
@@ -969,6 +970,7 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         args = get_args()
         alpha = 1 / ((epoch + 1) ** 2)
+        repel_loss = mid_repel_loss
         repel_loss *= alpha
         # if epoch < 3:
         #     # logger.info("~~~~~~~ using repel loss ~~~~~~~~~~~")
