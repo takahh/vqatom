@@ -245,15 +245,21 @@ class EquivariantThreeHopGINE(nn.Module):
             edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
             edge_attr = transformed_edge_weight
             edge_attr = torch.ones(edge_attr.shape).to(device)
-            h = self.gine1(h, edge_index=edge_index, edge_attr=edge_attr)
-            h = self.ln0(h)
-            h = self.gine2(h, edge_index=edge_index, edge_attr=edge_attr)
-            h = self.ln1(h)
-            h = self.gine3(h, edge_index=edge_index, edge_attr=edge_attr)
-            h = self.ln2(h)
-            # h = self.gine4(h, edge_index=edge_index, edge_attr=edge_attr)
-            # h = self.ln3(h)
-            h = h + self.linear_1(h)
+            h_list = []
+
+            h1 = self.ln0(self.gine1(h, edge_index, edge_attr))
+            h_list.append(h1)
+
+            h2 = self.ln1(self.gine2(h1, edge_index, edge_attr))
+            h_list.append(h2)
+
+            h3 = self.ln2(self.gine3(h2, edge_index, edge_attr))
+            h_list.append(h3)
+
+            # Aggregate
+            h = torch.cat(h_list, dim=-1)  # concat mode
+            # h = sum(h_list)              # sum mode
+
             # h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
             # norms = h.norm(dim=1)
             # if chunk_i % 50 == 0:
