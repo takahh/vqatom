@@ -145,16 +145,16 @@ class EquivariantThreeHopGINE(nn.Module):
         self.linear_0 = nn.Linear(120, args.hidden_dim)
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
-            nn.Linear(args.hidden_dim, int(hidden_feats/3)),
+            nn.Linear(args.hidden_dim, hidden_feats),
         )
         nn2 = nn.Sequential(
-            nn.Linear(hidden_feats, int(hidden_feats/3)),
+            nn.Linear(hidden_feats, hidden_feats),
         )
         nn3 = nn.Sequential(
-            nn.Linear(hidden_feats, int(hidden_feats/3)),
+            nn.Linear(hidden_feats, hidden_feats),
         )
         nn4 = nn.Sequential(
-            nn.Linear(hidden_feats, int(hidden_feats/3)),
+            nn.Linear(hidden_feats, hidden_feats),
         )
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
@@ -178,7 +178,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.ln3 = nn.LayerNorm(args.hidden_dim)
         # self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
         self.linear_1 = nn.Sequential(
-            nn.Linear(hidden_feats, 2 * hidden_feats),
+            nn.Linear(hidden_feats * 3, 2 * hidden_feats),
             nn.ReLU(),
             # nn.Dropout(0.1),
             nn.Linear(2 * hidden_feats, 2 * hidden_feats),
@@ -259,7 +259,7 @@ class EquivariantThreeHopGINE(nn.Module):
             # Aggregate
             h = torch.cat(h_list, dim=-1)  # concat mode
             # h = sum(h_list)              # sum mode
-
+            h = self.linear_1(h)
             # h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
             # norms = h.norm(dim=1)
             # if chunk_i % 50 == 0:
