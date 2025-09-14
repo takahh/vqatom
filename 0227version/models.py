@@ -145,16 +145,16 @@ class EquivariantThreeHopGINE(nn.Module):
         self.linear_0 = nn.Linear(120, args.hidden_dim)
         # GINEConv layers with specified edge_dim
         nn1 = nn.Sequential(
-            nn.Linear(args.hidden_dim, hidden_feats),
+            nn.Linear(args.hidden_dim, int(hidden_feats/3)),
         )
         nn2 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
+            nn.Linear(hidden_feats, int(hidden_feats/3)),
         )
         nn3 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
+            nn.Linear(hidden_feats, int(hidden_feats/3)),
         )
         nn4 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
+            nn.Linear(hidden_feats, int(hidden_feats/3)),
         )
         self.gine1 = GINEConv(nn1, edge_dim=1)
         self.gine2 = GINEConv(nn2, edge_dim=1)
