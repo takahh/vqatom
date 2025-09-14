@@ -227,6 +227,7 @@ class EquivariantThreeHopGINE(nn.Module):
             feat_before_transform = features.detach()
             features = self.feat_embed(features).to(device)
             features = features.to(device)
+            # 1 featue to nn
             h = self.linear_0(features)
             init_feat = h
             edge_weight = data.edata.get(
@@ -245,18 +246,15 @@ class EquivariantThreeHopGINE(nn.Module):
             edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
             edge_attr = transformed_edge_weight
             edge_attr = torch.ones(edge_attr.shape).to(device)
-            h_list = []
 
+            # 2 Three GNN Layers
+            h_list = []
             h1 = self.ln0(self.gine1(h, edge_index, edge_attr))
             h_list.append(h1)
-
             h2 = self.ln1(self.gine2(h1, edge_index, edge_attr))
             h_list.append(h2)
-
             h3 = self.ln2(self.gine3(h2, edge_index, edge_attr))
             h_list.append(h3)
-
-            # Aggregate
             h = torch.cat(h_list, dim=-1)  # concat mode
             # h = sum(h_list)              # sum mode
             h = self.linear_1(h)
