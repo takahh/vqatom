@@ -150,9 +150,11 @@ class EquivariantThreeHopGINE(nn.Module):
         )
         nn2 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(),
         )
         nn3 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
+            nn.ReLU(),
         )
         nn4 = nn.Sequential(
             nn.Linear(hidden_feats, hidden_feats),
