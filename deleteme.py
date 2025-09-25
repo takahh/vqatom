@@ -1,29 +1,31 @@
-import torch
-import matplotlib.pyplot as plt
+N = 0
 
-def soft_middle_weight(dmat, low, high, sharpness=20.0):
-    w_low = torch.sigmoid(sharpness * (dmat - low))
-    w_high = torch.sigmoid(sharpness * (high - dmat))
-    return w_low * w_high
+path = "/Users/takayukikimura/Downloads/"
+adj = f"both_mono/concatenated_adj_batch_{N}.npy"
+attr = f"both_mono/concatenated_attr_batch_{N}.npy"
+smiles = f"both_mono/smiles_{N}.txt"
 
-# Generate a range of distances
-dists = torch.linspace(0, 20, steps=1000)
-low = 3.0
-high = 7.0
-sharpness = 20.0
+import numpy as np
 
-# Compute weights
-weights = soft_middle_weight(dists, low, high, sharpness).numpy()
 
-# Plot
-plt.figure(figsize=(8, 5))
-plt.plot(dists.numpy(), weights, label=f"low={low}, high={high}, sharpness={sharpness}")
-plt.axvline(low, color='gray', linestyle='--', label='low threshold')
-plt.axvline(high, color='gray', linestyle='--', label='high threshold')
-plt.title("Soft Middle Weight Function")
-plt.xlabel("Pairwise Distance")
-plt.ylabel("Weight")
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.show()
+def main():
+    # adj_arr = np.load(path + adj).reshape(-1, 100, 100)
+    attr_arr = np.load(path + attr).reshape(-1, 100, 27)
+    attr_arr = attr_arr[0].reshape(-1)
+    attr_arr = attr_arr[attr_arr != 0]
+
+    # print(attr_arr)
+    # count = 0
+    # with open(path + smiles) as f:
+    #     for line in f:
+    #         print(line)
+    #         count += 1
+    #         if count == 1:
+    #             break
+    c_mask = attr_arr == 6
+    print(c_mask)
+
+
+
+if __name__ == "__main__":
+    main()

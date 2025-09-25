@@ -135,6 +135,7 @@ def convert_to_dgl(adj_batch, attr_batch):
     """
     base_graphs = []
     extended_graphs = []
+    masks = []
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # Reshape the current batch
         args = get_args()
@@ -148,6 +149,12 @@ def convert_to_dgl(adj_batch, attr_batch):
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
+            element_arr = attr_matrix.reshape(-1)
+            nonzero_element_arr = element_arr[element_arr != 0]
+            c_mask = nonzero_element_arr[nonzero_element_arr == 6]
+            n_mask = nonzero_element_arr[nonzero_element_arr == 7]
+            o_mask = nonzero_element_arr[nonzero_element_arr == 8]
+            masks.append([c_mask, n_mask, o_mask])
 
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
@@ -231,7 +238,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             extended_graphs.append(extended_g)
 
     # return base_graphs, extended_graphs
-    return base_graphs, base_graphs
+    return base_graphs, base_graphs, masks
 
 
 from torch.utils.data import Dataset
@@ -291,10 +298,12 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
         all_latents = []
+        all_masks = []
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
-            glist_base, glist = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            glist_base, glist, masks = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            all_masks.append(masks.cpu())
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
@@ -307,6 +316,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+        np.save(f"./all_masks_{epoch}.npy", all_masks.numpy())
+        # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # -------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest)
