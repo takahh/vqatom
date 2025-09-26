@@ -151,10 +151,10 @@ def convert_to_dgl(adj_batch, attr_batch):
             attr_matrix = attr_matrices[j]
             element_arr = attr_matrix.reshape(-1)
             nonzero_element_arr = element_arr[element_arr != 0]
-            h_mask = nonzero_element_arr[nonzero_element_arr == 1]
-            c_mask = nonzero_element_arr[nonzero_element_arr == 6]
-            n_mask = nonzero_element_arr[nonzero_element_arr == 7]
-            o_mask = nonzero_element_arr[nonzero_element_arr == 8]
+            h_mask = nonzero_element_arr == 1
+            c_mask = nonzero_element_arr == 6
+            n_mask = nonzero_element_arr == 7
+            o_mask = nonzero_element_arr == 8
             print("h_mask")
             print(h_mask)
             masks.append([h_mask, c_mask, n_mask, o_mask])
