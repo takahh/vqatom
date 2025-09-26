@@ -317,24 +317,34 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
-        all_masks_tensor = []
 
-        for mask in all_masks:
-            if isinstance(mask, list):
-                # If it's a list of tensors or list of numbers
-                if isinstance(mask[0], torch.Tensor):
-                    mask_tensor = torch.stack(mask)
-                else:
-                    mask_tensor = torch.tensor(mask)
-            elif isinstance(mask, torch.Tensor):
-                mask_tensor = mask
-            else:
-                raise TypeError(f"Unexpected type in all_masks: {type(mask)}")
+        # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
+        flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
 
-            all_masks_tensor.append(mask_tensor)
+        # Initialize 4 lists
+        h_masks = []
+        c_masks = []
+        n_masks = []
+        o_masks = []
 
-        all_masks_array = torch.stack(all_masks_tensor).numpy()
-        np.save(f"./all_masks_{epoch}.npy", all_masks_array)
+        # Fill them
+        for h, c, n, o in flattened:
+            h_masks.append(h.cpu().numpy())
+            c_masks.append(c.cpu().numpy())
+            n_masks.append(n.cpu().numpy())
+            o_masks.append(o.cpu().numpy())
+
+        # Now convert to object arrays (since lengths of masks may vary)
+        h_masks_np = np.array(h_masks, dtype=object)
+        c_masks_np = np.array(c_masks, dtype=object)
+        n_masks_np = np.array(n_masks, dtype=object)
+        o_masks_np = np.array(o_masks, dtype=object)
+
+        # Save to file (optional)
+        np.save("h_masks.npy", h_masks_np)
+        np.save("c_masks.npy", c_masks_np)
+        np.save("n_masks.npy", n_masks_np)
+        np.save("o_masks.npy", o_masks_np)
         # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # -------------------------------------------------------------------
