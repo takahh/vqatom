@@ -155,6 +155,8 @@ def convert_to_dgl(adj_batch, attr_batch):
             c_mask = nonzero_element_arr[nonzero_element_arr == 6]
             n_mask = nonzero_element_arr[nonzero_element_arr == 7]
             o_mask = nonzero_element_arr[nonzero_element_arr == 8]
+            print("h_mask")
+            print(h_mask)
             masks.append([h_mask, c_mask, n_mask, o_mask])
 
             # ------------------------------------------

@@ -19,7 +19,7 @@ N_NEIGHBORS = 10
 MIN_DIST = 0.01
 SPREAD = 1
 # BATCH_SIZE = 8000
-EPOCH_START = 4
+EPOCH_START = 1
 EPOCH_END = EPOCH_START + 1
 MODE = "umap"  # Choose between "tsne" and "umap"
 # MODE = "tsne"  # Choose between "tsne" and "umap"
@@ -203,7 +203,18 @@ def process_epoch(epoch, samples):
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
-    h_mask_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
+    h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)
+    c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)
+    n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)
+    o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)
+    print("h_mask_arr.shape")
+    print(h_mask_arr.shape)
+    print(h_mask_arr[:10])
+    print("c_mask_arr.shape")
+    print(c_mask_arr.shape)
+    print(c_mask_arr[:10])
+    print("n_mask_arr.shape")
+    print(n_mask_arr[:10])
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
