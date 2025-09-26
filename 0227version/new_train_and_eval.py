@@ -299,12 +299,12 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
         all_latents = []
-        all_masks = []
+        hmask_list = []
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
             glist_base, glist, masks = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            all_masks.append(masks)
+            hmask_list.extend(masks[0])
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
@@ -319,32 +319,32 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
-        flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
+        # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
 
-        # Initialize 4 lists
-        h_masks = []
-        c_masks = []
-        n_masks = []
-        o_masks = []
-
-        # Fill them
-        for h, c, n, o in flattened:
-            h_masks.append(h.cpu().numpy())
-            c_masks.append(c.cpu().numpy())
-            n_masks.append(n.cpu().numpy())
-            o_masks.append(o.cpu().numpy())
+        # # Initialize 4 lists
+        # h_masks = []
+        # c_masks = []
+        # n_masks = []
+        # o_masks = []
+        #
+        # # Fill them
+        # for h, c, n, o in flattened:
+        #     h_masks.append(h.cpu().numpy())
+        #     c_masks.append(c.cpu().numpy())
+        #     n_masks.append(n.cpu().numpy())
+        #     o_masks.append(o.cpu().numpy())
 
         # Now convert to object arrays (since lengths of masks may vary)
-        h_masks_np = np.array(h_masks, dtype=object)
-        c_masks_np = np.array(c_masks, dtype=object)
-        n_masks_np = np.array(n_masks, dtype=object)
-        o_masks_np = np.array(o_masks, dtype=object)
+        h_masks_np = np.array(hmask_list, dtype=object)
+        # c_masks_np = np.array(c_masks, dtype=object)
+        # n_masks_np = np.array(n_masks, dtype=object)
+        # o_masks_np = np.array(o_masks, dtype=object)
 
         # Save to file (optional)
         np.save(f"h_masks_{epoch}.npy", h_masks_np)
-        np.save(f"c_masks_{epoch}.npy", c_masks_np)
-        np.save(f"n_masks_{epoch}.npy", n_masks_np)
-        np.save(f"o_masks_{epoch}.npy", o_masks_np)
+        # np.save(f"c_masks_{epoch}.npy", c_masks_np)
+        # np.save(f"n_masks_{epoch}.npy", n_masks_np)
+        # np.save(f"o_masks_{epoch}.npy", o_masks_np)
         # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # -------------------------------------------------------------------

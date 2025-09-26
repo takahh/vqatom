@@ -118,7 +118,8 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 import umap
 
-def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
+
+def plot_umap(cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
     # 1. Concatenate for PCA
     combined = np.concatenate((latent_arr, cb_arr), axis=0)
     # combined_pca = PCA(n_components=pca_dim).fit_transform(combined)
@@ -146,6 +147,8 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
             ).fit(combined_pca)
 
             latent_emb = reducer.embedding_[:latent_arr.shape[0]]
+            print("latent_emb.shape")
+            print(latent_emb.shape)
             cb_emb = reducer.embedding_[latent_arr.shape[0]:]
 
             # Zoom window
@@ -171,7 +174,12 @@ def plot_umap(cb_arr, latent_arr, epoch, pca_dim=16):
             bins = 100
             save_dir = f"{OPATH}/distri_images"
             os.makedirs(save_dir, exist_ok=True)
-
+            print("zoomed_latent[:, 0].shape")
+            print(zoomed_latent[:, 0].shape)
+            print("mask_list[0].shape")
+            print(mask_list[0].shape)
+            print("zoomed_latent[:, 0] * mask_list[0]")
+            print(zoomed_latent[:, 0] * mask_list[0])
             for i in range(2):
                 plt.figure(figsize=(6, 5))
                 plt.hist2d(
@@ -203,23 +211,17 @@ def process_epoch(epoch, samples):
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
-    h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)
-    c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)
-    n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)
-    o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)
-    print("h_mask_arr.shape")
-    print(h_mask_arr.shape)
-    print(h_mask_arr[:10])
-    print("c_mask_arr.shape")
-    print(c_mask_arr.shape)
-    print(c_mask_arr[:10])
-    print("n_mask_arr.shape")
-    print(n_mask_arr[:10])
+    h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)[:samples]
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
+    print("c_mask_arr.shape")
+    print(c_mask_arr.shape)
 
     # Shuffle
     print("latent_arr.shape before")
@@ -240,7 +242,7 @@ def process_epoch(epoch, samples):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, 16)
+        plot_umap(cb_arr, latent_arr, epoch, [h_mask_arr, c_mask_arr, n_mask_arr, o_mask_arr], 16)
         #cb_arr, latent_arr, epoch, pca_dim=16
 
 def main():
