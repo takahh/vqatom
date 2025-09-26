@@ -317,7 +317,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
-        all_masks_array = torch.stack(all_masks).numpy()
+        all_masks_tensor = [torch.tensor(mask) if not isinstance(mask, torch.Tensor) else mask for mask in all_masks]
+        all_masks_array = torch.stack(all_masks_tensor).numpy()
         np.save(f"./all_masks_{epoch}.npy", all_masks_array)
         # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
