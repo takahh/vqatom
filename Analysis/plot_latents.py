@@ -203,6 +203,7 @@ def process_epoch(epoch, samples):
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
+    h_mask_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)

@@ -341,10 +341,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         o_masks_np = np.array(o_masks, dtype=object)
 
         # Save to file (optional)
-        np.save("h_masks.npy", h_masks_np)
-        np.save("c_masks.npy", c_masks_np)
-        np.save("n_masks.npy", n_masks_np)
-        np.save("o_masks.npy", o_masks_np)
+        np.save(f"h_masks_{epoch}.npy", h_masks_np)
+        np.save(f"c_masks_{epoch}.npy", c_masks_np)
+        np.save(f"n_masks_{epoch}.npy", n_masks_np)
+        np.save(f"o_masks_{epoch}.npy", o_masks_np)
         # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # -------------------------------------------------------------------
