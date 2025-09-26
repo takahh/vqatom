@@ -305,6 +305,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             glist_base, glist, masks = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             hmask_list.extend(masks[0])
+            print("len(hmask_list)")
+            print(len(hmask_list))
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
