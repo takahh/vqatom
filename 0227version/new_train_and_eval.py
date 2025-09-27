@@ -303,6 +303,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
+            print(idx)
             glist_base, glist, mask_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             print("mask_dict")
