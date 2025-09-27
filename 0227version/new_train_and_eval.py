@@ -192,21 +192,21 @@ def convert_to_dgl(adj_batch, attr_batch):
             g1.edata["edge_type"] = torch.ones(g1.num_edges(), dtype=torch.int)
             g1 = dgl.add_self_loop(g1)  # optional
             base_graphs.append(g1)
+            # A1: 1-hop reachability
+            A1_bool = (Af > 0)  # bool [n, n]
+            A1 = A1_bool.to(torch.int8)  # int for matmul
 
-            # --------- EXTENDED GRAPH: union of 1/2/3-hop ----------
-            # Use dense boolean mult (n<=100 → very fast, avoids DGL khop calls)
-            A1 = (Af > 0)                        # bool [n, n]
-            # 2-hop reachability
-            A2 = (A1 @ A1) > 0                   # bool
-            # 3-hop reachability
-            A3 = (A2 @ A1) > 0                   # bool
+            # 2/3-hop via dense matmul (n<=100 → fast)
+            A2 = (A1 @ A1) > 0  # bool
+            A3 = (A2.to(torch.int8) @ A1) > 0  # bool
 
             # Remove self for hop>1 (we’ll add self loops later)
             A2.fill_diagonal_(False)
             A3.fill_diagonal_(False)
 
             # Union of edges
-            U = A1 | A2 | A3                     # bool [n, n]
+            U = A1_bool | A2 | A3  # bool
+
             es, ed = U.nonzero(as_tuple=True)
 
             g_ext = dgl.graph((es, ed), num_nodes=n)
