@@ -193,23 +193,49 @@ def convert_to_dgl(adj_batch, attr_batch):
             g1 = dgl.add_self_loop(g1)  # optional
             base_graphs.append(g1)
             # A1: 1-hop reachability
-            A1_bool = (Af > 0)  # bool [n, n]
-            A1 = A1_bool.to(torch.int8)  # int for matmul
+            # 1/2/3-hop
+            A1_bool = (Af > 0)
+            A1 = A1_bool.to(torch.int8)
 
-            # 2/3-hop via dense matmul (n<=100 → fast)
-            A2 = (A1 @ A1) > 0  # bool
-            A3 = (A2.to(torch.int8) @ A1) > 0  # bool
+            A2 = (A1 @ A1) > 0
+            A3 = (A2.to(torch.int8) @ A1) > 0
 
-            # Remove self for hop>1 (we’ll add self loops later)
             A2.fill_diagonal_(False)
             A3.fill_diagonal_(False)
 
-            # Union of edges
-            U = A1_bool | A2 | A3  # bool
-
-            es, ed = U.nonzero(as_tuple=True)
+            U = A1_bool | A2 | A3
+            es, ed = U.nonzero(as_tuple=True)  # Long
 
             g_ext = dgl.graph((es, ed), num_nodes=n)
+
+            # weights
+            one_mask = A1_bool[es, ed]
+            two_mask = (~one_mask) & A2[es, ed]
+            three_mask = (~one_mask) & (~two_mask) & A3[es, ed]
+
+            w = torch.zeros_like(es, dtype=Af.dtype)
+            if one_mask.any():
+                idx = one_mask.nonzero(as_tuple=True)[0]
+                w[idx] = Af[es[idx], ed[idx]]
+            if two_mask.any():
+                idx = two_mask.nonzero(as_tuple=True)[0]
+                w[idx] = 0.5
+            if three_mask.any():
+                idx = three_mask.nonzero(as_tuple=True)[0]
+                w[idx] = 0.3
+
+            et = torch.zeros_like(es, dtype=torch.int)
+            if one_mask.any():
+                et[one_mask] = 1
+            if two_mask.any():
+                et[two_mask] = 2
+            if three_mask.any():
+                et[three_mask] = 3
+
+            g_ext.edata["weight"] = w.float()
+            g_ext.edata["edge_type"] = et
+            g_ext.ndata["feat"] = Xf
+            g_ext = dgl.add_self_loop(g_ext)
 
             # edge weights: take from Af (1-hop weights); else set hop-specific weights
             # Build weights by rule: 1-hop: Af, 2-hop: 0.5, 3-hop: 0.3
