@@ -139,6 +139,7 @@ def convert_to_dgl(adj_batch, attr_batch):
     masks_dict = defaultdict(list)  # elem -> list of bool arrays
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # Reshape the current batch
+        print(i)
         args = get_args()
         if args.train_or_infer == 'analysis':
             adj_matrices = adj_batch[i].view(-1, 100, 100)
