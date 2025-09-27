@@ -158,12 +158,7 @@ def convert_to_dgl(adj_batch, attr_batch):
                 for elem in np.unique(nz):
                     mask = (nz == elem)                  # numpy bool array
                     masks_dict[int(elem)].append(mask)   # accumulate parts
-            # finalize: single bool array per element
-            for elem, parts in masks_dict.items():
-                masks_dict[elem] = np.concatenate(parts)     # or .tolist() for list[bool]
-            # example check
-            e = next(iter(masks_dict))
-            print(masks_dict[e][:10], masks_dict[e].shape)
+                    print(masks_dict[int(elem)][-10:])
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
@@ -236,6 +231,12 @@ def convert_to_dgl(adj_batch, attr_batch):
 
             extended_graphs.append(extended_g)
 
+            # finalize: single bool array per element
+    for elem, parts in masks_dict.items():
+        masks_dict[elem] = np.concatenate(parts)     # or .tolist() for list[bool]
+    # example check
+    e = next(iter(masks_dict))
+    print(masks_dict[e][:10], masks_dict[e].shape)
     # return base_graphs, extended_graphs
     return base_graphs, base_graphs, masks_dict
 
