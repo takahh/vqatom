@@ -136,6 +136,8 @@ def convert_to_dgl(adj_batch, attr_batch):
     base_graphs = []
     extended_graphs = []
     masks = []
+    from collections import defaultdict
+    masks_dict = defaultdict(list)  # elem -> list of bool arrays
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # Reshape the current batch
         args = get_args()
@@ -149,31 +151,19 @@ def convert_to_dgl(adj_batch, attr_batch):
         for j in range(len(attr_matrices)):
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
-            element_arr = attr_matrix.reshape(-1)
-            nonzero_element_arr = element_arr[element_arr != 0]
-            from collections import defaultdict
             import numpy as np
-
-            # Initialize a dict of lists to collect masks per atom typeimport numpy as np
-            from collections import defaultdict
-
-            masks_dict = defaultdict(list)  # elem -> list of bool arrays
-
             for attr_matrix in attr_matrices:
                 nz = attr_matrix.reshape(-1)
                 nz = nz[nz != 0]
                 for elem in np.unique(nz):
                     mask = (nz == elem)                  # numpy bool array
                     masks_dict[int(elem)].append(mask)   # accumulate parts
-
             # finalize: single bool array per element
             for elem, parts in masks_dict.items():
                 masks_dict[elem] = np.concatenate(parts)     # or .tolist() for list[bool]
-
             # example check
             e = next(iter(masks_dict))
             print(masks_dict[e][:10], masks_dict[e].shape)
-
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
@@ -181,7 +171,6 @@ def convert_to_dgl(adj_batch, attr_batch):
             num_total_nodes = nonzero_mask.sum().item()
             filtered_attr_matrix = attr_matrix[nonzero_mask]
             filtered_adj_matrix = adj_matrix[:num_total_nodes, :num_total_nodes]
-
             # ------------------------------------------
             # Create the base graph (only 1-hop edges)
             # ------------------------------------------
@@ -191,43 +180,35 @@ def convert_to_dgl(adj_batch, attr_batch):
             src = src[mask]
             dst = dst[mask]
             edge_weights = filtered_adj_matrix[src, dst]  # Extract weights for 1-hop edges
-
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
             base_g.ndata["feat"] = filtered_attr_matrix
             base_g.edata["weight"] = edge_weights.float()
             # You can optionally customize edge types for the base graph; here we assign all 1-hop edges.
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
             base_g = dgl.add_self_loop(base_g)
-
             base_graphs.append(base_g)
-
             # ------------------------------------------
             # Generate 2-hop and 3-hop adjacency matrices
             # ------------------------------------------
             adj_2hop = dgl.khop_adj(base_g, 2)
             adj_3hop = dgl.khop_adj(base_g, 3)
-
             # ------------------------------------------
             # Combine adjacency matrices into one
             # ------------------------------------------
             full_adj_matrix = filtered_adj_matrix.clone()
             full_adj_matrix += (adj_2hop * 0.5)  # Incorporate 2-hop connections
             full_adj_matrix += (adj_3hop * 0.3)  # Incorporate 3-hop connections
-
             # Ensure diagonal values are set to 1.0 (self-connections)
             torch.diagonal(full_adj_matrix).fill_(1.0)
-
             # ------------------------------------------
             # Create the extended graph from the full adjacency matrix
             # ------------------------------------------
             src_full, dst_full = filtered_adj_matrix.nonzero(as_tuple=True)
             extended_g = dgl.graph((src_full, dst_full), num_nodes=num_total_nodes)
             new_src, new_dst = extended_g.edges()
-
             # Assign edge weights from the full adjacency matrix
             edge_weights = filtered_adj_matrix[new_src, new_dst]
             extended_g.edata["weight"] = edge_weights.float()
-
             # ------------------------------------------
             # Vectorized assignment of edge types
             # ------------------------------------------
