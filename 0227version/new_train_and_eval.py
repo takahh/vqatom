@@ -154,20 +154,25 @@ def convert_to_dgl(adj_batch, attr_batch):
             from collections import defaultdict
             import numpy as np
 
-            # Initialize a dict of lists to collect masks per atom type
-            masks_dict = defaultdict(list)
+            # Initialize a dict of lists to collect masks per atom typeimport numpy as np
+            from collections import defaultdict
+
+            masks_dict = defaultdict(list)  # elem -> list of bool arrays
 
             for attr_matrix in attr_matrices:
-                element_arr = attr_matrix.reshape(-1)
-                nonzero_element_arr = element_arr[element_arr != 0]
+                nz = attr_matrix.reshape(-1)
+                nz = nz[nz != 0]
+                for elem in np.unique(nz):
+                    mask = (nz == elem)                  # numpy bool array
+                    masks_dict[int(elem)].append(mask)   # accumulate parts
 
-                unique_elements = np.unique(nonzero_element_arr)
+            # finalize: single bool array per element
+            for elem, parts in masks_dict.items():
+                masks_dict[elem] = np.concatenate(parts)     # or .tolist() for list[bool]
 
-                for elem in unique_elements:
-                    mask = nonzero_element_arr == elem
-                    masks_dict[elem].append(mask)
-                    print(masks_dict[elem][:10])
-                    print(len(masks_dict[elem]))
+            # example check
+            e = next(iter(masks_dict))
+            print(masks_dict[e][:10], masks_dict[e].shape)
 
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
