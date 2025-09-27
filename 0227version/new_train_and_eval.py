@@ -166,6 +166,7 @@ def convert_to_dgl(adj_batch, attr_batch):
                 for elem in unique_elements:
                     mask = nonzero_element_arr == elem
                     masks_dict[elem].extend(mask)
+                    print(masks_dict[elem])
 
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
