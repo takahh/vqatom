@@ -158,7 +158,6 @@ def convert_to_dgl(adj_batch, attr_batch):
                 for elem in np.unique(nz):
                     mask = (nz == elem)                  # numpy bool array
                     masks_dict[int(elem)].append(mask)   # accumulate parts
-                    print(masks_dict[int(elem)][-10:])
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
