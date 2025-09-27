@@ -151,11 +151,21 @@ def convert_to_dgl(adj_batch, attr_batch):
             attr_matrix = attr_matrices[j]
             element_arr = attr_matrix.reshape(-1)
             nonzero_element_arr = element_arr[element_arr != 0]
-            h_mask = nonzero_element_arr == 1
-            c_mask = nonzero_element_arr == 6
-            n_mask = nonzero_element_arr == 7
-            o_mask = nonzero_element_arr == 8
-            masks.append([h_mask, c_mask, n_mask, o_mask])
+            from collections import defaultdict
+            import numpy as np
+
+            # Initialize a dict of lists to collect masks per atom type
+            masks_dict = defaultdict(list)
+
+            for attr_matrix in attr_matrices:
+                element_arr = attr_matrix.reshape(-1)
+                nonzero_element_arr = element_arr[element_arr != 0]
+
+                unique_elements = np.unique(nonzero_element_arr)
+
+                for elem in unique_elements:
+                    mask = nonzero_element_arr == elem
+                    masks_dict[elem].extend(mask)
 
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
@@ -239,7 +249,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             extended_graphs.append(extended_g)
 
     # return base_graphs, extended_graphs
-    return base_graphs, base_graphs, masks
+    return base_graphs, base_graphs, masks_dict
 
 
 from torch.utils.data import Dataset
@@ -300,13 +310,24 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # ------------------------------------------
         all_latents = []
         hmask_list = []
+
+        from collections import defaultdict
+        import numpy as np
+        # Initialize a dict of lists to collect masks per atom type
+        all_masks_dict = defaultdict(list)
+
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
-            glist_base, glist, masks = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            glist_base, glist, mask_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            hmask_list.extend(masks[0])
-            print("len(hmask_list)")
-            print(len(hmask_list))
+
+            unique_elements = np.unique(mask_dict)
+
+            for elem in unique_elements:
+                all_masks_dict[elem].extend(mask_dict[elem])
+
+            print("all_masks_dict")  # 4 ??
+            print(all_masks_dict)
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
@@ -343,7 +364,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # o_masks_np = np.array(o_masks, dtype=object)
 
         # Save to file (optional)
-        np.save(f"h_masks_{epoch}.npy", h_masks_np)
+        np.save("all_masks_dict.npy", all_masks_dict)
         # np.save(f"c_masks_{epoch}.npy", c_masks_np)
         # np.save(f"n_masks_{epoch}.npy", n_masks_np)
         # np.save(f"o_masks_{epoch}.npy", o_masks_np)
