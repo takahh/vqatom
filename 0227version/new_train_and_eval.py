@@ -165,7 +165,7 @@ def convert_to_dgl(adj_batch, attr_batch):
 
                 for elem in unique_elements:
                     mask = nonzero_element_arr == elem
-                    masks_dict[elem].extend(mask)
+                    masks_dict[elem].append(mask)
                     print(masks_dict[elem])
 
             # ------------------------------------------
