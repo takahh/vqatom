@@ -148,11 +148,13 @@ def convert_to_dgl(adj_batch, attr_batch):
             adj_matrices = adj_batch[i].view(-1, 100, 100)
             attr_matrices = attr_batch[i].view(-1, 100, 27)
 
-        for j in range(len(attr_matrices)):
+        for j in range(len(attr_matrices)): # per molecule
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
             import numpy as np
-            for attr_matrix in attr_matrices:
+            for attr_matrix in attr_matrices: # per atom
+                print("attr_matrix.shape")
+                print(attr_matrix.shape)
                 nz = attr_matrix.reshape(-1)
                 nz = nz[nz != 0]
                 for elem in np.unique(nz):
