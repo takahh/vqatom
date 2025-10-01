@@ -329,11 +329,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
 
         # Save to file (optional)
-        np.save("all_masks_dict.npy", all_masks_dict)
-        # np.save(f"c_masks_{epoch}.npy", c_masks_np)
-        # np.save(f"n_masks_{epoch}.npy", n_masks_np)
-        # np.save(f"o_masks_{epoch}.npy", o_masks_np)
-        # np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
+        # np.save("all_masks_dict.npy", all_masks_dict)
+        np.savez_compressed("all_masks_dict.npz", all_masks_dict)
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # -------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest)
