@@ -124,6 +124,35 @@ def collate_fn(batch):
 
 import dgl
 import torch
+from collections import defaultdict
+import numpy as np
+
+def collect_masks_per_batch(adj_batch, attr_batch):
+    # 返り値: {elem: [index_array (1D int32), ...]}  ※ bool ではなく index で持つ
+    masks_dict = defaultdict(list)
+    B = len(adj_batch)
+
+    for i in range(B):
+        # ここで get_args() を毎回呼ぶ必要は通常ない
+        adj_matrices = adj_batch[i].view(-1, 100, 100)
+        attr_matrices = attr_batch[i].view(-1, 100, 27)
+
+        M = len(attr_matrices)  # molecules per this batch item
+        for j in range(M):
+            attr_matrix = attr_matrices[j]            # (100, 27)
+            nz = attr_matrix[:, 0].cpu().numpy().reshape(-1)
+            nz = nz[nz != 0]
+
+            # ここで bool ではなく“インデックス”で保持する（省メモリ）
+            # 同じ要素が少数出現するなら index の方が圧倒的に小さい
+            if nz.size == 0:
+                continue
+            uniq = np.unique(nz)
+            for elem in uniq:
+                idxs = np.flatnonzero(nz == elem).astype(np.int32)
+                masks_dict[int(elem)].append(idxs)
+
+    return masks_dict
 
 def convert_to_dgl(adj_batch, attr_batch):
     """
@@ -132,11 +161,9 @@ def convert_to_dgl(adj_batch, attr_batch):
     This version includes optimizations such as vectorized edge-type assignment,
     and avoids unnecessary copies where possible.
     """
+    masks = collect_masks_per_batch(adj_batch, attr_batch)
     base_graphs = []
     extended_graphs = []
-    masks = []
-    from collections import defaultdict
-    masks_dict = defaultdict(list)  # elem -> list of bool arrays
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # Reshape the current batch
         print(f"{i}/{len(adj_batch)}")
@@ -151,17 +178,6 @@ def convert_to_dgl(adj_batch, attr_batch):
         for j in range(len(attr_matrices)): # per molecule
             adj_matrix = adj_matrices[j]
             attr_matrix = attr_matrices[j]
-            import numpy as np
-            for attr_matrix in attr_matrices: # per atom
-                nz = attr_matrix[:, 0].reshape(-1)
-                nz = nz[nz != 0]
-                for elem in np.unique(nz):
-                    mask = (nz == elem)                  # numpy bool array
-                    masks_dict[int(elem)].append(mask)   # accumulate parts
-            # finalize: single bool array per element
-            for elem, parts in masks_dict.items():
-                masks_dict[elem].append(parts)     # or .tolist() for list[bool]
-            # example check
             # ------------------------------------------
             # Remove padding: keep only non-zero attribute rows
             # ------------------------------------------
@@ -235,7 +251,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             extended_graphs.append(extended_g)
 
     # return base_graphs, extended_graphs
-    return base_graphs, base_graphs, masks_dict
+    return base_graphs, base_graphs, masks
 
 
 from torch.utils.data import Dataset
@@ -305,11 +321,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
             print(idx)
-            glist_base, glist, mask_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             print(all_masks_dict[6])
             # Aggregate masks into all_masks_dict
-            for atom_type, masks in mask_dict.items():
+            for atom_type, masks in masks_dict.items():
                 all_masks_dict[atom_type].extend(masks)
 
             for i in range(0, len(glist), chunk_size):

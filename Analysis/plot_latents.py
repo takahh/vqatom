@@ -31,6 +31,13 @@ def load_npz_array(filename):
     arr = arr["embed"]
     return np.squeeze(arr)
 
+
+def explore_npz(filename):
+    print("Exploring NPZ structure...")
+    with np.load(filename, allow_pickle=True) as data:
+        np.save("/Users/taka/Downloads/6.npy", data["arr_0"]["8"])
+
+
 def load_npz_array_multi(filename):
     """Load and return the array from a .npz file."""
     arr0 = np.load(filename, allow_pickle=True)
@@ -211,12 +218,12 @@ def process_epoch(epoch, samples):
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
-    mask_file = f"{DATA_PATH}all_masks_dict.npy"
+    mask_file = f"{DATA_PATH}all_masks_dict.npz"
     # h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)[:samples]
     # c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)[:samples]
     # n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)[:samples]
     # o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)[:samples]
-    mask_dict = np.load(mask_file, allow_pickle=True)
+    mask_dict = explore_npz(mask_file)
     print(mask_dict)
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
