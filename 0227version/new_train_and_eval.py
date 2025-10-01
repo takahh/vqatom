@@ -154,7 +154,6 @@ def convert_to_dgl(adj_batch, attr_batch):
             import numpy as np
             for attr_matrix in attr_matrices: # per atom
                 nz = attr_matrix[:, 0].reshape(-1)
-                print(nz) # (100, 27)
                 nz = nz[nz != 0]
                 for elem in np.unique(nz):
                     mask = (nz == elem)                  # numpy bool array
