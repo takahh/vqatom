@@ -10,7 +10,7 @@ from sklearn.decomposition import PCA
 np.set_printoptions(threshold=np.inf)
 
 # DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
-DATA_PATH = "/Users/takayukikimura/Downloads/"
+DATA_PATH = "/Users/taka/Downloads/"
 OPATH = "/Users/takayukikimura/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
@@ -211,17 +211,18 @@ def process_epoch(epoch, samples):
     # latent_file = f"{DATA_PATH}latents_all_{epoch}.npz"
     # codebook_file = f'{DATA_PATH}used_cb_vectors_{epoch}.npz'
     latent_file = f"{DATA_PATH}naked_latent_{epoch}.npz"
-    h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)[:samples]
-    c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)[:samples]
-    n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)[:samples]
-    o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    mask_file = f"{DATA_PATH}all_masks_dict.npy"
+    # h_mask_arr = np.load(f"{DATA_PATH}h_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    # c_mask_arr = np.load(f"{DATA_PATH}c_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    # n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    # o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)[:samples]
+    mask_dict = np.load(mask_file, allow_pickle=True)
+    print(mask_dict)
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
     print("latent_arr.shape")
     print(latent_arr.shape)
-    print("c_mask_arr.shape")
-    print(c_mask_arr.shape)
 
     # Shuffle
     print("latent_arr.shape before")

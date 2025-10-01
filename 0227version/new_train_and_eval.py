@@ -307,8 +307,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print(idx)
             glist_base, glist, mask_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            print("mask_dict")
-            print(mask_dict)
+
+            # Aggregate masks into all_masks_dict
+            for atom_type, masks in mask_dict.items():
+                all_masks_dict[atom_type].extend(masks)
+
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
@@ -324,25 +327,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
-
-        # # Initialize 4 lists
-        # h_masks = []
-        # c_masks = []
-        # n_masks = []
-        # o_masks = []
-        #
-        # # Fill them
-        # for h, c, n, o in flattened:
-        #     h_masks.append(h.cpu().numpy())
-        #     c_masks.append(c.cpu().numpy())
-        #     n_masks.append(n.cpu().numpy())
-        #     o_masks.append(o.cpu().numpy())
-
-        # Now convert to object arrays (since lengths of masks may vary)
-        h_masks_np = np.array(hmask_list, dtype=object)
-        # c_masks_np = np.array(c_masks, dtype=object)
-        # n_masks_np = np.array(n_masks, dtype=object)
-        # o_masks_np = np.array(o_masks, dtype=object)
 
         # Save to file (optional)
         np.save("all_masks_dict.npy", all_masks_dict)
