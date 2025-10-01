@@ -307,7 +307,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print(idx)
             glist_base, glist, mask_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-
+            print(all_masks_dict[6])
             # Aggregate masks into all_masks_dict
             for atom_type, masks in mask_dict.items():
                 all_masks_dict[atom_type].extend(masks)
