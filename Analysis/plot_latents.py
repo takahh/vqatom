@@ -6,6 +6,7 @@ import umap
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from torch import dtype
 
 np.set_printoptions(threshold=np.inf)
 
@@ -35,6 +36,9 @@ def load_npz_array(filename):
 def explore_npz(filename):
     print("Exploring NPZ structure...")
     with np.load(filename, allow_pickle=True) as data:
+        mask_dict = data["arr_0"].item()
+        print(mask_dict.keys())
+        print(mask_dict[35])
         np.save("/Users/taka/Downloads/6.npy", data["arr_0"]["8"])
 
 

@@ -126,33 +126,43 @@ import dgl
 import torch
 from collections import defaultdict
 import numpy as np
+from collections import defaultdict
+import numpy as np
 
-def collect_masks_per_batch(adj_batch, attr_batch):
-    # 返り値: {elem: [index_array (1D int32), ...]}  ※ bool ではなく index で持つ
-    masks_dict = defaultdict(list)
-    B = len(adj_batch)
+def collect_global_indices_compact(adj_batch, attr_batch,
+                                   start_atom_id=0,  # 有効原子のグローバル開始ID
+                                   start_mol_id=0): # 必要なら返すだけ
+    masks_dict = defaultdict(list)  # {elem: [global_idx_array(int64), ...]}
+    B = len(attr_batch)
+
+    atom_offset = int(start_atom_id)
+    mol_id = int(start_mol_id)
 
     for i in range(B):
-        # ここで get_args() を毎回呼ぶ必要は通常ない
-        adj_matrices = adj_batch[i].view(-1, 100, 100)
         attr_matrices = attr_batch[i].view(-1, 100, 27)
+        # 必要列だけCPUへ（転送回数削減）
+        elem_all = attr_matrices[..., 0].detach().to('cpu', non_blocking=True).numpy()  # (M, 100)
+        M = elem_all.shape[0]
 
-        M = len(attr_matrices)  # molecules per this batch item
         for j in range(M):
-            attr_matrix = attr_matrices[j]            # (100, 27)
-            nz = attr_matrix[:, 0].cpu().numpy().reshape(-1)
-            nz = nz[nz != 0]
-
-            # ここで bool ではなく“インデックス”で保持する（省メモリ）
-            # 同じ要素が少数出現するなら index の方が圧倒的に小さい
-            if nz.size == 0:
+            elem_vec = elem_all[j]                  # (100,)
+            valid = (elem_vec != 0)                 # 実在原子マスク
+            if not valid.any():
+                mol_id += 1
                 continue
+
+            nz = elem_vec[valid]                    # 実在原子の元素ラベル列 (len = n_atoms_in_mol)
             uniq = np.unique(nz)
             for elem in uniq:
-                idxs = np.flatnonzero(nz == elem).astype(np.int32)
-                masks_dict[int(elem)].append(idxs)
+                local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
+                global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
+                masks_dict[int(elem)].append(global_idxs)
 
-    return masks_dict
+            atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
+            mol_id += 1
+
+    return masks_dict, atom_offset, mol_id
+
 
 def convert_to_dgl(adj_batch, attr_batch):
     """
@@ -323,7 +333,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print(idx)
             glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            print(all_masks_dict[6])
             # Aggregate masks into all_masks_dict
             for atom_type, masks in masks_dict.items():
                 all_masks_dict[atom_type].extend(masks)
