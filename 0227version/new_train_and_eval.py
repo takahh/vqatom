@@ -171,7 +171,7 @@ def convert_to_dgl(adj_batch, attr_batch):
     This version includes optimizations such as vectorized edge-type assignment,
     and avoids unnecessary copies where possible.
     """
-    masks = collect_masks_per_batch(adj_batch, attr_batch)
+    masks = collect_global_indices_compact(adj_batch, attr_batch)
     base_graphs = []
     extended_graphs = []
     for i in range(len(adj_batch)):  # Loop over each molecule set
