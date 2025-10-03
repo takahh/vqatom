@@ -268,7 +268,7 @@ class EquivariantThreeHopGINE(nn.Module):
         if mode == "init_kmeans_loop":
             return h
         if mode == None:
-            # x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
+            # x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
             quantize_output = self.vq(
                 h, init_feat, mask_dict, logger, chunk_i, epoch, mode
             )

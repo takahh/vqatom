@@ -346,8 +346,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 batched_graph_base = dgl.batch(chunk_base)
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
+                # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
                 latents \
-                    = evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx, "init_kmeans_loop")
+                    = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
