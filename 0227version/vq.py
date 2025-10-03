@@ -385,7 +385,6 @@ class EuclideanCodebook(nn.Module):
             masked_data = data[0][mask_dict[key]]
             masked_data = masked_data.unsqueeze(0)
             embed, cluster_size = kmeans(masked_data, cbsize)
-            print(f"cluster_size {cluster_size}")
             embeds.append(embed[0])
             cluster_sizes.extend(cluster_size)
         # Combine all embeddings into a single tensor
