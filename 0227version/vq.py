@@ -380,8 +380,6 @@ class EuclideanCodebook(nn.Module):
         fill : "data" | "repeat" | "randn"
         data : [N, D] latents to sample from if fill=="data"
         """
-        print("embed.shape")
-        print(embed.shape)
         # --- align orientation so last dim is D ---
         def to_KD(t, D_expected):
             # try [K, D] first
@@ -449,7 +447,7 @@ class EuclideanCodebook(nn.Module):
         total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
 
         with torch.no_grad():
-            self.copy_codebook_(self.embed, big_embed, fill="data", data=flatten)
+            self.copy_codebook_(self.embed[0], big_embed, fill="data", data=flatten)
 
         self.embed_avg.data.copy_(big_embed.clone())
         self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
