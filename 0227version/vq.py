@@ -373,32 +373,88 @@ class EuclideanCodebook(nn.Module):
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
+    def copy_codebook_(self, embed: torch.Tensor, init: torch.Tensor, fill="data", data=None):
+        """
+        embed: [K, D] or [D, K] current codebook
+        init : [K_used, D] or [D, K_used] initializer
+        fill : "data" | "repeat" | "randn"
+        data : [N, D] latents to sample from if fill=="data"
+        """
+
+        # --- align orientation so last dim is D ---
+        def to_KD(t, D_expected):
+            # try [K, D] first
+            if t.shape[-1] == D_expected:
+                return t  # [K_used, D]
+            # else try transpose from [D, K_used]
+            if t.shape[0] == D_expected:
+                return t.t().contiguous()  # -> [K_used, D]
+            raise ValueError(f"init shape {tuple(t.shape)} not compatible with D={D_expected}")
+
+        # make embed [K, D] view
+        if embed.shape[-1] < embed.shape[0]:  # heuristics: typical is [K, D]
+            K, D = embed.shape
+            initKD = to_KD(init, D)
+            K_used = initKD.shape[0]
+            # copy overlap
+            n = min(K, K_used)
+            embed[:n].copy_(initKD[:n])
+
+            # fill remaining codes
+            if K > n:
+                if fill == "data" and data is not None and data.numel() > 0:
+                    idx = torch.randint(0, data.size(0), (K - n,), device=embed.device)
+                    embed[n:K].copy_(data[idx])
+                elif fill == "repeat" and n > 0:
+                    reps = (K - n + n - 1) // n
+                    embed[n:K].copy_(initKD[:n].repeat((reps, 1))[:K - n])
+                elif fill == "randn":
+                    embed[n:K].normal_(0, 1e-3)
+                else:
+                    embed[n:K].copy_(embed[:1])  # fallback
+        else:
+            # codebook is [D, K]; do the same with transposes
+            D, K = embed.shape
+            initKD = to_KD(init, D)  # [K_used, D]
+            initDK = initKD.t().contiguous()  # [D, K_used]
+            n = min(K, initDK.shape[1])
+            embed[:, :n].copy_(initDK[:, :n])
+            if K > n:
+                if fill == "randn":
+                    embed[:, n:K].normal_(0, 1e-3)
+                else:
+                    embed[:, n:K].copy_(embed[:, :1])
 
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None):
-        cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190, 15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
-        print(f"++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
-        embeds = []            # List to store embeddings
-        cluster_sizes = []     # List to store cluster sizes
+        cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
+                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
+        print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
+        embeds = []
+        cluster_sizes = []
+
         for key in mask_dict.keys():
             cbsize = int(self.codebook_size * cb_dict[key] / 10000)
-            masked_data = data[0][mask_dict[key]]
-            masked_data = masked_data.unsqueeze(0)
-            embed, cluster_size = kmeans(masked_data, cbsize)
-            embeds.append(embed[0])
-            cluster_sizes.extend(cluster_size)
-        # Combine all embeddings into a single tensor
+            masked_data = data[0][mask_dict[key]]  # [Ni, D]
+            embed, cluster_size = kmeans(masked_data.unsqueeze(0), cbsize)
+            embeds.append(embed[0])  # [cbsize, D]
+            cluster_sizes.append(cluster_size)  # each should be [cbsize]
+
+        # flatten all input latents into [N, D] for re-init
+        flatten = data[0].reshape(-1, data[0].size(-1))
+
         print("KMEANS DONE ---------")
-        big_embed = torch.cat(embeds, dim=0)
-        total_cluster_size = torch.cat(cluster_sizes, dim=0)
+        big_embed = torch.cat(embeds, dim=0)  # [K_used, D]
+        total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
+
         with torch.no_grad():
-            self.embed.copy_(big_embed)
+            self.copy_codebook_(self.embed, big_embed, fill="data", data=flatten)
+
         self.embed_avg.data.copy_(big_embed.clone())
         self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
         self.cluster_size.data.copy_(total_cluster_size)
         self.initted.data.copy_(torch.tensor([True]))
         return big_embed
-
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
