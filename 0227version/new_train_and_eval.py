@@ -351,11 +351,14 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 latents \
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
-
+        for key, value in all_masks_dict.items():
+            print(type(value))
+            all_masks_dict[key] = torch.cat(value)
         # Save to file (optional)
         # np.save("all_masks_dict.npy", all_masks_dict)
         np.savez_compressed("all_masks_dict.npz", all_masks_dict)
