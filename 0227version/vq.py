@@ -438,7 +438,7 @@ class EuclideanCodebook(nn.Module):
             masked_data = data[0][mask_dict[key]]  # [Ni, D]
             embed, cluster_size = kmeans(masked_data.unsqueeze(0), cbsize)
             embeds.append(embed[0])  # [cbsize, D]
-            cluster_sizes.append(cluster_size)  # each should be [cbsize]
+            cluster_sizes.extend(cluster_size)  # each should be [cbsize]
 
         # flatten all input latents into [N, D] for re-init
         flatten = data[0].reshape(-1, data[0].size(-1))
