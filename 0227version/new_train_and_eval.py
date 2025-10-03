@@ -330,11 +330,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
-            print(idx)
             glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
-            print(masks_dict[0].keys())
             for atom_type, masks in masks_dict[0].items():
                 all_masks_dict[atom_type].extend(masks)
 
@@ -356,7 +354,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
         for key, value in all_masks_dict.items():
-            print(type(value))
             value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]
             all_masks_dict[key] = torch.cat(value)
         # Save to file (optional)
