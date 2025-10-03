@@ -391,6 +391,7 @@ class EuclideanCodebook(nn.Module):
             print(f"{len(embed[0])} is len(embed)")
             print("type(embed[0])")
             print(type(embed[0]))
+            print(embed[0])
             embeds.append(embed[0])
             cluster_sizes.append(cluster_size)
         # Combine all embeddings into a single tensor
