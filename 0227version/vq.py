@@ -118,7 +118,9 @@ def kmeans(samples, num_clusters, use_cosine_sim=False, all_reduce_fn=noop, eps=
     # 1) Cap K to available unique samples (robust for small N cases)
     #    (H=1 in your logs; for H>1 you can compute per-H if needed)
     uniq = torch.unique(samples.reshape(-1, D), dim=0).shape[0]
+    print(f"unique is {uniq}")
     num_clusters = int(min(num_clusters, N, uniq if uniq > 0 else N))
+    print(f"num_clusters is {num_clusters}")
     if num_clusters <= 0:
         raise ValueError("No samples to cluster.")
 
@@ -388,7 +390,7 @@ class EuclideanCodebook(nn.Module):
             masked_data = masked_data.unsqueeze(0)
             print(f"masked_data.shape: {masked_data.shape}") # [1, 502283, 16]
             embed, cluster_size = kmeans(masked_data, cbsize)
-            print(f"{len(embed[0])} is len(embed)")
+            print(f"{len(embed[0])} is len(embed[0])")
             print("type(embed[0])")
             print(type(embed[0]))
             print(embed[0])
