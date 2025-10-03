@@ -380,7 +380,8 @@ class EuclideanCodebook(nn.Module):
         fill : "data" | "repeat" | "randn"
         data : [N, D] latents to sample from if fill=="data"
         """
-
+        print("embed.shape")
+        print(embed.shape)
         # --- align orientation so last dim is D ---
         def to_KD(t, D_expected):
             # try [K, D] first
