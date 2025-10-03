@@ -337,6 +337,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print(masks_dict[0].keys())
             for atom_type, masks in masks_dict[0].items():
                 all_masks_dict[atom_type].extend(masks)
+            print(all_masks_dict[6])
 
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
