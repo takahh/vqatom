@@ -12,7 +12,7 @@ np.set_printoptions(threshold=np.inf)
 
 # DATA_PATH = "/Users/taka/Documents/1_infer_for_uk_dynamic_epo1/10000_16/"
 DATA_PATH = "/Users/taka/Downloads/"
-OPATH = "/Users/takayukikimura/Documents/"
+OPATH = "/Users/taka/Documents/"
 SAMPLES = 2000000
 # DATA_PATH = "/"
 DIMENSION = 16
@@ -37,9 +37,11 @@ def explore_npz(filename):
     print("Exploring NPZ structure...")
     with np.load(filename, allow_pickle=True) as data:
         mask_dict = data["arr_0"].item()
-        print(mask_dict.keys())
-        print(mask_dict[35])
-        np.save("/Users/taka/Downloads/6.npy", data["arr_0"]["8"])
+        for mask in mask_dict.keys():
+            flat_list = [int(x) for a in mask_dict[mask] for x in a]
+            mask_dict[mask] = flat_list
+            # print(f"{mask} - {len(mask_dict[mask])}")
+    return mask_dict
 
 
 def load_npz_array_multi(filename):
@@ -130,18 +132,17 @@ from sklearn.decomposition import PCA
 import umap
 
 
-def plot_umap(cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
+def plot_umap(mask_dict, cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
     # 1. Concatenate for PCA
     combined = np.concatenate((latent_arr, cb_arr), axis=0)
     # combined_pca = PCA(n_components=pca_dim).fit_transform(combined)
     combined_pca = combined
-
     # Split PCA-transformed latent and codebook
     latent_pca = combined_pca[:latent_arr.shape[0]]
     cb_pca = combined_pca[latent_arr.shape[0]:]
 
     # Try different UMAP spreads and min_dists
-    for zoom in [10]:
+    for zoom in [5]:
         for spread, min_dist in [[1, 0.1]]:
             reducer = umap.UMAP(
                 n_neighbors=N_NEIGHBORS,
@@ -158,8 +159,6 @@ def plot_umap(cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
             ).fit(combined_pca)
 
             latent_emb = reducer.embedding_[:latent_arr.shape[0]]
-            print("latent_emb.shape")
-            print(latent_emb.shape)
             cb_emb = reducer.embedding_[latent_arr.shape[0]:]
 
             # Zoom window
@@ -176,40 +175,55 @@ def plot_umap(cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
                 (cb_emb[:, 0] >= x_range[0]) & (cb_emb[:, 0] <= x_range[1]) &
                 (cb_emb[:, 1] >= y_range[0]) & (cb_emb[:, 1] <= y_range[1])
             )
-
             zoomed_latent = latent_emb[latent_mask]
             zoomed_cb = cb_emb[cb_mask]
 
             # Plotting
-            title = f"UMAP: neighbors={N_NEIGHBORS}, min_dist={min_dist}, spread={spread},\n samples {SAMPLES}, zoom={int(50/zoom)}"
+            title0 = f"UMAP: neighbors={N_NEIGHBORS}, min_dist={min_dist}, spread={spread},\n samples {SAMPLES}, zoom={int(50/zoom)}"
             bins = 100
             save_dir = f"{OPATH}/distri_images"
             os.makedirs(save_dir, exist_ok=True)
-            print("zoomed_latent[:, 0].shape")
-            print(zoomed_latent[:, 0].shape)
-            print("mask_list[0].shape")
-            print(mask_list[0].shape)
-            print("zoomed_latent[:, 0] * mask_list[0]")
-            print(zoomed_latent[:, 0] * mask_list[0])
-            for i in range(2):
-                plt.figure(figsize=(6, 5))
-                plt.hist2d(
-                    zoomed_latent[:, 0], zoomed_latent[:, 1],
-                    bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
-                    cmap="Blues"
-                )
-                plt.colorbar(label='Density')
-                if i == 0:
-                    plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.5, marker='x')
+            for i in range(3):
+                if i == 2:
+                    for keys in mask_dict.keys():
+                        plt.figure(figsize=(6, 5))
+                        carbon_latent = latent_emb[mask_dict[keys]]
+                        zoomed_carbon_mask = latent_mask[mask_dict[keys]]
+                        zoomed_carbon_latent = carbon_latent[zoomed_carbon_mask]
+                        plt.hist2d(
+                            zoomed_carbon_latent[:, 0], zoomed_carbon_latent[:, 1],
+                            bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                            cmap="OrRd"
+                        )
+                        title = f"element:{keys}--{title0}"
+                        plt.colorbar(label='Density')
+                        plt.xlim(x_range)
+                        plt.ylim(y_range)
+                        plt.title(title + " (Zoomed)")
+                        fname = f"{save_dir}/n{10}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
+                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.5, marker='x')
+                        plt.savefig(fname)
+                        plt.show()
+                        plt.close()
+                else:
+                    plt.figure(figsize=(6, 5))
+                    # if i == 1:
+                    plt.hist2d(
+                        zoomed_latent[:, 0], zoomed_latent[:, 1],
+                        bins=[np.linspace(*x_range, bins), np.linspace(*y_range, bins)],
+                        cmap="Blues"
+                    )
+                    plt.colorbar(label='Density')
+                    if i == 0:
+                        plt.scatter(zoomed_cb[:, 0], zoomed_cb[:, 1], s=20, c='red', alpha=0.5, marker='x')
 
-                plt.xlim(x_range)
-                plt.ylim(y_range)
-                plt.title(title + " (Zoomed)")
-                fname = f"{save_dir}/n{10}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
-                print(fname)
-                plt.savefig(fname)
-                plt.show()
-                plt.close()
+                    plt.xlim(x_range)
+                    plt.ylim(y_range)
+                    plt.title(title0 + " (Zoomed)")
+                    fname = f"{save_dir}/n{10}_s{spread}_z{zoom}_mindist{min_dist}_epo{epoch}_{i}.png"
+                    plt.savefig(fname)
+                    plt.show()
+                    plt.close()
 
 
 def process_epoch(epoch, samples):
@@ -228,7 +242,6 @@ def process_epoch(epoch, samples):
     # n_mask_arr = np.load(f"{DATA_PATH}n_masks_{epoch}.npy", allow_pickle=True)[:samples]
     # o_mask_arr = np.load(f"{DATA_PATH}o_masks_{epoch}.npy", allow_pickle=True)[:samples]
     mask_dict = explore_npz(mask_file)
-    print(mask_dict)
     cb_arr = load_npz_array(codebook_file)
     print(cb_arr.shape)
     latent_arr = load_npz_array_multi(latent_file)
@@ -254,8 +267,8 @@ def process_epoch(epoch, samples):
     if MODE == "tsne":
         plot_tsne(cb_arr, latent_arr, epoch, perplexity=10, cb_size=cb_size)
     elif MODE == "umap":
-        plot_umap(cb_arr, latent_arr, epoch, [h_mask_arr, c_mask_arr, n_mask_arr, o_mask_arr], 16)
-        #cb_arr, latent_arr, epoch, pca_dim=16
+        plot_umap(mask_dict, cb_arr, latent_arr, epoch, mask_dict, 16)
+        # mask_dict, cb_arr, latent_arr, epoch, mask_list, pca_dim=16):
 
 def main():
     for epoch in range(EPOCH_START, EPOCH_END):

@@ -365,23 +365,35 @@ class EuclideanCodebook(nn.Module):
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
+
     @torch.jit.ignore
-    def init_embed_(self, data):
-        # if self.initted[0] != 0:
-        #     # print("return!!!!!")
-        #     return
-        print(f"++++++++++++++++ RUNNING int_embed !!! ++++++++++++++++++++++++++++++")
-        embed, cluster_size = kmeans(
-            data,
-            self.codebook_size,
-        )
+    def init_embed_(self, data, mask_dict):
+        cb_dict = {
+            6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
+            15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10
+        }
+        print(f"++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
+        embeds = []            # List to store embeddings
+        cluster_sizes = []     # List to store cluster sizes
+        for key in mask_dict.keys():
+            print(f"data.shape: {data.shape}")
+            cbsize = int(self.codebook_size * cb_dict[key] / 10000)
+            print(f"cbsize for key {key}: {cbsize}")
+            masked_data = mask_dict[key] * data
+            embed, cluster_size = kmeans(masked_data, cbsize)
+            embeds.append(embed)
+            cluster_sizes.append(cluster_size)
+        # Combine all embeddings into a single tensor
+        big_embed = torch.cat(embeds, dim=0)
+        total_cluster_size = torch.cat(cluster_sizes, dim=0)
         with torch.no_grad():
-            self.embed.copy_(embed)
-        self.embed_avg.data.copy_(embed.clone())
-        self.cluster_size = torch.zeros(cluster_size.shape, device=cluster_size.device)
-        self.cluster_size.data.copy_(cluster_size)
-        self.initted.data.copy_(torch.Tensor([True]))
-        return embed
+            self.embed.copy_(big_embed)
+        self.embed_avg.data.copy_(big_embed.clone())
+        self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
+        self.cluster_size.data.copy_(total_cluster_size)
+        self.initted.data.copy_(torch.tensor([True]))
+        return big_embed
+
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
