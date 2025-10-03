@@ -358,6 +358,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
         for key, value in all_masks_dict.items():
             print(type(value))
+            value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]
             all_masks_dict[key] = torch.cat(value)
         # Save to file (optional)
         # np.save("all_masks_dict.npy", all_masks_dict)
