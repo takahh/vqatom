@@ -379,7 +379,7 @@ class EuclideanCodebook(nn.Module):
             print(f"data.shape: {data.shape}") # [1, 502283, 16]
             cbsize = int(self.codebook_size * cb_dict[key] / 10000)
             print(f"cbsize for key {key}: {cbsize}")
-            print(f"mask_dict[key] max {max(mask_dict[key])}")
+            print(f"mask_dict[key] max {mask_dict[key]}")
             masked_data = mask_dict[key] * data[0]
             embed, cluster_size = kmeans(masked_data, cbsize)
             embeds.append(embed)
