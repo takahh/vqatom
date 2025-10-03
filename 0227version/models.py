@@ -207,7 +207,7 @@ class EquivariantThreeHopGINE(nn.Module):
                 return False
         return True
 
-    def forward(self, data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
+    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None, batched_graph_base=None, mode=None):
         import torch
         torch.set_printoptions(threshold=10_000)  # Set a high threshold to print all elements
         import torch
@@ -270,11 +270,11 @@ class EquivariantThreeHopGINE(nn.Module):
         if mode == None:
             # x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
             quantize_output = self.vq(
-                h, init_feat, logger, chunk_i, epoch, mode
+                h, init_feat, mask_dict, logger, chunk_i, epoch, mode
             )
         elif mode == "init_kmeans_final":
             self.vq(
-                data, None, logger, chunk_i, epoch, mode
+                data, None, mask_dict, logger, chunk_i, epoch, mode
             )
             return 0
         (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,

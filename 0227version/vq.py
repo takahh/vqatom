@@ -367,7 +367,7 @@ class EuclideanCodebook(nn.Module):
 
 
     @torch.jit.ignore
-    def init_embed_(self, data, mask_dict):
+    def init_embed_(self, data, mask_dict=None):
         cb_dict = {
             6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
             15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10
@@ -501,7 +501,7 @@ class EuclideanCodebook(nn.Module):
 
     import torch
     @torch.amp.autocast('cuda', enabled=False)
-    def forward(self, x, logger=None, chunk_i=None, epoch=None, mode=None):
+    def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         x = x.float()
         if x.ndim < 4:
             x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
@@ -509,7 +509,7 @@ class EuclideanCodebook(nn.Module):
 
         if mode == "init_kmeans_final":
             # if mode == "init_kmeans_final" and epoch < 5:
-            self.init_embed_(flatten)
+            self.init_embed_(flatten, mask_dict)
             print(f"init_embed is done")
         embed = self.embed  # (1, K, D)  K: codebook size
         dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
@@ -932,7 +932,7 @@ class VectorQuantize(nn.Module):
 
         return total_latent_loss, codebook_loss
 
-    def forward(self, x, init_feat, logger, chunk_i=None, epoch=0, mode=None):
+    def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -947,11 +947,11 @@ class VectorQuantize(nn.Module):
         if is_multiheaded:
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
         if mode == "init_kmeans_final":
-            self._codebook(x, logger, chunk_i, epoch, mode)
+            self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
             return 0
         else:
             #     ( x, logger=None, chunk_i=None, epoch=None, mode=None):
-            quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, logger, chunk_i, epoch, mode)
+            quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)

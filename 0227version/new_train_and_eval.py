@@ -55,17 +55,17 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
         num_unique
     )
 
-def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
+def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
 
     with torch.no_grad():
         if mode == "init_kmeans_loop":
-            latents = model(g, feats, chunk_i, logger, epoch, g_base, mode)
+            latents = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
             return latents
         elif mode == "init_kmeans_final":
-            model(g, feats, chunk_i, logger, epoch, g_base, mode)
+            model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
             return 0
         else:
             (
@@ -80,7 +80,7 @@ def evaluate(model, g, feats, epoch, logger, g_base, chunk_i, mode=None):
                 test_latents,
                 sample_list_test,
                 num_unique,
-            ) = model(g, feats, chunk_i, logger, epoch, g_base, mode)
+            ) = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
 
     # detach and move to cpu
     latent_train_cpu = latent_train.detach().cpu()
@@ -361,7 +361,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # -------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest)
         # -------------------------------------------------------------------
-        evaluate(model, all_latents_tensor, batched_feats, epoch, logger, None, None, "init_kmeans_final")
+        evaluate(model, all_latents_tensor, batched_feats, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
         print("initial kmeans done")
 
         # ---------------------------
