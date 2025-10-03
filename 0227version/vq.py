@@ -110,71 +110,79 @@ def batched_bincount(indices, minlength):
         bins[h].scatter_add_(0, indices[h], torch.ones_like(indices[h]))
     return bins
 
+def kmeans(samples, num_clusters, use_cosine_sim=False, all_reduce_fn=noop, eps=1e-12):
+    # samples: [H, N, D]
+    H, N, D = samples.shape
+    device, dtype = samples.device, samples.dtype
 
-def kmeans(
-        samples,
-        num_clusters,
-        use_cosine_sim=False,
-        all_reduce_fn=noop
-):
-    num_iters = 30
-    num_codebooks, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
-    # num_iters = 30
+    # 1) Cap K to available unique samples (robust for small N cases)
+    #    (H=1 in your logs; for H>1 you can compute per-H if needed)
+    uniq = torch.unique(samples.reshape(-1, D), dim=0).shape[0]
+    num_clusters = int(min(num_clusters, N, uniq if uniq > 0 else N))
+    if num_clusters <= 0:
+        raise ValueError("No samples to cluster.")
 
-    # K-Means++ initialization
-    means = torch.zeros((num_codebooks, num_clusters, dim), device=device, dtype=dtype)
+    # 2) Prepare means
+    means = torch.zeros((H, num_clusters, D), device=device, dtype=dtype)
+    means[:, 0] = samples[:, torch.randint(0, N, (1,), device=device)]
 
-    # Randomly select the first centroid
-    means[:, 0] = samples[:, torch.randint(0, samples.shape[1], (1,))]
-    samples = samples.to("cuda")
-    means = means.to("cuda")
+    # Optional: proper cosine distance (nonnegative)
+    if use_cosine_sim:
+        samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
+
     with torch.no_grad():
+        # ---- K-Means++ init ----
         for k in range(1, num_clusters):
-            # Compute full distance to all means (H, N, num_clusters)
             if use_cosine_sim:
-                all_dists = 1 - (samples @ rearrange(means, 'h n d -> h d n'))  # (H, N, num_clusters)
+                # cosine distance in [0, 2]
+                d = 1.0 - (samples @ means[:, :k].transpose(1, 2))
             else:
-                all_dists = torch.cdist(samples, means, p=2)  # (H, N, num_clusters)
+                d = torch.cdist(samples, means[:, :k], p=2)         # [H, N, k]
 
-            # Mask out distances beyond k
-            masked_dists = all_dists[:, :, :k]  # Slice fixed shape
-            min_dists = masked_dists.min(dim=-1).values
-            probs = min_dists / min_dists.sum(dim=-1, keepdim=True)
-            next_centroid_idx = torch.multinomial(probs, 1)
-            means[:, k] = samples[:, next_centroid_idx.squeeze(-1)]
+            min_d = d.min(dim=-1).values                            # [H, N]
+            min_d = torch.clamp(min_d, min=0)                       # no negatives
+            row_sum = min_d.sum(dim=-1, keepdim=True)               # [H, 1]
 
-        # Iterative optimization
-        for _ in range(num_iters):
+            # Safe probs: if sum==0 (all points exactly at chosen centers), fallback to uniform
+            safe_probs = torch.where(
+                row_sum > 0,
+                min_d / (row_sum + eps),
+                torch.full_like(min_d, 1.0 / N)
+            )
+
+            # multinomial requires nonnegative and finite
+            safe_probs = torch.nan_to_num(safe_probs, nan=0.0, posinf=0.0, neginf=0.0)
+            # Guarantee rows sum to 1
+            safe_probs = safe_probs / (safe_probs.sum(dim=-1, keepdim=True) + eps)
+
+            next_idx = torch.multinomial(safe_probs, 1).squeeze(-1) # [H]
+            means[:, k] = samples[torch.arange(H, device=device), next_idx]
+
+        # ---- Lloyd steps ----
+        for _ in range(30):
             if use_cosine_sim:
-                dists = samples @ rearrange(means, 'h n d -> h d n')
+                dists = samples @ means.transpose(1, 2)             # similarity
             else:
-                dists = -torch.cdist(samples, means, p=2)
+                dists = -torch.cdist(samples, means, p=2)           # negative distance
 
-            buckets = torch.argmax(dists, dim=-1)
+            buckets = torch.argmax(dists, dim=-1)                   # [H, N]
             bins = batched_bincount(buckets, minlength=num_clusters)
             all_reduce_fn(bins)
 
             zero_mask = bins == 0
-            bins_min_clamped = bins.masked_fill(zero_mask, 1)
+            bins_safe = bins.masked_fill(zero_mask, 1)
 
-            new_means = buckets.new_zeros(num_codebooks, num_clusters, dim, dtype=dtype)
+            new_means = torch.zeros_like(means)
+            new_means.scatter_add_(1, buckets.unsqueeze(-1).expand(-1, -1, D), samples)
+            new_means = new_means / bins_safe.unsqueeze(-1)
 
-            new_means.scatter_add_(1, repeat(buckets, 'h n -> h n d', d=dim), samples)
-            new_means = new_means / rearrange(bins_min_clamped, '... -> ... 1')
             all_reduce_fn(new_means)
-
             if use_cosine_sim:
-                new_means = l2norm(new_means)
+                new_means = torch.nn.functional.normalize(new_means, p=2, dim=-1)
 
-            means = torch.where(
-                rearrange(zero_mask, '... -> ... 1'),
-                means,
-                new_means
-            )
-            buckets_flat = buckets.flatten()  # [H * N]
-            del dists, buckets, bins_min_clamped, new_means, zero_mask
+            means = torch.where(zero_mask.unsqueeze(-1), means, new_means)
 
-    return means, bins  # [H, K, D], [H, K]
+    return means, bins
 
 
 def batched_embedding(indices, embed):
