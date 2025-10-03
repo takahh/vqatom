@@ -388,9 +388,11 @@ class EuclideanCodebook(nn.Module):
             masked_data = masked_data.unsqueeze(0)
             print(f"masked_data.shape: {masked_data.shape}") # [1, 502283, 16]
             embed, cluster_size = kmeans(masked_data, cbsize)
+            print(f"{len(embed)} is len(embed)")
             embeds.append(embed)
             cluster_sizes.append(cluster_size)
         # Combine all embeddings into a single tensor
+        print("KMEANS DONE ---------")
         big_embed = torch.cat(embeds, dim=0)
         total_cluster_size = torch.cat(cluster_sizes, dim=0)
         with torch.no_grad():
