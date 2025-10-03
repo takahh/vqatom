@@ -368,10 +368,8 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None):
-        cb_dict = {
-            6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
-            15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10
-        }
+        freq_dict = {6: 372730, 7: 61038, 8: 46458, 9: 10413, 16: 5547, 17: 4932, 35: 679, 15: 179, 53: 142, 11: 53,
+                     1: 43, 5: 36, 34: 14, 14: 10, 19: 7, 3: 2}
         print(f"++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
         embeds = []            # List to store embeddings
         cluster_sizes = []     # List to store cluster sizes
