@@ -398,6 +398,8 @@ class EuclideanCodebook(nn.Module):
             cluster_sizes.append(cluster_size)
         # Combine all embeddings into a single tensor
         print("KMEANS DONE ---------")
+        for i, e in enumerate(embeds):
+            print(f"{i}: {e.shape}")
         big_embed = torch.cat(embeds, dim=0)
         total_cluster_size = torch.cat(cluster_sizes, dim=0)
         with torch.no_grad():
