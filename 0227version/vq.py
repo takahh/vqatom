@@ -375,6 +375,7 @@ class EuclideanCodebook(nn.Module):
         print(f"++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
         embeds = []            # List to store embeddings
         cluster_sizes = []     # List to store cluster sizes
+        print(mask_dict.keys())
         for key in mask_dict.keys():
             cbsize = int(self.codebook_size * cb_dict[key] / 10000)
             print(f"cbsize for key {key}: {cbsize}")
