@@ -667,7 +667,6 @@ class EuclideanCodebook(nn.Module):
             print(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
-        print(f"self.training {self.training}, epoch {epoch}")
         if self.training and epoch < 30:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
@@ -681,12 +680,10 @@ class EuclideanCodebook(nn.Module):
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
             cluster_size = cluster_size * self.cluster_size.sum()
             cluster_size = rearrange(cluster_size, '... -> ... 1')
-            print(f"self.embed_avg.shape[0] {self.embed_avg.shape[1]}, cluster_size.shape[0] {cluster_size.shape[0]}")
             if self.embed_avg.shape[1] > cluster_size.shape[0]:
                 pad_len = self.embed_avg.shape[1] - cluster_size.shape[0]
                 pad = torch.zeros((pad_len, 1), device=cluster_size.device, dtype=cluster_size.dtype)
                 cluster_size = torch.cat([cluster_size, pad], dim=0)
-            print(f"self.embed_avg.shape[0] {self.embed_avg.shape[1]}, cluster_size {cluster_size.shape[0]}")
             embed_normalized = self.embed_avg / cluster_size
 
             self.embed.data.copy_(embed_normalized)
