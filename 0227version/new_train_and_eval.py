@@ -8,7 +8,7 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
-def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
+def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Ensure model is on device
     model = model.to(device)
@@ -26,7 +26,8 @@ def train_sage(model, g, feats, optimizer, chunk_i, logger, epoch):
     # Forward pass
     with torch.cuda.amp.autocast():
         # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        outputs = model(g, feats, chunk_i, logger, epoch)
+        # (g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch)
         (_, logits, loss, _, cb, loss_list3,
          latent_train, quantized, latents,
          sample_list_train, num_unique) = outputs
@@ -401,7 +402,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     # train step
                     # (model, g, feats, optimizer, chunk_i, logger, epoch):
                     loss, loss_list_train, latent_train_cpu, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), logger, epoch
+                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), all_masks_dict, logger, epoch
                     )
 
                     # record scalar losses
