@@ -445,11 +445,33 @@ class EuclideanCodebook(nn.Module):
         print("KMEANS DONE ---------")
         big_embed = torch.cat(embeds, dim=0)  # [K_used, D]
         total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
-
         with torch.no_grad():
-            self.copy_codebook_(self.embed[0], big_embed, fill="data", data=flatten)
+            # big_embed: [K_used, D]
+            # self.embed_avg: [K, D] or [D, K]
+            K = self.codebook_size
+            D = big_embed.size(1)
+            K_used = big_embed.size(0)
 
-        self.embed_avg.data.copy_(big_embed.clone())
+            # If big_embed is transposed, fix orientation
+            if big_embed.size(0) == D and big_embed.size(1) != D:
+                big_embed = big_embed.t().contiguous()
+
+            if K_used < K:
+                pad = torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype)
+                big_embed_full = torch.cat([big_embed, pad], dim=0)  # [K, D]
+            else:
+                big_embed_full = big_embed[:K]
+
+            # Handle possible [D, K] layout in buffers
+            if self.embed.shape == big_embed_full.shape:
+                self.embed.data.copy_(big_embed_full)
+                self.embed_avg.data.copy_(big_embed_full)
+            elif self.embed.shape == big_embed_full.t().shape:
+                self.embed.data.copy_(big_embed_full.t())
+                self.embed_avg.data.copy_(big_embed_full.t())
+            else:
+                raise ValueError(f"Shape mismatch: embed {self.embed.shape} vs big_embed {big_embed_full.shape}")
+
         self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
         self.cluster_size.data.copy_(total_cluster_size)
         self.initted.data.copy_(torch.tensor([True]))
