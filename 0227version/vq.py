@@ -669,7 +669,7 @@ class EuclideanCodebook(nn.Module):
             print(
                 f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
             return 0
-
+        print(f"self.training {self.training}, epoch {epoch}")
         if self.training and epoch < 30:
             temperature = 0.1
             distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
