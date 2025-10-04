@@ -449,7 +449,6 @@ class EuclideanCodebook(nn.Module):
             K = self.codebook_size
             D = big_embed.size(2)
             K_used = big_embed.size(1)
-            print(f"K {K}, D {D}, K used {K_used}")
             # K 10000, D 9806, K used 1
             # If big_embed is transposed, fix orientation
             if big_embed.size(0) == D and big_embed.size(1) != D:
@@ -457,7 +456,6 @@ class EuclideanCodebook(nn.Module):
 
             if K_used < K:
                 pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
-                print(f"pad shape {pad.shape}, big_embed {big_embed.shape}")
                 # pad shape torch.Size([1, 9999, 9806]), big_embed torch.Size([1, 9806, 16])
                 big_embed_full = torch.cat([big_embed, pad], dim=1)  # [K, D]
                 # RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 9806 but got size 194 for tensor number 1 in the list.

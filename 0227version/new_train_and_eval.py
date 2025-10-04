@@ -177,7 +177,6 @@ def convert_to_dgl(adj_batch, attr_batch):
     extended_graphs = []
     for i in range(len(adj_batch)):  # Loop over each molecule set
         # Reshape the current batch
-        print(f"{i}/{len(adj_batch)}")
         args = get_args()
         if args.train_or_infer == 'analysis':
             adj_matrices = adj_batch[i].view(-1, 100, 100)
@@ -301,7 +300,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
     for epoch in range(1, conf["max_epoch"] + 1):
         print(f"epoch {epoch} ------------------------------")
-
+        print("initial kmeans start ....")
         # fresh containers per epoch
         loss_list_list_train = [[] for _ in range(11)]
         loss_list_list_test = [[] for _ in range(11)]
@@ -365,7 +364,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Run k-means on the collected latent vectors (goes to the deepest)
         # -------------------------------------------------------------------
         evaluate(model, all_latents_tensor, batched_feats, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
-        print("initial kmeans done")
+        print("initial kmeans done....")
 
         # ---------------------------
         # TRAIN
@@ -389,7 +388,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 chunk_size = conf["chunk_size"] if epoch < 2 else conf["chunk_size2"]
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
-                    print_memory_usage(f"idx {idx}")
                     # # ------------- remove thi soon --------------
                     # if i == chunk_size:
                     #     break
