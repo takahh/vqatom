@@ -446,20 +446,19 @@ class EuclideanCodebook(nn.Module):
         big_embed = torch.unsqueeze(torch.cat(embeds, dim=0), dim=0)  # [K_used, D]
         total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
         with torch.no_grad():
-            # big_embed: [K_used, D]
-            # self.embed_avg: [K, D] or [D, K]
             K = self.codebook_size
             D = big_embed.size(1)
             K_used = big_embed.size(0)
-
+            print(f"K {K}, D {D}, K used {K_used}")
             # If big_embed is transposed, fix orientation
             if big_embed.size(0) == D and big_embed.size(1) != D:
                 big_embed = big_embed.t().contiguous()
 
             if K_used < K:
                 pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
+                print(f"pad shape {pad.shape}, big_embed {big_embed.shape}")
                 big_embed_full = torch.cat([big_embed, pad], dim=0)  # [K, D]
-                # RuntimeError: Tensors must have same number of dimensions: got 3 and 2
+                # Expected size 9806 but got size 9999 for tensor number 1 in the list.
             else:
                 big_embed_full = big_embed[:K]
 
