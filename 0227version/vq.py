@@ -459,8 +459,8 @@ class EuclideanCodebook(nn.Module):
                 pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
                 print(f"pad shape {pad.shape}, big_embed {big_embed.shape}")
                 # pad shape torch.Size([1, 9999, 9806]), big_embed torch.Size([1, 9806, 16])
-                big_embed_full = torch.cat([big_embed, pad], dim=0)  # [K, D]
-                # Expected size 9806 but got size 9999 for tensor number 1 in the list.
+                big_embed_full = torch.cat([big_embed, pad], dim=1)  # [K, D]
+                # RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 9806 but got size 194 for tensor number 1 in the list.
             else:
                 big_embed_full = big_embed[:K]
 
