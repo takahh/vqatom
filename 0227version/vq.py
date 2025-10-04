@@ -443,7 +443,7 @@ class EuclideanCodebook(nn.Module):
         flatten = data[0].reshape(-1, data[0].size(-1))
 
         print("KMEANS DONE ---------")
-        big_embed = torch.unsqueeze(torch.cat(embeds, dim=0))  # [K_used, D]
+        big_embed = torch.unsqueeze(torch.cat(embeds, dim=0), dim=0)  # [K_used, D]
         total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
         with torch.no_grad():
             # big_embed: [K_used, D]
