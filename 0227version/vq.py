@@ -457,8 +457,9 @@ class EuclideanCodebook(nn.Module):
                 big_embed = big_embed.t().contiguous()
 
             if K_used < K:
-                pad = torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype)
+                pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
                 big_embed_full = torch.cat([big_embed, pad], dim=0)  # [K, D]
+                # RuntimeError: Tensors must have same number of dimensions: got 3 and 2
             else:
                 big_embed_full = big_embed[:K]
 
