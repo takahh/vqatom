@@ -680,7 +680,12 @@ class EuclideanCodebook(nn.Module):
 
             cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
             cluster_size = cluster_size * self.cluster_size.sum()
-            embed_normalized = self.embed_avg / rearrange(cluster_size, '... -> ... 1')
+            cluster_size = rearrange(cluster_size, '... -> ... 1')
+            if self.embed_avg.shape[0] > cluster_size.shape[0]:
+                pad_len = self.embed_avg.shape[0] - cluster_size.shape[0]
+                pad = torch.zeros((pad_len, 1), device=cluster_size.device, dtype=cluster_size.dtype)
+                cluster_size = torch.cat([cluster_size, pad], dim=0)
+            embed_normalized = self.embed_avg / cluster_size
 
             self.embed.data.copy_(embed_normalized)
             self.expire_codes_(x)
