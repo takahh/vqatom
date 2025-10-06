@@ -605,7 +605,8 @@ class EuclideanCodebook(nn.Module):
             else:  # when train
                 assert flatten.shape[1] > 16
                 print(self.latent_size_sum)
-                mask_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
+                mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
+                mask_for_this_global = mask_dict[key][mask_bool_for_this_global]
                 mask_for_this_local = mask_for_this_global - self.latent_size_sum
                 print(f"flatten {flatten.shape}")
                 print(f"mask_dict[key] {mask_dict[key].shape}")
