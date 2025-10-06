@@ -589,7 +589,6 @@ class EuclideanCodebook(nn.Module):
         if x.ndim < 4:
             x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
-
         if mode == "init_kmeans_final":
             # if mode == "init_kmeans_final" and epoch < 5:
             self.init_embed_(flatten, mask_dict)
@@ -600,9 +599,12 @@ class EuclideanCodebook(nn.Module):
         # this dist calculated just by closest pairs without considering element
         dist_list = []
         for key in mask_dict.keys():
+            assert flatten.shape[1] > 16
+            mask_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
+            mask_for_this_local = mask_for_this_global - flatten.shape[1]
             print(f"flatten {flatten.shape}")
             print(f"mask_dict[key] {mask_dict[key].shape}")
-            masked_latents = flatten[0][mask_dict[key]]  # [Ni, D]
+            masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
             print(f"masked_latents {masked_latents.shape}")
             dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             print(f"dist_per_ele {dist_per_ele.shape}")

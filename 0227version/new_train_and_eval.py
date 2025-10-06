@@ -8,7 +8,7 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
-def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch):
+def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Ensure model is on device
     model = model.to(device)
@@ -385,7 +385,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 print(f"idx {idx}")
 
                 glist_base, glist, masks_2 = convert_to_dgl(adj_batch, attr_batch)
-                chunk_size = conf["chunk_size"] if epoch < 2 else conf["chunk_size2"]
+                chunk_size = conf["chunk_size"]
                 print(f"CHUNK SIZE {chunk_size} ============================")
                 for i in range(0, len(glist), chunk_size):
                     # # ------------- remove thi soon --------------
@@ -400,7 +400,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     # train step
                     # (model, g, feats, optimizer, chunk_i, logger, epoch):
                     loss, loss_list_train, latent_train_cpu, latents, cb_num_unique = train_sage(
-                        model, batched_graph, batched_feats, optimizer, int(i / chunk_size), all_masks_dict, logger, epoch
+                        model, batched_graph, batched_feats, optimizer, i, all_masks_dict, logger, epoch, chunk_size
                     )
 
                     # record scalar losses
