@@ -189,7 +189,6 @@ class EquivariantThreeHopGINE(nn.Module):
             nn.Linear(2 * hidden_feats, hidden_feats),
             nn.ReLU()
         )
-        self.latent_size_sum = 0
         self.train_or_infer = args.train_or_infer
 
     def reset_kmeans(self):
@@ -292,7 +291,6 @@ class EquivariantThreeHopGINE(nn.Module):
             sample_bond_info = data.edata["weight"]
             sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
         sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
-        self.latent_size_sum += h.shape[1]
         return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
 
 

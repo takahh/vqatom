@@ -370,6 +370,7 @@ class EuclideanCodebook(nn.Module):
         self.register_buffer('embed_avg', embed.clone())
         self.learnable_codebook = learnable_codebook
         self.embed = nn.Parameter(embed, requires_grad=True)
+        self.latent_size_sum = 0
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
@@ -601,7 +602,7 @@ class EuclideanCodebook(nn.Module):
         for key in mask_dict.keys():
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]
-            else:
+            else:  # when train
                 assert flatten.shape[1] > 16
                 print(self.latent_size_sum)
                 mask_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
@@ -609,6 +610,7 @@ class EuclideanCodebook(nn.Module):
                 print(f"flatten {flatten.shape}")
                 print(f"mask_dict[key] {mask_dict[key].shape}")
                 masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
+                self.latent_size_sum += flatten.shape[1]
             print(f"masked_latents {masked_latents.shape}")
             dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             print(f"dist_per_ele {dist_per_ele.shape}")

@@ -524,6 +524,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
             np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
 
+        model.vq._codebook.latent_size_sum = 0
         # cleanup big lists
         loss_list_list_train.clear()
         loss_list_list_test.clear()
