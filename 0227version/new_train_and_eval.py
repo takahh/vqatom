@@ -372,6 +372,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         if conf["train_or_infer"] in ("hptune", "train"):
             # re-init codebook
             model.vq._codebook.initted.data.copy_(torch.tensor([False], device=model.vq._codebook.initted.device))
+            model.latent_size_sum = 0
             print("TRAIN ---------------")
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):

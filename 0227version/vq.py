@@ -600,8 +600,9 @@ class EuclideanCodebook(nn.Module):
         dist_list = []
         for key in mask_dict.keys():
             assert flatten.shape[1] > 16
+            print(self.latent_size_sum)
             mask_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
-            mask_for_this_local = mask_for_this_global - flatten.shape[1]
+            mask_for_this_local = mask_for_this_global - self.latent_size_sum
             print(f"flatten {flatten.shape}")
             print(f"mask_dict[key] {mask_dict[key].shape}")
             masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
