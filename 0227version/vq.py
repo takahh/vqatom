@@ -595,7 +595,16 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten, mask_dict)
             print(f"init_embed is done")
         embed = self.embed  # (1, K, D)  K: codebook size
-        dist = torch.cdist(flatten.squeeze(0), embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, B, K) B: batch size
+        # flatten: latent vectors
+        # embed: codebook vectors
+        # this dist calculated just by closest pairs without considering element
+        dist_list = []
+        for key in mask_dict.keys():
+            masked_latents = flatten[0][mask_dict[key]]  # [Ni, D]
+            dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
+            dist_list.append(dist_per_ele)
+        dist = torch.cat(dist_list, dim=1)
+
         # min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
 
         # hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
