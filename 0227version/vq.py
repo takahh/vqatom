@@ -599,6 +599,7 @@ class EuclideanCodebook(nn.Module):
         # embed: codebook vectors
         # this dist calculated just by closest pairs without considering element
         dist_list = []
+        print(f"flatten {flatten.shape}")
         for key in mask_dict.keys():
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]
@@ -608,14 +609,13 @@ class EuclideanCodebook(nn.Module):
                 mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
                 mask_for_this_global = mask_dict[key][mask_bool_for_this_global]
                 mask_for_this_local = mask_for_this_global - self.latent_size_sum
-                print(f"flatten {flatten.shape}")
                 print(f"mask_dict[key] {mask_dict[key].shape}")
                 masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
-                self.latent_size_sum += flatten.shape[1]
             print(f"masked_latents {masked_latents.shape}")
             dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             print(f"dist_per_ele {dist_per_ele.shape}")
             dist_list.append(dist_per_ele)
+        self.latent_size_sum += flatten.shape[1]
         dist = torch.cat(dist_list, dim=1)
 
         # min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
