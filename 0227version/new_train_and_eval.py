@@ -365,6 +365,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # -------------------------------------------------------------------
         evaluate(model, all_latents_tensor, batched_feats, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
         print("initial kmeans done....")
+        model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
         # TRAIN
