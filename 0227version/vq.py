@@ -635,45 +635,47 @@ class EuclideanCodebook(nn.Module):
             # ---------------------------------------------
             if self.training and epoch < 30:
                 temperature = 0.1
-                K_e = self.cb_dict[key]  # per-element codebook size
+                K_e = self.cb_dict[key]
 
-                # masked_latents: (Ni, D). Add a head dim to match einsum pattern.
+                # correct distances for real use
+                embed = self.embed[str(key)]  # (K_e, D) or (1, K_e, D)
                 z_e = masked_latents.unsqueeze(0)  # (1, B_e, D)
 
-                # (warmup) dummy distances -> soft assign; later replace with real distances
-                distances = torch.randn(1, z_e.shape[1], K_e, device=z_e.device)
+                distances = torch.cdist(
+                    z_e, embed.unsqueeze(0) if embed.ndim == 2 else embed, p=2
+                ).pow(2)  # -> (1, B_e, K_e)
+
+                # distances = torch.randn(1, z_e.shape[1], K_e, device=z_e.device, dtype=z_e.dtype)
                 embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B_e, K_e)
 
-                # Batch sums per code and soft counts
-                # z_e: (1,B_e,D), probs: (1,B_e,K_e) -> (1,K_e,D) -> (K_e,D)
-                embed_sum_e = torch.einsum('h n d, h n c -> h c d', z_e, embed_probs).squeeze(0)
+                # Per-code sums and soft counts
+                embed_sum_e = torch.einsum('h n d, h n c -> h c d', z_e, embed_probs).squeeze(0)  # (K_e, D)
                 counts_e = embed_probs.sum(dim=1).squeeze(0)  # (K_e,)
 
                 with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D) buffer
-                    cs = getattr(self, f"cluster_size_{key}")  # (K_e,)   buffer
+                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D)
+                    cs = getattr(self, f"cluster_size_{key}")  # (K_e,)
 
-                    # EMA accumulate
+                    # ensure dtype/device match
+                    embed_sum_e = embed_sum_e.to(ea.dtype)
+                    counts_e = counts_e.to(cs.dtype)
+
+                    # EMA accumulate (no extra add_ before this)
                     ea.mul_(self.decay).add_(embed_sum_e, alpha=1.0 - self.decay)
                     cs.mul_(self.decay).add_(counts_e, alpha=1.0 - self.decay)
 
-                    # (optional) Laplace smoothing on counts before normalization
-                    if hasattr(self, "eps"):
-                        cs_smoothed = cs.add(self.eps)  # or your laplace_smoothing(cs, K_e, self.eps)
-                    else:
-                        cs_smoothed = cs.clamp_min(1e-6)
+                    # Normalize to means
+                    eps = getattr(self, "eps", 1e-6)
+                    means = ea / (cs.unsqueeze(-1) + eps)  # (K_e, D)
 
-                    # Means = summed embeddings / counts
-                    means = ea / cs_smoothed.unsqueeze(-1)  # (K_e, D)
-
-                    # Write back to the codebook parameter
+                    # Write back to codebook param
                     code = self.embed[str(key)]
                     if code.ndim == 3:  # (1, K_e, D)
                         code.data.copy_(means.unsqueeze(0))
                     else:  # (K_e, D)
                         code.data.copy_(means)
 
-                # per-element expire (ensure it uses per-element tensors)
+                # If your expire uses per-element stats, pass z_e or key-specific tensors
                 self.expire_codes_(z_e)
 
         self.latent_size_sum += flatten.shape[1]
