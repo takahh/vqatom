@@ -366,12 +366,10 @@ class EuclideanCodebook(nn.Module):
         self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
         self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
         self.register_buffer('initted', torch.Tensor([not kmeans_init]))
-        # self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
-        # self.register_buffer('embed_avg', embed.clone())
         element_keys = [1, 3, 5, 6, 7, 8, 9, 11, 14, 15, 16, 17, 19, 34, 35, 53]
         for elem in element_keys:
-            self.register_buffer(f"cluster_size_{elem}", torch.zeros(1))
-            self.register_buffer(f"embed_avg_{elem}", torch.zeros(dim))
+            self.register_buffer(f"cluster_size_{elem}", torch.zeros(element_keys[elem]))
+            self.register_buffer(f"embed_avg_{elem}", torch.zeros(element_keys[elem], dim))
         self.learnable_codebook = learnable_codebook
         self.embed = nn.ParameterDict()
         # self.embed_avg = nn.ParameterDict()
@@ -380,6 +378,8 @@ class EuclideanCodebook(nn.Module):
             self.embed[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
+        self.cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
+                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
@@ -436,8 +436,6 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None):
-        cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
-                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
         print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
         cluster_sizes = []
 
@@ -445,47 +443,14 @@ class EuclideanCodebook(nn.Module):
             # --------------------------
             # run k-means
             # --------------------------
-            cbsize = int(self.codebook_size * cb_dict[key] / 10000)
+            cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
             masked_data = data[0][mask_dict[key]]  # [Ni, D]
             embed, cluster_size = kmeans(masked_data.unsqueeze(0), cbsize)
             cluster_sizes.extend(cluster_size)  # each should be [cbsize]
             with torch.no_grad():
                 self.embed[str(key)] = embed
-                self.embed_avg[str(key)] = embed
-        #
-        # print("KMEANS DONE ---------")
-        # big_embed = torch.unsqueeze(torch.cat(embeds, dim=0), dim=0)  # [K_used, D]
-        # total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
-        # with torch.no_grad():
-        #     K = self.codebook_size
-        #     D = big_embed.size(2)
-        #     K_used = big_embed.size(1)
-        #     # K 10000, D 9806, K used 1
-        #     # If big_embed is transposed, fix orientation
-        #     if big_embed.size(0) == D and big_embed.size(1) != D:
-        #         big_embed = big_embed.t().contiguous()
-        #
-        #     if K_used < K:
-        #         pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
-        #         # pad shape torch.Size([1, 9999, 9806]), big_embed torch.Size([1, 9806, 16])
-        #         big_embed_full = torch.cat([big_embed, pad], dim=1)  # [K, D]
-        #         # RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 9806 but got size 194 for tensor number 1 in the list.
-        #     else:
-        #         big_embed_full = big_embed[:K]
-        #
-        #     # Handle possible [D, K] layout in buffers
-        #     if self.embed.shape == big_embed_full.shape:
-        #         self.embed.data.copy_(big_embed_full)
-        #         self.embed_avg.data.copy_(big_embed_full)
-        #     elif self.embed.shape == big_embed_full.t().shape:
-        #         self.embed.data.copy_(big_embed_full.t())
-        #         self.embed_avg.data.copy_(big_embed_full.t())
-        #     else:
-        #         # ([1, 10000, 16]) vs big_embed torch.Size([10000, 16])
-        #         raise ValueError(f"Shape mismatch: embed {self.embed.shape} vs big_embed {big_embed_full.shape}")
+                getattr(self, f"cluster_size_{key}").add_(cluster_size)
 
-        self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
-        self.cluster_size.data.copy_(total_cluster_size)
         self.initted.data.copy_(torch.tensor([True]))
         return embed
 
@@ -670,25 +635,46 @@ class EuclideanCodebook(nn.Module):
             # ---------------------------------------------
             if self.training and epoch < 30:
                 temperature = 0.1
-                distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
-                embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
-                embed_onehot = embed_probs  # [1, B, K]
+                K_e = self.cb_dict[key]  # per-element codebook size
 
-                embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+                # masked_latents: (Ni, D). Add a head dim to match einsum pattern.
+                z_e = masked_latents.unsqueeze(0)  # (1, B_e, D)
+
+                # (warmup) dummy distances -> soft assign; later replace with real distances
+                distances = torch.randn(1, z_e.shape[1], K_e, device=z_e.device)
+                embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B_e, K_e)
+
+                # Batch sums per code and soft counts
+                # z_e: (1,B_e,D), probs: (1,B_e,K_e) -> (1,K_e,D) -> (K_e,D)
+                embed_sum_e = torch.einsum('h n d, h n c -> h c d', z_e, embed_probs).squeeze(0)
+                counts_e = embed_probs.sum(dim=1).squeeze(0)  # (K_e,)
+
                 with torch.no_grad():
-                    self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D) buffer
+                    cs = getattr(self, f"cluster_size_{key}")  # (K_e,)   buffer
 
-                cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
-                cluster_size = cluster_size * self.cluster_size.sum()
-                cluster_size = rearrange(cluster_size, '... -> ... 1')
-                if self.embed_avg.shape[1] > cluster_size.shape[0]:
-                    pad_len = self.embed_avg.shape[1] - cluster_size.shape[0]
-                    pad = torch.zeros((pad_len, 1), device=cluster_size.device, dtype=cluster_size.dtype)
-                    cluster_size = torch.cat([cluster_size, pad], dim=0)
-                embed_normalized = self.embed_avg / cluster_size
+                    # EMA accumulate
+                    ea.mul_(self.decay).add_(embed_sum_e, alpha=1.0 - self.decay)
+                    cs.mul_(self.decay).add_(counts_e, alpha=1.0 - self.decay)
 
-                self.embed.data.copy_(embed_normalized)
-                self.expire_codes_(x)
+                    # (optional) Laplace smoothing on counts before normalization
+                    if hasattr(self, "eps"):
+                        cs_smoothed = cs.add(self.eps)  # or your laplace_smoothing(cs, K_e, self.eps)
+                    else:
+                        cs_smoothed = cs.clamp_min(1e-6)
+
+                    # Means = summed embeddings / counts
+                    means = ea / cs_smoothed.unsqueeze(-1)  # (K_e, D)
+
+                    # Write back to the codebook parameter
+                    code = self.embed[str(key)]
+                    if code.ndim == 3:  # (1, K_e, D)
+                        code.data.copy_(means.unsqueeze(0))
+                    else:  # (K_e, D)
+                        code.data.copy_(means)
+
+                # per-element expire (ensure it uses per-element tensors)
+                self.expire_codes_(z_e)
 
         self.latent_size_sum += flatten.shape[1]
 
