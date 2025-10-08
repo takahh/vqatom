@@ -360,6 +360,8 @@ class EuclideanCodebook(nn.Module):
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
         self.use_checkpoint = args.use_checkpoint
+        self.cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
+                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
         assert not (
                     use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
         self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
@@ -368,8 +370,8 @@ class EuclideanCodebook(nn.Module):
         self.register_buffer('initted', torch.Tensor([not kmeans_init]))
         element_keys = [1, 3, 5, 6, 7, 8, 9, 11, 14, 15, 16, 17, 19, 34, 35, 53]
         for elem in element_keys:
-            self.register_buffer(f"cluster_size_{elem}", torch.zeros(element_keys[elem]))
-            self.register_buffer(f"embed_avg_{elem}", torch.zeros(element_keys[elem], dim))
+            self.register_buffer(f"cluster_size_{elem}", torch.zeros(self.cb_dict[elem]))
+            self.register_buffer(f"embed_avg_{elem}", torch.zeros(self.cb_dict[elem], dim))
         self.learnable_codebook = learnable_codebook
         self.embed = nn.ParameterDict()
         # self.embed_avg = nn.ParameterDict()
@@ -378,8 +380,6 @@ class EuclideanCodebook(nn.Module):
             self.embed[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
-        self.cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
-                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
