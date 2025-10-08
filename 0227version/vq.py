@@ -366,10 +366,19 @@ class EuclideanCodebook(nn.Module):
         self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
         self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
         self.register_buffer('initted', torch.Tensor([not kmeans_init]))
-        self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
-        self.register_buffer('embed_avg', embed.clone())
+        # self.register_buffer('cluster_size', torch.zeros(num_codebooks, codebook_size))
+        # self.register_buffer('embed_avg', embed.clone())
+        element_keys = [1, 3, 5, 6, 7, 8, 9, 11, 14, 15, 16, 17, 19, 34, 35, 53]
+        for elem in element_keys:
+            self.register_buffer(f"cluster_size_{elem}", torch.zeros(1))
+            self.register_buffer(f"embed_avg_{elem}", torch.zeros(dim))
         self.learnable_codebook = learnable_codebook
-        self.embed = nn.Parameter(embed, requires_grad=True)
+        self.embed = nn.ParameterDict()
+        # self.embed_avg = nn.ParameterDict()
+        for key in element_keys:
+            # Make a fresh tensor copy per element
+            self.embed[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
+            # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
@@ -430,54 +439,55 @@ class EuclideanCodebook(nn.Module):
         cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
                    15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
         print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
-        embeds = []
         cluster_sizes = []
 
         for key in mask_dict.keys():
+            # --------------------------
+            # run k-means
+            # --------------------------
             cbsize = int(self.codebook_size * cb_dict[key] / 10000)
             masked_data = data[0][mask_dict[key]]  # [Ni, D]
             embed, cluster_size = kmeans(masked_data.unsqueeze(0), cbsize)
-            embeds.append(embed[0])  # [cbsize, D]
             cluster_sizes.extend(cluster_size)  # each should be [cbsize]
-
-        # flatten all input latents into [N, D] for re-init
-        flatten = data[0].reshape(-1, data[0].size(-1))
-
-        print("KMEANS DONE ---------")
-        big_embed = torch.unsqueeze(torch.cat(embeds, dim=0), dim=0)  # [K_used, D]
-        total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
-        with torch.no_grad():
-            K = self.codebook_size
-            D = big_embed.size(2)
-            K_used = big_embed.size(1)
-            # K 10000, D 9806, K used 1
-            # If big_embed is transposed, fix orientation
-            if big_embed.size(0) == D and big_embed.size(1) != D:
-                big_embed = big_embed.t().contiguous()
-
-            if K_used < K:
-                pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
-                # pad shape torch.Size([1, 9999, 9806]), big_embed torch.Size([1, 9806, 16])
-                big_embed_full = torch.cat([big_embed, pad], dim=1)  # [K, D]
-                # RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 9806 but got size 194 for tensor number 1 in the list.
-            else:
-                big_embed_full = big_embed[:K]
-
-            # Handle possible [D, K] layout in buffers
-            if self.embed.shape == big_embed_full.shape:
-                self.embed.data.copy_(big_embed_full)
-                self.embed_avg.data.copy_(big_embed_full)
-            elif self.embed.shape == big_embed_full.t().shape:
-                self.embed.data.copy_(big_embed_full.t())
-                self.embed_avg.data.copy_(big_embed_full.t())
-            else:
-                # ([1, 10000, 16]) vs big_embed torch.Size([10000, 16])
-                raise ValueError(f"Shape mismatch: embed {self.embed.shape} vs big_embed {big_embed_full.shape}")
+            with torch.no_grad():
+                self.embed[str(key)] = embed
+                self.embed_avg[str(key)] = embed
+        #
+        # print("KMEANS DONE ---------")
+        # big_embed = torch.unsqueeze(torch.cat(embeds, dim=0), dim=0)  # [K_used, D]
+        # total_cluster_size = torch.cat(cluster_sizes, dim=0)  # [K_used]
+        # with torch.no_grad():
+        #     K = self.codebook_size
+        #     D = big_embed.size(2)
+        #     K_used = big_embed.size(1)
+        #     # K 10000, D 9806, K used 1
+        #     # If big_embed is transposed, fix orientation
+        #     if big_embed.size(0) == D and big_embed.size(1) != D:
+        #         big_embed = big_embed.t().contiguous()
+        #
+        #     if K_used < K:
+        #         pad = torch.unsqueeze(torch.zeros((K - K_used, D), device=big_embed.device, dtype=big_embed.dtype), dim=0)
+        #         # pad shape torch.Size([1, 9999, 9806]), big_embed torch.Size([1, 9806, 16])
+        #         big_embed_full = torch.cat([big_embed, pad], dim=1)  # [K, D]
+        #         # RuntimeError: Sizes of tensors must match except in dimension 0. Expected size 9806 but got size 194 for tensor number 1 in the list.
+        #     else:
+        #         big_embed_full = big_embed[:K]
+        #
+        #     # Handle possible [D, K] layout in buffers
+        #     if self.embed.shape == big_embed_full.shape:
+        #         self.embed.data.copy_(big_embed_full)
+        #         self.embed_avg.data.copy_(big_embed_full)
+        #     elif self.embed.shape == big_embed_full.t().shape:
+        #         self.embed.data.copy_(big_embed_full.t())
+        #         self.embed_avg.data.copy_(big_embed_full.t())
+        #     else:
+        #         # ([1, 10000, 16]) vs big_embed torch.Size([10000, 16])
+        #         raise ValueError(f"Shape mismatch: embed {self.embed.shape} vs big_embed {big_embed_full.shape}")
 
         self.cluster_size = torch.zeros_like(total_cluster_size, device=total_cluster_size.device)
         self.cluster_size.data.copy_(total_cluster_size)
         self.initted.data.copy_(torch.tensor([True]))
-        return big_embed
+        return embed
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
@@ -605,111 +615,83 @@ class EuclideanCodebook(nn.Module):
                 masked_latents = flatten[0][mask_dict[key]]
             else:  # when train
                 assert flatten.shape[1] > 16
-                print(self.latent_size_sum)
                 mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
                 mask_for_this_global = mask_dict[key][mask_bool_for_this_global]
                 mask_for_this_local = mask_for_this_global - self.latent_size_sum
-                print(f"mask_dict[key] {mask_dict[key].shape}")
                 masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
-            print(f"masked_latents {masked_latents.shape}")
             dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
-            print(f"dist_per_ele {dist_per_ele.shape}")
             dist_list.append(dist_per_ele)
+            dist = torch.cat(dist_list, dim=1)
+            min_dists_sq, embed_ind_hard = torch.min(dist, dim=-1)  # (1, B)
+            used_codebook_indices = torch.unique(embed_ind_hard.squeeze(0))
+            embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed.shape[1]).float()  # (B, K)
+            embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
+            quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed.squeeze(0))
+            quantize_unique = torch.unique(quantize, dim=1)
+            num_unique = quantize_unique.shape[1]
+            embed_ind = embed_ind_hard  # If you want to explicitly name it
+
+            # -----------------------
+            # sil score calculation
+            # -----------------------
+            from sklearn.metrics import silhouette_score
+            from sklearn.utils import resample
+            import numpy as np
+
+            if mode == "init_kmeans_final":
+                # Save full arrays
+                np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
+                np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
+
+                # Sample 1000 points for silhouette score calculation
+                x_np = x.cpu().squeeze().detach().numpy()
+                labels_np = embed_ind.cpu().squeeze().detach().numpy()
+
+                x_sample, labels_sample = resample(
+                    x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
+                )
+                # x_sample and labels_sample are NumPy arrays after resample
+                x = torch.from_numpy(x_sample).float().to('cuda')  # move to GPU if needed
+                labels = torch.from_numpy(labels_sample).long().to('cuda')
+
+                # sil_score = silhouette_score(x_sample, labels_sample)
+                sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
+                print(f"Silhouette Score (subsample): {key} - {sil_score:.4f}")
+                logger.info(f"Silhouette Score (subsample): {key} - {sil_score:.4f}")
+
+                logger.info(
+                    f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+                print(
+                    f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+                return 0
+
+            # ---------------------------------------------
+            # EMA (codebook update with weighted history)
+            # ---------------------------------------------
+            if self.training and epoch < 30:
+                temperature = 0.1
+                distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
+                embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
+                embed_onehot = embed_probs  # [1, B, K]
+
+                embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
+                with torch.no_grad():
+                    self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
+
+                cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
+                cluster_size = cluster_size * self.cluster_size.sum()
+                cluster_size = rearrange(cluster_size, '... -> ... 1')
+                if self.embed_avg.shape[1] > cluster_size.shape[0]:
+                    pad_len = self.embed_avg.shape[1] - cluster_size.shape[0]
+                    pad = torch.zeros((pad_len, 1), device=cluster_size.device, dtype=cluster_size.dtype)
+                    cluster_size = torch.cat([cluster_size, pad], dim=0)
+                embed_normalized = self.embed_avg / cluster_size
+
+                self.embed.data.copy_(embed_normalized)
+                self.expire_codes_(x)
+
         self.latent_size_sum += flatten.shape[1]
-        dist = torch.cat(dist_list, dim=1)
 
-        # min_dists_sq, min_indices = torch.min(dist, dim=-1)  # (1, B)
-
-        # hist = torch.histc(min_dists_sq.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
-        # logger.info(hist.cpu().tolist())
-
-        # dist = -dist  # negative distance = similarity
-        # embed_ind_soft = F.softmax(dist, dim=-1)  # (1, B, K)
-        # indices = torch.arange(embed.shape[1], dtype=torch.float32, device=embed.device)  # (K,)
-
-        # # For monitoring codebook usage: use hard assignment
-        # embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
-        # used_codebook_indices = torch.unique(embed_ind_hard)
-
-        min_dists_sq, embed_ind_hard = torch.min(dist, dim=-1)  # (1, B)
-        used_codebook_indices = torch.unique(embed_ind_hard.squeeze(0))
-
-        # [1, B, K] -> hard indices: [B]
-        # embed_ind_hard = embed_ind_soft.argmax(dim=-1).squeeze(0)  # (B,)
-
-        # One-hot encode hard assignments
-        embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed.shape[1]).float()  # (B, K)
-
-        # Re-insert batch dim to match shape: [1, B, K]
-        # embed_ind_hard_onehot = embed_ind_hard_onehot.unsqueeze(0)
-        embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
-
-        # Straight-through estimator: combine hard and soft
-        # embed_ind_onehot = embed_ind_hard_onehot + (embed_ind_soft - embed_ind_soft.detach())
-
-        # Soft quantized vector (with gradient)
-        # print(f"embed_ind_hard_onehot {embed_ind_hard_onehot.shape}, self.embed {self.embed.shape}")
-        # quantize = torch.einsum('nbk,nkd->nbd', embed_ind_hard_onehot, self.embed.squeeze())  # (1, B, D)
-        quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed.squeeze(0))
-
-        quantize_unique = torch.unique(quantize, dim=1)
-        num_unique = quantize_unique.shape[1]
-        embed_ind = embed_ind_hard  # If you want to explicitly name it
-
-        # ------------
-        # sil score
-        # ------------
-        from sklearn.metrics import silhouette_score
-        from sklearn.utils import resample
-        import numpy as np
-
-        if mode == "init_kmeans_final":
-            # Save full arrays
-            np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
-            np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
-
-            # Sample 1000 points for silhouette score calculation
-            x_np = x.cpu().squeeze().detach().numpy()
-            labels_np = embed_ind.cpu().squeeze().detach().numpy()
-
-            x_sample, labels_sample = resample(
-                x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
-            )
-            # x_sample and labels_sample are NumPy arrays after resample
-            x = torch.from_numpy(x_sample).float().to('cuda')  # move to GPU if needed
-            labels = torch.from_numpy(labels_sample).long().to('cuda')
-
-            # sil_score = silhouette_score(x_sample, labels_sample)
-            sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
-            print(f"Silhouette Score (subsample): {sil_score:.4f}")
-            logger.info(f"Silhouette Score (subsample): {sil_score:.4f}")
-
-            logger.info(
-                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-            print(
-                f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-            return 0
-        if self.training and epoch < 30:
-            temperature = 0.1
-            distances = torch.randn(1, flatten.shape[1], self.codebook_size, device=flatten.device)
-            embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B, K)
-            embed_onehot = embed_probs  # [1, B, K]
-
-            embed_sum = einsum('h n d, h n c -> h c d', flatten, embed_onehot)
-            with torch.no_grad():
-                self.embed_avg = torch.lerp(self.embed_avg, embed_sum, 1 - self.decay)
-
-            cluster_size = laplace_smoothing(self.cluster_size, self.codebook_size, self.eps)
-            cluster_size = cluster_size * self.cluster_size.sum()
-            cluster_size = rearrange(cluster_size, '... -> ... 1')
-            if self.embed_avg.shape[1] > cluster_size.shape[0]:
-                pad_len = self.embed_avg.shape[1] - cluster_size.shape[0]
-                pad = torch.zeros((pad_len, 1), device=cluster_size.device, dtype=cluster_size.dtype)
-                cluster_size = torch.cat([cluster_size, pad], dim=0)
-            embed_normalized = self.embed_avg / cluster_size
-
-            self.embed.data.copy_(embed_normalized)
-            self.expire_codes_(x)
 
         torch.cuda.empty_cache()
         return quantize, embed_ind, dist, self.embed, flatten, self.embed.clone(), num_unique, self.embed[:,
