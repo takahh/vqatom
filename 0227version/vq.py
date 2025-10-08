@@ -437,22 +437,55 @@ class EuclideanCodebook(nn.Module):
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None):
         print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
-        cluster_sizes = []
+        cluster_sizes_all = []
 
-        for key in mask_dict.keys():
+        # Deterministic order
+        for key in sorted(mask_dict.keys()):
             # --------------------------
-            # run k-means
+            # per-element K
             # --------------------------
+            # If self.cb_dict[key] is an *absolute* K_e, use it directly.
+            # If it's a proportion, keep your formula.
             cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
-            masked_data = data[0][mask_dict[key]]  # [Ni, D]
-            embed, cluster_size = kmeans(masked_data.unsqueeze(0), cbsize)
-            cluster_sizes.extend(cluster_size)  # each should be [cbsize]
-            with torch.no_grad():
-                self.embed[str(key)] = embed
-                getattr(self, f"cluster_size_{key}").add_(cluster_size)
 
-        self.initted.data.copy_(torch.tensor([True]))
-        return embed
+            # --------------------------
+            # run k-means on this element only
+            # --------------------------
+            masked_data = data[0][mask_dict[key]]  # (Ni, D)
+            embed_k, cluster_size_k = kmeans(masked_data.unsqueeze(0), cbsize)
+
+            # Normalize shapes: -> embed:(K,D), counts:(K,)
+            if embed_k.dim() == 3:  # (1, K, D)
+                embed_k = embed_k.squeeze(0).contiguous()
+            if cluster_size_k.dim() == 2:  # (1, K)
+                cluster_size_k = cluster_size_k.squeeze(0).contiguous()
+
+            # --------------------------
+            # write into parameter / buffers
+            # --------------------------
+            with torch.no_grad():
+                # 1) copy centroids into learnable codebook
+                code = self.embed[str(key)]  # nn.Parameter
+                if code.ndim == 3:  # (1, K, D)
+                    code.data.copy_(embed_k.unsqueeze(0))
+                else:  # (K, D)
+                    code.data.copy_(embed_k)
+
+                # 2) add counts into buffer (shapes must match)
+                cs_buf = getattr(self, f"cluster_size_{key}")  # (K,)
+                # safety: ensure sizes match
+                assert cs_buf.shape[0] == cluster_size_k.shape[0], \
+                    f"cluster_size buffer {cs_buf.shape} vs kmeans {cluster_size_k.shape} for key={key}"
+                cs_buf.add_(cluster_size_k.to(cs_buf.dtype))
+
+            # for optional logging later
+            cluster_sizes_all.append(cluster_size_k)
+
+        # optional: stack for logging
+        # cluster_sizes_all = torch.cat(cluster_sizes_all)  # or keep as list per element
+
+        self.initted.data.copy_(torch.tensor([True], device=self.initted.device))
+        return embed_k
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
