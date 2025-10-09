@@ -469,7 +469,7 @@ class EuclideanCodebook(nn.Module):
             # if actual data count is smaller than the cb count assigned
             # -----------------------------------------------------------
             if embed_k.squeeze().shape[0] < cbsize:
-                self.cb_dict[key] = embed_k.shape[0]
+                self.cb_dict[key] = embed_k.shape[-2]
                 K_e = embed_k.shape[-2]  # e.g. 4360 for carbon
                 print(f"K_e is {K_e}")
                 D = self.embed[str(key)].shape[-1]
