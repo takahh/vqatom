@@ -117,8 +117,8 @@ def kmeans(samples, num_clusters, use_cosine_sim=False, all_reduce_fn=noop, eps=
 
     # 1) Cap K to available unique samples (robust for small N cases)
     #    (H=1 in your logs; for H>1 you can compute per-H if needed)
-    uniq = torch.unique(samples.reshape(-1, D), dim=0).shape[0]
-    num_clusters = int(min(num_clusters, N, uniq if uniq > 0 else N))
+    # uniq = torch.unique(samples.reshape(-1, D), dim=0).shape[0]
+    num_clusters = int(min(num_clusters, N))
     if num_clusters <= 0:
         raise ValueError("No samples to cluster.")
 
@@ -446,7 +446,7 @@ class EuclideanCodebook(nn.Module):
         # Deterministic order
         for key in sorted(mask_dict.keys()):
             cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
-            print(f"cbsize {cbsize}")
+            print(f"cbsize {cbsize}")  # 47
             # --------------------------
             # run k-means on this element only
             # --------------------------
