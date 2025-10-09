@@ -378,7 +378,7 @@ class EuclideanCodebook(nn.Module):
         for key in element_keys:
             # Make a fresh tensor copy per element
             K_e = self.cb_dict[key]  # e.g. 4360 for carbon
-            D = self.dim
+            D = dim
             init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
             self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
