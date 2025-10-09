@@ -475,6 +475,8 @@ class EuclideanCodebook(nn.Module):
                 D = self.embed[str(key)].shape[-1]
                 init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
                 self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
+                getattr(self, f"cluster_size_{key}").add_(embed_k.shape[-2])
+
             print(f"self.embed[str(key)] {self.embed[str(key)].shape}")
             # Normalize shapes: -> embed:(K,D), counts:(K,)
             if embed_k.dim() == 3:  # (1, K, D)
