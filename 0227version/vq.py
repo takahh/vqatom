@@ -360,8 +360,8 @@ class EuclideanCodebook(nn.Module):
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
         self.use_checkpoint = args.use_checkpoint
-        self.cb_dict = {6: 4360, 7: 1760, 8: 1530, 9: 730, 17: 500, 16: 530, 35: 190,
-                   15: 100, 53: 85, 11: 50, 1: 47, 14: 22, 34: 27, 5: 43, 19: 19, 3: 10}
+        self.cb_dict = {1: 47, 3: 10, 5: 43, 6: 4360, 7: 1760, 8: 1530, 9: 730, 11: 50, 14: 22, 15: 100, 16: 530,
+                        17: 500, 19: 19, 34: 27, 35: 190, 53: 85}
         assert not (
                     use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
         self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
