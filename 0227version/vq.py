@@ -447,6 +447,7 @@ class EuclideanCodebook(nn.Module):
         # here write some codes to adjust codebooks considering actual data size (mask_dict)
         # for example, when mask_dict size is 100, and codebook size is 150, make cb size 100
         # change self.cb_dict otherwise code gives an error
+        # and self.embed[str(key)] also should be adjusted
         # -----------------------------------------------------------------------------------
 
         # Deterministic order
@@ -464,9 +465,15 @@ class EuclideanCodebook(nn.Module):
             embed_k, cluster_size_k = kmeans(masked_data.unsqueeze(0), cbsize)
             # embed_k is a collection of a codebook vector for each cluster
 
+            # -----------------------------------------------------------
             # if actual data count is smaller than the cb count assigned
+            # -----------------------------------------------------------
             if embed_k.squeeze().shape[0] < cbsize:
                 self.cb_dict[key] = embed_k.shape[0]
+                K_e = self.cb_dict[key]  # e.g. 4360 for carbon
+                D = self.embed[str(key)].shape[-1]
+                init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
+                self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
 
             # Normalize shapes: -> embed:(K,D), counts:(K,)
             if embed_k.dim() == 3:  # (1, K, D)
