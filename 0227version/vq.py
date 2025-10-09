@@ -451,7 +451,7 @@ class EuclideanCodebook(nn.Module):
 
         # Deterministic order
         for key in sorted(mask_dict.keys()):
-            cbsize = int(self.codebook_size * self.cb_dict[str(key)] / 10000)
+            cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
             print(f"cbsize {cbsize}")  # 47
             # cbsize 47
             # masked_data.shape torch.Size([43, 16])
@@ -466,7 +466,7 @@ class EuclideanCodebook(nn.Module):
 
             # if actual data count is smaller than the cb count assigned
             if embed_k.squeeze().shape[0] < cbsize:
-                self.cb_dict[str(key)] = embed_k.shape[0]
+                self.cb_dict[key] = embed_k.shape[0]
 
             # Normalize shapes: -> embed:(K,D), counts:(K,)
             if embed_k.dim() == 3:  # (1, K, D)
