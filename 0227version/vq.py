@@ -451,6 +451,7 @@ class EuclideanCodebook(nn.Module):
             # run k-means on this element only
             # --------------------------
             masked_data = data[0][mask_dict[key]]  # (Ni, D)
+            print(f"masked_data.shape {masked_data.shape}")
             embed_k, cluster_size_k = kmeans(masked_data.unsqueeze(0), cbsize)
 
             # Normalize shapes: -> embed:(K,D), counts:(K,)
