@@ -475,7 +475,7 @@ class EuclideanCodebook(nn.Module):
                 D = self.embed[str(key)].shape[-1]
                 init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
                 self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
-
+            print(f"self.embed[str(key)] {self.embed[str(key)].shape}")
             # Normalize shapes: -> embed:(K,D), counts:(K,)
             if embed_k.dim() == 3:  # (1, K, D)
                 embed_k = embed_k.squeeze(0).contiguous()
