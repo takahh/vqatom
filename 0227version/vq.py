@@ -362,6 +362,7 @@ class EuclideanCodebook(nn.Module):
         self.use_checkpoint = args.use_checkpoint
         self.cb_dict = {1: 47, 3: 10, 5: 43, 6: 4360, 7: 1760, 8: 1530, 9: 730, 11: 50, 14: 22, 15: 100, 16: 530,
                         17: 500, 19: 19, 34: 27, 35: 190, 53: 85}
+        # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
         assert not (
                     use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
         self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
@@ -445,7 +446,7 @@ class EuclideanCodebook(nn.Module):
         # Deterministic order
         for key in sorted(mask_dict.keys()):
             cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
-
+            print(f"cbsize {cbsize}")
             # --------------------------
             # run k-means on this element only
             # --------------------------
@@ -467,6 +468,7 @@ class EuclideanCodebook(nn.Module):
                 if code.ndim == 3:  # (1, K, D)
                     code.data.copy_(embed_k.unsqueeze(0))
                 else:  # (K, D)
+                    # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
                     print(f"key {key}, code {code.shape}, embed_k {embed_k.shape}")
                     code.data.copy_(embed_k)
 
