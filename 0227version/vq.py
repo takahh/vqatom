@@ -377,7 +377,10 @@ class EuclideanCodebook(nn.Module):
         # self.embed_avg = nn.ParameterDict()
         for key in element_keys:
             # Make a fresh tensor copy per element
-            self.embed[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
+            K_e = self.cb_dict[key]  # e.g. 4360 for carbon
+            D = self.dim
+            init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
+            self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
     def reset_kmeans(self):
@@ -441,11 +444,6 @@ class EuclideanCodebook(nn.Module):
 
         # Deterministic order
         for key in sorted(mask_dict.keys()):
-            # --------------------------
-            # per-element K
-            # --------------------------
-            # If self.cb_dict[key] is an *absolute* K_e, use it directly.
-            # If it's a proportion, keep your formula.
             cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
 
             # --------------------------
