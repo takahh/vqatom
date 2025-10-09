@@ -451,8 +451,11 @@ class EuclideanCodebook(nn.Module):
 
         # Deterministic order
         for key in sorted(mask_dict.keys()):
-            cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
+            cbsize = int(self.codebook_size * self.cb_dict[str(key)] / 10000)
             print(f"cbsize {cbsize}")  # 47
+            # cbsize 47
+            # masked_data.shape torch.Size([43, 16])
+            # key 1, code torch.Size([47, 16]), embed_k torch.Size([43, 16])
             # --------------------------
             # run k-means on this element only
             # --------------------------
@@ -462,7 +465,7 @@ class EuclideanCodebook(nn.Module):
             # embed_k is a collection of a codebook vector for each cluster
 
             # if actual data count is smaller than the cb count assigned
-            if embed_k.shape[0] < cbsize:
+            if embed_k.squeeze().shape[0] < cbsize:
                 self.cb_dict[str(key)] = embed_k.shape[0]
 
             # Normalize shapes: -> embed:(K,D), counts:(K,)
