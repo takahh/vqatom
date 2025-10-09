@@ -467,7 +467,7 @@ class EuclideanCodebook(nn.Module):
                 if code.ndim == 3:  # (1, K, D)
                     code.data.copy_(embed_k.unsqueeze(0))
                 else:  # (K, D)
-                    print(f"code {code.shape}, embed_k {embed_k.shape}")
+                    print(f"key {key}, code {code.shape}, embed_k {embed_k.shape}")
                     code.data.copy_(embed_k)
 
                 # 2) add counts into buffer (shapes must match)
