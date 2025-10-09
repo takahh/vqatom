@@ -440,77 +440,107 @@ class EuclideanCodebook(nn.Module):
 
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None):
-        print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
-        cluster_sizes_all = []
+        """
+        Initialize per-element codebooks using K-means on masked latents.
 
-        # -----------------------------------------------------------------------------------
-        # here write some codes to adjust codebooks considering actual data size (mask_dict)
-        # for example, when mask_dict size is 100, and codebook size is 150, make cb size 100
-        # change self.cb_dict otherwise code gives an error
-        # and self.embed[str(key)] also should be adjusted
-        # -----------------------------------------------------------------------------------
+        Guarantees for each element `key`:
+          - self.cb_dict[str(key)] == actual K found by k-means
+          - self.embed[str(key)].shape == (K, D)
+          - getattr(self, f"cluster_size_{key}").shape == (K,)
+          - Copies centroids and counts with proper dtypes/devices
+        """
+        print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
+        assert mask_dict is not None, "mask_dict is required"
+        cluster_sizes_all = []
 
         # Deterministic order
         for key in sorted(mask_dict.keys()):
-            cbsize = int(self.codebook_size * self.cb_dict[key] / 10000)
-            print(f"cbsize {cbsize}")  # 47
-            # cbsize 47
-            # masked_data.shape torch.Size([43, 16])
-            # key 1, code torch.Size([47, 16]), embed_k torch.Size([43, 16])
-            # --------------------------
-            # run k-means on this element only
-            # --------------------------
-            masked_data = data[0][mask_dict[key]]  # (Ni, D)
-            print(f"masked_data.shape {masked_data.shape}")
-            embed_k, cluster_size_k = kmeans(masked_data.unsqueeze(0), cbsize)
-            # embed_k is a collection of a codebook vector for each cluster
+            # Normalize key usage (ParameterDict/Dict keys often stored as str)
+            skey = str(key)
 
-            # -----------------------------------------------------------
-            # if actual data count is smaller than the cb count assigned
-            # -----------------------------------------------------------
-            if embed_k.squeeze().shape[0] < cbsize:
-                self.cb_dict[key] = embed_k.shape[-2]
-                K_e = embed_k.shape[-2]  # e.g. 4360 for carbon
-                print(f"K_e is {K_e}")
-                D = self.embed[str(key)].shape[-1]
-                init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
-                self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
-                getattr(self, f"cluster_size_{key}").add_(embed_k.shape[-2])
+            # Target cb size from allocation ratio
+            try:
+                ratio = self.cb_dict[skey]
+            except KeyError:
+                ratio = self.cb_dict[key]
+            cbsize = int(self.codebook_size * ratio / 10000)
 
-            print(f"self.embed[str(key)] {self.embed[str(key)].shape}")
-            # Normalize shapes: -> embed:(K,D), counts:(K,)
-            if embed_k.dim() == 3:  # (1, K, D)
-                embed_k = embed_k.squeeze(0).contiguous()
-            if cluster_size_k.dim() == 2:  # (1, K)
-                cluster_size_k = cluster_size_k.squeeze(0).contiguous()
+            idx = mask_dict[key]  # indices for this element
+            masked = data[0][idx]  # (Ni, D)
+            print(f"[key={key}] cbsize={cbsize}, masked.shape={tuple(masked.shape)}")
 
-            # --------------------------
-            # write into parameter / buffers
-            # --------------------------
+            # Run k-means (expects [H, N, D]); here H=1
+            embed_k, cluster_size_k = kmeans(masked.unsqueeze(0), cbsize)
+
+            # Normalize k-means outputs to (K, D) and (K,)
+            if embed_k.dim() == 3:  # (1, K, D) -> (K, D)
+                embed_k = embed_k[0].contiguous()
+            if cluster_size_k.dim() == 2:  # (1, K)    -> (K,)
+                cluster_size_k = cluster_size_k[0].contiguous()
+
+            K_found = int(embed_k.shape[0])
+            D_curr = int(self.embed[skey].shape[-1])
+            print(f"[key={key}] K_found={K_found}, D={D_curr}")
+
+            # Record the actual K used for this element
+            self.cb_dict[skey] = K_found
+
+            # ---------- Ensure codebook parameter has shape [K_found, D] ----------
+            code = self.embed[skey]
+            if code.shape[0] != K_found:
+                new_code = torch.empty(
+                    K_found, D_curr, device=code.device, dtype=code.dtype
+                )
+                nn.init.normal_(new_code, mean=0.0, std=0.01)
+                self.embed[skey] = nn.Parameter(new_code, requires_grad=True)
+                code = self.embed[skey]  # refresh reference
+
+            # ---------- Ensure cluster_size buffer has shape [K_found] ------------
+            cs_name = f"cluster_size_{key}"
+            cs_buf = getattr(self, cs_name)
+            if cs_buf.numel() != K_found:
+                new_cs = torch.zeros(
+                    K_found, device=cs_buf.device, dtype=cs_buf.dtype
+                )
+                # Re-register the buffer with the new shape
+                self.register_buffer(cs_name, new_cs)
+                cs_buf = getattr(self, cs_name)
+            else:
+                cs_buf.zero_()
+
+            # (Optional) If you keep EMA stats per element, resize them here too.
+            # Example (guarded):
+            # for buf in (f"embed_avg_{key}", f"ema_cluster_size_{key}"):
+            #     if hasattr(self, buf):
+            #         old = getattr(self, buf)
+            #         if old.dim() == 2 and old.shape[0] != K_found:  # (K, D)
+            #             new = torch.zeros(K_found, D_curr, device=old.device, dtype=old.dtype)
+            #             self.register_buffer(buf, new)
+            #         elif old.dim() == 1 and old.numel() != K_found: # (K,)
+            #             new = torch.zeros(K_found, device=old.device, dtype=old.dtype)
+            #             self.register_buffer(buf, new)
+
+            # ----------------------- Copy centroids & counts -----------------------
             with torch.no_grad():
-                # 1) copy centroids into learnable codebook
-                code = self.embed[str(key)]  # nn.Parameter
-                if code.ndim == 3:  # (1, K, D)
-                    code.data.copy_(embed_k.unsqueeze(0))
+                # Centroids
+                if code.dim() == 3:  # (1, K, D) – unlikely here, but keep safety
+                    code.data.copy_(embed_k.unsqueeze(0).to(code.dtype))
                 else:  # (K, D)
-                    # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
-                    print(f"key {key}, code {code.shape}, embed_k {embed_k.shape}")
-                    code.data.copy_(embed_k)
+                    code.data.copy_(embed_k.to(code.dtype))
 
-                # 2) add counts into buffer (shapes must match)
-                cs_buf = getattr(self, f"cluster_size_{key}")  # (K,)
-                # safety: ensure sizes match
+                # Counts
                 assert cs_buf.shape[0] == cluster_size_k.shape[0], \
                     f"cluster_size buffer {cs_buf.shape} vs kmeans {cluster_size_k.shape} for key={key}"
                 cs_buf.add_(cluster_size_k.to(cs_buf.dtype))
 
-            # for optional logging later
+            # For optional logging
             cluster_sizes_all.append(cluster_size_k)
 
-        # optional: stack for logging
-        # cluster_sizes_all = torch.cat(cluster_sizes_all)  # or keep as list per element
+            print(f"[key={key}] codebook={tuple(code.shape)}, cluster_size_buf={tuple(cs_buf.shape)}")
 
+        # Mark initialized
         self.initted.data.copy_(torch.tensor([True], device=self.initted.device))
+        # Return last embed_k for compatibility (or return None / dict if you prefer)
         return embed_k
 
     def replace(self, batch_samples, batch_mask):
