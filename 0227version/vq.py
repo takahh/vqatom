@@ -470,7 +470,8 @@ class EuclideanCodebook(nn.Module):
             # -----------------------------------------------------------
             if embed_k.squeeze().shape[0] < cbsize:
                 self.cb_dict[key] = embed_k.shape[0]
-                K_e = self.cb_dict[key]  # e.g. 4360 for carbon
+                K_e = embed_k.shape[0]  # e.g. 4360 for carbon
+                print(f"K_e is {K_e}")
                 D = self.embed[str(key)].shape[-1]
                 init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
                 self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
