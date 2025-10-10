@@ -702,7 +702,7 @@ class EuclideanCodebook(nn.Module):
 
             if mode == "init_kmeans_final":
                 # Save full arrays
-                np.savez(f"./naked_embed_{epoch}.npz", embed=embed.cpu().detach().numpy())
+                np.savez(f"./naked_embed_{epoch}.npz", embed=embed[str(key)].cpu().detach().numpy())
                 np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
 
                 # Sample 1000 points for silhouette score calculation
