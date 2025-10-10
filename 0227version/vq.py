@@ -688,7 +688,7 @@ class EuclideanCodebook(nn.Module):
             used_codebook_indices = torch.unique(embed_ind_hard.squeeze(0))
             embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed[str(key)].shape[-2]).float()  # (B, K)
             embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
-            quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed.squeeze(0))
+            quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed[str(key)].squeeze(0))
             quantize_unique = torch.unique(quantize, dim=1)
             num_unique = quantize_unique.shape[1]
             embed_ind = embed_ind_hard  # If you want to explicitly name it
