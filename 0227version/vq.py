@@ -665,15 +665,23 @@ class EuclideanCodebook(nn.Module):
         dist_list = []
         print(f"flatten {flatten.shape}")
         for key in mask_dict.keys():
-            if mode == "init_kmeans_final":
+            if mode == "init_kmeans_final":  # first global
                 masked_latents = flatten[0][mask_dict[key]]
-            else:  # when train
+                masked_embed = self.embed[str(key)]
+            else:  # when train, minibatch
                 assert flatten.shape[1] > 16
+                # ------------------------------------------------------------------------------------------------------------------------
+                # here, flatten[0] is minibatch, so slice mask_dict[key], and then make the indices local by subtracting the start index
+                # ------------------------------------------------------------------------------------------------------------------------
                 mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
-                mask_for_this_global = mask_dict[key][mask_bool_for_this_global]
+                mask_for_this_global = mask_dict[key][mask_bool_for_this_global]  # e.g. [102, 106, 120,...298]
                 mask_for_this_local = mask_for_this_global - self.latent_size_sum
                 masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
-            dist_per_ele = torch.cdist(masked_latents, embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
+                # ---------------------
+                #  ### 目的：embed[key] (cb vectors) のミニバッチ分取得 >> ミニバッチ訓練時も元素対応 centroids 全て使用
+                masked_embed = self.embed[str(key)]
+
+            dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             dist_list.append(dist_per_ele)
             dist = torch.cat(dist_list, dim=1)
             min_dists_sq, embed_ind_hard = torch.min(dist, dim=-1)  # (1, B)
