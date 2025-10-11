@@ -680,9 +680,8 @@ class EuclideanCodebook(nn.Module):
                 # ---------------------
                 #  ### 目的：embed[key] (cb vectors) のミニバッチ分取得 >> ミニバッチ訓練時も元素対応 centroids 全て使用
                 masked_embed = self.embed[str(key)]
-
-            print(f"masked_latents {masked_latents.shape}")
-            print(f"masked_embed {masked_embed.shape}")
+            # masked_latents torch.Size([372730, 16])
+            # masked_embed torch.Size([4360, 16])
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             print(f"dist_per_ele {dist_per_ele.shape}")
             min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
@@ -712,7 +711,7 @@ class EuclideanCodebook(nn.Module):
                 np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
 
                 # Sample 1000 points for silhouette score calculation
-                x_np = x.cpu().squeeze().detach().numpy()
+                x_np = masked_latents.cpu().squeeze().detach().numpy()
                 labels_np = embed_ind.cpu().squeeze().detach().numpy()
 
                 x_sample, labels_sample = resample(
