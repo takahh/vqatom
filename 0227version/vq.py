@@ -669,6 +669,7 @@ class EuclideanCodebook(nn.Module):
             print(f"{key} - len(mask_dict[key]) {len(mask_dict[key])}")
 
         for key in mask_dict.keys():
+            print(f"key {key}")
             if mode == "init_kmeans_final":  # first global
                 masked_latents = flatten[0][mask_dict[key]]
                 masked_embed = self.embed[str(key)]
@@ -684,8 +685,8 @@ class EuclideanCodebook(nn.Module):
                 # ---------------------
                 #  ### 目的：embed[key] (cb vectors) のミニバッチ分取得 >> ミニバッチ訓練時も元素対応 centroids 全て使用
                 masked_embed = self.embed[str(key)]
-            # masked_latents torch.Size([372730, 16])
-            # masked_embed torch.Size([4360, 16])
+            print(f"masked_latents {masked_latents.shape}")
+            print(f"masked_embed {masked_embed.shape}")
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
             print(f"dist_per_ele {dist_per_ele.shape}")
             min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
