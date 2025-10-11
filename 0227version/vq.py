@@ -682,15 +682,19 @@ class EuclideanCodebook(nn.Module):
                 masked_embed = self.embed[str(key)]
 
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
-            dist_list.append(dist_per_ele)
-            dist = torch.cat(dist_list, dim=1)
-            min_dists_sq, embed_ind_hard = torch.min(dist, dim=-1)  # (1, B)
-            used_codebook_indices = torch.unique(embed_ind_hard.squeeze(0))
+            min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
+            # # one_hot に食わせる前に (B,) にする（one_hot は Long 1D を期待）
+            embed_ind_hard_b = embed_ind_hard.squeeze(0).to(torch.long)     # [B]
+            #
+            # # 使われたコードのID（ユニーク数）
+            # used_codebook_indices = torch.unique(embed_ind_hard_b)          # [U]
+            # num_used_codes = used_codebook_indices.numel()
+            used_codebook_indices = torch.unique(embed_ind_hard_b)
             embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed[str(key)].shape[-2]).float()  # (B, K)
             embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
             quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed[str(key)].squeeze(0))
-            quantize_unique = torch.unique(quantize, dim=1)
-            num_unique = quantize_unique.shape[1]
+            quantize_unique = torch.unique(quantize, dim=0)
+            num_unique = quantize_unique.shape[0]
             embed_ind = embed_ind_hard  # If you want to explicitly name it
 
             # -----------------------
