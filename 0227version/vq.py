@@ -664,6 +664,10 @@ class EuclideanCodebook(nn.Module):
         # this dist calculated just by closest pairs without considering element
         dist_list = []
         print(f"flatten {flatten.shape}")
+
+        for key in mask_dict.keys():
+            print(f"{key} - len(mask_dict[key]) {len(mask_dict[key])}")
+
         for key in mask_dict.keys():
             if mode == "init_kmeans_final":  # first global
                 masked_latents = flatten[0][mask_dict[key]]
@@ -730,7 +734,6 @@ class EuclideanCodebook(nn.Module):
                     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
                 print(
                     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-                return 0
 
             # ---------------------------------------------
             # EMA (codebook update with weighted history)
@@ -781,10 +784,11 @@ class EuclideanCodebook(nn.Module):
                 self.expire_codes_(z_e)
 
         self.latent_size_sum += flatten.shape[1]
-
-
-        torch.cuda.empty_cache()
-        return quantize, embed_ind, dist, self.embed, flatten, self.embed.clone(), num_unique, self.embed[:,
+        if mode == "init_kmeans_final":
+            return 0
+        else:
+            torch.cuda.empty_cache()
+            return quantize, embed_ind, dist, self.embed, flatten, self.embed.clone(), num_unique, self.embed[:,
                                                                                                used_codebook_indices, :]
 
 
