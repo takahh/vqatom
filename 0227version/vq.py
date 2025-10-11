@@ -682,7 +682,9 @@ class EuclideanCodebook(nn.Module):
                 masked_embed = self.embed[str(key)]
 
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
+            print(f"dist_per_ele {dist_per_ele.shape}")
             min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
+            print(f"embed_ind_hard {embed_ind_hard.shape}")
             # # one_hot に食わせる前に (B,) にする（one_hot は Long 1D を期待）
             embed_ind_hard_b = embed_ind_hard.squeeze(0).to(torch.long)     # [B]
             #
@@ -696,7 +698,7 @@ class EuclideanCodebook(nn.Module):
             quantize_unique = torch.unique(quantize, dim=0)
             num_unique = quantize_unique.shape[0]
             embed_ind = embed_ind_hard  # If you want to explicitly name it
-
+            print(f"embed_ind {embed_ind.shape}, x {x.shape}")
             # -----------------------
             # sil score calculation
             # -----------------------
