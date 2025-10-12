@@ -782,7 +782,7 @@ class EuclideanCodebook(nn.Module):
                         code.data.copy_(means)
 
                 # If your expire uses per-element stats, pass z_e or key-specific tensors
-                self.expire_codes_(z_e)
+                # self.expire_codes_(z_e)
 
         self.latent_size_sum += flatten.shape[1]
         if mode == "init_kmeans_final":
