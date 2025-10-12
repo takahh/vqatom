@@ -495,6 +495,9 @@ class EuclideanCodebook(nn.Module):
                 self.embed[skey] = nn.Parameter(new_code, requires_grad=True)
                 code = self.embed[skey]  # refresh reference
 
+                # update "embed_avg_{key}" shape
+                self._buffers[f"embed_avg_{key}"] = torch.zeros(K_found, D_curr)
+
             # ---------- Ensure cluster_size buffer has shape [K_found] ------------
             cs_name = f"cluster_size_{key}"
             cs_buf = getattr(self, cs_name)
@@ -688,7 +691,7 @@ class EuclideanCodebook(nn.Module):
             print(f"masked_latents {masked_latents.shape}")
             print(f"masked_embed {masked_embed.shape}")
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
-            print(f"dist_per_ele {dist_per_ele.shape}")
+            print(f"dist_per_ele {dist_per_ele.shape}")  #[1, 7, 43])
             min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
             # # one_hot に食わせる前に (B,) にする（one_hot は Long 1D を期待）
             embed_ind_hard_b = embed_ind_hard.squeeze(0).to(torch.long)     # [B]
@@ -759,7 +762,7 @@ class EuclideanCodebook(nn.Module):
                 counts_e = embed_probs.sum(dim=1).squeeze(0)  # (K_e,)
 
                 with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D)
+                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D)  torch.zeros(self.cb_dict[elem], dim)
                     cs = getattr(self, f"cluster_size_{key}")  # (K_e,)
 
                     # ensure dtype/device match
