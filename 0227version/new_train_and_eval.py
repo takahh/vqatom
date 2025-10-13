@@ -28,16 +28,10 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
         # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
         # (g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch)
-        (_, logits, loss, _, cb, loss_list3,
-         latent_train, quantized, latents,
-         sample_list_train, num_unique) = outputs
+        (loss, cb, loss_list3) = outputs
 
     # Sync codebook weights
     model.vq._codebook.embed.data.copy_(cb.to(device))
-
-    # Free some unused outputs early
-    del logits, quantized
-    # torch.cuda.empty_cache()  # remove in production
 
     # Backward pass
     scaler.scale(loss).backward()
@@ -50,10 +44,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
     # Return only what’s needed
     return (
         loss.detach(),                     # keep as tensor if you want
-        [l.item() if hasattr(l, 'item') else l for l in loss_list3],
-        latent_train.detach().cpu(),       # safe on CPU
-        latents.detach().cpu() if torch.is_tensor(latents) else latents,
-        num_unique
+        [l.item() if hasattr(l, 'item') else l for l in loss_list3]
     )
 
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None):
@@ -401,7 +392,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                     # train step
                     # (model, g, feats, optimizer, chunk_i, logger, epoch):
-                    loss, loss_list_train, latent_train_cpu, latents, cb_num_unique = train_sage(
+                    loss, loss_list_train = train_sage(
                         model, batched_graph, batched_feats, optimizer, i, all_masks_dict, logger, epoch, chunk_size
                     )
 
@@ -411,10 +402,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
                     loss_list.append(loss.detach().cpu().item())
-                    cb_unique_num_list.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
-
                     # cleanup
-                    del batched_graph, batched_feats, chunk, latents, loss, loss_list_train, cb_num_unique
+                    del batched_graph, batched_feats, chunk, latents, loss, loss_list_train
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()

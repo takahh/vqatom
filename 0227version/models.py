@@ -276,22 +276,10 @@ class EquivariantThreeHopGINE(nn.Module):
                 data, None, mask_dict, logger, chunk_i, epoch, mode
             )
             return 0
-        (quantize, emb_ind, loss, dist, embed, commit_loss, latents, div_nega_loss,
-         x, cb_loss, sil_loss, num_unique, repel_loss, cb_repel_loss) = quantize_output
-        detached_quantize = quantize.detach()
+        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
-        if batched_graph_base:  # from evaluate
-            latents = h
-            sample_adj_base = batched_graph_base.adj().to_dense()
-            sample_bond_info = batched_graph_base.edata["weight"]
-            # print(f"in model py, if batched_graph_base, latent shape is {latents.shape}")
-            sample_list = [emb_ind, feat_before_transform, latents, sample_bond_info, src_output, dst_output, sample_adj_base]
-        else:   # from train_sage
-            sample_bond_info = data.edata["weight"]
-            sample_list = [emb_ind, feat_before_transform, sample_adj, sample_bond_info, src_output, dst_output]
-        sample_list = [t.clone().detach() if t is not None else torch.zeros_like(sample_list[0]) for t in sample_list]
-        return [], h, loss, dist, embed, losslist, x, detached_quantize, latents, sample_list, num_unique
+        return loss, embed, losslist
 
 
 class Model(nn.Module):

@@ -784,16 +784,13 @@ class EuclideanCodebook(nn.Module):
                     else:  # (K_e, D)
                         code.data.copy_(means)
 
-                # If your expire uses per-element stats, pass z_e or key-specific tensors
-                # self.expire_codes_(z_e)
-
         self.latent_size_sum += flatten.shape[1]
         if mode == "init_kmeans_final":
             return 0
         else:
             torch.cuda.empty_cache()
-            return quantize, embed_ind, dist, self.embed, flatten, self.embed.clone(), num_unique, self.embed[:,
-                                                                                               used_codebook_indices, :]
+            # quantize, embed_ind, embed
+            return quantize, embed_ind, self.embed
 
 
 class VectorQuantize(nn.Module):
@@ -1140,7 +1137,7 @@ class VectorQuantize(nn.Module):
             return 0
         else:
             #     ( x, logger=None, chunk_i=None, epoch=None, mode=None):
-            quantize, embed_ind, dist, embed, latents, init_cb, num_unique, used_cb = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
+            quantize, embed_ind, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
         quantize = quantize.squeeze(0)
         x_tmp = x.squeeze(1).unsqueeze(0)
         quantize = x_tmp + (quantize - x_tmp)
@@ -1155,17 +1152,8 @@ class VectorQuantize(nn.Module):
         elif embed_ind.ndim != 1:
             raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        # ------- change if needed ---------
-        EPOCH_TO_SHIFT = 2
-        # ----------------------------------
-
-        # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
-        # commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
-        # # ------------DELETE THIS SOON !!!!!!!!! ----------------------
-        # if epoch >= EPOCH_TO_SHIFT:
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
-        # else:
-        #     commit_loss = torch.tensor(1)
+
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
@@ -1182,29 +1170,5 @@ class VectorQuantize(nn.Module):
             # logger.info("~~~~~~~ using commit loss ~~~~~~~~~~~")
             beta = 0.0001
             loss = beta * (commit_loss) + repel_loss
-
-            # loss = 0.1 * commit_loss + 0.1 * codebook_loss + two_repel_loss
-            # print(f"commit loss {self.commitment_weight * commit_loss}")
-        # else:
-        #     # loss = (self.commitment_weight * commit_loss + self.commitment_weight * codebook_loss)
-        # else:
-        #     # loss = repel_loss + self.spread_weight * spread_loss
-        #     print(f"commit loss {self.commitment_weight * commit_loss} two repel {two_repel_loss}")
-        #     loss = two_repel_loss
-        if need_transpose:
-            quantize = rearrange(quantize, 'b n d -> b d n')
-        if only_one:
-            if len(quantize.shape) == 3:
-                # this line is executed
-                quantize = rearrange(quantize, '1 b d -> b d')
-            if len(embed_ind.shape) == 2:
-                embed_ind = rearrange(embed_ind, 'b 1 -> b')
-        # delete this soon ------------------------------------
-        # div_nega_loss = commit_loss
-        # sil_loss = commit_loss
-        # repel_loss = commit_loss
-        # cb_repel_loss = commit_loss
-        # delete this soon ------------------------------------
-
-        return (quantize, embed_ind, loss, dist, embed, commit_loss, latents, div_nega_loss, x, commit_loss, sil_loss,
-                num_unique, repel_loss, cb_repel_loss)
+        # loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss
+        return (loss, embed, commit_loss, commit_loss, sil_loss, repel_loss, cb_repel_loss)
