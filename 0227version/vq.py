@@ -469,7 +469,7 @@ class EuclideanCodebook(nn.Module):
 
             idx = mask_dict[key]  # indices for this element
             masked = data[0][idx]  # (Ni, D)
-            print(f"[key={key}] cbsize={cbsize}, masked.shape={tuple(masked.shape)}")
+            # print(f"[key={key}] cbsize={cbsize}, masked.shape={tuple(masked.shape)}")
 
             # Run k-means (expects [H, N, D]); here H=1
             embed_k, cluster_size_k = kmeans(masked.unsqueeze(0), cbsize)
@@ -482,7 +482,7 @@ class EuclideanCodebook(nn.Module):
 
             K_found = int(embed_k.shape[0])
             D_curr = int(self.embed[skey].shape[-1])
-            print(f"[key={key}] K_found={K_found}, D={D_curr}")
+            # print(f"[key={key}] K_found={K_found}, D={D_curr}")
 
             # Record the actual K used for this element
             self.cb_dict[skey] = K_found
@@ -541,7 +541,7 @@ class EuclideanCodebook(nn.Module):
             # For optional logging
             cluster_sizes_all.append(cluster_size_k)
 
-            print(f"[key={key}] codebook={tuple(code.shape)}, cluster_size_buf={tuple(cs_buf.shape)}")
+            # print(f"[key={key}] codebook={tuple(code.shape)}, cluster_size_buf={tuple(cs_buf.shape)}")
 
         # Mark initialized
         self.initted.data.copy_(torch.tensor([True], device=self.initted.device))
@@ -668,13 +668,13 @@ class EuclideanCodebook(nn.Module):
         # embed: codebook vectors
         # this dist calculated just by closest pairs without considering element
         dist_list = []
-        print(f"flatten {flatten.shape}")
+        # print(f"flatten {flatten.shape}")
+
+        # for key in mask_dict.keys():
+        #     # print(f"{key} - len(mask_dict[key]) {len(mask_dict[key])}")
 
         for key in mask_dict.keys():
-            print(f"{key} - len(mask_dict[key]) {len(mask_dict[key])}")
-
-        for key in mask_dict.keys():
-            print(f"key {key}")
+            # print(f"key {key}")
             if mode == "init_kmeans_final":  # first global
                 masked_latents = flatten[0][mask_dict[key]]
                 masked_embed = self.embed[str(key)]
@@ -690,10 +690,10 @@ class EuclideanCodebook(nn.Module):
                 # ---------------------
                 #  ### 目的：embed[key] (cb vectors) のミニバッチ分取得 >> ミニバッチ訓練時も元素対応 centroids 全て使用
                 masked_embed = self.embed[str(key)]
-            print(f"masked_latents {masked_latents.shape}")
-            print(f"masked_embed {masked_embed.shape}")
+            # print(f"masked_latents {masked_latents.shape}")
+            # print(f"masked_embed {masked_embed.shape}")
             dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
-            print(f"dist_per_ele {dist_per_ele.shape}")  #[1, 7, 43])
+            # print(f"dist_per_ele {dist_per_ele.shape}")  #[1, 7, 43])
             min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
             # # one_hot に食わせる前に (B,) にする（one_hot は Long 1D を期待）
             embed_ind_hard_b = embed_ind_hard.squeeze(0).to(torch.long)     # [B]
@@ -740,8 +740,8 @@ class EuclideanCodebook(nn.Module):
 
                 logger.info(
                     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-                print(
-                    f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
+                # print(
+                #     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
 
             # ---------------------------------------------
             # EMA (codebook update with weighted history)
