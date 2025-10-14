@@ -735,7 +735,7 @@ class EuclideanCodebook(nn.Module):
 
                 # sil_score = silhouette_score(x_sample, labels_sample)
                 sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
-                print(f"Silhouette Score (subsample): {key} - {sil_score:.4f}")
+                print(f"Silhouette Score (subsample): {key}  {sil_score:.4f}")
                 logger.info(f"Silhouette Score (subsample): {key} - {sil_score:.4f}")
 
                 logger.info(
