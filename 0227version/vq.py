@@ -1029,32 +1029,24 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
 
-    def orthogonal_loss_fn(self, embed_ind, codebook, init_feat, latents, quantized, logger, epoch, chunk=0):
-        embed_ind.to("cuda")
+    def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
+        embed_ind_dict.to("cuda")
         codebook.to("cuda")
         init_feat.to("cuda")
         latents.to("cuda")
-        quantized.to("cuda")
-        # dist_matrix = torch.squeeze(torch.cdist(codebook, codebook, p=2) + 1e-6)  # Avoid zero distances
-        # mask = ~torch.eye(dist_matrix.size(0), dtype=bool, device=dist_matrix.device)
-        # dist_matrix_no_diag = dist_matrix[mask].view(dist_matrix.size(0), -1)
-
-        def spread_loss(z, eps=1e-6):
-            # z: [N, D] latent vectors
-            var = torch.var(z, dim=0) + eps  # variance along each dimension
-            inv_var = 1.0 / var
-            return inv_var.mean()
-
-        embed_ind_for_sil = torch.squeeze(embed_ind)
-        latents_for_sil = torch.squeeze(latents)
-        sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook.shape[-2])
-        # final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss
-        two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
-            self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook))
+        quantized_dict.to("cuda")
+        for key in embed_ind_dict.keys():
+            embed_ind_for_sil = torch.squeeze(embed_ind_dict[str(key)])
+            latents_for_sil = torch.squeeze(latents)
+            # sil_loss = self.fast_silhouette_loss(latents_for_sil, embed_ind_for_sil, codebook[str(key)].shape[-2])
+            # final_loss, neg_loss, latent_repel_loss_mid, cb_loss, latent_repel_loss
+            two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
+                self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
         # spread_loss = spread_loss(latents_for_sil)
         # if chunk == 0:
         #     logger.info(f"lat repel: {repel_loss}, spread: {spread_loss}")
-        return (repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
+        #      sil_loss, mid_repel_loss, cb_repel_loss
+        return (two_repel_loss, cb_loss)
 
     import torch
     import torch.nn.functional as F
@@ -1195,23 +1187,20 @@ class VectorQuantize(nn.Module):
             #     ( x, logger=None, chunk_i=None, epoch=None, mode=None):
             quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
 
-        for key in quantize_dict.keys():
-            quantize_dict[str(key)] = quantize_dict[str(key)].squeeze(0)
-            x_tmp = x.squeeze(1).unsqueeze(0)
-            quantize = x_tmp + (quantize - x_tmp)
-            codebook = self._codebook.embed
+        # -------------------------------
+        # repel loss calculation
+        # -------------------------------
 
-        # repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
-        repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, mid_repel_loss, cb_repel_loss, two_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind_dict, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
-        if len(embed_ind.shape) == 3:
-            embed_ind = embed_ind[0]
-        if embed_ind.ndim == 2:
-            embed_ind = embed_ind.flatten()
-        elif embed_ind.ndim != 1:
-            raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
+        mid_repel_loss, cb_repel_loss \
+            = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch, chunk_i)
+        # if len(embed_ind.shape) == 3:
+        #     embed_ind = embed_ind[0]
+        # if embed_ind.ndim == 2:
+        #     embed_ind = embed_ind.flatten()
+        # elif embed_ind.ndim != 1:
+        #     raise ValueError(f"Unexpected shape for embed_ind: {embed_ind.shape}")
 
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), codebook)
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), self._codebook.embed)
 
         # ---------------------------------------------
         # only repel losses at the first several steps
@@ -1230,4 +1219,4 @@ class VectorQuantize(nn.Module):
             beta = 0.0001
             loss = beta * (commit_loss) + repel_loss
         # loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss
-        return (loss, embed, commit_loss, commit_loss, sil_loss, repel_loss, cb_repel_loss)
+        return (loss, embed, commit_loss, commit_loss, [], repel_loss, cb_repel_loss)
