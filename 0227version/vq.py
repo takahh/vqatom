@@ -384,8 +384,8 @@ class EuclideanCodebook(nn.Module):
             self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
-        self.embed_ind_dict = nn.ParameterDict()
-        self.quantize_dict = nn.ParameterDict()
+        self.embed_ind_dict = {}
+        self.quantize_dict = {}
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
