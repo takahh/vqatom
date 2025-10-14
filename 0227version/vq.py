@@ -1034,7 +1034,7 @@ class VectorQuantize(nn.Module):
 
 
     def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
-        embed_ind_dict.to("cuda")
+        # embed_ind_dict.to("cuda")
         codebook.to("cuda")
         init_feat.to("cuda")
         latents.to("cuda")
