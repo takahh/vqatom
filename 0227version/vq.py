@@ -384,6 +384,8 @@ class EuclideanCodebook(nn.Module):
             self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
             # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
         self.latent_size_sum = 0
+        self.embed_ind_dict = nn.ParameterDict()
+        self.quantize_dict = nn.ParameterDict()
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
@@ -703,9 +705,11 @@ class EuclideanCodebook(nn.Module):
             embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed[str(key)].shape[-2]).float()  # (B, K)
             embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
             quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed[str(key)].squeeze(0))
+            self.quantize_dict[str(key)] = quantize
             quantize_unique = torch.unique(quantize, dim=0)
             num_unique = quantize_unique.shape[0]
             embed_ind = embed_ind_hard  # If you want to explicitly name it
+            self.embed_ind_dict[str(key)] = embed_ind
             # -----------------------
             # sil score calculation
             # -----------------------
@@ -784,13 +788,65 @@ class EuclideanCodebook(nn.Module):
                     else:  # (K_e, D)
                         code.data.copy_(means)
 
+        # After the big for key in mask_dict.keys(): loop ...
+
+        # 1) Build a full quantize tensor aligned with the current minibatch
+        #    flatten: (1, B, D)  -> use flatten[0] as the base
+        B, D = flatten.shape[1], flatten.shape[2]
+        quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
+
+        for key in mask_dict.keys():
+            if mode == "init_kmeans_final":
+                # indices are already global for the single (global) pass
+                idx_global = mask_dict[key]  # [Ni]
+                qk = self.quantize_dict[str(key)]  # [Ni, D]
+                # constrain to this B just in case (same as your code-path)
+                valid = (idx_global >= self.latent_size_sum) & (idx_global < self.latent_size_sum + B)
+                idx_local = (idx_global[valid] - self.latent_size_sum).to(torch.long)
+                quantize_full.index_copy_(0, idx_local, qk[valid])
+            else:
+                # training minibatch path (you already computed mask_for_this_local)
+                # Recompute the same booleans as above to know which rows belong to this batch
+                mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (
+                            mask_dict[key] < self.latent_size_sum + B)
+                idx_global = mask_dict[key][mask_bool_for_this_global]  # [Ni_in_batch]
+                idx_local = (idx_global - self.latent_size_sum).to(torch.long)
+                qk = self.quantize_dict[str(key)]  # [Ni_in_batch, D]
+                quantize_full.index_copy_(0, idx_local, qk)
+
+        # 2) Fill any untouched rows (rare, but be safe) with the original latents
+        #    This ensures quantize_full is fully defined.
+        unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
+        unused[torch.unique_consecutive(torch.sort(
+            torch.cat([(mask_dict[k][(mask_dict[k] >= self.latent_size_sum) &
+                                     (mask_dict[k] < self.latent_size_sum + B)]) - self.latent_size_sum
+                       for k in mask_dict.keys()], dim=0)
+        )[0])] = False
+        if unused.any():
+            quantize_full[unused] = flatten[0][unused]
+
+        # 3) Straight-through estimator (forward = quantized, backward = through x)
+        quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()  # [B, D]
+
+        # 4) Restore the leading dim to match your original (1, B, D) contract
+        quantize_st = quantize_st.unsqueeze(0)
+
+        self.latent_size_sum += flatten.shape[1]
+
+        if mode == "init_kmeans_final":
+            return 0
+        else:
+            # Return the ST quantize tensor instead of the dict,
+            # plus the index dict and full embed if you still need them.
+            return quantize_st, self.embed_ind_dict, self.embed
+
         self.latent_size_sum += flatten.shape[1]
         if mode == "init_kmeans_final":
             return 0
         else:
             torch.cuda.empty_cache()
             # quantize, embed_ind, embed
-            return quantize, embed_ind, self.embed
+            return self.quantize_dict, self.embed_ind_dict, self.embed
 
 
 class VectorQuantize(nn.Module):
@@ -1137,14 +1193,17 @@ class VectorQuantize(nn.Module):
             return 0
         else:
             #     ( x, logger=None, chunk_i=None, epoch=None, mode=None):
-            quantize, embed_ind, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
-        quantize = quantize.squeeze(0)
-        x_tmp = x.squeeze(1).unsqueeze(0)
-        quantize = x_tmp + (quantize - x_tmp)
-        codebook = self._codebook.embed
+            quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
+
+        for key in quantize_dict.keys():
+            quantize_dict[str(key)] = quantize_dict[str(key)].squeeze(0)
+            x_tmp = x.squeeze(1).unsqueeze(0)
+            quantize = x_tmp + (quantize - x_tmp)
+            codebook = self._codebook.embed
+
         # repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, two_repel_loss, cb_loss, repel_loss_mid_high)
         repel_loss_from_2, embed_ind, sil_loss, repel_loss_from_2, div_nega_loss, mid_repel_loss, cb_repel_loss, two_repel_loss \
-            = self.orthogonal_loss_fn(embed_ind, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
+            = self.orthogonal_loss_fn(embed_ind_dict, codebook, init_feat, x, quantize, logger, epoch, chunk_i)
         if len(embed_ind.shape) == 3:
             embed_ind = embed_ind[0]
         if embed_ind.ndim == 2:
