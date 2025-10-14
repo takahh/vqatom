@@ -803,6 +803,8 @@ class EuclideanCodebook(nn.Module):
                 # constrain to this B just in case (same as your code-path)
                 valid = (idx_global >= self.latent_size_sum) & (idx_global < self.latent_size_sum + B)
                 idx_local = (idx_global[valid] - self.latent_size_sum).to(torch.long)
+                idx_local = idx_local.to(flatten.device)
+                qk[valid] = qk[valid].to(flatten.device)
                 quantize_full.index_copy_(0, idx_local, qk[valid])
             else:
                 # training minibatch path (you already computed mask_for_this_local)
@@ -812,6 +814,8 @@ class EuclideanCodebook(nn.Module):
                 idx_global = mask_dict[key][mask_bool_for_this_global]  # [Ni_in_batch]
                 idx_local = (idx_global - self.latent_size_sum).to(torch.long)
                 qk = self.quantize_dict[str(key)]  # [Ni_in_batch, D]
+                idx_local = idx_local.to(flatten.device)
+                qk = qk.to(flatten.device)
                 quantize_full.index_copy_(0, idx_local, qk)
 
         # 2) Fill any untouched rows (rare, but be safe) with the original latents
