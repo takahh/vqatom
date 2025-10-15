@@ -722,8 +722,8 @@ class EuclideanCodebook(nn.Module):
 
             if mode == "init_kmeans_final":
                 # Save full arrays
-                np.savez(f"./naked_embed_{epoch}.npz", embed=embed[str(key)].cpu().detach().numpy())
-                np.savez(f"./naked_latent_{epoch}.npz", latent=x.cpu().detach().numpy())
+                np.savez(f"./naked_embed_{epoch}_{key}.npz", embed=embed[str(key)].cpu().detach().numpy())
+                np.savez(f"./naked_latent_{epoch}_{key}.npz", latent=x.cpu().detach().numpy())
 
                 # Sample 1000 points for silhouette score calculation
                 x_np = masked_latents.cpu().squeeze().detach().numpy()
@@ -738,8 +738,8 @@ class EuclideanCodebook(nn.Module):
 
                 # sil_score = silhouette_score(x_sample, labels_sample)
                 sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
-                print(f"Silhouette Score (subsample): {key}  {sil_score:.4f}")
-                logger.info(f"Silhouette Score (subsample) {key} - {sil_score:.4f}")
+                print(f"Silhouette Score (subsample): {key}  {sil_score:.4f}, sample size {masked_latents.shape[0]}, cbsize {used_codebook_indices}")
+                logger.info(f"Silhouette Score (subsample) {key} - {sil_score:.4f}, sample size {masked_latents.shape[0]}, cbsize {used_codebook_indices}")
 
                 logger.info(
                     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
