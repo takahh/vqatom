@@ -239,7 +239,15 @@ class ContrastiveLoss(nn.Module):
                 if s.numel() > 100_000:
                     s = s[torch.randperm(s.numel(), device=s.device)[:100_000]]
                 # histc は GPUでもOK。ログ出し用にだけ .cpu().tolist()
-                hist = torch.histc(s.float(), bins=10, min=0.0, max=15.0)
+                if chunk % 32 == 0:
+                    with torch.no_grad():
+                        s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
+                        hist = torch.histc(s_cpu, bins=10, min=0.0, max=15.0)
+                        vals = hist.tolist()
+                        logger.info(vals)
+                        print(vals)
+                #
+                # hist = torch.histc(s.float(), bins=10, min=0.0, max=15.0)
                 vals = hist.cpu().tolist()
                 logger.info(vals)
                 print(vals)
