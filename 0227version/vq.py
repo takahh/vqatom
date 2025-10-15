@@ -212,116 +212,101 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, z, chunk, logger, codebook):
         import torch
-        latent_dist_matrix = torch.cdist(z, z, p=2)
-        sample = latent_dist_matrix.flatten()
+        import torch.nn.functional as F
+
+        # ---- 1) 距離ベースの統計は BxB ではなく pdist で ----
+        # z: [B, D]
+        pdist_z = torch.pdist(z, p=2)  # shape: [B*(B-1)/2], 1D
+
+        # サンプルして分位点（巨大なときは1e6までサンプリング）
+        sample = pdist_z
         if sample.numel() > 1_000_000:
-            sample = sample[torch.randperm(sample.numel())[:1_000_000]]
+            idx = torch.randperm(sample.numel(), device=sample.device)[:1_000_000]
+            sample = sample[idx]
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
-        if chunk % 32 == 0:
-            import torch
-            hist = torch.histc(latent_dist_matrix.cpu().to(torch.float32), bins=10, min=0.0, max=15.0)
-            logger.info(hist.cpu().tolist())
-            print(hist.cpu().tolist())
-
-        import torch.nn.functional as F
-        def repel_codebooks(codebook, sigma=1.0):
-            dmat = torch.cdist(codebook, codebook, p=2)  # [1, K, K]
-            K = codebook.size(0)
-            mask = ~torch.eye(K, dtype=torch.bool, device=codebook.device)  # [K, K]
-            # mask = mask.unsqueeze(0)  # [1, K, K] to match repel shape
-            repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))  # [1, K, K]
-            print(f"mask {mask.shape}, repel {repel.shape}, K {K}, dmat {dmat.shape}")
-            # mask torch.Size([16, 16]), repel torch.Size([4360, 4360]), K 16, dmat torch.Size([4360, 4360])
-            return repel[mask].mean()
-
-        def calc_attract_loss(z, cb, temperature=1.0):
-            """
-            z         : [B, D] - latent vectors
-            codebook  : [K, D] - codebook embeddings
-            temperature : scaling for soft assignment sharpness
-
-            Returns:
-                attract_loss : scalar
-            """
-            # Step 1: Compute soft assignment weights
-            distances = torch.cdist(z, cb, p=2)  # [B, K]
-            soft_assign = F.softmax(-distances / temperature, dim=-1)  # [B, K]
-
-            # Step 2: Compute weighted centroids (cluster means)
-            soft_assign_T = soft_assign.transpose(0, 1)  # [K, B]
-            weighted_sum = soft_assign_T @ z  # [K, D]
-            cluster_mass = soft_assign_T.sum(dim=1, keepdim=True) + 1e-8
-            cluster_mean = weighted_sum / cluster_mass  # [K, D]
-
-            # Step 3: Distance between each z and its assigned centroids
-            z_expand = z.unsqueeze(1)  # [B, 1, D]
-            means_expand = cluster_mean.unsqueeze(0)  # [1, K, D]
-            l2_dist = ((z_expand - means_expand) ** 2).sum(dim=-1)  # [B, K]
-
-            # Step 4: Weighted attraction loss
-            attract_loss = (soft_assign * l2_dist).sum(dim=-1).mean()  # scalar
-
-            return attract_loss
-
-        # def calc_attractive_loss(dmat, threshold=1):
-        #     attract_mask = dmat < threshold
-        #     attract_term = (dmat[attract_mask] ** 2).mean()
-        #     return attract_term
-
-        # Compute lower and upper quantiles for middle 40%
-        lower_q = 0.95
-        upper_q = 0.99
+        # 95–99%帯の中心
+        lower_q, upper_q = 0.95, 0.99
         lower_thresh = torch.quantile(sample, lower_q)
         upper_thresh = torch.quantile(sample, upper_q)
         center = (lower_thresh + upper_thresh) / 2
 
-        def soft_middle_weight(dmat, low, high, sharpness=20.0):
-            """
-            Smooth weights near 1 for distances in [low, high], tapering outside.
-            """
-            w_low = torch.sigmoid(sharpness * (dmat - low))
-            w_high = torch.sigmoid(sharpness * (high - dmat))
-            return w_low * w_high  # shape same as dmat
+        # ---- 2) ログは no_grad & サンプルで ----
+        if chunk % 32 == 0:
+            with torch.no_grad():
+                # CPUへ全コピーせず、サンプルを CPU に持っていく
+                s = sample
+                if s.numel() > 100_000:
+                    s = s[torch.randperm(s.numel(), device=s.device)[:100_000]]
+                # histc は GPUでもOK。ログ出し用にだけ .cpu().tolist()
+                hist = torch.histc(s.float(), bins=10, min=0.0, max=15.0)
+                vals = hist.cpu().tolist()
+                logger.info(vals)
+                print(vals)
 
-        def soft_middle_weight_half(dmat, low, sharpness=20.0):
-            """
-            Smooth weights near 1 for distances in [low, high], tapering outside.
-            """
-            w_low = torch.sigmoid(sharpness * (dmat - low))
-            return w_low  # shape same as dmat
+        # ---- 3) ユーティリティ ----
+        def soft_middle_weight_1d(d, low, high, sharpness=20.0):
+            w_low = torch.sigmoid(sharpness * (d - low))
+            w_high = torch.sigmoid(sharpness * (high - d))
+            return w_low * w_high  # same shape as d (1D)
 
-        def calc_repel_loss_mid(dmat, low, high, center=2.0, sigma=3.0):
-            weights = soft_middle_weight(dmat, low, high)  # soft mask in middle range
-            bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))  # bell curve repel
-            weighted_bell = weights * bell
-            # Normalize by sum of weights to keep scale consistent
-            return weighted_bell.sum() / (weights.sum() + 1e-8)
+        def calc_repel_loss_mid_1d(d, low, high, center=2.0, sigma=3.0):
+            w = soft_middle_weight_1d(d, low, high)
+            bell = torch.exp(-(d - center) ** 2 / (2 * sigma ** 2))
+            return (w * bell).sum() / (w.sum() + 1e-8)
 
-        def repel_from_zero(dmat, margin=1.0):
-            margin = margin.detach()  # keep value, avoid weird gradient behavior
-            loss = torch.relu(margin - dmat).mean()
-            return loss
+        def repel_from_zero_1d(d, margin):
+            # margin はスカラTensorでOK
+            return torch.relu(margin - d).mean()
 
-        def calc_repel_loss(dmat, center=2.0, sigma=3.0):
-            bell = torch.exp(-(dmat - center) ** 2 / (2 * sigma ** 2))
+        # ---- 4) コードブック同士も pdist で ----
+        def repel_codebooks(cb, sigma=1.0):
+            # cb: [K, D]  → 1D の上三角距離
+            d = torch.pdist(cb, p=2)  # [K*(K-1)/2]
+            bell = torch.exp(-d.pow(2) / (2 * sigma ** 2))  # same shape
             return bell.mean()
 
-        latent_repel_loss_mid = calc_repel_loss_mid(latent_dist_matrix, lower_thresh, upper_thresh, center)
-        repel_from_2 = calc_repel_loss(latent_dist_matrix)
-        cb_loss = repel_codebooks(codebook)
-        latent_repel_loss = repel_from_zero(latent_dist_matrix, lower_thresh) + cb_loss
-        # latent_repel_loss = calc_repel_loss(latent_dist_matrix,) + repel_from_zero(latent_dist_matrix)
+        # ---- 5) z 対 codebook の距離（B×K）は行チャンクで ----
+        # attract（必要なら有効化）: メモリ節約のため z を分割
+        def calc_attract_loss_chunked(z, cb, temperature=1.0, row_chunk=8192):
+            B, D = z.shape
+            K = cb.shape[0]
+            loss_acc = 0.0
+            n_chunks = 0
+            for i in range(0, B, row_chunk):
+                z_i = z[i:i + row_chunk]  # [b, D]
+                # 距離 [b, K] を都度計算（ピーク抑制）
+                d = torch.cdist(z_i, cb, p=2)
+                soft_assign = F.softmax(-d / temperature, dim=-1)  # [b, K]
+                # クラスタ平均（bが小さいと推定が荒れるので必要に応じて別実装でもOK）
+                # ここは簡略化：各 z_i に対して期待二乗距離の加重平均
+                l2 = d.pow(2)
+                loss_acc += (soft_assign * l2).sum(dim=-1).mean()
+                n_chunks += 1
+                del z_i, d, soft_assign, l2
+            return loss_acc / max(n_chunks, 1)
 
-        attract_weight = 1  # or your preferred weight
-        repel_weight = 1  # 0.005
-        # final_loss = repel_weight * latent_repel_loss + attract_weight * attract_loss
+        # ---- 6) 各 Loss の計算（巨大行列を作らない）----
+        latent_repel_loss_mid = calc_repel_loss_mid_1d(pdist_z, lower_thresh, upper_thresh, center=center)
+        repel_from_2 = torch.exp(-(pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()  # 参考：元の calc_repel_loss に相当
+        cb_loss = repel_codebooks(codebook)
+
+        # “ゼロからのマージン反発”を 1D 距離で
+        latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
+
+        # attract を使うなら（必要時だけ呼ぶ）
+        # attract_loss = calc_attract_loss_chunked(z, codebook, temperature=1.0, row_chunk=8192)
+
+        attract_weight = 1.0
+        repel_weight = 1.0
+
+        # 使う損失を選択（あなたの元コード方針に合わせて）
         final_loss = repel_weight * latent_repel_loss_mid
-        # latent_repel_loss += cb_loss
-        # final_loss = repel_weight * latent_repel_loss
-        # print(f"attract loss {attract_loss}, latent_repel_loss {latent_repel_loss}, ")
         neg_loss = 1
-        # 最後の　latent_repel_loss　を使用中
+
+        # 大物は参照解除（Python参照が残っているとGC待ちで保持される）
+        del pdist_z, sample
+
         return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
 
