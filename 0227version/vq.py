@@ -653,206 +653,161 @@ class EuclideanCodebook(nn.Module):
     #         sil_samples[i] = (b_i - a_i) / denom if denom > 0 else 0.0
     #
     #     return sil_samples.mean().item()
-
     import torch
+    import torch.nn.functional as F
+    from einops import rearrange
+
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
+        """Forward pass with per-element quantization and EMA update."""
+
+        # ------------------------------------------------------------------
+        # 0. prepare input
+        # ------------------------------------------------------------------
         x = x.float()
         if x.ndim < 4:
-            x = rearrange(x, '... -> 1 ...')  # shape: (1, B, D)
+            x = rearrange(x, '... -> 1 ...')  # (1, B, D)
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
-        if mode == "init_kmeans_final":
-            # if mode == "init_kmeans_final" and epoch < 5:
-            self.init_embed_(flatten, mask_dict)
-            print(f"init_embed is done")
-        embed = self.embed  # (1, K, D)  K: codebook size
-        # flatten: latent vectors
-        # embed: codebook vectors
-        # this dist calculated just by closest pairs without considering element
-        dist_list = []
-        # print(f"flatten {flatten.shape}")
-
-        # for key in mask_dict.keys():
-        #     # print(f"{key} - len(mask_dict[key]) {len(mask_dict[key])}")
-
-        for key in mask_dict.keys():
-            # print(f"key {key}")
-            if mode == "init_kmeans_final":  # first global
-                masked_latents = flatten[0][mask_dict[key]]
-                masked_embed = self.embed[str(key)]
-            else:  # when train, minibatch
-                assert flatten.shape[1] > 16
-                # ------------------------------------------------------------------------------------------------------------------------
-                # here, flatten[0] is minibatch, so slice mask_dict[key], and then make the indices local by subtracting the start index
-                # ------------------------------------------------------------------------------------------------------------------------
-                mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (mask_dict[key] < self.latent_size_sum + flatten.shape[1])
-                mask_for_this_global = mask_dict[key][mask_bool_for_this_global]  # e.g. [102, 106, 120,...298]
-                mask_for_this_local = mask_for_this_global - self.latent_size_sum
-                masked_latents = flatten[0][mask_for_this_local]  # [Ni, D]
-                # ---------------------
-                #  ### 目的：embed[key] (cb vectors) のミニバッチ分取得 >> ミニバッチ訓練時も元素対応 centroids 全て使用
-                masked_embed = self.embed[str(key)]
-            # print(f"masked_latents {masked_latents.shape}")
-            # print(f"masked_embed {masked_embed.shape}")
-            dist_per_ele = torch.cdist(masked_latents, masked_embed.squeeze(0), p=2).pow(2).unsqueeze(0)  # (1, Ni, K) B: batch size
-            # print(f"dist_per_ele {dist_per_ele.shape}")  #[1, 7, 43])
-            min_dists_sq, embed_ind_hard = torch.min(dist_per_ele, dim=-1)  # (1, B)
-            # # one_hot に食わせる前に (B,) にする（one_hot は Long 1D を期待）
-            embed_ind_hard_b = embed_ind_hard.squeeze(0).to(torch.long)     # [B]
-            #
-            # # 使われたコードのID（ユニーク数）
-            # used_codebook_indices = torch.unique(embed_ind_hard_b)          # [U]
-            # num_used_codes = used_codebook_indices.numel()
-            used_codebook_indices = torch.unique(embed_ind_hard_b)
-            embed_ind_hard_onehot = F.one_hot(embed_ind_hard, num_classes=self.embed[str(key)].shape[-2]).float()  # (B, K)
-            embed_ind_hard_onehot = embed_ind_hard_onehot.squeeze(0)  # from (1, B, K) → (B, K)
-            quantize = torch.einsum('bk,kd->bd', embed_ind_hard_onehot, self.embed[str(key)].squeeze(0))
-            self.quantize_dict[str(key)] = quantize
-            quantize_unique = torch.unique(quantize, dim=0)
-            num_unique = quantize_unique.shape[0]
-            embed_ind = embed_ind_hard  # If you want to explicitly name it
-            self.embed_ind_dict[str(key)] = embed_ind
-            # -----------------------
-            # sil score calculation
-            # -----------------------
-            from sklearn.metrics import silhouette_score
-            from sklearn.utils import resample
-            import numpy as np
-
-            if mode == "init_kmeans_final":
-                # Save full arrays
-                np.savez(f"./naked_embed_{epoch}_{key}.npz", embed=embed[str(key)].cpu().detach().numpy())
-                np.savez(f"./naked_latent_{epoch}_{key}.npz", latent=x.cpu().detach().numpy())
-
-                # Sample 1000 points for silhouette score calculation
-                x_np = masked_latents.cpu().squeeze().detach().numpy()
-                labels_np = embed_ind.cpu().squeeze().detach().numpy()
-
-                x_sample, labels_sample = resample(
-                    x_np, labels_np, n_samples=self.samples_latent_in_kmeans, random_state=42
-                )
-                # x_sample and labels_sample are NumPy arrays after resample
-                x = torch.from_numpy(x_sample).float().to('cuda')  # move to GPU if needed
-                labels = torch.from_numpy(labels_sample).long().to('cuda')
-
-                # sil_score = silhouette_score(x_sample, labels_sample)
-                sil_score = self.silhouette_score_torch(x.squeeze(), labels.squeeze())
-                print(f"Silhouette Score (subsample): {key}  {sil_score:.4f}, sample size {masked_latents.shape[0]}, cbsize {used_codebook_indices.shape}")
-                logger.info(f"Silhouette Score (subsample) {key} - {sil_score:.4f}, sample size {masked_latents.shape[0]}, cbsize {used_codebook_indices.shape}")
-
-                logger.info(
-                    f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-                # print(
-                #     f"-- epoch {epoch}: used_codebook_indices.shape {used_codebook_indices.shape} -----------------")
-
-            # ---------------------------------------------
-            # EMA (codebook update with weighted history)
-            # ---------------------------------------------
-            if self.training and epoch < 30:
-                temperature = 0.1
-                K_e = self.cb_dict[key]
-
-                # correct distances for real use
-                embed = self.embed[str(key)]  # (K_e, D) or (1, K_e, D)
-                z_e = masked_latents.unsqueeze(0)  # (1, B_e, D)
-
-                distances = torch.cdist(
-                    z_e, embed.unsqueeze(0) if embed.ndim == 2 else embed, p=2
-                ).pow(2)  # -> (1, B_e, K_e)
-
-                # distances = torch.randn(1, z_e.shape[1], K_e, device=z_e.device, dtype=z_e.dtype)
-                embed_probs = F.softmax(-distances / temperature, dim=-1)  # (1, B_e, K_e)
-
-                # Per-code sums and soft counts
-                embed_sum_e = torch.einsum('h n d, h n c -> h c d', z_e, embed_probs).squeeze(0)  # (K_e, D)
-                counts_e = embed_probs.sum(dim=1).squeeze(0)  # (K_e,)
-
-                with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{key}")  # (K_e, D)  torch.zeros(self.cb_dict[elem], dim)
-                    cs = getattr(self, f"cluster_size_{key}")  # (K_e,)
-
-                    # ensure dtype/device match
-                    embed_sum_e = embed_sum_e.to(ea.dtype)
-                    counts_e = counts_e.to(cs.dtype)
-
-                    # EMA accumulate (no extra add_ before this)
-                    ea.mul_(self.decay).add_(embed_sum_e, alpha=1.0 - self.decay)
-                    cs.mul_(self.decay).add_(counts_e, alpha=1.0 - self.decay)
-
-                    # Normalize to means
-                    eps = getattr(self, "eps", 1e-6)
-                    means = ea / (cs.unsqueeze(-1) + eps)  # (K_e, D)
-
-                    # Write back to codebook param
-                    code = self.embed[str(key)]
-                    if code.ndim == 3:  # (1, K_e, D)
-                        code.data.copy_(means.unsqueeze(0))
-                    else:  # (K_e, D)
-                        code.data.copy_(means)
-
-        # After the big for key in mask_dict.keys(): loop ...
-
-        # 1) Build a full quantize tensor aligned with the current minibatch
-        #    flatten: (1, B, D)  -> use flatten[0] as the base
         B, D = flatten.shape[1], flatten.shape[2]
+
+        # clear per-call buffers
+        self.quantize_dict = {}
+        self.embed_ind_dict = {}
+
+        # ------------------------------------------------------------------
+        # 1. initialization phase (K-Means embedding)
+        # ------------------------------------------------------------------
+        if mode == "init_kmeans_final":
+            self.init_embed_(flatten, mask_dict)
+            print("init_embed is done")
+
+        # ------------------------------------------------------------------
+        # 2. per-element quantization loop
+        # ------------------------------------------------------------------
+        for key in mask_dict.keys():
+            # -------------------- select latents for this element --------------------
+            if mode == "init_kmeans_final":
+                masked_latents = flatten[0][mask_dict[key]]  # global pass
+            else:
+                # slice current minibatch range
+                gmask = (mask_dict[key] >= self.latent_size_sum) & (
+                        mask_dict[key] < self.latent_size_sum + B
+                )
+                loc = mask_dict[key][gmask] - self.latent_size_sum
+                masked_latents = flatten[0][loc]
+
+            if masked_latents.numel() == 0:
+                continue
+
+            code = self.embed[str(key)]
+            code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
+
+            # -------------------- nearest code indices (no grad) --------------------
+            with torch.no_grad():
+                dist = torch.cdist(masked_latents, code, p=2).pow(2)
+                idx = dist.argmin(dim=-1)  # [Ni]
+                del dist
+            quantize = code.index_select(0, idx)  # [Ni, D]
+
+            self.quantize_dict[str(key)] = quantize
+            self.embed_ind_dict[str(key)] = idx.to(torch.int32)
+
+            # -------------------- silhouette (init only, on CPU) --------------------
+            if mode == "init_kmeans_final":
+                try:
+                    torch.save(code.detach().cpu(), f"./naked_embed_{epoch}_{key}.pt")
+                    torch.save(flatten.detach().cpu(), f"./naked_latent_{epoch}_{key}.pt")
+                except Exception as e:
+                    if logger: logger.warning(f"Save failed for key {key}: {e}")
+
+                try:
+                    from sklearn.utils import resample
+                    n = min(self.samples_latent_in_kmeans, masked_latents.shape[0])
+                    if n > 1:
+                        xs, ys = resample(
+                            masked_latents.cpu().numpy(),
+                            idx.cpu().numpy(),
+                            n_samples=n,
+                            random_state=42,
+                        )
+                        sil = self.silhouette_score_torch(
+                            torch.from_numpy(xs).float(), torch.from_numpy(ys).long()
+                        )
+                        msg = (f"Silhouette Score (subsample): {key} {sil:.4f}, "
+                               f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}")
+                        print(msg)
+                        if logger: logger.info(msg)
+                except Exception as e:
+                    if logger: logger.warning(f"Silhouette failed for {key}: {e}")
+
+            # -------------------- EMA codebook update (hard-EMA) --------------------
+            if self.training and epoch is not None and epoch < 30:
+                with torch.no_grad():
+                    ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
+                    cs = getattr(self, f"cluster_size_{key}")  # [K_e]
+                    eps = getattr(self, "eps", 1e-6)
+                    decay = float(self.decay)
+
+                    ea.mul_(decay)
+                    cs.mul_(decay)
+
+                    one = torch.ones_like(idx, dtype=cs.dtype)
+                    cs.index_add_(0, idx, one * (1.0 - decay))
+                    ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
+
+                    means = ea / (cs.unsqueeze(-1) + eps)
+
+                    code_param = self.embed[str(key)]
+                    code_param.data.copy_(
+                        means.unsqueeze(0) if code_param.ndim == 3 else means
+                    )
+
+            del masked_latents, code, idx, quantize
+
+        # ------------------------------------------------------------------
+        # 3. build full quantized tensor aligned to minibatch
+        # ------------------------------------------------------------------
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
         for key in mask_dict.keys():
-            if mode == "init_kmeans_final":
-                # indices are already global for the single (global) pass
-                idx_global = mask_dict[key]  # [Ni]
-                qk = self.quantize_dict[str(key)]  # [Ni, D]
-                # constrain to this B just in case (same as your code-path)
-                valid = (idx_global >= self.latent_size_sum) & (idx_global < self.latent_size_sum + B)
-                idx_local = (idx_global[valid] - self.latent_size_sum).to(torch.long)
-                idx_local = idx_local.to(flatten.device)
-                qk[valid] = qk[valid].to(flatten.device)
-                quantize_full.index_copy_(0, idx_local, qk[valid])
-            else:
-                # training minibatch path (you already computed mask_for_this_local)
-                # Recompute the same booleans as above to know which rows belong to this batch
-                mask_bool_for_this_global = (mask_dict[key] >= self.latent_size_sum) & (
-                            mask_dict[key] < self.latent_size_sum + B)
-                idx_global = mask_dict[key][mask_bool_for_this_global]  # [Ni_in_batch]
-                idx_local = (idx_global - self.latent_size_sum).to(torch.long)
-                qk = self.quantize_dict[str(key)]  # [Ni_in_batch, D]
-                idx_local = idx_local.to(flatten.device)
-                qk = qk.to(flatten.device)
-                quantize_full.index_copy_(0, idx_local, qk)
+            gmask = (mask_dict[key] >= self.latent_size_sum) & (
+                    mask_dict[key] < self.latent_size_sum + B
+            )
+            idx_global = mask_dict[key][gmask]
+            if idx_global.numel() == 0:
+                continue
+            idx_local = (idx_global - self.latent_size_sum).to(torch.long)
+            qk = self.quantize_dict[str(key)].to(flatten.device)
+            quantize_full.index_copy_(0, idx_local, qk)
 
-        # 2) Fill any untouched rows (rare, but be safe) with the original latents
-        #    This ensures quantize_full is fully defined.
+        # fill unused with original latents
+        all_local = torch.cat([
+            (mask_dict[k][(mask_dict[k] >= self.latent_size_sum) &
+                          (mask_dict[k] < self.latent_size_sum + B)]) - self.latent_size_sum
+            for k in mask_dict.keys()
+            if mask_dict[k].numel() > 0
+        ], dim=0)
+        used = torch.unique(all_local)
         unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
-        unused[torch.unique_consecutive(torch.sort(
-            torch.cat([(mask_dict[k][(mask_dict[k] >= self.latent_size_sum) &
-                                     (mask_dict[k] < self.latent_size_sum + B)]) - self.latent_size_sum
-                       for k in mask_dict.keys()], dim=0)
-        )[0])] = False
+        unused[used] = False
         if unused.any():
             quantize_full[unused] = flatten[0][unused]
 
-        # 3) Straight-through estimator (forward = quantized, backward = through x)
-        quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()  # [B, D]
+        # ------------------------------------------------------------------
+        # 4. Straight-Through estimator & bookkeeping
+        # ------------------------------------------------------------------
+        quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
+        quantize_st = quantize_st.unsqueeze(0)  # restore (1, B, D)
+        self.latent_size_sum += B
 
-        # 4) Restore the leading dim to match your original (1, B, D) contract
-        quantize_st = quantize_st.unsqueeze(0)
-
-        self.latent_size_sum += flatten.shape[1]
-
-        if mode == "init_kmeans_final":
-            return 0
-        else:
-            # Return the ST quantize tensor instead of the dict,
-            # plus the index dict and full embed if you still need them.
-            return quantize_st, self.embed_ind_dict, self.embed
-
-        self.latent_size_sum += flatten.shape[1]
+        # ------------------------------------------------------------------
+        # 5. return
+        # ------------------------------------------------------------------
         if mode == "init_kmeans_final":
             return 0
         else:
             torch.cuda.empty_cache()
-            # quantize, embed_ind, embed
-            return self.quantize_dict, self.embed_ind_dict, self.embed
+            return quantize_st, self.embed_ind_dict, self.embed
 
 
 class VectorQuantize(nn.Module):
