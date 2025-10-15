@@ -229,8 +229,11 @@ class ContrastiveLoss(nn.Module):
             dmat = torch.cdist(codebook, codebook, p=2)  # [1, K, K]
             K = codebook.size(1)
             mask = ~torch.eye(K, dtype=torch.bool, device=codebook.device)  # [K, K]
-            mask = mask.unsqueeze(0)  # [1, K, K] to match repel shape
+            # mask = mask.unsqueeze(0)  # [1, K, K] to match repel shape
             repel = torch.exp(-dmat.pow(2) / (2 * sigma ** 2))  # [1, K, K]
+            print(f"mask {mask.shape}, repel {repel.shape}, K {K}, dmat {dmat.shape}")
+            #     return repel[mask].mean()
+            # IndexError: too many indices for tensor of dimension 2
             return repel[mask].mean()
 
         def calc_attract_loss(z, cb, temperature=1.0):
