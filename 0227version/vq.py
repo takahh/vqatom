@@ -210,6 +210,15 @@ class ContrastiveLoss(nn.Module):
         else:
             self.use_dynamic_threshold = False
 
+    def sample_cap(t, max_n=200_000):
+        n = t.numel()
+        if n <= max_n:
+            return t
+        # CPUでrandpermして小さく切ってからGPUへ（GPU側にNサイズを確保しない）
+        idx_cpu = torch.randperm(n, device='cpu')[:max_n]
+        idx = idx_cpu.to(t.device, non_blocking=True)
+        return t[idx]
+
     def forward(self, z, chunk, logger, codebook):
         import torch
         import torch.nn.functional as F
@@ -221,8 +230,8 @@ class ContrastiveLoss(nn.Module):
         # サンプルして分位点（巨大なときは1e6までサンプリング）
         sample = pdist_z
         if sample.numel() > 1_000_000:
-            idx = torch.randperm(sample.numel(), device=sample.device)[:1_000_000]
-            sample = sample[idx]
+            sample = self.sample_cap(sample, max_n=200_000)  # 1e6→2e5などに下げるとさらに安定
+
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
         # 95–99%帯の中心
