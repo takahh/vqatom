@@ -210,11 +210,23 @@ class ContrastiveLoss(nn.Module):
         else:
             self.use_dynamic_threshold = False
 
-    def sample_cap(t, max_n=200_000):
+    def sample_cap(self, t, max_n=200_000, with_replacement=False):
+        """
+        t: 1D/任意形状 Tensor（flattenして扱う場合は呼び出し側で調整）
+        max_n: 取り出す最大サンプル数
+        with_replacement: True なら重複あり（超省メモリ）
+        """
+        import torch
         n = t.numel()
         if n <= max_n:
             return t
-        # CPUでrandpermして小さく切ってからGPUへ（GPU側にNサイズを確保しない）
+
+        if with_replacement:
+            # 重複あり：最小メモリ（長さ max_n のみ確保）
+            idx = torch.randint(0, n, (max_n,), device=t.device)
+            return t[idx]
+
+        # 重複なし：GPU OOM回避のため CPU で randperm
         idx_cpu = torch.randperm(n, device='cpu')[:max_n]
         idx = idx_cpu.to(t.device, non_blocking=True)
         return t[idx]
