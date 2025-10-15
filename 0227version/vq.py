@@ -778,6 +778,19 @@ class EuclideanCodebook(nn.Module):
                 continue
             idx_local = (idx_global - self.latent_size_sum).to(torch.long)
             qk = self.quantize_dict[str(key)].to(flatten.device)
+            # 前提：quantize_full は CUDA 側で作る
+            device = quantize_full.device
+
+            # idx_local はインデックスなので int64（long）かつ同じ device
+            idx_local = idx_local.to(device=device, dtype=torch.long)
+
+            # qk も dtype/device を合わせる（autocast中でもOK）
+            qk = qk.to(device=device, dtype=quantize_full.dtype)
+
+            # 空配列ガード（要らなければ削ってOK）
+            if idx_local.numel() > 0:
+                quantize_full.index_copy_(0, idx_local, qk)
+
             quantize_full.index_copy_(0, idx_local, qk)
 
         # fill unused with original latents
