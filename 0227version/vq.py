@@ -1027,6 +1027,12 @@ class VectorQuantize(nn.Module):
         two_repel_loss_weighted_sum = 0
         cb_loss_weighted_sum = 0
         for key in embed_ind_dict.keys():
+            import torch
+            print(key)
+            # prints currently allocated and reserved (cached) memory in MB
+            print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
             latents_for_sil = torch.squeeze(latents)
             latents_size = latents_for_sil.shape[0]
             latent_len_sum += latents_size
