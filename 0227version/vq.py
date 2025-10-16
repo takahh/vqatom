@@ -286,56 +286,102 @@ class ContrastiveLoss(nn.Module):
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         # ---- 3) ユーティリティ ----
-        def soft_middle_weight_1d(d, low, high, sharpness=20.0):
-            w_low = torch.sigmoid(sharpness * (d - low))
-            w_high = torch.sigmoid(sharpness * (high - d))
-            return w_low * w_high  # same shape as d (1D)
+        # def soft_middle_weight_1d(d, low, high, sharpness=20.0):
+        #     w_low = torch.sigmoid(sharpness * (d - low))
+        #     w_high = torch.sigmoid(sharpness * (high - d))
+        #     return w_low * w_high  # same shape as d (1D)
+        #
+        # def calc_repel_loss_mid_1d(d, low, high, center=2.0, sigma=3.0):
+        #     w = soft_middle_weight_1d(d, low, high)
+        #     bell = torch.exp(-(d - center) ** 2 / (2 * sigma ** 2))
+        #     return (w * bell).sum() / (w.sum() + 1e-8)
 
-        def calc_repel_loss_mid_1d(d, low, high, center=2.0, sigma=3.0):
-            w = soft_middle_weight_1d(d, low, high)
-            bell = torch.exp(-(d - center) ** 2 / (2 * sigma ** 2))
-            return (w * bell).sum() / (w.sum() + 1e-8)
+        def repel_mid_backward_chunked(d, low, high, center, sigma=3.0, sharp=20.0, chunk=2_000_000):
+            total_detached = 0.0
+            n = 0
+            L = d.numel()
+            for i in range(0, L, chunk):
+                di = d[i:i + chunk]  # [c]
+                # ここからは必要最低限のテンソルのみ作る（中間はすぐ消える）
+                w = torch.sigmoid(sharp * (di - low)) * torch.sigmoid(sharp * (high - di))
+                bell = torch.exp(- (di - center).pow(2) / (2 * (sigma ** 2)))
+                loss_i = (w * bell).sum() / (w.sum() + 1e-8)
+
+                # 勾配をここで流してグラフを即破棄（規模に応じて平均化）
+                (loss_i).backward()
+                total_detached += loss_i.detach()
+                n += 1
+
+                # 明示的に参照解除
+                del di, w, bell, loss_i
+            return total_detached / max(n, 1)
 
         def repel_from_zero_1d(d, margin):
             # margin はスカラTensorでOK
             return torch.relu(margin - d).mean()
 
         # ---- 4) コードブック同士も pdist で ----
-        def repel_codebooks(cb, sigma=1.0):
-            # cb: [K, D]  → 1D の上三角距離
-            d = torch.pdist(cb, p=2)  # [K*(K-1)/2]
-            bell = torch.exp(-d.pow(2) / (2 * sigma ** 2))  # same shape
-            return bell.mean()
+        # def repel_codebooks(cb, sigma=1.0):
+        #     # cb: [K, D]  → 1D の上三角距離
+        #     d = torch.pdist(cb, p=2)  # [K*(K-1)/2]
+        #     bell = torch.exp(-d.pow(2) / (2 * sigma ** 2))  # same shape
+        #     return bell.mean()
 
-        # ---- 5) z 対 codebook の距離（B×K）は行チャンクで ----
-        # attract（必要なら有効化）: メモリ節約のため z を分割
-        def calc_attract_loss_chunked(z, cb, temperature=1.0, row_chunk=8192):
-            B, D = z.shape
-            K = cb.shape[0]
-            loss_acc = 0.0
-            n_chunks = 0
-            for i in range(0, B, row_chunk):
-                z_i = z[i:i + row_chunk]  # [b, D]
-                # 距離 [b, K] を都度計算（ピーク抑制）
-                d = torch.cdist(z_i, cb, p=2)
-                soft_assign = F.softmax(-d / temperature, dim=-1)  # [b, K]
-                # クラスタ平均（bが小さいと推定が荒れるので必要に応じて別実装でもOK）
-                # ここは簡略化：各 z_i に対して期待二乗距離の加重平均
-                l2 = d.pow(2)
-                loss_acc += (soft_assign * l2).sum(dim=-1).mean()
-                n_chunks += 1
-                del z_i, d, soft_assign, l2
-            return loss_acc / max(n_chunks, 1)
+        def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
+            K = cb.size(0)
+            total = 0.0;
+            n = 0
+            for i in range(0, K, block):
+                ci = cb[i:i + block]
+                # 同ブロック内の上三角
+                dij = torch.pdist(ci, p=2)
+                li = torch.exp(-dij.pow(2) / (2 * sigma ** 2)).mean()
+                li.backward(retain_graph=True)  # ci からの勾配保持が必要なら
+                total += li.detach();
+                n += 1
+                del dij, li
+
+                # ブロック間
+                for j in range(i + block, K, block):
+                    cj = cb[j:j + block]
+                    d = torch.cdist(ci, cj, p=2)
+                    lj = torch.exp(-d.pow(2) / (2 * sigma ** 2)).mean()
+                    lj.backward()
+                    total += lj.detach();
+                    n += 1
+                    del cj, d, lj
+                del ci
+            return total / max(n, 1)
+
+        # # ---- 5) z 対 codebook の距離（B×K）は行チャンクで ----
+        # # attract（必要なら有効化）: メモリ節約のため z を分割
+        # def calc_attract_loss_chunked(z, cb, temperature=1.0, row_chunk=8192):
+        #     B, D = z.shape
+        #     K = cb.shape[0]
+        #     loss_acc = 0.0
+        #     n_chunks = 0
+        #     for i in range(0, B, row_chunk):
+        #         z_i = z[i:i + row_chunk]  # [b, D]
+        #         # 距離 [b, K] を都度計算（ピーク抑制）
+        #         d = torch.cdist(z_i, cb, p=2)
+        #         soft_assign = F.softmax(-d / temperature, dim=-1)  # [b, K]
+        #         # クラスタ平均（bが小さいと推定が荒れるので必要に応じて別実装でもOK）
+        #         # ここは簡略化：各 z_i に対して期待二乗距離の加重平均
+        #         l2 = d.pow(2)
+        #         loss_acc += (soft_assign * l2).sum(dim=-1).mean()
+        #         n_chunks += 1
+        #         del z_i, d, soft_assign, l2
+        #     return loss_acc / max(n_chunks, 1)
 
         # ---- 6) 各 Loss の計算（巨大行列を作らない）----
-        latent_repel_loss_mid = calc_repel_loss_mid_1d(pdist_z, lower_thresh, upper_thresh, center=center)
+        latent_repel_loss_mid = repel_mid_backward_chunked(pdist_z, lower_thresh, upper_thresh, center=center)
 
         print("1c -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         repel_from_2 = torch.exp(-(pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()  # 参考：元の calc_repel_loss に相当
-        cb_loss = repel_codebooks(codebook)
+        cb_loss = repel_codebooks_chunked(codebook)
 
         print("2 -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
