@@ -1026,6 +1026,7 @@ class VectorQuantize(nn.Module):
             import torch
             print(key)
             # prints currently allocated and reserved (cached) memory in MB
+            print("before contra -------")
             print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
             print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
@@ -1034,10 +1035,19 @@ class VectorQuantize(nn.Module):
             latent_len_sum += latents_size
             two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
                 self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
+
+            print("after contra -------")
+            print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
             two_repel_loss_weighted_sum += latents_size * two_repel_loss
             cb_loss_weighted_sum += latents_size * cb_loss
         two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
         cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
+        print("end -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         return (two_repel_loss_avg, cb_loss_avg)
 
     import torch
