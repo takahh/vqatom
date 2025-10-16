@@ -235,10 +235,6 @@ class ContrastiveLoss(nn.Module):
         import torch
         import torch.nn.functional as F
 
-        print("contra 0 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
         device = z.device
         eps = 1e-8
 
@@ -251,10 +247,6 @@ class ContrastiveLoss(nn.Module):
         if sample.numel() > 1_000_000:
             sample = self.sample_cap(sample, max_n=200_000)
 
-        print("contra 1 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
         # 分位点などは学習に使う重みの境界値なので勾配不要
         with torch.no_grad():
             dynamic_threshold = torch.quantile(sample, 0.10)  # tensor
@@ -262,10 +254,6 @@ class ContrastiveLoss(nn.Module):
             lower_thresh = torch.quantile(sample, lower_q)  # tensor
             upper_thresh = torch.quantile(sample, upper_q)  # tensor
             center = (lower_thresh + upper_thresh) / 2  # tensor
-
-        print("contra 12-------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         # ---- ログ（負荷・転送を抑えて）----
         if chunk % 32 == 0:
@@ -279,10 +267,6 @@ class ContrastiveLoss(nn.Module):
                 vals = hist.tolist()
                 logger.info(vals)
                 print(vals)
-
-        print("contra 3 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         def latent_repel_mid_chunked(
                 z,
@@ -448,26 +432,13 @@ class ContrastiveLoss(nn.Module):
             stream_backward=False,  # forward 内では False
         )
         # ほかの損失と合算して最後に一度だけ backward()
-
-        print("contra 4 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
         # 参考指標（元式に相当）
         repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
 
         cb_loss = repel_codebooks_chunked(codebook)
 
-        print("contra 5 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
         # “ゼロからのマージン反発”を 1D 距離で
         latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
-
-        print("contra 6 -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         # 必要に応じて attract を使うならここで足す
         # attract_weight = 1.0
@@ -1168,29 +1139,16 @@ class VectorQuantize(nn.Module):
         cb_loss_weighted_sum = 0
         for key in embed_ind_dict.keys():
             import torch
-            print(key)
-            # prints currently allocated and reserved (cached) memory in MB
-            print("before contra -------")
-            print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
             latents_for_sil = torch.squeeze(latents)
             latents_size = latents_for_sil.shape[0]
             latent_len_sum += latents_size
             two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
                 self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
 
-            print("after contra -------")
-            print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-            print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
-
             two_repel_loss_weighted_sum += latents_size * two_repel_loss
             cb_loss_weighted_sum += latents_size * cb_loss
         two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
         cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
-        print("end -------")
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
-        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         return (two_repel_loss_avg, cb_loss_avg)
 
