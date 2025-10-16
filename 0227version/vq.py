@@ -325,6 +325,11 @@ class ContrastiveLoss(nn.Module):
 
         # ---- 6) 各 Loss の計算（巨大行列を作らない）----
         latent_repel_loss_mid = calc_repel_loss_mid_1d(pdist_z, lower_thresh, upper_thresh, center=center)
+
+        print("1c -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         repel_from_2 = torch.exp(-(pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()  # 参考：元の calc_repel_loss に相当
         cb_loss = repel_codebooks(codebook)
 
