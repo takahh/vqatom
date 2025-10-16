@@ -252,7 +252,7 @@ class ContrastiveLoss(nn.Module):
         upper_thresh = torch.quantile(sample, upper_q)
         center = (lower_thresh + upper_thresh) / 2
 
-        print("1 -------")
+        print("1a -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
@@ -276,6 +276,10 @@ class ContrastiveLoss(nn.Module):
                 vals = hist.cpu().tolist()
                 logger.info(vals)
                 print(vals)
+
+        print("1b -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         # ---- 3) ユーティリティ ----
         def soft_middle_weight_1d(d, low, high, sharpness=20.0):
@@ -347,6 +351,7 @@ class ContrastiveLoss(nn.Module):
 
         # 大物は参照解除（Python参照が残っているとGC待ちで保持される）
         del pdist_z, sample
+        torch.cuda.empty_cache()
 
         print("4 -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
