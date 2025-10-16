@@ -699,7 +699,7 @@ class EuclideanCodebook(nn.Module):
     import torch
 
     @torch.no_grad()
-    def silhouette_score_torch(X: torch.Tensor, labels: torch.Tensor) -> float:
+    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor) -> float:
         """
         Vectorized silhouette score using GPU.
         X: [N, D] tensor (cuda)
