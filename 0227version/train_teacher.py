@@ -25,6 +25,7 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+torch.autograd.set_detect_anomaly(True)
 
 import multiprocessing
 
