@@ -1186,89 +1186,96 @@ class VectorQuantize(nn.Module):
     def commitment_loss(
         self,
         encoder_outputs,  # [B, D]
+        mask_dict,
         codebook,         # [K, D] or [1, K, D]
         beta=0.25,
         temperature=None,       # if not None, overrides EMA
         use_cosine=False
     ):
-        codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook
-        assert encoder_outputs.dim() == 2 and codebook.dim() == 2
-        B, D = encoder_outputs.shape
-        K, Dk = codebook.shape
-        assert D == Dk, f"latent D={D} != codebook D={Dk}"
+        total_latent_size = 0
+        latent_loss_sum = 0
+        codebook_loss_sum = 0
+        for key in codebook.keys():
+            codebook = codebook[str(key)]
+            encoder_outputs = encoder_outputs[mask_dict]
+            latent_size = encoder_outputs.shape[0]
+            codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook
+            assert encoder_outputs.dim() == 2 and codebook.dim() == 2
+            B, D = encoder_outputs.shape
+            K, Dk = codebook.shape
+            assert D == Dk, f"latent D={D} != codebook D={Dk}"
 
-        # # Optional codebook norm clamp to avoid run-away norms in codes
-        # if (self.codebook_max_norm is not None) and self.training:
-        #     with torch.no_grad():
-        #         norms = torch.linalg.norm(codebook, dim=-1, keepdim=True)
-        #         scale = torch.clamp(self.codebook_max_norm / (norms + 1e-8), max=1.0)
-        #         codebook.mul_(scale)
+            # Keep latents roughly centered to reduce drift
+            z = self._center_batch(encoder_outputs)
 
-        # Keep latents roughly centered to reduce drift
-        z = self._center_batch(encoder_outputs)
+            if use_cosine:
+                # Cosine (unit-norm) path: very stable; distances in [-1, 1]
+                z_n = F.normalize(z, dim=-1)
+                cb_n = F.normalize(codebook, dim=-1)
 
-        if use_cosine:
-            # Cosine (unit-norm) path: very stable; distances in [-1, 1]
-            z_n = F.normalize(z, dim=-1)
-            cb_n = F.normalize(codebook, dim=-1)
+                # Use cosine “distance” as 1 - cos sim
+                sim = z_n @ cb_n.t()                     # [B,K]
+                logits = sim / 0.07                      # fixed temperature in cosine land (tweakable)
+                soft_assign = F.softmax(logits, dim=-1)  # [B,K]
+                indices = logits.argmax(dim=-1)          # [B]
+                quantized_hard = codebook[indices]       # decode with raw codebook (keeps magnitude info)
+                quantized_soft = soft_assign @ codebook
 
-            # Use cosine “distance” as 1 - cos sim
-            sim = z_n @ cb_n.t()                     # [B,K]
-            logits = sim / 0.07                      # fixed temperature in cosine land (tweakable)
-            soft_assign = F.softmax(logits, dim=-1)  # [B,K]
-            indices = logits.argmax(dim=-1)          # [B]
-            quantized_hard = codebook[indices]       # decode with raw codebook (keeps magnitude info)
-            quantized_soft = soft_assign @ codebook
+            else:
+                # Euclidean path with squared distances for stable gradients
+                d2 = self.pairwise_sq_dists(z, codebook)     # [B,K]
+                indices = d2.argmin(dim=-1)
+                quantized_hard = codebook[indices]
 
-        else:
-            # Euclidean path with squared distances for stable gradients
-            d2 = self.pairwise_sq_dists(z, codebook)     # [B,K]
-            indices = d2.argmin(dim=-1)
-            quantized_hard = codebook[indices]
+                # Temperature handling: decouple from raw (growing) distance scale via EMA + clamp
+                with torch.no_grad():
+                    med = torch.sqrt(d2.detach()).median()
+                    tau_obs = float(med + 1e-6)
+                    # EMA update
+                    tau_new = self.tau_ema * float(self._tau.item()) + (1.0 - self.tau_ema) * tau_obs
+                    tau_new = float(min(max(tau_new, self.tau_min), self.tau_max))
+                    self._tau.fill_(tau_new)
 
-            # Temperature handling: decouple from raw (growing) distance scale via EMA + clamp
-            with torch.no_grad():
-                med = torch.sqrt(d2.detach()).median()
-                tau_obs = float(med + 1e-6)
-                # EMA update
-                tau_new = self.tau_ema * float(self._tau.item()) + (1.0 - self.tau_ema) * tau_obs
-                tau_new = float(min(max(tau_new, self.tau_min), self.tau_max))
-                self._tau.fill_(tau_new)
+                tau_eff = float(self._tau.item()) if (temperature is None) else float(temperature)
+                tau_eff = min(max(tau_eff, self.tau_min), self.tau_max)
 
-            tau_eff = float(self._tau.item()) if (temperature is None) else float(temperature)
-            tau_eff = min(max(tau_eff, self.tau_min), self.tau_max)
+                # Use true Euclidean in the softmax logits (better locality than d2)
+                distances = torch.sqrt(torch.clamp(d2, min=1e-12))
+                logits = -distances / tau_eff
+                soft_assign = F.softmax(logits, dim=-1)
+                quantized_soft = soft_assign @ codebook
 
-            # Use true Euclidean in the softmax logits (better locality than d2)
-            distances = torch.sqrt(torch.clamp(d2, min=1e-12))
-            logits = -distances / tau_eff
-            soft_assign = F.softmax(logits, dim=-1)
-            quantized_soft = soft_assign @ codebook
+            # Straight-through: forward hard, backward soft
+            quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
 
-        # Straight-through: forward hard, backward soft
-        quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
+            # Codebook update pulls code vectors toward (detached) latents
+            codebook_loss = F.mse_loss(quantized, z.detach())
 
-        # Codebook update pulls code vectors toward (detached) latents
-        codebook_loss = F.mse_loss(quantized, z.detach())
+            # Commitment pulls latents toward chosen code (detached)
+            # latent_loss = beta * F.mse_loss(z, quantized.detach())
+            latent_loss = beta * (z - quantized.detach()).abs().mean()  # L1 距離（線形）
 
-        # Commitment pulls latents toward chosen code (detached)
-        # latent_loss = beta * F.mse_loss(z, quantized.detach())
-        latent_loss = beta * (z - quantized.detach()).abs().mean()  # L1 距離（線形）
+            # Radius regularizer to prevent latent norm explosion (Euclidean path only—or keep for both)
+            radius_loss = self._latent_radius_loss(z) * self.radius_weight
 
-        # Radius regularizer to prevent latent norm explosion (Euclidean path only—or keep for both)
-        radius_loss = self._latent_radius_loss(z) * self.radius_weight
+            # Total (return separated pieces so you can log them)
+            total_latent_loss = latent_loss + radius_loss
 
-        # Total (return separated pieces so you can log them)
-        total_latent_loss = latent_loss + radius_loss
+            if self.training and torch.rand(()) < 0.02:
+                with torch.no_grad():
+                    maxp = soft_assign.max(dim=-1).values.mean().item()
+                    if self.use_cosine:
+                        print(f"[COS] K={K} max prob ~{maxp:.3f}")
+                    else:
+                        print(f"[EUC] K={K} tau={tau_eff:.3f} max prob ~{maxp:.3f}")
+            total_latent_size += latent_size
+            latent_loss_sum += latent_size * latent_loss
+            codebook_loss_sum += latent_size * codebook_loss
 
-        if self.training and torch.rand(()) < 0.02:
-            with torch.no_grad():
-                maxp = soft_assign.max(dim=-1).values.mean().item()
-                if self.use_cosine:
-                    print(f"[COS] K={K} max prob ~{maxp:.3f}")
-                else:
-                    print(f"[EUC] K={K} tau={tau_eff:.3f} max prob ~{maxp:.3f}")
+        avg_latent_loss = latent_loss_sum / total_latent_size
+        avg_codebook_loss = codebook_loss_sum / total_latent_size
 
-        return total_latent_loss, codebook_loss
+        return avg_latent_loss, avg_codebook_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
@@ -1300,7 +1307,7 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # repel loss calculation
         # -------------------------------
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), self._codebook.embed)
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
