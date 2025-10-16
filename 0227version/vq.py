@@ -296,25 +296,48 @@ class ContrastiveLoss(nn.Module):
         #     bell = torch.exp(-(d - center) ** 2 / (2 * sigma ** 2))
         #     return (w * bell).sum() / (w.sum() + 1e-8)
 
-        def repel_mid_backward_chunked(d, low, high, center, sigma=3.0, sharp=20.0, chunk=2_000_000):
-            total_detached = 0.0
-            n = 0
-            L = d.numel()
-            for i in range(0, L, chunk):
-                di = d[i:i + chunk]  # [c]
-                # ここからは必要最低限のテンソルのみ作る（中間はすぐ消える）
-                w = torch.sigmoid(sharp * (di - low)) * torch.sigmoid(sharp * (high - di))
-                bell = torch.exp(- (di - center).pow(2) / (2 * (sigma ** 2)))
-                loss_i = (w * bell).sum() / (w.sum() + 1e-8)
+        def repel_mid_backward_blocked(z, low, high, center, sigma=3.0, sharp=20.0,
+                                       row_block=4096, col_block=4096):
+            """
+            z: [B, D] (requires_grad=True)
+            low/high/center: torch.Scalar-like (no_gradで前計算推奨)
+            2重ループで上三角ブロックだけを扱い、各ブロックで即 backward()
+            """
+            import torch
+            B, D = z.shape
+            total_detached = z.new_tensor(0.0)
+            nblocks = 0
 
-                # 勾配をここで流してグラフを即破棄（規模に応じて平均化）
-                (loss_i).backward()
-                total_detached += loss_i.detach()
-                n += 1
+            for i in range(0, B, row_block):
+                zi = z[i:i + row_block]  # [bi, D]
+                j_start = i + row_block
+                for j in range(j_start, B, col_block):  # 上三角のみ
+                    zj = z[j:j + col_block]  # [bj, D]
 
-                # 明示的に参照解除
-                del di, w, bell, loss_i
-            return total_detached / max(n, 1)
+                    # 距離ブロック [bi, bj] を作る（ここで初めて小さなグラフができる）
+                    d = torch.cdist(zi, zj, p=2)  # [bi, bj]
+
+                    # 中間テンソルは短命に（インプレースで寿命を短く）
+                    w = torch.sigmoid(sharp * (d - low))
+                    w.mul_(torch.sigmoid(sharp * (high - d)))  # w *= ...
+                    bell = torch.exp(- (d - center).pow(2) / (2 * (sigma ** 2)))
+
+                    # 1ブロックの loss を計算
+                    num = (w * bell).sum()
+                    den = w.sum().add_(1e-8)
+                    loss_block = num / den
+
+                    # 即時 backward：このブロックの小さなグラフだけが解放される
+                    loss_block.backward()
+
+                    total_detached = total_detached + loss_block.detach()
+                    nblocks += 1
+
+                    # 参照解除（グラフは backward 済みなので実質解放される）
+                    del zj, d, w, bell, num, den, loss_block
+                del zi
+
+            return (total_detached / max(nblocks, 1)).item()
 
         def repel_from_zero_1d(d, margin):
             # margin はスカラTensorでOK
@@ -374,8 +397,10 @@ class ContrastiveLoss(nn.Module):
         #     return loss_acc / max(n_chunks, 1)
 
         # ---- 6) 各 Loss の計算（巨大行列を作らない）----
-        latent_repel_loss_mid = repel_mid_backward_chunked(pdist_z, lower_thresh, upper_thresh, center=center)
-
+        latent_repel_loss_mid = repel_mid_backward_blocked(
+            z, lower_thresh, upper_thresh, center=center, sigma=3.0, sharp=20.0,
+            row_block=4096, col_block=4096
+        )
         print("1c -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
