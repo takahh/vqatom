@@ -582,47 +582,43 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor) -> float:
-        """
-        Efficient silhouette score for large N using vectorized PyTorch ops.
 
-        X: [N, D] float tensor on GPU
-        labels: [N] int tensor on GPU
-        Returns: scalar silhouette score (float)
+    @torch.no_grad()
+    def silhouette_score_torch(X: torch.Tensor, labels: torch.Tensor) -> float:
+        """
+        Vectorized silhouette score using GPU.
+        X: [N, D] tensor (cuda)
+        labels: [N] int tensor (cuda)
         """
         X = X.squeeze()
         labels = labels.squeeze()
+        N = X.size(0)
+        dists = torch.cdist(X, X, p=2)  # [N, N], GPU-accelerated
 
-        N = X.shape[0]
-        dists = torch.cdist(X, X, p=2)  # [N, N]
+        # same-cluster mask
+        same = labels.unsqueeze(0) == labels.unsqueeze(1)
+        eye = torch.eye(N, dtype=torch.bool, device=X.device)
+        same = same & ~eye
 
+        # a_i: mean intra-cluster distance
+        same_sum = same.sum(dim=1)
+        same_sum[same_sum == 0] = 1  # avoid div/0
+        a_i = (dists * same).sum(dim=1) / same_sum
+
+        # b_i: min mean inter-cluster distance
         unique_labels = labels.unique()
         K = unique_labels.size(0)
-
-        # Create [N, N] mask for each cluster
-        label_eq = labels.unsqueeze(0) == labels.unsqueeze(1)  # [N, N]
-        eye = torch.eye(N, dtype=torch.bool, device=X.device)
-        same_cluster_mask = label_eq & ~eye  # exclude self
-
-        a_i = torch.zeros(N, device=X.device)
-        for i in range(N):
-            mask = same_cluster_mask[i]
-            if mask.any():
-                a_i[i] = dists[i, mask].mean()
-
-        # b_i: minimum mean distance to points in other clusters
         b_i = torch.full((N,), float('inf'), device=X.device)
-        for label in unique_labels:
-            cluster_mask = labels == label  # [N]
-            if cluster_mask.sum() == 0:
+        for lbl in unique_labels:
+            mask = labels == lbl
+            if mask.sum() == 0:
                 continue
-            cluster_dists = dists[:, cluster_mask]  # [N, N_label]
-            cluster_mean = cluster_dists.mean(dim=1)  # [N]
-            is_same_label = (labels == label).float()
-            b_i = torch.where(is_same_label.bool(), b_i, torch.min(b_i, cluster_mean))
+            cluster_mean = (dists[:, mask].sum(dim=1) / mask.sum()).float()
+            b_i = torch.minimum(b_i, torch.where(mask, torch.inf, cluster_mean))
 
+        # silhouette values
         sil = (b_i - a_i) / torch.maximum(a_i, b_i)
-        sil[torch.isnan(sil)] = 0.0
+        sil[torch.isnan(sil)] = 0
         return sil.mean().item()
 
     # # old, slow
