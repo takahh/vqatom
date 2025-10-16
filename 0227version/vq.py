@@ -252,6 +252,10 @@ class ContrastiveLoss(nn.Module):
         upper_thresh = torch.quantile(sample, upper_q)
         center = (lower_thresh + upper_thresh) / 2
 
+        print("1 -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         # ---- 2) ログは no_grad & サンプルで ----
         if chunk % 32 == 0:
             with torch.no_grad():
@@ -320,6 +324,10 @@ class ContrastiveLoss(nn.Module):
         repel_from_2 = torch.exp(-(pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()  # 参考：元の calc_repel_loss に相当
         cb_loss = repel_codebooks(codebook)
 
+        print("2 -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         # “ゼロからのマージン反発”を 1D 距離で
         latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
 
@@ -329,12 +337,20 @@ class ContrastiveLoss(nn.Module):
         attract_weight = 1.0
         repel_weight = 1.0
 
+        print("3 -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         # 使う損失を選択（あなたの元コード方針に合わせて）
         final_loss = repel_weight * latent_repel_loss_mid
         neg_loss = 1
 
         # 大物は参照解除（Python参照が残っているとGC待ちで保持される）
         del pdist_z, sample
+
+        print("4 -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
