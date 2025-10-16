@@ -246,13 +246,17 @@ class ContrastiveLoss(nn.Module):
 
         dynamic_threshold = torch.quantile(sample, 0.1).item()
 
+        print("1a0 -------")
+        print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+        print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
+
         # 95–99%帯の中心
         lower_q, upper_q = 0.95, 0.99
         lower_thresh = torch.quantile(sample, lower_q)
         upper_thresh = torch.quantile(sample, upper_q)
         center = (lower_thresh + upper_thresh) / 2
 
-        print("1a -------")
+        print("1a1 -------")
         print(f"Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
