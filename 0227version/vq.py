@@ -1254,8 +1254,8 @@ class VectorQuantize(nn.Module):
             else:
                 cb_t = cb  # e.g., nn.Parameter
 
-            cb_t = cb_t.squeeze(0) if cb_t.dim() == 3 else cb_t
-            assert z.dim() == 2 and cb_t.dim() == 2, f"z:{z.shape}, cb:{cb_t.shape}"
+            cb_t = cb_t.squeeze(0) if len(cb_t.shape) == 3 else cb_t
+            assert z.dim() == 2 and len(cb_t.shape) == 2, f"z:{z.shape}, cb:{cb_t.shape}"
             K, Dk = cb_t.shape
             D = z.size(1)
             assert D == Dk, f"latent D={D} != codebook D={Dk}"
