@@ -697,92 +697,82 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
+    import torch
 
-    @torch.no_grad()
-    def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor) -> float:
+    @torch.inference_mode()
+    def silhouette_score_torch(X: torch.Tensor,
+                               labels: torch.Tensor,
+                               row_block: int = 8192) -> float:
         """
-        Vectorized silhouette score using GPU.
-        X: [N, D] tensor (cuda)
-        labels: [N] int tensor (cuda)
+        GPU + chunked silhouette score (mean over samples),
+        safely ignoring vacant (unused) codebook clusters.
+
+        Args:
+            X: [N, D] CUDA float tensor (no grad)
+            labels: [N] CUDA int tensor (e.g., cluster indices)
+            row_block: number of rows processed per chunk
         """
+        assert X.is_cuda and labels.is_cuda, "Put X and labels on CUDA."
         X = X.squeeze()
         labels = labels.squeeze()
         N = X.size(0)
-        dists = torch.cdist(X, X, p=2)  # [N, N], GPU-accelerated
 
-        # same-cluster mask
-        same = labels.unsqueeze(0) == labels.unsqueeze(1)
-        eye = torch.eye(N, dtype=torch.bool, device=X.device)
-        same = same & ~eye
+        uniq, inv = labels.unique(sorted=True, return_inverse=True)  # actual used clusters
+        counts = torch.bincount(inv, minlength=uniq.numel()).to(X.device)  # counts per *used* cluster
+        active_mask = counts > 0
+        uniq = uniq[active_mask]
+        counts = counts[active_mask]
+        K = uniq.numel()
+        if K <= 1 or N <= 1:
+            return 0.0
 
-        # a_i: mean intra-cluster distance
-        same_sum = same.sum(dim=1)
-        same_sum[same_sum == 0] = 1  # avoid div/0
-        a_i = (dists * same).sum(dim=1) / same_sum
+        counts_f = counts.float()
+        sil_sum = 0.0
+        processed = 0
 
-        # b_i: min mean inter-cluster distance
-        unique_labels = labels.unique()
-        K = unique_labels.size(0)
-        b_i = torch.full((N,), float('inf'), device=X.device)
-        for lbl in unique_labels:
-            mask = labels == lbl
-            if mask.sum() == 0:
-                continue
-            cluster_mean = (dists[:, mask].sum(dim=1) / mask.sum()).float()
-            b_i = torch.minimum(b_i, torch.where(mask, torch.inf, cluster_mean))
+        # map from original label id -> compact index (0..K-1)
+        mapping = torch.zeros(labels.max().item() + 1, device=X.device, dtype=torch.long)
+        mapping[uniq] = torch.arange(K, device=X.device)
+        inv = mapping[labels]  # remap to compact indices
 
-        # silhouette values
-        sil = (b_i - a_i) / torch.maximum(a_i, b_i)
-        sil[torch.isnan(sil)] = 0
-        return sil.mean().item()
+        for start in range(0, N, row_block):
+            end = min(start + row_block, N)
+            B = end - start
+            Xb = X[start:end]
 
-    # # old, slow
-    # def silhouette_score_torch(self, X: torch.Tensor, labels: torch.Tensor):
-    #     """
-    #     X: [N, D] float tensor on GPU
-    #     labels: [N] int tensor on GPU
-    #     Returns: scalar silhouette score (float)
-    #     """
-    #     print(f"running sil score calculation")
-    #     # pairwise distance matrix (N x N)
-    #     # If N is large, consider chunking!
-    #     X = X.squeeze()
-    #     labels = labels.squeeze()
-    #     dists = torch.cdist(X, X, p=2)  # GPU accelerated
-    #
-    #     N = X.shape[0]
-    #     sil_samples = torch.empty(N, device=X.device)
-    #
-    #     unique_labels = labels.unique()
-    #     for i in range(N):
-    #         same_mask = (labels == labels[i])
-    #         same_mask[i] = False  # exclude self
-    #
-    #         # mean intra-cluster distance a(i)
-    #         if same_mask.any():
-    #             a_i = dists[i][same_mask].mean()
-    #         else:
-    #             a_i = torch.tensor(0.0, device=X.device)
-    #
-    #         # mean distance to all other clusters
-    #         b_i_vals = []
-    #         for lab in unique_labels:
-    #             if lab == labels[i]:
-    #                 continue
-    #             mask = (labels == lab)
-    #             if mask.any():
-    #                 b_i_vals.append(dists[i][mask].mean())
-    #         b_i = torch.stack(b_i_vals).min() if b_i_vals else torch.tensor(0.0, device=X.device)
-    #
-    #         denom = torch.max(a_i, b_i)
-    #         sil_samples[i] = (b_i - a_i) / denom if denom > 0 else 0.0
-    #
-    #     return sil_samples.mean().item()
-    import torch
-    import torch.nn.functional as F
-    from einops import rearrange
+            # full distance for current chunk
+            d_block = torch.cdist(Xb, X, p=2)  # [B, N]
 
-    @torch.amp.autocast('cuda', enabled=False)
+            inv_index = inv.view(1, N).expand(B, N)
+            sums_per_cluster = torch.zeros(B, K, device=X.device, dtype=d_block.dtype)
+            sums_per_cluster.scatter_add_(1, inv_index, d_block)
+            means_per_cluster = sums_per_cluster / counts_f.view(1, K)
+
+            # intra-cluster mean
+            k_block = inv[start:end]
+            a_counts = counts[k_block] - 1
+            a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)
+            scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
+            mask_gt1 = a_counts > 0
+            scale[mask_gt1] = counts[k_block][mask_gt1].float() / a_counts[mask_gt1].float()
+            a_i = a_mean * scale
+
+            # inter-cluster mean (ignore own)
+            means_per_cluster.scatter_(1, k_block[:, None], float('inf'))
+            b_i, _ = means_per_cluster.min(dim=1)
+
+            denom = torch.maximum(a_i, b_i)
+            sil = (b_i - a_i) / denom
+            sil = torch.nan_to_num(sil, nan=0.0, posinf=0.0, neginf=0.0)
+
+            sil_sum += sil.sum().item()
+            processed += B
+
+            del Xb, d_block, sums_per_cluster, means_per_cluster, a_i, b_i, sil
+
+        return float(sil_sum / max(processed, 1)))
+
+        @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
 
