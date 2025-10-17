@@ -1192,102 +1192,106 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     from torch import nn
     import torch
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
 
-    def _as_index_tensor(idx, N: int, device):
-        """
-        Normalize idx into a 1D LongTensor of indices on `device`.
-        Supports: list/tuple, numpy array, torch bool mask, torch long/int tensor.
-        Clips empty to size-0 LongTensor.
-        """
-        if isinstance(idx, torch.Tensor):
-            if idx.dtype == torch.bool:
-                # boolean mask -> positions
-                return idx.nonzero(as_tuple=False).flatten().to(device=device, dtype=torch.long)
-            else:
-                return idx.to(device=device, dtype=torch.long).flatten()
-        else:
-            # list/tuple/np array
-            return torch.as_tensor(idx, device=device, dtype=torch.long).flatten()
+    def _as_index_tensor(self, idx_raw, N, device):
+        """Make a 1D LongTensor of indices on device. Accepts list/np/tensor/bool-mask."""
+        if idx_raw is None:
+            return torch.arange(N, device=device)
+        if torch.is_tensor(idx_raw):
+            if idx_raw.dtype == torch.bool:
+                return torch.nonzero(idx_raw, as_tuple=False).squeeze(-1).to(device)
+            return idx_raw.to(device).long().view(-1)
+        # list / numpy
+        return torch.as_tensor(idx_raw, device=device).long().view(-1)
 
-    # ---- inside your commitment_loss ----
-    def commitment_loss(self, encoder_outputs, mask_dict, codebook, beta=0.25, temperature=None, use_cosine=False):
+    def _unwrap_codebook_entry(self, cb):
         """
-        encoder_outputs: [B, D] (device can be cuda/cpu)
-        mask_dict: dict[str -> indices or bool mask] (may be list/np/torch)
-        codebook: dict-like per element OR a single tensor
+        Accept: Tensor, nn.Parameter, dict/ParameterDict possibly holding 'embed'.
+        Return: Tensor (or Parameter) with shape [K,D] or [1,K,D].
         """
+        if isinstance(cb, (torch.Tensor, nn.Parameter)):
+            return cb
+        if isinstance(cb, (dict, nn.ParameterDict)):
+            if 'embed' in cb:
+                return self._unwrap_codebook_entry(cb['embed'])
+        raise TypeError(f"Unsupported codebook entry type: {type(cb)}. "
+                        "Expected Tensor/Parameter or dict/ParameterDict with 'embed'.")
+
+    def _squeeze_01(self, x):
+        # [1, K, D] -> [K, D]; leave [K, D] unchanged
+        return x.squeeze(0) if x.dim() == 3 and x.size(0) == 1 else x
+
+    def commitment_loss(self, encoder_outputs, mask_dict, codebook,
+                        beta=0.25, temperature=None, use_cosine=False):
+        """
+        encoder_outputs: [B, D]
+        mask_dict: dict[str -> indices/bool-mask] (or 'all' for shared codebook)
+        codebook: dict-like per element (keys as str/int) OR a single shared tensor/param
+        """
+        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
         device = encoder_outputs.device
-        latent_loss_sum = encoder_outputs.new_zeros(())
-        codebook_loss_sum = encoder_outputs.new_zeros(())
-        total_latent_size = 0
 
-        # If codebook is a dict per element; don't shadow it inside the loop
-        if isinstance(codebook, dict):
+        commit_num = encoder_outputs.new_zeros(())
+        codebk_num = encoder_outputs.new_zeros(())
+        total_latent = 0
+
+        # Iterate either per-element or once for a shared codebook
+        if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
         else:
-            # single shared codebook
             items = [(None, codebook)]
 
         for key, cb in items:
-            # ---- indices from mask_dict ----
+            # indices
             if key is None:
-                idx_raw = mask_dict.get("all", None)
-                if idx_raw is None:
-                    # if no key for shared codebook, assume all
-                    idx = torch.arange(encoder_outputs.size(0), device=device)
-                else:
-                    idx = _as_index_tensor(idx_raw, encoder_outputs.size(0), device)
+                idx = _as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
             else:
-                idx_raw = mask_dict[str(key)]
-                idx = _as_index_tensor(idx_raw, encoder_outputs.size(0), device)
+                idx = _as_index_tensor(mask_dict[str(key)], encoder_outputs.size(0), device)
 
-            # empty cluster guard
             if idx.numel() == 0:
                 continue
 
             z = encoder_outputs.index_select(0, idx)  # [Ni, D]
-            total_latent_size += z.size(0)
+            Ni, D = z.shape
 
-            # normalize cb shape to [K, D]
-            if isinstance(cb, torch.Tensor):
-                cb_t = cb
-            else:
-                cb_t = cb  # e.g., nn.Parameter
-
-            cb_t = cb_t.squeeze(0) if len(cb_t.shape) == 3 else cb_t
-            assert z.dim() == 2 and len(cb_t.shape) == 2, f"z:{z.shape}, cb:{cb_t.shape}"
+            # unwrap cb → tensor/param
+            cb_t = _unwrap_codebook_entry(cb)
+            cb_t = _squeeze_01(cb_t)
+            assert cb_t.dim() == 2, f"codebook for key={key} must be [K,D] or [1,K,D]; got {tuple(cb_t.shape)}"
             K, Dk = cb_t.shape
-            D = z.size(1)
-            assert D == Dk, f"latent D={D} != codebook D={Dk}"
+            assert Dk == D, f"latent D={D} != codebook D={Dk} for key={key}"
 
-            # (optional) cosine mode
+            # nearest code indices
             if use_cosine:
-                z_n = torch.nn.functional.normalize(z, p=2, dim=-1)
-                cb_n = torch.nn.functional.normalize(cb_t, p=2, dim=-1)
-                # squared cosine distance in [0,4]
-                dist = (1 - torch.matmul(z_n, cb_n.t())).pow(2)
+                z_n = F.normalize(z, p=2, dim=-1)
+                cb_n = F.normalize(cb_t, p=2, dim=-1)
+                sim = z_n @ cb_n.t()  # [Ni, K]
+                embed_ind = torch.argmax(sim, dim=-1)
             else:
                 dist = torch.cdist(z, cb_t, p=2).pow(2)  # [Ni, K]
+                embed_ind = torch.argmin(dist, dim=-1)
 
-            min_dists, nearest = dist.min(dim=1)  # [Ni]
+            e = cb_t.index_select(0, embed_ind)  # [Ni, D]
 
-            # commitment loss (VQ-VAE style)
-            latent_loss = min_dists.mean()
-            latent_loss_sum = latent_loss_sum + latent_loss
+            # VQ-VAE losses (EMA updates for codebook can be done elsewhere)
+            commit_part = F.mse_loss(z, e.detach(), reduction='mean')  # β‖z - sg(e)‖²
+            codebk_part = F.mse_loss(e, z.detach(), reduction='mean')  # ‖sg(z) - e‖²
 
-            # codebook loss (straight-through trick often uses EMA; placeholder if you need)
-            # If you maintain EMA elsewhere, you can set codebook_loss to 0 here.
-            codebook_loss = latent_loss.detach()  # simple symmetric version; replace with your EMA update if any
-            codebook_loss_sum = codebook_loss_sum + codebook_loss
+            # Weight by Ni (avoid double-averaging later)
+            total_latent += Ni
+            commit_num = commit_num + commit_part * Ni
+            codebk_num = codebk_num + codebk_part * Ni
 
-        # avoid div/0
-        if total_latent_size == 0:
-            return encoder_outputs.new_zeros(()), encoder_outputs.new_zeros(())
+        if total_latent == 0:
+            zero = encoder_outputs.new_zeros(())
+            return zero, zero
 
-        # average over all used latents
-        commit_loss = beta * (latent_loss_sum / total_latent_size)
-        codebk_loss = (codebook_loss_sum / total_latent_size)
-        return commit_loss, codebk_loss
+        commit_loss = beta * (commit_num / total_latent)
+        codebook_loss = codebk_num / total_latent
+        return commit_loss, codebook_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
