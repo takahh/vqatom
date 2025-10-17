@@ -1247,9 +1247,9 @@ class VectorQuantize(nn.Module):
         for key, cb in items:
             # indices
             if key is None:
-                idx = _as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
+                idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
             else:
-                idx = _as_index_tensor(mask_dict[str(key)], encoder_outputs.size(0), device)
+                idx = self._as_index_tensor(mask_dict[str(key)], encoder_outputs.size(0), device)
 
             if idx.numel() == 0:
                 continue
@@ -1258,8 +1258,8 @@ class VectorQuantize(nn.Module):
             Ni, D = z.shape
 
             # unwrap cb → tensor/param
-            cb_t = _unwrap_codebook_entry(cb)
-            cb_t = _squeeze_01(cb_t)
+            cb_t = self._unwrap_codebook_entry(cb)
+            cb_t = self._squeeze_01(cb_t)
             assert cb_t.dim() == 2, f"codebook for key={key} must be [K,D] or [1,K,D]; got {tuple(cb_t.shape)}"
             K, Dk = cb_t.shape
             assert Dk == D, f"latent D={D} != codebook D={Dk} for key={key}"
