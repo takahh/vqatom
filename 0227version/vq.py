@@ -697,7 +697,6 @@ class EuclideanCodebook(nn.Module):
         self.replace(batch_samples, batch_mask=expired_codes)
 
     import torch
-    import torch
 
     @torch.inference_mode()
     def silhouette_score_torch(X: torch.Tensor,
