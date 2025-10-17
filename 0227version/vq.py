@@ -1196,6 +1196,8 @@ class VectorQuantize(nn.Module):
         latent_loss_sum = 0
         codebook_loss_sum = 0
         for key in codebook.keys():
+            print(key)
+            print(codebook)
             codebook = codebook[key]
             encoder_outputs = encoder_outputs[mask_dict[str(key)]]
             latent_size = encoder_outputs.shape[0]
