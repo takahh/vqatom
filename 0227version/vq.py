@@ -1253,7 +1253,7 @@ class VectorQuantize(nn.Module):
                 idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
             else:
                 idx = self._as_index_tensor(mask_dict[str(key)], encoder_outputs.size(0), device)
-
+            print(f"idx: {idx}")
             if idx.numel() == 0:
                 continue
 
