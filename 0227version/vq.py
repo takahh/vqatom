@@ -771,7 +771,7 @@ class EuclideanCodebook(nn.Module):
 
         return float(sil_sum / max(processed, 1))
 
-        @torch.amp.autocast('cuda', enabled=False)
+    @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
 
