@@ -282,6 +282,11 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"sil_loss {sil_loss}")
         print(f"repel_loss {repel_loss}")
         print(f"cb_repel_loss {cb_repel_loss}")
+        # commit_loss 0.0
+        # cb_loss 0.0
+        # sil_loss []
+        # repel_loss 0.24993233382701874
+        # cb_repel_loss 0.995575487613678
         losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
                     repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist

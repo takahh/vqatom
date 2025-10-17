@@ -1284,6 +1284,7 @@ class VectorQuantize(nn.Module):
             total_latent += Ni
             commit_num = commit_num + commit_part * Ni
             codebk_num = codebk_num + codebk_part * Ni
+            print(f"key {key}, commit_num {commit_num}, total_latent {total_latent}")
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
@@ -1336,4 +1337,11 @@ class VectorQuantize(nn.Module):
             print(f"repel {repel_loss}") # or some decaying schedule
             beta = 0.0001
             loss = beta * (commit_loss) + repel_loss
-        return (loss, embed, commit_loss, commit_loss, [], repel_loss, cb_repel_loss)
+            #
+            # commit_loss 0.0
+            # cb_loss 0.0
+            # sil_loss []
+            # repel_loss 0.24993233382701874
+            # cb_repel_loss 0.995575487613678
+            # loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss
+        return (loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
