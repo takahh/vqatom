@@ -1197,7 +1197,7 @@ class VectorQuantize(nn.Module):
         codebook_loss_sum = 0
         for key in codebook.keys():
             codebook = codebook[str(key)]
-            encoder_outputs = encoder_outputs[mask_dict]
+            encoder_outputs = encoder_outputs[mask_dict(str(key))]
             latent_size = encoder_outputs.shape[0]
             codebook = codebook.squeeze(0) if codebook.dim() == 3 else codebook
             assert encoder_outputs.dim() == 2 and codebook.dim() == 2
