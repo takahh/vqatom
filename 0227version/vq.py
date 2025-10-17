@@ -1175,143 +1175,103 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
     from torch import nn
+    import torch
 
-    def commitment_loss(
-            self,
-            encoder_outputs,  # [N, D]  (元の [B,D] と同じ意味で使う)
-            mask_dict,  # dict[str]-> LongTensor indices (元素ごとのインデックス)
-            codebook_store,  # nn.ParameterDict / dict[int|str -> (K,D) Tensor/Parameter]
-            beta=0.25,
-            temperature=None,  # if not None, overrides EMA
-            use_cosine=False
-    ):
-        # 返却用の集計（サイズ加重平均）
-        total_latent_size = 0
+    def _as_index_tensor(idx, N: int, device):
+        """
+        Normalize idx into a 1D LongTensor of indices on `device`.
+        Supports: list/tuple, numpy array, torch bool mask, torch long/int tensor.
+        Clips empty to size-0 LongTensor.
+        """
+        if isinstance(idx, torch.Tensor):
+            if idx.dtype == torch.bool:
+                # boolean mask -> positions
+                return idx.nonzero(as_tuple=False).flatten().to(device=device, dtype=torch.long)
+            else:
+                return idx.to(device=device, dtype=torch.long).flatten()
+        else:
+            # list/tuple/np array
+            return torch.as_tensor(idx, device=device, dtype=torch.long).flatten()
+
+    # ---- inside your commitment_loss ----
+    def commitment_loss(self, encoder_outputs, mask_dict, codebook, beta=0.25, temperature=None, use_cosine=False):
+        """
+        encoder_outputs: [B, D] (device can be cuda/cpu)
+        mask_dict: dict[str -> indices or bool mask] (may be list/np/torch)
+        codebook: dict-like per element OR a single tensor
+        """
+        device = encoder_outputs.device
         latent_loss_sum = encoder_outputs.new_zeros(())
         codebook_loss_sum = encoder_outputs.new_zeros(())
+        total_latent_size = 0
 
-        # 安全チェック
-        if not isinstance(codebook_store, (dict, nn.ParameterDict, nn.ModuleDict)):
-            raise TypeError(f"codebook_store must be a mapping, got {type(codebook_store)}")
+        # If codebook is a dict per element; don't shadow it inside the loop
+        if isinstance(codebook, dict):
+            items = list(codebook.items())
+        else:
+            # single shared codebook
+            items = [(None, codebook)]
 
-        # ループは「実際に使う要素」= mask_dict のキーに合わせる
-        for k in sorted(mask_dict.keys()):
-            k_str = str(k)
-            # 取り出しキーは str→int の順でフォールバック（ParameterDict は (1),(6)…の int キー）
-            if k_str in codebook_store:
-                cb = codebook_store[k_str]
-            else:
-                try:
-                    k_int = int(k_str)
-                except Exception:
-                    k_int = None
-                if k_int is not None and (k_int in codebook_store):
-                    cb = codebook_store[k_int]
+        for key, cb in items:
+            # ---- indices from mask_dict ----
+            if key is None:
+                idx_raw = mask_dict.get("all", None)
+                if idx_raw is None:
+                    # if no key for shared codebook, assume all
+                    idx = torch.arange(encoder_outputs.size(0), device=device)
                 else:
-                    # 対応するコードブックがない場合はスキップ or 明示的に落とす
-                    raise KeyError(f"Missing codebook for key={k!r}")
-
-            # Parameter/Tensor のみ許可
-            if isinstance(cb, nn.Parameter):
-                cb_t = cb
-            elif torch.is_tensor(cb):
-                cb_t = cb
+                    idx = _as_index_tensor(idx_raw, encoder_outputs.size(0), device)
             else:
-                raise TypeError(f"Codebook[{k!r}] is {type(cb)}, expected Tensor/Parameter")
+                idx_raw = mask_dict[str(key)]
+                idx = _as_index_tensor(idx_raw, encoder_outputs.size(0), device)
 
-            # [K, D] or [1,K,D] → [K,D]
-            if cb_t.dim() == 3:
-                assert cb_t.shape[0] == 1, f"Unexpected codebook dim: {cb_t.shape}"
-                cb_t = cb_t.squeeze(0)
-
-            # 浮動小数 & device/dtype を合わせる
-            if not cb_t.dtype.is_floating_point:
-                cb_t = cb_t.float()
-            cb_t = cb_t.to(encoder_outputs.device, dtype=encoder_outputs.dtype)  # [K,D]
-
-            # この元素だけの潜在を抽出（元の encoder_outputs は書き換えない）
-            idx = mask_dict[k_str]
+            # empty cluster guard
             if idx.numel() == 0:
                 continue
-            x_e = encoder_outputs.index_select(0, idx)  # [Ne, D]
-            latent_size = x_e.shape[0]
 
-            # Keep latents roughly centered to reduce drift
-            z = self._center_batch(x_e)  # [Ne, D]
+            z = encoder_outputs.index_select(0, idx)  # [Ni, D]
+            total_latent_size += z.size(0)
 
-            # ---- Cosine or Euclid path ----
-            if use_cosine:
-                z_n = F.normalize(z, dim=-1)
-                cb_n = F.normalize(cb_t, dim=-1)
-
-                sim = z_n @ cb_n.t()  # [Ne,K]
-                logits = sim / 0.07  # 固定温度（元コード踏襲）
-                soft_assign = F.softmax(logits, dim=-1)  # [Ne,K]
-                indices = logits.argmax(dim=-1)  # [Ne]
-                quantized_hard = cb_t.index_select(0, indices)  # [Ne,D]
-                quantized_soft = soft_assign @ cb_t  # [Ne,D]
-
-                tau_eff = None  # ログ出力のため
+            # normalize cb shape to [K, D]
+            if isinstance(cb, torch.Tensor):
+                cb_t = cb
             else:
-                d2 = self.pairwise_sq_dists(z, cb_t)  # [Ne,K]  (L2^2)
+                cb_t = cb  # e.g., nn.Parameter
 
-                indices = d2.argmin(dim=-1)  # [Ne]
-                quantized_hard = cb_t.index_select(0, indices)
+            cb_t = cb_t.squeeze(0) if cb_t.dim() == 3 else cb_t
+            assert z.dim() == 2 and cb_t.dim() == 2, f"z:{z.shape}, cb:{cb_t.shape}"
+            K, Dk = cb_t.shape
+            D = z.size(1)
+            assert D == Dk, f"latent D={D} != codebook D={Dk}"
 
-                # 観測温度のEMA（元コード踏襲）
-                with torch.no_grad():
-                    med = torch.sqrt(d2.detach()).median()
-                    tau_obs = float(med + 1e-6)
-                    tau_new = self.tau_ema * float(self._tau.item()) + (1.0 - self.tau_ema) * tau_obs
-                    tau_new = float(min(max(tau_new, self.tau_min), self.tau_max))
-                    self._tau.fill_(tau_new)
+            # (optional) cosine mode
+            if use_cosine:
+                z_n = torch.nn.functional.normalize(z, p=2, dim=-1)
+                cb_n = torch.nn.functional.normalize(cb_t, p=2, dim=-1)
+                # squared cosine distance in [0,4]
+                dist = (1 - torch.matmul(z_n, cb_n.t())).pow(2)
+            else:
+                dist = torch.cdist(z, cb_t, p=2).pow(2)  # [Ni, K]
 
-                tau_eff = float(self._tau.item()) if (temperature is None) else float(temperature)
-                tau_eff = min(max(tau_eff, self.tau_min), self.tau_max)
+            min_dists, nearest = dist.min(dim=1)  # [Ni]
 
-                distances = torch.sqrt(torch.clamp(d2, min=1e-12))  # [Ne,K]
-                logits = -distances / tau_eff
-                soft_assign = F.softmax(logits, dim=-1)  # [Ne,K]
-                quantized_soft = soft_assign @ cb_t  # [Ne,D]
+            # commitment loss (VQ-VAE style)
+            latent_loss = min_dists.mean()
+            latent_loss_sum = latent_loss_sum + latent_loss
 
-            # Straight-through: forward hard, backward soft
-            quantized = quantized_hard + (quantized_soft - quantized_soft.detach())
+            # codebook loss (straight-through trick often uses EMA; placeholder if you need)
+            # If you maintain EMA elsewhere, you can set codebook_loss to 0 here.
+            codebook_loss = latent_loss.detach()  # simple symmetric version; replace with your EMA update if any
+            codebook_loss_sum = codebook_loss_sum + codebook_loss
 
-            # Codebook側：コードを latent に寄せる（latent は detach）
-            codebook_loss = F.mse_loss(quantized, z.detach())
-
-            # Commitment：latent を選択コードに寄せる（コードは detach）
-            # L1（元のコメント通り）
-            latent_loss = beta * (z - quantized.detach()).abs().mean()
-
-            # 半径正則化
-            radius_loss = self._latent_radius_loss(z) * self.radius_weight
-
-            total_latent_loss = latent_loss + radius_loss
-
-            # たまに診断出力（元コード踏襲）
-            if self.training and torch.rand(()) < 0.02:
-                with torch.no_grad():
-                    maxp = soft_assign.max(dim=-1).values.mean().item()
-                    if use_cosine:
-                        print(f"[COS] key={k} K={cb_t.shape[0]} max prob ~{maxp:.3f}")
-                    else:
-                        print(f"[EUC] key={k} K={cb_t.shape[0]} tau={tau_eff:.3f} max prob ~{maxp:.3f}")
-
-            # サイズ加重平均のための集計
-            total_latent_size += latent_size
-            latent_loss_sum += total_latent_loss * latent_size
-            codebook_loss_sum += codebook_loss * latent_size
-
-        # すべての元素で集計
+        # avoid div/0
         if total_latent_size == 0:
-            # 元コードの想定に合わせて 0 を返す（学習外のバッチ等）
-            zero = encoder_outputs.new_zeros(())
-            return zero, zero
+            return encoder_outputs.new_zeros(()), encoder_outputs.new_zeros(())
 
-        avg_latent_loss = latent_loss_sum / total_latent_size
-        avg_codebk_loss = codebook_loss_sum / total_latent_size
-        return avg_latent_loss, avg_codebk_loss
+        # average over all used latents
+        commit_loss = beta * (latent_loss_sum / total_latent_size)
+        codebk_loss = (codebook_loss_sum / total_latent_size)
+        return commit_loss, codebk_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
