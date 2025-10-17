@@ -1241,10 +1241,13 @@ class VectorQuantize(nn.Module):
         # Iterate either per-element or once for a shared codebook
         if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
+            print(f"items len {len(items)}")
         else:
             items = [(None, codebook)]
+            print(f"items is none....!!!")
 
         for key, cb in items:
+            print(f"key: {key}")
             # indices
             if key is None:
                 idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
