@@ -769,7 +769,7 @@ class EuclideanCodebook(nn.Module):
 
             del Xb, d_block, sums_per_cluster, means_per_cluster, a_i, b_i, sil
 
-        return float(sil_sum / max(processed, 1)))
+        return float(sil_sum / max(processed, 1))
 
         @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
