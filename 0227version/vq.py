@@ -1301,7 +1301,7 @@ class VectorQuantize(nn.Module):
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         keys_str = "None" if mask_dict is None else list(mask_dict.keys())
-        print(f"[vq.forward] mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
+        print(f"[vq.forward] 0 mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -1323,6 +1323,7 @@ class VectorQuantize(nn.Module):
             return 0
         else:
             quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
+        print(f"[vq.forward] 1 mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
         # -------------------------------
         # repel loss calculation
         # -------------------------------
@@ -1332,6 +1333,7 @@ class VectorQuantize(nn.Module):
         # repel loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
+        print(f"[vq.forward] 2 mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
