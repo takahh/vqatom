@@ -1197,6 +1197,7 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
 
     def _as_index_tensor(self, idx_raw, N, device):
+        print(f"idx_raw {idx_raw}")
         """Make a 1D LongTensor of indices on device. Accepts list/np/tensor/bool-mask."""
         if idx_raw is None:
             return torch.arange(N, device=device)
