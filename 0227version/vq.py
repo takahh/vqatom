@@ -1373,7 +1373,7 @@ class VectorQuantize(nn.Module):
         # encoder_outputs, mask_dict, codebook
         keys_str = "None" if mask_dict is None else list(mask_dict.keys())
         print(
-            f" 0 [vq.forward] mode={mode} | x.shape={tuple(encoder_outputs.shape)} | "
+            f" 0 [vq.forward] mode={mode} |  | "
             f"mask_dict.keys={keys_str}",
             flush=True,
         )
@@ -1388,7 +1388,9 @@ class VectorQuantize(nn.Module):
                 )
             else:
                 print(f"    key=6 | type={type(vals)} | sample={str(vals)[:100]}", flush=True)
-
+        else:
+            print("mask_dict")
+            print(mask_dict)
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
