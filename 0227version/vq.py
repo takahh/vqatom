@@ -1232,8 +1232,6 @@ class VectorQuantize(nn.Module):
         mask_dict: dict[str -> indices/bool-mask] (or 'all' for shared codebook)
         codebook: dict-like per element (keys as str/int) OR a single shared tensor/param
         """
-
-        print(f"mask_dict[6][:5] {mask_dict[6][:5]}")
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
         device = encoder_outputs.device
 
@@ -1243,28 +1241,8 @@ class VectorQuantize(nn.Module):
         # Iterate either per-element or once for a shared codebook
         if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
-            print(f"items len {len(items)}")
         else:
             items = [(None, codebook)]
-            print(f"items is none....!!!")
-        keys_str = "None" if mask_dict is None else list(mask_dict.keys())
-        print(
-            f" 2 [vq.forward] | x.shape={tuple(encoder_outputs.shape)} | "
-            f"mask_dict.keys={keys_str}",
-            flush=True,
-        )
-
-        if mask_dict is not None and "6" in mask_dict:
-            vals = mask_dict["6"]
-            if torch.is_tensor(vals):
-                # show shape and first few values
-                print(
-                    f"    key=6 | shape={tuple(vals.shape)} | dtype={vals.dtype} | first={vals[:10].tolist()}",
-                    flush=True,
-                )
-            else:
-                print(f"    key=6 | type={type(vals)} | sample={str(vals)[:100]}", flush=True)
-
         for key, cb in items:
             print(f"key: {key}")
             # indices
@@ -1318,13 +1296,6 @@ class VectorQuantize(nn.Module):
         return commit_loss, codebook_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
-        keys_str = "None" if mask_dict is None else list(mask_dict.keys())
-        x_preview = x.flatten()[:5].tolist()  # show first 5 scalar values
-        print(
-            f" 0 [vq.forward] mode={mode} | x.shape={tuple(x.shape)} | "
-            f"mask_dict.keys={keys_str} | x[:5]={x_preview}",
-            flush=True,
-        )
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -1355,7 +1326,6 @@ class VectorQuantize(nn.Module):
         # repel loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        print(f"mask_dict[6][:5] {mask_dict[6][:5]}")
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
