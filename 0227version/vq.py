@@ -1271,8 +1271,8 @@ class VectorQuantize(nn.Module):
             if key is None:
                 idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
             else:
-                print(f"mask_dict[str(key)] {mask_dict[str(key)]}")
-                idx = self._as_index_tensor(mask_dict[str(key)], encoder_outputs.size(0), device)
+                print(f"mask_dict[str(key)] {mask_dict[key]}")
+                idx = self._as_index_tensor(mask_dict[key], encoder_outputs.size(0), device)
             print(f"idx: {idx}")
             if idx.numel() == 0:
                 continue
