@@ -1232,24 +1232,8 @@ class VectorQuantize(nn.Module):
         mask_dict: dict[str -> indices/bool-mask] (or 'all' for shared codebook)
         codebook: dict-like per element (keys as str/int) OR a single shared tensor/param
         """
-        keys_str = "None" if mask_dict is None else list(mask_dict.keys())
-        print(
-            f" 1 [vq.forward] | x.shape={tuple(encoder_outputs.shape)} | "
-            f"mask_dict.keys={keys_str}",
-            flush=True,
-        )
 
-        if mask_dict is not None and "6" in mask_dict:
-            vals = mask_dict["6"]
-            if torch.is_tensor(vals):
-                # show shape and first few values
-                print(
-                    f"    key=6 | shape={tuple(vals.shape)} | dtype={vals.dtype} | first={vals[:10].tolist()}",
-                    flush=True,
-                )
-            else:
-                print(f"    key=6 | type={type(vals)} | sample={str(vals)[:100]}", flush=True)
-
+        print(f"mask_dict[6][:5] {mask_dict[6][:5]}")
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
         device = encoder_outputs.device
 
@@ -1371,28 +1355,7 @@ class VectorQuantize(nn.Module):
         # repel loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        keys_str = "None" if mask_dict is None else list(mask_dict.keys())
-        print(
-            f" 0 [vq.forward] mode={mode} |  | "
-            f"mask_dict.keys={keys_str}",
-            flush=True,
-        )
-
-        if mask_dict is not None and 6 in mask_dict:
-            print("pattern 0")
-            vals = mask_dict["6"]
-            if torch.is_tensor(vals):
-                # show shape and first few values
-                print(
-                    f"    key=6 | shape={tuple(vals.shape)} | dtype={vals.dtype} | first={vals[:10].tolist()}",
-                    flush=True,
-                )
-            else:
-                print(f"    key=6 | type={type(vals)} | sample={str(vals)[:100]}", flush=True)
-        else:
-            print("pattern 1")
-            print("mask_dict")
-            print(mask_dict)
+        print(f"mask_dict[6][:5] {mask_dict[6][:5]}")
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
