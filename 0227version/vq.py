@@ -1300,6 +1300,7 @@ class VectorQuantize(nn.Module):
         return commit_loss, codebook_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
+        keys_str = "None" if mask_dict is None else list(mask_dict.keys())
         print(f"[vq.forward] mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
         only_one = x.ndim == 2
         x = x.to("cuda")
