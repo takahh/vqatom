@@ -1238,7 +1238,6 @@ class VectorQuantize(nn.Module):
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
         total_latent = 0
-
         # Iterate either per-element or once for a shared codebook
         if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
