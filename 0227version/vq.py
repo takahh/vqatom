@@ -1378,7 +1378,7 @@ class VectorQuantize(nn.Module):
             flush=True,
         )
 
-        if mask_dict is not None and "6" in mask_dict:
+        if mask_dict is not None and 6 in mask_dict:
             print("pattern 0")
             vals = mask_dict["6"]
             if torch.is_tensor(vals):
