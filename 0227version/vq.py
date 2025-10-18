@@ -1333,7 +1333,7 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
         print(f"[vq.forward] 2 mode={mode} | x.shape={tuple(x.shape)} | mask_dict.keys={keys_str}", flush=True)
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
+        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict.squeeze(), self._codebook.embed)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
