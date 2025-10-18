@@ -1243,15 +1243,69 @@ class VectorQuantize(nn.Module):
             items = list(codebook.items())
         else:
             items = [(None, codebook)]
+
         for key, cb in items:
-            print(f"key: {key}")
-            # indices
-            if key is None:
-                idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
+            # Normalize key to string for mask_dict lookups
+            kstr = "all" if key is None else str(key)
+
+            # Helpful header
+            print(
+                f"[commitment_loss] key={key} (type={type(key).__name__}) | "
+                f"kstr='{kstr}' | encoder_outputs.shape={tuple(encoder_outputs.shape)}",
+                flush=True,
+            )
+
+            # Fetch raw mask/indices safely (don’t mutate mask_dict)
+            raw = None if mask_dict is None else mask_dict.get(kstr, None)
+
+            # Debug: what’s in mask_dict for this key?
+            if raw is None:
+                print(f"  -> mask_dict has NO entry for '{kstr}'", flush=True)
+                continue
+
+            if torch.is_tensor(raw):
+                if raw.dtype == torch.bool:
+                    nz = raw.nonzero(as_tuple=True)[0]
+                    preview = nz[:10].cpu().tolist()
+                    print(
+                        f"  raw(bool) shape={tuple(raw.shape)} | true_count={nz.numel()} | "
+                        f"first_true_idx={preview}",
+                        flush=True,
+                    )
+                else:
+                    preview = raw[:10].detach().cpu().tolist()
+                    print(
+                        f"  raw(idx) shape={tuple(raw.shape)} | dtype={raw.dtype} | "
+                        f"first10={preview}",
+                        flush=True,
+                    )
             else:
-                print(f"mask_dict[str(key)] {mask_dict[key]}")
-                idx = self._as_index_tensor(mask_dict[key], encoder_outputs.size(0), device)
-            print(f"idx: {idx}")
+                # list / numpy / etc.
+                sample = list(raw)[:10] if hasattr(raw, '__iter__') else raw
+                print(f"  raw(type={type(raw).__name__}) sample={sample}", flush=True)
+
+            # Convert to index tensor on the right device
+            idx = self._as_index_tensor(raw, encoder_outputs.size(0), encoder_outputs.device)
+
+            # Print idx summary safely
+            idx_preview = idx[:10].detach().cpu().tolist()
+            print(
+                f"  idx.shape={tuple(idx.shape)} | count={idx.numel()} | first10={idx_preview} | "
+                f"device={idx.device} | dtype={idx.dtype}",
+                flush=True,
+            )
+
+            # ... proceed with your per-key loss using `idx`
+        #
+        # for key, cb in items:
+        #     print(f"key: {key}")
+        #     # indices
+        #     if key is None:
+        #         idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
+        #     else:
+        #         print(f"mask_dict[str(key)] {mask_dict[key]}")
+        #         idx = self._as_index_tensor(mask_dict[key], encoder_outputs.size(0), device)
+        #     print(f"idx: {idx}")
             if idx.numel() == 0:
                 continue
 
