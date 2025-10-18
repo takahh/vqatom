@@ -1379,6 +1379,7 @@ class VectorQuantize(nn.Module):
         )
 
         if mask_dict is not None and "6" in mask_dict:
+            print("pattern 0")
             vals = mask_dict["6"]
             if torch.is_tensor(vals):
                 # show shape and first few values
@@ -1389,6 +1390,7 @@ class VectorQuantize(nn.Module):
             else:
                 print(f"    key=6 | type={type(vals)} | sample={str(vals)[:100]}", flush=True)
         else:
+            print("pattern 1")
             print("mask_dict")
             print(mask_dict)
         commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
