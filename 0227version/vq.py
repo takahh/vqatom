@@ -361,17 +361,17 @@ class ContrastiveLoss(nn.Module):
 
                     if stream_backward:
                         # Use ONLY outside forward; shown for completeness
-                        loss_block = block_loss(zi, zj, low, high, center) / n_blocks_total
+                        loss_block = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight) / n_blocks_total
                         loss_block.backward()
                         total = total + loss_block.detach()
                     else:
                         if use_checkpoint:
                             # Pass ALL tensors used inside the closure as inputs to checkpoint.
                             # (Avoids subtle detaches when closures capture tensors.)
-                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center, use_reentrant=False)
+                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight, use_reentrant=False)
                             used_ckpt = True
                         else:
-                            lb = block_loss(zi, zj, low, high, center)
+                            lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
 
                         # Sanity: lb should carry grad
                         assert lb.requires_grad, "lb requires_grad=False (grad path broken)"
