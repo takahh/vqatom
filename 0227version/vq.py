@@ -1509,6 +1509,49 @@ class VectorQuantize(nn.Module):
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
+        def _as_scalar_tensor(val, ref_tensor):
+            """
+            Convert val (Tensor / float-int / list/tuple/dict of those) into a 0D Tensor on ref_tensor's device/dtype.
+            - Lists/tuples/dicts -> mean of elements (grad-safe zeros for empties).
+            - Pure Python numbers -> tensor(val) (detached, which is fine for constants).
+            """
+            import torch
+
+            def _zero_like_ref():
+                # grad-safe zero that keeps graph if ref requires_grad
+                z = ref_tensor.sum() * 0
+                return z
+
+            if isinstance(val, torch.Tensor):
+                # scalar -> return; non-scalar -> mean
+                return val if val.ndim == 0 else val.mean()
+
+            if isinstance(val, (list, tuple)):
+                if len(val) == 0:
+                    return _zero_like_ref()
+                elems = [_as_scalar_tensor(v, ref_tensor) for v in val]
+                return torch.stack(elems).mean()
+
+            if isinstance(val, dict):
+                if len(val) == 0:
+                    return _zero_like_ref()
+                elems = [_as_scalar_tensor(v, ref_tensor) for v in val.values()]
+                return torch.stack(elems).mean()
+
+            if isinstance(val, (float, int)):
+                return torch.tensor(val, device=ref_tensor.device, dtype=ref_tensor.dtype)
+
+            # Fallback (None / unknown): grad-safe zero
+            return _zero_like_ref()
+
+        ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
+
+        repel_loss = _as_scalar_tensor(repel_loss, ref)
+        cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
+        commit_loss = _as_scalar_tensor(commit_loss, ref)
+        cb_loss = _as_scalar_tensor(cb_loss, ref)
+        sil_loss = _as_scalar_tensor(sil_loss, ref)
+
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss = mid_repel_loss
         repel_loss *= alpha
