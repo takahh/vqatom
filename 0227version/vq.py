@@ -368,7 +368,7 @@ class ContrastiveLoss(nn.Module):
                         if use_checkpoint:
                             # Pass ALL tensors used inside the closure as inputs to checkpoint.
                             # (Avoids subtle detaches when closures capture tensors.)
-                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center)
+                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center, use_reentrant=False)
                             used_ckpt = True
                         else:
                             lb = block_loss(zi, zj, low, high, center)
