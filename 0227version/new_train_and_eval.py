@@ -29,9 +29,9 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
         # (g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch)
         (loss, cb, loss_list3) = outputs
-
-    # Sync codebook weights
-    model.vq._codebook.embed.data.copy_(cb.to(device))
+    #
+    # # Sync codebook weights
+    # model.vq._codebook.embed.data.copy_(cb.to(device))
 
     # Backward pass
     scaler.scale(loss).backward()
