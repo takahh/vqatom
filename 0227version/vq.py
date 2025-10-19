@@ -237,7 +237,7 @@ class ContrastiveLoss(nn.Module):
 
         device = z.device
         eps = 1e-8
-
+        z = z.squeeze()
         # ---- 1) 距離の一次統計（1Dで扱う）----
         # z: [B, D]
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
