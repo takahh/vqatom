@@ -866,6 +866,8 @@ class EuclideanCodebook(nn.Module):
                                f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}")
                         print(msg)
                         if logger: logger.info(msg)
+                    else:
+                        print("n <= 1 !!!!!!!!!")
                 except Exception as e:
                     if logger: logger.warning(f"Silhouette failed for {key}: {e}")
 
