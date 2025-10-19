@@ -287,7 +287,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # sil_loss []
         # repel_loss 0.24993233382701874
         # cb_repel_loss 0.995575487613678
-        losslist = [0, commit_loss.item(), cb_loss.item(), sil_loss.item(),
+        losslist = [0, commit_loss.item(), cb_loss.item(), 0,
                     repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist
 
