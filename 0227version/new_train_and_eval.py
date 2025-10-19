@@ -32,8 +32,9 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
     #
     # # Sync codebook weights
     # model.vq._codebook.embed.data.copy_(cb.to(device))
-
-    # Backward pass
+    # -----------------
+    # update variables
+    # -----------------
     scaler.scale(loss).backward()
     scaler.unscale_(optimizer)
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)

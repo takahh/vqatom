@@ -277,33 +277,36 @@ class ContrastiveLoss(nn.Module):
                 row_block=4096,
                 col_block=4096,
                 detach_weight=True,
-                use_checkpoint=True,  # ← 推奨: True にすると各ブロックの中間を保持せず再計算
-                stream_backward=False,  # ← True にすると各ブロックで即 backward（要: 呼び出し元での管理）
+                use_checkpoint=True,
+                stream_backward=False,
                 eps=1e-8,
         ):
             """
             z: [B, D], requires_grad=True
-            low/high/center: しきい値（no_grad Tensor 推奨）
-            - use_checkpoint=True: 各ブロックの中間を保持せず、backward時に再計算（メモリ節約）
-            - stream_backward=True: 各ブロックで縮尺済み loss を即 backward（forward内では使わないこと！）
+            low/high/center: no-grad tensors on the same device as z (OK)
             """
             import torch
             import torch.utils.checkpoint as cp
 
-            assert not (use_checkpoint and stream_backward), "checkpoint と streaming backward は同時に使わないでください。"
+            # --- Safety: mutually exclusive modes ---
+            assert not (use_checkpoint and stream_backward), \
+                "checkpoint と streaming backward は同時に使えません。"
 
+            assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
             B, D = z.shape
-            device = z.device
+            device, dtype = z.device, z.dtype
 
-            # 方式Bで必要になる：総ブロック数（上三角の「ブロック間」だけ数える）
+            # --- Make sure thresholds are tensors on the right device/dtype ---
+            low = torch.as_tensor(low, device=device, dtype=dtype)
+            high = torch.as_tensor(high, device=device, dtype=dtype)
+            center = torch.as_tensor(center, device=device, dtype=dtype)
+
+            # Count upper-triangular inter-block pairs (normalization)
             def count_blocks(B, rb, cb):
-                cnt = 0
-                i = 0
+                cnt, i = 0, 0
                 while i < B:
-                    bi = min(rb, B - i)
                     j = i + rb
                     while j < B:
-                        bj = min(cb, B - j)
                         cnt += 1
                         j += cb
                     i += rb
@@ -311,57 +314,60 @@ class ContrastiveLoss(nn.Module):
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            # ブロック計算本体（Checkpoint で包めるよう関数化）
-            def block_loss(zi, zj):
+            # ---- Core block op (explicit args to be checkpoint-safe) ----
+            def block_loss(zi, zj, low_t, high_t, center_t):
                 # zi: [bi, D], zj: [bj, D]
-                d = torch.cdist(zi, zj, p=2)  # [bi, bj]
+                d = torch.cdist(zi, zj, p=2)  # [bi, bj], differentiable w.r.t zi,zj
 
-                # 重み（Sigmoid）: 勾配を通さないなら detach で安全側に
-                w = torch.sigmoid(sharp * (d - low)) * torch.sigmoid(sharp * (high - d))
+                # Window weight (optionally detached so grads only come via `bell`)
+                w = torch.sigmoid(sharp * (d - low_t)) * torch.sigmoid(sharp * (high_t - d))
                 if detach_weight:
                     w = w.detach()
 
-                # 中央付近を釣鐘で強調（ここは勾配を z に通す）
-                bell = torch.exp(-(d - center) ** 2 / (2 * (sigma ** 2)))
+                # Bell emphasizes the middle band — this path MUST carry grad to z
+                bell = torch.exp(-(d - center_t) ** 2 / (2 * (sigma ** 2)))
 
                 num = (w * bell).sum()
-                den = w.sum().clamp_min(eps)
-                return num / den  # scalar Tensor
+                den = w.sum().clamp_min(eps)  # detached if w is detached ⇒ OK
+                out = num / den  # scalar
+                # Assert we actually have a grad path from out → zi/zj
+                assert out.requires_grad, "block_loss output lost grad"
+                return out
 
             total = z.new_zeros(())
+            used_ckpt = False
 
-            # メインループ
+            # ---- Main loop (upper-triangular across blocks) ----
             i = 0
             while i < B:
                 bi = min(row_block, B - i)
-                zi = z[i: i + bi]  # [bi, D]
+                zi = z[i:i + bi]  # view; still requires_grad=True
+                assert zi.requires_grad, "zi lost requires_grad"
+
                 j = i + row_block
                 while j < B:
                     bj = min(col_block, B - j)
-                    zj = z[j: j + bj]  # [bj, D]
+                    zj = z[j:j + bj]
+                    assert zj.requires_grad, "zj lost requires_grad"
 
                     if stream_backward:
-                        # 方式B: forward 内で使わないで。学習ループ側でこの関数を呼び、
-                        # ここで loss_block / n_blocks_total を backward してメモリを即時解放する。
-                        # ≒ 各ブロックのグラフが forward 中に溜まらない。
-                        loss_block = block_loss(zi, zj) / n_blocks_total
-                        # !!! forward 内で backward はアンチパターンなので、
-                        # このモードは forward では使わず「損失計算関数」として学習ループ側で呼び出して下さい。
+                        # Use ONLY outside forward; shown for completeness
+                        loss_block = block_loss(zi, zj, low, high, center) / n_blocks_total
                         loss_block.backward()
-                        # ログ用に合算（勾配には関与しない）
                         total = total + loss_block.detach()
                     else:
                         if use_checkpoint:
-                            # 方式A: Checkpointing で中間を保持しない
-                            # 注意: 入力は Tensor で、関数は Tensor を返す必要がある
-                            # zi, zj をそのまま渡す
-                            lb = cp.checkpoint(block_loss, zi, zj)
+                            # Pass ALL tensors used inside the closure as inputs to checkpoint.
+                            # (Avoids subtle detaches when closures capture tensors.)
+                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center)
+                            used_ckpt = True
                         else:
-                            # 通常合算（メモリは溜まる）
-                            lb = block_loss(zi, zj)
+                            lb = block_loss(zi, zj, low, high, center)
+
+                        # Sanity: lb should carry grad
+                        assert lb.requires_grad, "lb requires_grad=False (grad path broken)"
                         total = total + lb
 
-                    # 明示参照解除（Python 参照を早めに消す）
                     del zj
                     j += col_block
 
@@ -369,12 +375,22 @@ class ContrastiveLoss(nn.Module):
                 i += row_block
 
             if stream_backward:
-                # 方式B: ここでは張っているグラフはない。total はログ用の数値（Tensor）として返す。
-                return total  # detached の合算
+                return total  # detached sum for logging
 
-            # 方式A / 通常: グラフ付きのスカラー Tensor を返す（上位で一括 backward）
-            # 平均に正規化（スケール安定化）
-            return total / n_blocks_total
+            out = total / n_blocks_total
+            # Final guard: returned scalar must keep a grad_fn unless graph is intentionally frozen
+            assert out.requires_grad, (
+                "Returned loss has no grad_fn. Likely causes:\n"
+                "- z was detached upstream\n"
+                "- use_checkpoint path captured tensors not passed as inputs\n"
+                "- all contributions detached (e.g., detach_weight plus removing bell)\n"
+            )
+
+            # Optional: tiny probe to confirm grad exists at runtime (enable temporarily)
+            # g = torch.autograd.grad(out, z, retain_graph=True, allow_unused=True)[0]
+            # assert g is not None, "grad(out, z) is None"
+
+            return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
         def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
@@ -449,7 +465,7 @@ class ContrastiveLoss(nn.Module):
         # （注意）empty_cache は通常は不要。OOM 調査中だけ使うのが無難
         # del pdist_z, sample
         # torch.cuda.empty_cache()
-
+        # final_loss and cb_loss are used
         return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
 
@@ -1150,6 +1166,7 @@ class VectorQuantize(nn.Module):
             latents_for_sil = torch.squeeze(latents)
             latents_size = latents_for_sil.shape[0]
             latent_len_sum += latents_size
+            # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
             two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
                 self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
 
