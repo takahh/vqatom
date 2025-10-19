@@ -312,7 +312,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
         all_latents = []
-        hmask_list = []
+        latents = None
 
         from collections import defaultdict
         import numpy as np
