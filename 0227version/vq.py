@@ -449,7 +449,7 @@ class ContrastiveLoss(nn.Module):
         latent_repel_loss_mid = latent_repel_mid_chunked(
             z,
             low=lower_thresh, high=upper_thresh, center=center,
-            sigma=3.0, sharp=20.0,
+            sigma=1.0, sharp=20.0,
             row_block=4096, col_block=4096,
             detach_weight=True,
             use_checkpoint=True,  # 推奨: True
