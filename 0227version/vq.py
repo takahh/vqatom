@@ -250,9 +250,9 @@ class ContrastiveLoss(nn.Module):
         # 分位点などは学習に使う重みの境界値なので勾配不要
         with torch.no_grad():
             dynamic_threshold = torch.quantile(sample, 0.10)  # tensor
-            lower_q, upper_q = 0.95, 0.99
-            lower_thresh = torch.quantile(sample, lower_q)  # tensor
-            upper_thresh = torch.quantile(sample, upper_q)  # tensor
+            lower_q, upper_q = 0, 0.9
+            lower_thresh = torch.quantile(sample, 0.25)  # tensor
+            upper_thresh = torch.quantile(sample, 0.75)  # tensor
             center = (lower_thresh + upper_thresh) / 2  # tensor
 
         # ---- ログ（負荷・転送を抑えて）----
