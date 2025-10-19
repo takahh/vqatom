@@ -1546,11 +1546,10 @@ class VectorQuantize(nn.Module):
 
         ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
 
-        repel_loss = _as_scalar_tensor(repel_loss, ref)
+        mid_repel_loss = _as_scalar_tensor(mid_repel_loss, ref)
         cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
         commit_loss = _as_scalar_tensor(commit_loss, ref)
-        cb_loss = _as_scalar_tensor(cb_loss, ref)
-        sil_loss = _as_scalar_tensor(sil_loss, ref)
+        codebook_loss = _as_scalar_tensor(codebook_loss, ref)
 
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss = mid_repel_loss
