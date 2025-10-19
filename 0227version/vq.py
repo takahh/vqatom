@@ -1256,7 +1256,6 @@ class VectorQuantize(nn.Module):
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
         device = encoder_outputs.device
         mask_dict = self._normalize_mask_dict(mask_dict)
-        print(mask_dict)
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
         total_latent = 0
