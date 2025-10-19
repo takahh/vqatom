@@ -266,7 +266,6 @@ class ContrastiveLoss(nn.Module):
                 hist = torch.histc(s_cpu, bins=10, min=0.0, max=15.0)
                 vals = hist.tolist()
                 logger.info(vals)
-                print(vals)
 
         def latent_repel_mid_chunked(
                 z,
@@ -1197,7 +1196,6 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
 
     def _as_index_tensor(self, idx_raw, N, device):
-        print(f"idx_raw {idx_raw}") # []
         """Make a 1D LongTensor of indices on device. Accepts list/np/tensor/bool-mask."""
         if idx_raw is None:
             return torch.arange(N, device=device)
