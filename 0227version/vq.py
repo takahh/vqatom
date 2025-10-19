@@ -1225,6 +1225,27 @@ class VectorQuantize(nn.Module):
         # [1, K, D] -> [K, D]; leave [K, D] unchanged
         return x.squeeze(0) if x.dim() == 3 and x.size(0) == 1 else x
 
+    def _normalize_mask_dict(self, mask_dict):
+        if mask_dict is None:
+            return None
+        norm = dict(mask_dict)  # shallow copy
+        for k, v in list(mask_dict.items()):
+            # int alias
+            if isinstance(k, str) and k.isdigit():
+                norm.setdefault(int(k), v)
+            # str alias
+            if isinstance(k, int):
+                norm.setdefault(str(k), v)
+            # torch scalar alias
+            if hasattr(k, "item") and callable(k.item):
+                try:
+                    ki = int(k.item())
+                    norm.setdefault(ki, v)
+                    norm.setdefault(str(ki), v)
+                except Exception:
+                    pass
+        return norm
+
     def commitment_loss(self, encoder_outputs, mask_dict, codebook,
                         beta=0.25, temperature=None, use_cosine=False):
         """
@@ -1234,6 +1255,7 @@ class VectorQuantize(nn.Module):
         """
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
         device = encoder_outputs.device
+        mask_dict = self._normalize_mask_dict(mask_dict)
         print(mask_dict)
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
