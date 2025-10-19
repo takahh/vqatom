@@ -1499,7 +1499,7 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # repel loss calculation
         # -------------------------------
-        mid_repel_loss, cb_repel_loss \
+        mid_repel_loss, cb_repel_loss, sil, contrib \
             = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch, chunk_i)
         # -------------------------------
         # repel loss calculation
