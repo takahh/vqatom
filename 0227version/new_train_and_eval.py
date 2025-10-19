@@ -403,7 +403,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                         loss_list_list_train[j].append(val)
                     loss_list.append(loss.detach().cpu().item())
                     # cleanup
-                    del batched_graph, batched_feats, chunk, latents, loss, loss_list_train
+                    del batched_graph, batched_feats, chunk, loss, loss_list_train
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
