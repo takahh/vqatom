@@ -398,7 +398,7 @@ class ContrastiveLoss(nn.Module):
             # Optional: tiny probe to confirm grad exists at runtime (enable temporarily)
             # g = torch.autograd.grad(out, z, retain_graph=True, allow_unused=True)[0]
             # assert g is not None, "grad(out, z) is None"
-
+            print(f"out in latent_repel_mid_chunked {out}")
             return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
@@ -1198,6 +1198,7 @@ class VectorQuantize(nn.Module):
             sil_k = 0
             repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
                 (self.compute_contrastive_loss(x, chunk, logger, codebook[str(key)]))
+            print(f"repel_k {repel_k}")
             weight_by_counts = True
             # Weight: either by count or uniform per contributing element
             w = float(n) if weight_by_counts else 1.0
