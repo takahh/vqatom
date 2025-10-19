@@ -1226,6 +1226,7 @@ class VectorQuantize(nn.Module):
         return x.squeeze(0) if x.dim() == 3 and x.size(0) == 1 else x
 
     def _normalize_mask_dict(self, mask_dict):
+        """mask_dict のキーを str / int / torch.scalar の同義語に正規化して返す（非破壊）"""
         if mask_dict is None:
             return None
         norm = dict(mask_dict)  # shallow copy
@@ -1246,101 +1247,104 @@ class VectorQuantize(nn.Module):
                     pass
         return norm
 
-    def commitment_loss(self, encoder_outputs, mask_dict, codebook,
-                        beta=0.25, temperature=None, use_cosine=False):
+    def commitment_loss(
+            self,
+            encoder_outputs,  # [B, D]  … 現在の“チャンク”だけ
+            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバルindex想定）
+            codebook,  # dict-like per element or single tensor/param
+            beta=0.25,
+            temperature=None,  # 未使用ならそのまま（EMAは別処理）
+            use_cosine=False,
+            *,
+            chunk_start=None  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
+    ):
         """
-        encoder_outputs: [B, D]
-        mask_dict: dict[str -> indices/bool-mask] (or 'all' for shared codebook)
-        codebook: dict-like per element (keys as str/int) OR a single shared tensor/param
+        重要: mask_dict の indices は「グローバル index」を想定。
+             本関数内でチャンク境界 [chunk_start, chunk_start+B) に入るものだけを残し、
+             ローカル index (= global - chunk_start) に変換してから使用する。
         """
-        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {encoder_outputs.shape}"
+        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
+        B, D = encoder_outputs.shape
+
+        # chunk_start が未指定なら 0（= 既にローカル index を渡しているケースに対応）
+        if chunk_start is None:
+            chunk_start = 0
+        chunk_end = chunk_start + B
+
         mask_dict = self._normalize_mask_dict(mask_dict)
+
+        # 累積器（平均の二重計算を避けるため、Ni 加重和で持つ）
+        total_latent = 0
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
-        total_latent = 0
-        # Iterate either per-element or once for a shared codebook
+
+        # イテレーション準備（要素別コードブック or 共有コードブック）
         if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
         else:
             items = [(None, codebook)]
 
+        # --- ヘルパ: グローバル index → （このチャンク内の）ローカル index へ ---
+        def _select_by_global_idx(encoder_outputs, global_idx, start, end, *, name=""):
+            """
+            encoder_outputs: [B, D]（現チャンク）
+            global_idx: 1D LongTensor（グローバル index）
+            戻り値: (z_local [Ni, D], idx_local [Ni])
+            """
+            if global_idx.numel() == 0:
+                return encoder_outputs.new_zeros((0, encoder_outputs.size(1))), global_idx
+
+            # チャンクに属する index だけを残す
+            mask = (global_idx >= start) & (global_idx < end)
+            idx_in = global_idx[mask]
+            if idx_in.numel() == 0:
+                return encoder_outputs.new_zeros((0, encoder_outputs.size(1))), idx_in
+
+            idx_local = (idx_in - start).to(torch.long)
+
+            # device-side assert を防ぐため手前チェック
+            max_idx = int(idx_local.max().item())
+            min_idx = int(idx_local.min().item())
+            if min_idx < 0 or max_idx >= encoder_outputs.size(0):
+                raise RuntimeError(
+                    f"[{name}] local index out of range: min={min_idx}, max={max_idx}, "
+                    f"B={encoder_outputs.size(0)}, start={start}, end={end}, "
+                    f"kept={idx_in.numel()}"
+                )
+            z = encoder_outputs.index_select(0, idx_local)
+            return z, idx_local
+
         for key, cb in items:
-            # Normalize key to string for mask_dict lookups
             kstr = "all" if key is None else str(key)
 
-            # Helpful header
-            print(
-                f"[commitment_loss] key={key} (type={type(key).__name__}) | "
-                f"kstr='{kstr}' | encoder_outputs.shape={tuple(encoder_outputs.shape)}",
-                flush=True,
-            )
-
-            # Fetch raw mask/indices safely (don’t mutate mask_dict)
+            # --- mask/indices を取得し index tensor に統一（まずはグローバルとして整形） ---
             raw = None if mask_dict is None else mask_dict.get(kstr, None)
-
-            # Debug: what’s in mask_dict for this key?
             if raw is None:
-                print(f"  -> mask_dict has NO entry for '{kstr}'", flush=True)
+                # このキーに該当するデータが無い場合はスキップ
                 continue
 
-            if torch.is_tensor(raw):
-                if raw.dtype == torch.bool:
-                    nz = raw.nonzero(as_tuple=True)[0]
-                    preview = nz[:10].cpu().tolist()
-                    print(
-                        f"  raw(bool) shape={tuple(raw.shape)} | true_count={nz.numel()} | "
-                        f"first_true_idx={preview}",
-                        flush=True,
-                    )
-                else:
-                    preview = raw[:10].detach().cpu().tolist()
-                    print(
-                        f"  raw(idx) shape={tuple(raw.shape)} | dtype={raw.dtype} | "
-                        f"first10={preview}",
-                        flush=True,
-                    )
-            else:
-                # list / numpy / etc.
-                sample = list(raw)[:10] if hasattr(raw, '__iter__') else raw
-                print(f"  raw(type={type(raw).__name__}) sample={sample}", flush=True)
+            # bool-mask / list / tensor を 1D LongTensor へ（グローバル想定）
+            # 既存のユーティリティを利用。total_length は不要、ここでは型変換のみ。
+            idx_global = self._as_index_tensor(raw, None, device)  # 注意: 第二引数は使わない実装にしておく
 
-            # Convert to index tensor on the right device
-            idx = self._as_index_tensor(raw, encoder_outputs.size(0), encoder_outputs.device)
-
-            # Print idx summary safely
-            idx_preview = idx[:10].detach().cpu().tolist()
-            print(
-                f"  idx.shape={tuple(idx.shape)} | count={idx.numel()} | first10={idx_preview} | "
-                f"device={idx.device} | dtype={idx.dtype}",
-                flush=True,
+            # --- グローバル → ローカル（このチャンクに入るものだけ抽出） ---
+            z, idx_local = _select_by_global_idx(
+                encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
             )
-
-            # ... proceed with your per-key loss using `idx`
-        #
-        # for key, cb in items:
-        #     print(f"key: {key}")
-        #     # indices
-        #     if key is None:
-        #         idx = self._as_index_tensor(mask_dict.get("all", None), encoder_outputs.size(0), device)
-        #     else:
-        #         print(f"mask_dict[str(key)] {mask_dict[key]}")
-        #         idx = self._as_index_tensor(mask_dict[key], encoder_outputs.size(0), device)
-        #     print(f"idx: {idx}")
-            if idx.numel() == 0:
+            Ni = z.size(0)
+            if Ni == 0:
+                # このチャンクに該当サンプルなし
                 continue
 
-            z = encoder_outputs.index_select(0, idx)  # [Ni, D]
-            Ni, D = z.shape
-
-            # unwrap cb → tensor/param
-            cb_t = self._unwrap_codebook_entry(cb)
-            cb_t = self._squeeze_01(cb_t)
+            # --- コードブック取り出し＆形状正規化 ---
+            cb_t = self._unwrap_codebook_entry(cb)  # nn.Parameter / tensor 両対応で tensor を返す想定
+            cb_t = self._squeeze_01(cb_t)  # [1,K,D] → [K,D] にするユーティリティ
             assert cb_t.dim() == 2, f"codebook for key={key} must be [K,D] or [1,K,D]; got {tuple(cb_t.shape)}"
             K, Dk = cb_t.shape
             assert Dk == D, f"latent D={D} != codebook D={Dk} for key={key}"
 
-            # nearest code indices
+            # --- 最近傍コード探索（cosine か L2） ---
             if use_cosine:
                 z_n = F.normalize(z, p=2, dim=-1)
                 cb_n = F.normalize(cb_t, p=2, dim=-1)
@@ -1352,22 +1356,21 @@ class VectorQuantize(nn.Module):
 
             e = cb_t.index_select(0, embed_ind)  # [Ni, D]
 
-            # VQ-VAE losses (EMA updates for codebook can be done elsewhere)
-            commit_part = F.mse_loss(z, e.detach(), reduction='mean')  # β‖z - sg(e)‖²
-            codebk_part = F.mse_loss(e, z.detach(), reduction='mean')  # ‖sg(z) - e‖²
+            # --- VQ-VAE 損失（EMA 更新は別で）---
+            commit_part = F.mse_loss(z, e.detach(), reduction="mean")  # β‖z - sg(e)‖²
+            codebk_part = F.mse_loss(e, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
 
-            # Weight by Ni (avoid double-averaging later)
+            # Ni で重み付け
             total_latent += Ni
             commit_num = commit_num + commit_part * Ni
             codebk_num = codebk_num + codebk_part * Ni
-            print(f"key {key}, commit_num {commit_num}, total_latent {total_latent}")
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
             return zero, zero
 
         commit_loss = beta * (commit_num / total_latent)
-        codebook_loss = codebk_num / total_latent
+        codebook_loss = (codebk_num / total_latent)
         return commit_loss, codebook_loss
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
