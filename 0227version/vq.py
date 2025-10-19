@@ -1151,31 +1151,83 @@ class VectorQuantize(nn.Module):
         equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
         return equivalence_groups
 
+    def orthogonal_loss_fn(
+            embed_ind_dict,  # dict[str]-> LongTensor indices per element for this chunk (may be empty)
+            codebook,  # dict[str]-> [K,D] or similar
+            init_feat, x,  # whatever you currently pass
+            quantize_dict,  # dict[str]-> [Ni,D] latents after quantization (or pre-quant z)
+            logger=None, epoch=None, chunk_i=None,
+            weight_by_counts=True,
+            device=None,
+    ):
+        import torch
+        dev = device or (x.device if hasattr(x, "device") else "cpu")
 
-    def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
-        # embed_ind_dict.to("cuda")
-        codebook.to("cuda")
-        init_feat.to("cuda")
-        latents.to("cuda")
-        quantized_dict.to("cuda")
-        latent_len_sum = 0
-        two_repel_loss_weighted_sum = 0
-        cb_loss_weighted_sum = 0
-        for key in embed_ind_dict.keys():
-            import torch
-            latents_for_sil = torch.squeeze(latents)
-            latents_size = latents_for_sil.shape[0]
-            latent_len_sum += latents_size
-            # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
-                self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
+        # Accumulators
+        repel_wsum = torch.zeros((), device=dev)
+        cb_repel_wsum = torch.zeros((), device=dev)
+        sil_wsum = torch.zeros((), device=dev)
 
-            two_repel_loss_weighted_sum += latents_size * two_repel_loss
-            cb_loss_weighted_sum += latents_size * cb_loss
-        two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
-        cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
+        w_total = 0.0  # total weight of contributing elements
 
-        return (two_repel_loss_avg, cb_loss_avg)
+        # OPTIONAL: collect debug info
+        contributed_keys = []
+
+        # Iterate per element
+        for key in sorted(embed_ind_dict.keys()):
+            inds = embed_ind_dict[key]
+            # inds may be tensor or list; normalize length
+            n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
+
+            # Need >=2 for pairwise losses; skip otherwise
+            if n < 2:
+                continue
+
+            # Fetch per-element latents/embeds as you already do
+            # Example (adapt to your variables):
+            z_k = quantize_dict[key]  # [n, D]
+            cb_k = codebook[str(key)]  # [K, D] or similar
+
+            # --- compute your per-element losses here (examples as placeholders) ---
+            # repel_k = ...
+            # cb_repel_k = ...
+            # sil_k = ...
+            # ----------------------------------------------------------------------
+
+            # Weight: either by count or uniform per contributing element
+            w = float(n) if weight_by_counts else 1.0
+
+            # Accumulate weighted sums
+            repel_wsum = repel_wsum + w * repel_k
+            cb_repel_wsum = cb_repel_wsum + w * cb_repel_k
+            sil_wsum = sil_wsum + w * sil_k
+
+            w_total += w
+            contributed_keys.append((key, n))
+
+        if w_total == 0.0:
+            # No contributors in this chunk → return clean zeros (and optionally log)
+            if logger is not None:
+                logger.info(f"[orthogonal_loss_fn] chunk {chunk_i}: no contributing elements; returning zeros.")
+            zero = torch.zeros((), device=dev)
+            return {
+                "repel_loss": zero,
+                "cb_repel_loss": zero,
+                "sil_loss": zero,
+                "contrib": [],
+            }
+
+        # Safe averages
+        repel_avg = repel_wsum / w_total
+        cb_repel_avg = cb_repel_wsum / w_total
+        sil_avg = sil_wsum / w_total
+
+        return {
+            "repel_loss": repel_avg,
+            "cb_repel_loss": cb_repel_avg,
+            "sil_loss": sil_avg,
+            "contrib": contributed_keys,  # for debugging
+        }
 
     import torch
     import torch.nn.functional as F
