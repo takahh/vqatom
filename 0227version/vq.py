@@ -1152,16 +1152,10 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
     def orthogonal_loss_fn(
-            embed_ind_dict,  # dict[str]-> LongTensor indices per element for this chunk (may be empty)
-            codebook,  # dict[str]-> [K,D] or similar
-            init_feat, x,  # whatever you currently pass
-            quantize_dict,  # dict[str]-> [Ni,D] latents after quantization (or pre-quant z)
-            logger=None, epoch=None, chunk_i=None,
-            weight_by_counts=True,
-            device=None,
-    ):
+            self, embed_ind_dict, codebook, init_feat, x, quantize_dict, logger, epoch, chunk=0
+        ):
         import torch
-        dev = device or (x.device if hasattr(x, "device") else "cpu")
+        dev = x.device if hasattr(x, "device") else "cpu"
 
         # Accumulators
         repel_wsum = torch.zeros((), device=dev)
@@ -1192,8 +1186,10 @@ class VectorQuantize(nn.Module):
             # repel_k = ...
             # cb_repel_k = ...
             # sil_k = ...
-            # ----------------------------------------------------------------------
-
+            sil_k = 0
+            repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
+                (self.compute_contrastive_loss(x, chunk, logger, codebook[str(key)]))
+            weight_by_counts = True
             # Weight: either by count or uniform per contributing element
             w = float(n) if weight_by_counts else 1.0
 
@@ -1208,7 +1204,7 @@ class VectorQuantize(nn.Module):
         if w_total == 0.0:
             # No contributors in this chunk → return clean zeros (and optionally log)
             if logger is not None:
-                logger.info(f"[orthogonal_loss_fn] chunk {chunk_i}: no contributing elements; returning zeros.")
+                logger.info(f"[orthogonal_loss_fn] chunk {chunk}: no contributing elements; returning zeros.")
             zero = torch.zeros((), device=dev)
             return {
                 "repel_loss": zero,
@@ -1228,6 +1224,31 @@ class VectorQuantize(nn.Module):
             "sil_loss": sil_avg,
             "contrib": contributed_keys,  # for debugging
         }
+
+    # def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
+    #     # embed_ind_dict.to("cuda")
+    #     codebook.to("cuda")
+    #     init_feat.to("cuda")
+    #     latents.to("cuda")
+    #     quantized_dict.to("cuda")
+    #     latent_len_sum = 0
+    #     two_repel_loss_weighted_sum = 0
+    #     cb_loss_weighted_sum = 0
+    #     for key in embed_ind_dict.keys():
+    #         import torch
+    #         latents_for_sil = torch.squeeze(latents)
+    #         latents_size = latents_for_sil.shape[0]
+    #         latent_len_sum += latents_size
+    #         # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
+    #         two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
+    #             self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
+    #
+    #         two_repel_loss_weighted_sum += latents_size * two_repel_loss
+    #         cb_loss_weighted_sum += latents_size * cb_loss
+    #     two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
+    #     cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
+    #
+    #     return (two_repel_loss_avg, cb_loss_avg)
 
     import torch
     import torch.nn.functional as F
