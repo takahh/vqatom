@@ -869,6 +869,7 @@ class EuclideanCodebook(nn.Module):
                     else:
                         print("n <= 1 !!!!!!!!!")
                 except Exception as e:
+                    print(f"Silhouette failed for {key}: {e}")
                     if logger: logger.warning(f"Silhouette failed for {key}: {e}")
 
             # -------------------- EMA codebook update (hard-EMA) --------------------
