@@ -1179,8 +1179,8 @@ class VectorQuantize(nn.Module):
 
             # Fetch per-element latents/embeds as you already do
             # Example (adapt to your variables):
-            z_k = quantize_dict[key]  # [n, D]
-            cb_k = codebook[str(key)]  # [K, D] or similar
+            # z_k = quantize_dict[key]  # [n, D]
+            # cb_k = codebook[str(key)]  # [K, D] or similar
 
             # --- compute your per-element losses here (examples as placeholders) ---
             # repel_k = ...
