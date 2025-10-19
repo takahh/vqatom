@@ -698,7 +698,8 @@ class EuclideanCodebook(nn.Module):
     import torch
 
     @torch.inference_mode()
-    def silhouette_score_torch(X: torch.Tensor,
+    def silhouette_score_torch(self,
+                               X: torch.Tensor,
                                labels: torch.Tensor,
                                row_block: int = 8192,
                                device: str | torch.device | None = None) -> float:
