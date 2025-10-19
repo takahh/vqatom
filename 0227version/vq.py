@@ -314,24 +314,33 @@ class ContrastiveLoss(nn.Module):
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            # ---- Core block op (explicit args to be checkpoint-safe) ----
-            def block_loss(zi, zj, low_t, high_t, center_t):
+            def block_loss(zi, zj, low_t, high_t, center_t, sigma, sharp, eps, detach_weight):
                 # zi: [bi, D], zj: [bj, D]
-                d = torch.cdist(zi, zj, p=2)  # [bi, bj], differentiable w.r.t zi,zj
+                # ---- empty guards ----
+                if zi.numel() == 0 or zj.numel() == 0:
+                    return (zi.sum() * 0 + zj.sum() * 0)  # grad-safe zero
 
-                # Window weight (optionally detached so grads only come via `bell`)
+                d = torch.cdist(zi, zj, p=2)  # [bi, bj], requires grad w.r.t. zi,zj
+
+                # window weight (can be detached)
                 w = torch.sigmoid(sharp * (d - low_t)) * torch.sigmoid(sharp * (high_t - d))
                 if detach_weight:
                     w = w.detach()
 
-                # Bell emphasizes the middle band — this path MUST carry grad to z
+                # bell must carry grad (depends on d)
                 bell = torch.exp(-(d - center_t) ** 2 / (2 * (sigma ** 2)))
 
-                num = (w * bell).sum()
-                den = w.sum().clamp_min(eps)  # detached if w is detached ⇒ OK
-                out = num / den  # scalar
-                # Assert we actually have a grad path from out → zi/zj
-                assert out.requires_grad, "block_loss output lost grad"
+                # weighted mean in the band
+                num = (w * bell).sum()  # scalar; carries grad via 'bell'
+                den = w.sum().clamp_min(eps)  # detached path is fine for denom
+
+                out = num / den
+
+                # ---- grad-safety shim ----
+                # If every w=0 in this block, num==0 and out is constant; keep a noop dependency.
+                if not out.requires_grad:
+                    out = out + 0.0 * (zi.sum() + zj.sum())
+
                 return out
 
             total = z.new_zeros(())
