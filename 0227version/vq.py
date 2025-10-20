@@ -823,6 +823,9 @@ class EuclideanCodebook(nn.Module):
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
+        # 0. prepare input の少し上 or 直下あたりに
+        if mode != "init_kmeans_final" and chunk_i is not None and chunk_i == 0:
+            self.latent_size_sum = 0
 
         # ------------------------------------------------------------------
         # 0. prepare input
