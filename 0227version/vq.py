@@ -462,7 +462,7 @@ class ContrastiveLoss(nn.Module):
             use_checkpoint=True,  # 推奨: True
             stream_backward=False,  # forward 内では False
         )
-
+        print(f"latent_repel_loss_mid {latent_repel_loss_mid}")
         # ほかの損失と合算して最後に一度だけ backward()
         # 参考指標（元式に相当）
         repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
@@ -1189,7 +1189,7 @@ class VectorQuantize(nn.Module):
             inds = embed_ind_dict[key]
             # inds may be tensor or list; normalize length
             n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
-
+            print(f"n {n}")
             # Need >=2 for pairwise losses; skip otherwise
             if n < 2:
                 continue
@@ -1509,6 +1509,7 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # repel loss calculation
         # -------------------------------
+        print(f"chunk_i {chunk_i}")
         ret = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch,
                                       chunk_i)
 

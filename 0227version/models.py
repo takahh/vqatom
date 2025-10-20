@@ -216,20 +216,14 @@ class EquivariantThreeHopGINE(nn.Module):
             src_one_way, dst_one_way = data.edges()
             src = torch.cat([src_one_way, dst_one_way])
             dst = torch.cat([dst_one_way, src_one_way])
-            src_output = src.detach().clone()
-            dst_output = dst.detach().clone()
-            num_nodes = data.num_nodes()
-            sample_adj = torch.zeros((num_nodes, num_nodes), device=src.device)
             self.gine1 = self.gine1.to(device)
             self.gine2 = self.gine2.to(device)
             self.gine3 = self.gine3.to(device)
             self.gine4 = self.gine4.to(device)
             self.vq = self.vq.to(device)
             self.bond_weight = self.bond_weight.to(device)
-            feat_before_transform = features.detach()
             features = self.feat_embed(features).to(device)
             features = features.to(device)
-            # 1 featue to nn
             h = self.linear_0(features)
             init_feat = h
             edge_weight = data.edata.get(
@@ -248,7 +242,6 @@ class EquivariantThreeHopGINE(nn.Module):
             edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
             edge_attr = transformed_edge_weight
             edge_attr = torch.ones(edge_attr.shape).to(device)
-
             # 2 Three GNN Layers
             h_list = []
             h1 = self.ln0(self.gine1(h, edge_index, edge_attr))
@@ -267,7 +260,6 @@ class EquivariantThreeHopGINE(nn.Module):
         if mode == "init_kmeans_loop":
             return h
         if mode == None:  # train
-            # x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
             quantize_output = self.vq(
                 h, init_feat, mask_dict, logger, chunk_i, epoch, mode
             )
@@ -282,11 +274,6 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"sil_loss {sil_loss}")
         print(f"repel_loss {repel_loss}")
         print(f"cb_repel_loss {cb_repel_loss}")
-        # commit_loss 0.0
-        # cb_loss 0.0
-        # sil_loss []
-        # repel_loss 0.24993233382701874
-        # cb_repel_loss 0.995575487613678
         losslist = [0, commit_loss.item(), cb_loss.item(), 0,
                     repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist
