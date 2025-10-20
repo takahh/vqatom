@@ -340,109 +340,67 @@ class ContrastiveLoss(nn.Module):
                     low_t, high_t, center_t,
                     sigma, sharp, eps,
                     detach_weight=True,
-                    gamma: float = 1.0,  # >1.0 sharpens the mid band; 1.0 = no change
-                    amp_safe: bool = True  # disable AMP for this block's math if True
+                    gamma: float = 1.0,  # optional focal sharpening for mid band
             ):
-                """
-                zi: [bi, D], zj: [bj, D], both require_grad=True
-                *_t: scalars/tensors broadcastable to pairwise distance matrix
-                sigma, sharp, eps: floats/tensors (broadcastable)
-                detach_weight: if True, gate weights are detached (no grad through gating)
-                gamma: optional focal exponent on the bell (emphasizes mid-range if >1)
-                amp_safe: compute distances in fp32 even under autocast to avoid precision issues
-                """
                 import torch
-                from torch.amp import autocast
+                from contextlib import nullcontext
 
-                # ---- Empty guards ----
+                # ---- early empty guards ----
                 if zi.numel() == 0 or zj.numel() == 0:
-                    return zi.sum() * 0 + zj.sum() * 0  # grad-safe zero on correct device/dtype
+                    return zi.sum() * 0 + zj.sum() * 0
 
-                # ---- Compute in full precision if requested (helps at small distance scales) ----
-                use_fp32 = amp_safe and (zi.is_cuda or zj.is_cuda)
-                ctx = autocast('cuda', enabled=False) if use_fp32 else torch.no_grad().__class__(False)  # dummy context
+                # ---- do the math in fp32 (robust under AMP) ----
+                zi32 = zi.float()
+                zj32 = zj.float()
+                low32 = torch.as_tensor(low_t, device=zi.device, dtype=torch.float32)
+                high32 = torch.as_tensor(high_t, device=zi.device, dtype=torch.float32)
+                center32 = torch.as_tensor(center_t, device=zi.device, dtype=torch.float32)
 
-                with ctx:
-                    d = torch.cdist(zi, zj, p=2)  # [bi, bj], carries grad w.r.t zi,zj
+                # guard sigma
+                sigma32 = torch.as_tensor(sigma, device=zi.device, dtype=torch.float32)
+                sigma32 = torch.clamp(sigma32, min=1e-6)  # avoid /0
+                inv_two_sigma2 = 0.5 / (sigma32 * sigma32)
 
-                    # Gating window (optionally detached)
-                    w = torch.sigmoid(sharp * (d - low_t)) * torch.sigmoid(sharp * (high_t - d))
-                    if detach_weight:
-                        w = w.detach()
+                # ---- distances ----
+                d = torch.cdist(zi32, zj32, p=2)  # [bi, bj], fp32
 
-                    # Mid-band bell (must carry grad)
-                    bell = torch.exp(-((d - center_t) ** 2) / (2 * (sigma ** 2))).clamp_min(1e-20)
-                    if gamma != 1.0:
-                        bell = bell ** gamma
+                # ---- gating window (clamp sigmoid arguments) ----
+                # prevent inf in exp for extreme 'sharp * (...)'
+                x1 = (sharp * (d - low32)).clamp(-40.0, 40.0)
+                x2 = (sharp * (high32 - d)).clamp(-40.0, 40.0)
+                w = torch.sigmoid(x1) * torch.sigmoid(x2)
+                if detach_weight:
+                    w = w.detach()
 
-                    num = (w * bell).sum()  # scalar; grad flows via bell→d→{zi,zj}
-                    den = w.sum().clamp_min(eps)  # safe even if all weights ~0
-                    out = num / den
+                # ---- mid-band bell (keep grad) ----
+                # exponent is non-positive; clamp to avoid denormal underflow
+                exp_arg = -((d - center32) ** 2) * inv_two_sigma2
+                exp_arg = torch.clamp(exp_arg, min=-60.0, max=0.0)
+                bell = torch.exp(exp_arg)
+                if gamma != 1.0:
+                    bell = bell ** gamma
 
-                # ---- Grad-safety shim ----
-                # If every w==0, out is constant; attach a no-op dependency so graph remains valid.
+                # ---- weighted mean ----
+                num = (w * bell).sum()  # scalar
+                den = w.sum()
+
+                # handle den==0 or NaN/Inf safely
+                if not torch.isfinite(den):
+                    den = torch.tensor(0.0, device=zi.device, dtype=torch.float32)
+                den = den.clamp_min(eps)
+
+                out = num / den
+
+                # ---- repair NaNs/Infs if they still occur ----
+                if not torch.isfinite(out):
+                    # make a grad-carrying zero on the right device
+                    out = (zi.sum() + zj.sum()) * 0.0
+
+                # keep grad path if weights were all zero
                 if not out.requires_grad:
                     out = out + 0.0 * (zi.sum() + zj.sum())
 
                 return out
-
-            total = z.new_zeros(())
-            used_ckpt = False
-
-            # ---- Main loop (upper-triangular across blocks) ----
-            i = 0
-            while i < B:
-                bi = min(row_block, B - i)
-                zi = z[i:i + bi]  # view; still requires_grad=True
-                assert zi.requires_grad, "zi lost requires_grad"
-
-                j = i + row_block
-                while j < B:
-                    bj = min(col_block, B - j)
-                    zj = z[j:j + bj]
-                    assert zj.requires_grad, "zj lost requires_grad"
-
-                    if stream_backward:
-                        # Use ONLY outside forward; shown for completeness
-                        loss_block = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight) / n_blocks_total
-                        loss_block.backward()
-                        total = total + loss_block.detach()
-                    else:
-                        if use_checkpoint:
-                            # Pass ALL tensors used inside the closure as inputs to checkpoint.
-                            # (Avoids subtle detaches when closures capture tensors.)
-                            lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight, use_reentrant=False)
-                            used_ckpt = True
-                        else:
-                            lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
-
-                        # Sanity: lb should carry grad
-                        assert lb.requires_grad, "lb requires_grad=False (grad path broken)"
-                        total = total + lb
-
-                    del zj
-                    j += col_block
-
-                del zi
-                i += row_block
-
-            if stream_backward:
-                return total  # detached sum for logging
-
-            out = total / n_blocks_total
-            # Final guard: returned scalar must keep a grad_fn unless graph is intentionally frozen
-            assert out.requires_grad, (
-                "Returned loss has no grad_fn. Likely causes:\n"
-                "- z was detached upstream\n"
-                "- use_checkpoint path captured tensors not passed as inputs\n"
-                "- all contributions detached (e.g., detach_weight plus removing bell)\n"
-            )
-
-            # Optional: tiny probe to confirm grad exists at runtime (enable temporarily)
-            # g = torch.autograd.grad(out, z, retain_graph=True, allow_unused=True)[0]
-            # assert g is not None, "grad(out, z) is None"
-            print(f"out in latent_repel_mid_chunked {out}")
-            return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
         def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
