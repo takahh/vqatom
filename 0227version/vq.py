@@ -313,6 +313,10 @@ class ContrastiveLoss(nn.Module):
             B, D = z.shape
             device, dtype = z.device, z.dtype
 
+            band = (high - low).abs()
+            sigma = torch.clamp(0.20 * band, min=1e-4)  # try 0.20 first; 0.15–0.33 works
+            sharp = 10  # not 20 to start
+
             # --- Make sure thresholds are tensors on the right device/dtype ---
             low = torch.as_tensor(low, device=device, dtype=dtype)
             high = torch.as_tensor(high, device=device, dtype=dtype)
@@ -331,30 +335,52 @@ class ContrastiveLoss(nn.Module):
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            def block_loss(zi, zj, low_t, high_t, center_t, sigma, sharp, eps, detach_weight):
-                # zi: [bi, D], zj: [bj, D]
-                # ---- empty guards ----
+            def block_loss(
+                    zi, zj,
+                    low_t, high_t, center_t,
+                    sigma, sharp, eps,
+                    detach_weight=True,
+                    gamma: float = 1.0,  # >1.0 sharpens the mid band; 1.0 = no change
+                    amp_safe: bool = True  # disable AMP for this block's math if True
+            ):
+                """
+                zi: [bi, D], zj: [bj, D], both require_grad=True
+                *_t: scalars/tensors broadcastable to pairwise distance matrix
+                sigma, sharp, eps: floats/tensors (broadcastable)
+                detach_weight: if True, gate weights are detached (no grad through gating)
+                gamma: optional focal exponent on the bell (emphasizes mid-range if >1)
+                amp_safe: compute distances in fp32 even under autocast to avoid precision issues
+                """
+                import torch
+                from torch.amp import autocast
+
+                # ---- Empty guards ----
                 if zi.numel() == 0 or zj.numel() == 0:
-                    return (zi.sum() * 0 + zj.sum() * 0)  # grad-safe zero
+                    return zi.sum() * 0 + zj.sum() * 0  # grad-safe zero on correct device/dtype
 
-                d = torch.cdist(zi, zj, p=2)  # [bi, bj], requires grad w.r.t. zi,zj
+                # ---- Compute in full precision if requested (helps at small distance scales) ----
+                use_fp32 = amp_safe and (zi.is_cuda or zj.is_cuda)
+                ctx = autocast('cuda', enabled=False) if use_fp32 else torch.no_grad().__class__(False)  # dummy context
 
-                # window weight (can be detached)
-                w = torch.sigmoid(sharp * (d - low_t)) * torch.sigmoid(sharp * (high_t - d))
-                if detach_weight:
-                    w = w.detach()
+                with ctx:
+                    d = torch.cdist(zi, zj, p=2)  # [bi, bj], carries grad w.r.t zi,zj
 
-                # bell must carry grad (depends on d)
-                bell = torch.exp(-(d - center_t) ** 2 / (2 * (sigma ** 2)))
+                    # Gating window (optionally detached)
+                    w = torch.sigmoid(sharp * (d - low_t)) * torch.sigmoid(sharp * (high_t - d))
+                    if detach_weight:
+                        w = w.detach()
 
-                # weighted mean in the band
-                num = (w * bell).sum()  # scalar; carries grad via 'bell'
-                den = w.sum().clamp_min(eps)  # detached path is fine for denom
+                    # Mid-band bell (must carry grad)
+                    bell = torch.exp(-((d - center_t) ** 2) / (2 * (sigma ** 2))).clamp_min(1e-20)
+                    if gamma != 1.0:
+                        bell = bell ** gamma
 
-                out = num / den
+                    num = (w * bell).sum()  # scalar; grad flows via bell→d→{zi,zj}
+                    den = w.sum().clamp_min(eps)  # safe even if all weights ~0
+                    out = num / den
 
-                # ---- grad-safety shim ----
-                # If every w=0 in this block, num==0 and out is constant; keep a noop dependency.
+                # ---- Grad-safety shim ----
+                # If every w==0, out is constant; attach a no-op dependency so graph remains valid.
                 if not out.requires_grad:
                     out = out + 0.0 * (zi.sum() + zj.sum())
 
