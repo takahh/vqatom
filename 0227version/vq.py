@@ -263,8 +263,9 @@ class ContrastiveLoss(nn.Module):
                     idx = torch.randperm(s.numel(), device=s.device)[:100_000]
                     s = s.index_select(0, idx)
                 s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
-                hist = torch.histc(s_cpu, bins=10, min=0.0, max=15.0)
+                hist = torch.histc(s_cpu, bins=10, min=0.0, max=5.0)
                 vals = hist.tolist()
+                print(vals)
                 logger.info(vals)
 
         def latent_repel_mid_chunked(
