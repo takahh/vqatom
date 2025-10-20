@@ -1218,6 +1218,7 @@ class VectorQuantize(nn.Module):
 
             w_total += w
             contributed_keys.append((key, n))
+            print(f"w_total {w_total}")
 
         if w_total == 0.0:
             # No contributors in this chunk → return clean zeros (and optionally log)
@@ -1235,7 +1236,7 @@ class VectorQuantize(nn.Module):
         repel_avg = repel_wsum / w_total
         cb_repel_avg = cb_repel_wsum / w_total
         sil_avg = sil_wsum / w_total
-
+        print(f"repel_avg {repel_avg}")
         return {
             "repel_loss": repel_avg,
             "cb_repel_loss": cb_repel_avg,
