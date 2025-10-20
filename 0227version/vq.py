@@ -1236,7 +1236,7 @@ class VectorQuantize(nn.Module):
         repel_avg = repel_wsum / w_total
         cb_repel_avg = cb_repel_wsum / w_total
         sil_avg = sil_wsum / w_total
-        print(f"repel_avg {repel_avg}")
+        print(f"repel_avg {repel_avg}")  # this is nonzero
         return {
             "repel_loss": repel_avg,
             "cb_repel_loss": cb_repel_avg,
@@ -1564,6 +1564,7 @@ class VectorQuantize(nn.Module):
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss = mid_repel_loss
         repel_loss *= alpha
+        print(f"repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}")
         if epoch < 3:
             loss = repel_loss
         elif epoch >= 3:
