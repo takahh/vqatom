@@ -293,11 +293,11 @@ class ContrastiveLoss(nn.Module):
             assert not (use_checkpoint and stream_backward), \
                 "checkpoint と streaming backward は同時に使えません。"
 
+            # --- quick diagnostic sampling ---
             with torch.no_grad():
-                # sample a modest subset for speed
                 idx = torch.randperm(z.shape[0], device=z.device)[:4096]
                 d = torch.cdist(z[idx], z[idx], p=2)
-                mask = (d > lower_thresh) & (d < upper_thresh)
+                mask = (d > low) & (d < high)
                 if mask.any():
                     d_in = d[mask]
                     m = float(d_in.mean())
@@ -313,16 +313,17 @@ class ContrastiveLoss(nn.Module):
             B, D = z.shape
             device, dtype = z.device, z.dtype
 
+            # --- parameters ---
             band = (high - low).abs()
-            sigma = torch.clamp(0.20 * band, min=1e-4)  # try 0.20 first; 0.15–0.33 works
+            sigma = torch.clamp(0.20 * band, min=1e-4)
             sharp = 10  # not 20 to start
 
-            # --- Make sure thresholds are tensors on the right device/dtype ---
+            # --- threshold tensors ---
             low = torch.as_tensor(low, device=device, dtype=dtype)
             high = torch.as_tensor(high, device=device, dtype=dtype)
             center = torch.as_tensor(center, device=device, dtype=dtype)
 
-            # Count upper-triangular inter-block pairs (normalization)
+            # --- block counting for normalization ---
             def count_blocks(B, rb, cb):
                 cnt, i = 0, 0
                 while i < B:
@@ -335,28 +336,37 @@ class ContrastiveLoss(nn.Module):
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            def block_loss(zi, zj, low_t, high_t, center_t, sigma, sharp, eps, detach_weight, gamma: float = 1.0):
+            # --- inner block loss ---
+            def block_loss(
+                    zi, zj,
+                    low_t, high_t, center_t,
+                    sigma, sharp, eps, detach_weight,
+                    gamma: float = 1.0
+            ):
                 import torch
 
                 if zi.numel() == 0 or zj.numel() == 0:
                     return zi.sum() * 0 + zj.sum() * 0
 
-                # fp32で安定計算
+                # fp32 for stability
                 zi32, zj32 = zi.float(), zj.float()
                 low32 = torch.as_tensor(low_t, device=zi.device, dtype=torch.float32)
                 high32 = torch.as_tensor(high_t, device=zi.device, dtype=torch.float32)
                 center32 = torch.as_tensor(center_t, device=zi.device, dtype=torch.float32)
                 sigma32 = torch.clamp(torch.as_tensor(sigma, device=zi.device, dtype=torch.float32), min=1e-6)
 
-                d = torch.cdist(zi32, zj32, p=2)  # [bi,bj]
+                d = torch.cdist(zi32, zj32, p=2)  # [bi, bj]
+
+                # gating window
                 x1 = (sharp * (d - low32)).clamp(-40.0, 40.0)
                 x2 = (sharp * (high32 - d)).clamp(-40.0, 40.0)
                 w = torch.sigmoid(x1) * torch.sigmoid(x2)
                 if detach_weight:
                     w = w.detach()
 
+                # bell curve weighting
                 exp_arg = -((d - center32) ** 2) / (2.0 * sigma32 * sigma32)
-                exp_arg = exp_arg.clamp(min=-60.0, max=0.0)  # underflow/overflow防止
+                exp_arg = exp_arg.clamp(min=-60.0, max=0.0)
                 bell = torch.exp(exp_arg)
                 if gamma != 1.0:
                     bell = bell ** gamma
@@ -367,10 +377,35 @@ class ContrastiveLoss(nn.Module):
                 out = num / den
                 out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # 勾配経路が切れていたらノーオペ依存を足す
+                # gradient safety
                 if not out.requires_grad:
                     out = out + 0.0 * (zi.sum() + zj.sum())
+
                 return out
+
+            i = 0
+            total = z.new_zeros(())
+            while i < B:
+                bi = min(row_block, B - i)
+                zi = z[i:i + bi]
+
+                j = i + row_block
+                while j < B:
+                    bj = min(col_block, B - j)
+                    zj = z[j:j + bj]
+
+                    if use_checkpoint:
+                        lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight,
+                                           use_reentrant=False)
+                    else:
+                        lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
+
+                    total = total + lb
+                    j += col_block
+                i += row_block
+
+            out = total / n_blocks_total
+            return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
         def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
