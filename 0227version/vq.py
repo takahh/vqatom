@@ -292,6 +292,22 @@ class ContrastiveLoss(nn.Module):
             assert not (use_checkpoint and stream_backward), \
                 "checkpoint と streaming backward は同時に使えません。"
 
+            with torch.no_grad():
+                # sample a modest subset for speed
+                idx = torch.randperm(z.shape[0], device=z.device)[:4096]
+                d = torch.cdist(z[idx], z[idx], p=2)
+                mask = (d > lower_thresh) & (d < upper_thresh)
+                if mask.any():
+                    d_in = d[mask]
+                    m = float(d_in.mean())
+                    c = float(center)
+                    s = float(sigma)
+                    rel = float(((d_in - c).abs().mean() / max(1e-8, (high - low))))
+                    print(f"[repel diag] in-window pairs={mask.sum().item()} "
+                          f"mean(d)={m:.4f} center={c:.4f} "
+                          f"mean|d-center|={float((d_in - c).abs().mean()):.4f} "
+                          f"rel_to_band={rel:.3f}")
+
             assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
             B, D = z.shape
             device, dtype = z.device, z.dtype
