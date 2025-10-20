@@ -1509,8 +1509,16 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # repel loss calculation
         # -------------------------------
-        mid_repel_loss, cb_repel_loss, sil, contrib \
-            = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch, chunk_i)
+        ret = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch,
+                                      chunk_i)
+
+        # Be permissive about key names
+        mid_repel_loss = ret.get("mid_repel_loss") or ret.get("repel_loss") or 0.0
+        cb_repel_loss = ret.get("cb_repel_loss") or 0.0
+        sil = ret.get("sil", [])
+        contrib = ret.get("contrib", None)
+
+        print(f"-1 repel_loss = {mid_repel_loss}, epoch = {epoch}")  # repel = 0 here !!!!!!!
         # -------------------------------
         # repel loss calculation
         # -------------------------------
