@@ -1184,6 +1184,16 @@ class VectorQuantize(nn.Module):
         # OPTIONAL: collect debug info
         contributed_keys = []
 
+        print(f"[ORTHO] epoch={epoch} chunk={chunk} type(embed_ind_dict)={type(embed_ind_dict).__name__}")
+        if hasattr(embed_ind_dict, "__len__"):
+            print(f"[ORTHO] keys={list(embed_ind_dict.keys())[:8]} len={len(embed_ind_dict)}")
+        else:
+            print("[ORTHO] embed_ind_dict has no __len__")
+
+        # If dict-like but empty, say why we return zeros:
+        if not embed_ind_dict:
+            print(f"[ORTHO SKIP] epoch={epoch} chunk={chunk}: embed_ind_dict is empty")
+
         # Iterate per element
         for key in sorted(embed_ind_dict.keys()):
             inds = embed_ind_dict[key]
