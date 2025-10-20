@@ -1556,15 +1556,17 @@ class VectorQuantize(nn.Module):
 
         ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
 
+        print(f"0 repel_loss = {mid_repel_loss}, epoch = {epoch}") # repel = 0 here !!!!!!!
         mid_repel_loss = _as_scalar_tensor(mid_repel_loss, ref)
         cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
         commit_loss = _as_scalar_tensor(commit_loss, ref)
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
-
+        print(f"1 repel_loss = {mid_repel_loss}, epoch = {epoch}") # repel = 0 here !!!!!!!
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss = mid_repel_loss
+        print(f"2 repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}") # repel = 0 here !!!!!!!
         repel_loss *= alpha
-        print(f"repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}")
+        print(f"3 repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}") # repel = 0 here !!!!!!!
         if epoch < 3:
             loss = repel_loss
         elif epoch >= 3:
