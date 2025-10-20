@@ -341,8 +341,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
 
-                if i > 2000:
-                    break
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
@@ -411,8 +409,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
-                    if i > 2000:
-                        break
 
                 # cleanup glist
                 for g in glist:
