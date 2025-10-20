@@ -341,6 +341,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
 
+                if i > 2000:
+                    break
+
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
