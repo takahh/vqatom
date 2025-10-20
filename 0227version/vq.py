@@ -335,71 +335,41 @@ class ContrastiveLoss(nn.Module):
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            def block_loss(
-                    zi, zj,
-                    low_t, high_t, center_t,
-                    sigma, sharp, eps,
-                    detach_weight=True,
-                    gamma: float = 1.0,  # optional focal sharpening for mid band
-            ):
+            def block_loss(zi, zj, low_t, high_t, center_t, sigma, sharp, eps, detach_weight, gamma: float = 1.0):
                 import torch
-                from contextlib import nullcontext
 
-                # ---- early empty guards ----
                 if zi.numel() == 0 or zj.numel() == 0:
                     return zi.sum() * 0 + zj.sum() * 0
 
-                # ---- do the math in fp32 (robust under AMP) ----
-                zi32 = zi.float()
-                zj32 = zj.float()
+                # fp32で安定計算
+                zi32, zj32 = zi.float(), zj.float()
                 low32 = torch.as_tensor(low_t, device=zi.device, dtype=torch.float32)
                 high32 = torch.as_tensor(high_t, device=zi.device, dtype=torch.float32)
                 center32 = torch.as_tensor(center_t, device=zi.device, dtype=torch.float32)
+                sigma32 = torch.clamp(torch.as_tensor(sigma, device=zi.device, dtype=torch.float32), min=1e-6)
 
-                # guard sigma
-                sigma32 = torch.as_tensor(sigma, device=zi.device, dtype=torch.float32)
-                sigma32 = torch.clamp(sigma32, min=1e-6)  # avoid /0
-                inv_two_sigma2 = 0.5 / (sigma32 * sigma32)
-
-                # ---- distances ----
-                d = torch.cdist(zi32, zj32, p=2)  # [bi, bj], fp32
-
-                # ---- gating window (clamp sigmoid arguments) ----
-                # prevent inf in exp for extreme 'sharp * (...)'
+                d = torch.cdist(zi32, zj32, p=2)  # [bi,bj]
                 x1 = (sharp * (d - low32)).clamp(-40.0, 40.0)
                 x2 = (sharp * (high32 - d)).clamp(-40.0, 40.0)
                 w = torch.sigmoid(x1) * torch.sigmoid(x2)
                 if detach_weight:
                     w = w.detach()
 
-                # ---- mid-band bell (keep grad) ----
-                # exponent is non-positive; clamp to avoid denormal underflow
-                exp_arg = -((d - center32) ** 2) * inv_two_sigma2
-                exp_arg = torch.clamp(exp_arg, min=-60.0, max=0.0)
+                exp_arg = -((d - center32) ** 2) / (2.0 * sigma32 * sigma32)
+                exp_arg = exp_arg.clamp(min=-60.0, max=0.0)  # underflow/overflow防止
                 bell = torch.exp(exp_arg)
                 if gamma != 1.0:
                     bell = bell ** gamma
 
-                # ---- weighted mean ----
-                num = (w * bell).sum()  # scalar
-                den = w.sum()
-
-                # handle den==0 or NaN/Inf safely
-                if not torch.isfinite(den):
-                    den = torch.tensor(0.0, device=zi.device, dtype=torch.float32)
-                den = den.clamp_min(eps)
+                num = (w * bell).sum()
+                den = w.sum().clamp_min(eps)
 
                 out = num / den
+                out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # ---- repair NaNs/Infs if they still occur ----
-                if not torch.isfinite(out):
-                    # make a grad-carrying zero on the right device
-                    out = (zi.sum() + zj.sum()) * 0.0
-
-                # keep grad path if weights were all zero
+                # 勾配経路が切れていたらノーオペ依存を足す
                 if not out.requires_grad:
                     out = out + 0.0 * (zi.sum() + zj.sum())
-
                 return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
@@ -456,6 +426,7 @@ class ContrastiveLoss(nn.Module):
             use_checkpoint=True,  # 推奨: True
             stream_backward=False,  # forward 内では False
         )
+
         # ほかの損失と合算して最後に一度だけ backward()
         # 参考指標（元式に相当）
         repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
