@@ -408,6 +408,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     gc.collect()
                     torch.cuda.empty_cache()
                     torch.cuda.synchronize()
+                    if i > 2000:
+                        break
 
                 # cleanup glist
                 for g in glist:
