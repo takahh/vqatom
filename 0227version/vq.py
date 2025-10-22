@@ -1517,6 +1517,7 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)])
             repel_value = ret[0]
             cb_repel_value = ret[3]
+            print(f"repel_value {repel_value}, cb_rep_value {cb_repel_value}")
             repel_num = repel_num + repel_value * Ni
             cb_repel_num = cb_repel_num + cb_repel_value * Ni
 
