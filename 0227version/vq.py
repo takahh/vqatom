@@ -401,9 +401,8 @@ class ContrastiveLoss(nn.Module):
                                            use_reentrant=False)
                     else:
                         lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
-
+                    print(f"lb {lb}")
                     total = total + lb
-                    print(total)
                     j += col_block
                 i += row_block
 
