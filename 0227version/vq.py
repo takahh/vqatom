@@ -549,6 +549,7 @@ class EuclideanCodebook(nn.Module):
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
         self.quantize_dict = {}
+
     def reset_kmeans(self):
         self.initted.data.copy_(torch.Tensor([False]))
 
@@ -877,8 +878,9 @@ class EuclideanCodebook(nn.Module):
 
             self.quantize_dict[str(key)] = quantize
             self.embed_ind_dict[str(key)] = idx.to(torch.int32)
-
-            # -------------------- silhouette (init only, on CPU) --------------------
+            # ========================================================================
+            #        silhouette (init only, on CPU)
+            # ========================================================================
             if mode == "init_kmeans_final":
                 try:
                     torch.save(code.detach().cpu(), f"./naked_embed_{epoch}_{key}.pt")
@@ -908,6 +910,25 @@ class EuclideanCodebook(nn.Module):
                 except Exception as e:
                     print(f"Silhouette failed for {key}: {e}")
                     if logger: logger.warning(f"Silhouette failed for {key}: {e}")
+            # elif mode is None: # training
+            #     # ========================================================================
+            #     # ここで repel ロス計算。Sil score と違い合計計算必要
+            #     # ========================================================================
+            #     inds = self.embed_ind_dict[key]
+            #     n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
+            #     if n < 2:
+            #         continue
+            #     sil_k = 0
+            #     repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
+            #         (self.compute_contrastive_loss(x, chunk_i, logger, self.embed[str(key)]))
+            #     weight_by_counts = True
+            #     w = float(n) if weight_by_counts else 1.0
+            #     repel_wsum = repel_wsum + w * repel_k
+            #     cb_repel_wsum = cb_repel_wsum + w * cb_repel_k
+            #     sil_wsum = sil_wsum + w * sil_k
+            #     w_total += w
+            #     contributed_keys.append((key, n))
+
 
             # -------------------- EMA codebook update (hard-EMA) --------------------
             if self.training and epoch is not None and epoch < 30:
@@ -1172,7 +1193,7 @@ class VectorQuantize(nn.Module):
         return equivalence_groups
 
     def orthogonal_loss_fn(
-            self, embed_ind_dict, codebook, init_feat, x, quantize_dict, logger, epoch, chunk=0
+            self, mask_dict, embed_ind_dict, codebook, init_feat, x, quantize_dict, logger, epoch, chunk=0
         ):
         import torch
         dev = x.device if hasattr(x, "device") else "cpu"
@@ -1181,32 +1202,28 @@ class VectorQuantize(nn.Module):
         repel_wsum = torch.zeros((), device=dev)
         cb_repel_wsum = torch.zeros((), device=dev)
         sil_wsum = torch.zeros((), device=dev)
-
         w_total = 0.0  # total weight of contributing elements
-
         # OPTIONAL: collect debug info
         contributed_keys = []
-
-        print(f"[ORTHO] epoch={epoch} chunk={chunk} type(embed_ind_dict)={type(embed_ind_dict).__name__}")
-        if hasattr(embed_ind_dict, "__len__"):
-            print(f"[ORTHO] keys={list(embed_ind_dict.keys())[:8]} len={len(embed_ind_dict)}")
-        else:
-            print("[ORTHO] embed_ind_dict has no __len__")
-
-        # If dict-like but empty, say why we return zeros:
-        if not embed_ind_dict:
-            print(f"[ORTHO SKIP] epoch={epoch} chunk={chunk}: embed_ind_dict is empty")
+        # print(f"[ORTHO] epoch={epoch} chunk={chunk} type(embed_ind_dict)={type(embed_ind_dict).__name__}")
+        # if hasattr(embed_ind_dict, "__len__"):
+        #     print(f"[ORTHO] keys={list(embed_ind_dict.keys())[:8]} len={len(embed_ind_dict)}")
+        # else:
+        #     print("[ORTHO] embed_ind_dict has no __len__")
+        #
+        # # If dict-like but empty, say why we return zeros:
+        # if not embed_ind_dict:
+        #     print(f"[ORTHO SKIP] epoch={epoch} chunk={chunk}: embed_ind_dict is empty")
 
         # Iterate per element
         for key in sorted(embed_ind_dict.keys()):
             inds = embed_ind_dict[key]
             # inds may be tensor or list; normalize length
             n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
-            print(f"n {n}")
+            # print(f"n {n}")
             # Need >=2 for pairwise losses; skip otherwise
             if n < 2:
                 continue
-
             # Fetch per-element latents/embeds as you already do
             # Example (adapt to your variables):
             # z_k = quantize_dict[key]  # [n, D]
@@ -1219,7 +1236,7 @@ class VectorQuantize(nn.Module):
             sil_k = 0
             repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
                 (self.compute_contrastive_loss(x, chunk, logger, codebook[str(key)]))
-            print(f"repel_k {repel_k}")
+            # print(f"repel_k {repel_k}")
             weight_by_counts = True
             # Weight: either by count or uniform per contributing element
             w = float(n) if weight_by_counts else 1.0
@@ -1231,7 +1248,7 @@ class VectorQuantize(nn.Module):
 
             w_total += w
             contributed_keys.append((key, n))
-            print(f"w_total {w_total}")
+            # print(f"w_total {w_total}")
 
         if w_total == 0.0:
             # No contributors in this chunk → return clean zeros (and optionally log)
@@ -1370,12 +1387,13 @@ class VectorQuantize(nn.Module):
                 except Exception:
                     pass
         return norm
-
+    # x.squeeze(), mask_dict, self._codebook.embed
     def commitment_loss(
             self,
             encoder_outputs,  # [B, D]  … 現在の“チャンク”だけ
             mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバルindex想定）
             codebook,  # dict-like per element or single tensor/param
+            logger,
             beta=0.25,
             temperature=None,  # 未使用ならそのまま（EMAは別処理）
             use_cosine=False,
@@ -1402,6 +1420,8 @@ class VectorQuantize(nn.Module):
         total_latent = 0
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
+        repel_num = encoder_outputs.new_zeros(())
+        cb_repel_num = encoder_outputs.new_zeros(())
 
         # イテレーション準備（要素別コードブック or 共有コードブック）
         if isinstance(codebook, (dict, nn.ParameterDict)):
@@ -1480,6 +1500,9 @@ class VectorQuantize(nn.Module):
 
             e = cb_t.index_select(0, embed_ind)  # [Ni, D]
 
+            # ==============================
+            # commitment loss 計算　＋重み付け
+            # ==============================
             # --- VQ-VAE 損失（EMA 更新は別で）---
             commit_part = F.mse_loss(z, e.detach(), reduction="mean")  # β‖z - sg(e)‖²
             codebk_part = F.mse_loss(e, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
@@ -1488,14 +1511,32 @@ class VectorQuantize(nn.Module):
             total_latent += Ni
             commit_num = commit_num + commit_part * Ni
             codebk_num = codebk_num + codebk_part * Ni
+            # ==============================
+            # repel loss 計算　＋重み付け
+            # ==============================
+            ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)])
+            repel_value = ret.get("mid_repel_loss") or ret.get("repel_loss") or 0.0
+            cb_repel_value = ret.get("cb_repel_loss") or 0.0
+            repel_num = repel_num + repel_value * Ni
+            cb_repel_num = cb_repel_num + cb_repel_value * Ni
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
             return zero, zero
 
+        # ==============================
+        # commitment loss 平均の計算
+        # ==============================
         commit_loss = beta * (commit_num / total_latent)
         codebook_loss = (codebk_num / total_latent)
-        return commit_loss, codebook_loss
+        # ==============================
+        # repel loss 平均の計算
+        # ==============================
+        repel_loss = repel_num / total_latent
+        cb_repel_loss = (cb_repel_num / total_latent)
+
+        return commit_loss, codebook_loss, repel_loss, cb_repel_loss
+
 
     def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
@@ -1519,25 +1560,22 @@ class VectorQuantize(nn.Module):
             return 0
         else:
             quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
-        # -------------------------------
-        # repel loss calculation
-        # -------------------------------
-        print(f"chunk_i {chunk_i}")
-        ret = self.orthogonal_loss_fn(embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch,
-                                      chunk_i)
+        # # -------------------------------
+        # # repel loss calculation
+        # # -------------------------------
+        # ret = self.orthogonal_loss_fn(mask_dict, embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch, chunk_i)
+        #
+        # # Be permissive about key names
+        # mid_repel_loss = ret.get("mid_repel_loss") or ret.get("repel_loss") or 0.0
+        # cb_repel_loss = ret.get("cb_repel_loss") or 0.0
+        # sil = ret.get("sil", [])
+        # contrib = ret.get("contrib", None)
 
-        # Be permissive about key names
-        mid_repel_loss = ret.get("mid_repel_loss") or ret.get("repel_loss") or 0.0
-        cb_repel_loss = ret.get("cb_repel_loss") or 0.0
-        sil = ret.get("sil", [])
-        contrib = ret.get("contrib", None)
-
-        print(f"-1 repel_loss = {mid_repel_loss}, epoch = {epoch}")  # repel = 0 here !!!!!!!
         # -------------------------------
-        # repel loss calculation
+        # commit loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        commit_loss, codebook_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed)
+        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed, logger)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
@@ -1578,17 +1616,12 @@ class VectorQuantize(nn.Module):
 
         ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
 
-        print(f"0 repel_loss = {mid_repel_loss}, epoch = {epoch}") # repel = 0 here !!!!!!!
-        mid_repel_loss = _as_scalar_tensor(mid_repel_loss, ref)
+        repel_loss = _as_scalar_tensor(repel_loss, ref)
         cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
         commit_loss = _as_scalar_tensor(commit_loss, ref)
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
-        print(f"1 repel_loss = {mid_repel_loss}, epoch = {epoch}") # repel = 0 here !!!!!!!
         alpha = 1 / ((epoch + 1) ** 2)
-        repel_loss = mid_repel_loss
-        print(f"2 repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}") # repel = 0 here !!!!!!!
         repel_loss *= alpha
-        print(f"3 repel_loss = {repel_loss}, alpha = {alpha}, epoch = {epoch}") # repel = 0 here !!!!!!!
         if epoch < 3:
             loss = repel_loss
         elif epoch >= 3:
