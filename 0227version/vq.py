@@ -1395,11 +1395,10 @@ class VectorQuantize(nn.Module):
             mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバルindex想定）
             codebook,  # dict-like per element or single tensor/param
             logger,
+            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
             beta=0.25,
             temperature=None,  # 未使用ならそのまま（EMAは別処理）
             use_cosine=False,
-            *,
-            chunk_start=None  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
     ):
         """
         重要: mask_dict の indices は「グローバル index」を想定。
@@ -1577,7 +1576,7 @@ class VectorQuantize(nn.Module):
         # commit loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed, logger)
+        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed, logger, chunk_i)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
