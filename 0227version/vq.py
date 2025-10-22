@@ -338,6 +338,9 @@ class ContrastiveLoss(nn.Module):
                     i += rb
                 return max(cnt, 1)
 
+            row_block = max(1, min(row_block, B))
+            col_block = max(1, min(col_block, B))
+
             n_blocks_total = count_blocks(B, row_block, col_block)
 
             # --- inner block loss ---
