@@ -386,7 +386,7 @@ class ContrastiveLoss(nn.Module):
                     out = out + 0.0 * (zi.sum() + zj.sum())
 
                 return out
-
+            print("--- 0 ---")
             i = 0
             total = z.new_zeros(())
             while i < B:
@@ -403,12 +403,13 @@ class ContrastiveLoss(nn.Module):
                                            use_reentrant=False)
                     else:
                         lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
-                    print(f"lb {lb}")
                     total = total + lb
                     j += col_block
                 i += row_block
 
             out = total / n_blocks_total
+
+            print("--- 1 ---")
             return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
