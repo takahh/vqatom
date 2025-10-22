@@ -240,6 +240,8 @@ class ContrastiveLoss(nn.Module):
         z = z.squeeze()
         # ---- 1) 距離の一次統計（1Dで扱う）----
         # z: [B, D]
+        if z.dim() == 1:
+            z = z.unsqueeze(0)
         print(f"z {z.shape}")
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
@@ -277,8 +279,8 @@ class ContrastiveLoss(nn.Module):
                 center,
                 sigma=3.0,
                 sharp=20.0,
-                row_block=4096,
-                col_block=4096,
+                row_block=0,
+                col_block=0,
                 detach_weight=True,
                 use_checkpoint=True,
                 stream_backward=False,
@@ -1388,6 +1390,7 @@ class VectorQuantize(nn.Module):
                 except Exception:
                     pass
         return norm
+
     # x.squeeze(), mask_dict, self._codebook.embed
     def commitment_loss(
             self,
