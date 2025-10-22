@@ -464,7 +464,7 @@ class ContrastiveLoss(nn.Module):
             z,
             low=lower_thresh, high=upper_thresh, center=center,
             sigma=1.0, sharp=20.0,
-            row_block=100, col_block=100,
+            row_block=1024, col_block=1024,
             detach_weight=True,
             use_checkpoint=True,  # 推奨: True
             stream_backward=False,  # forward 内では False
