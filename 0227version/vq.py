@@ -403,6 +403,7 @@ class ContrastiveLoss(nn.Module):
                         lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
 
                     total = total + lb
+                    print(total)
                     j += col_block
                 i += row_block
 
