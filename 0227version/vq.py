@@ -240,6 +240,7 @@ class ContrastiveLoss(nn.Module):
         z = z.squeeze()
         # ---- 1) 距離の一次統計（1Dで扱う）----
         # z: [B, D]
+        print(f"z {z.shape}")
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
         # （巨大時）サンプルを間引き
