@@ -635,7 +635,7 @@ class EuclideanCodebook(nn.Module):
             skey = str(key)
 
             from utils import CORE_ELEMENTS
-            if int(key) not in CORE_ELEMENTS:
+            if skey not in CORE_ELEMENTS:
                 continue
 
             # Target cb size from allocation ratio
@@ -1475,7 +1475,7 @@ class VectorQuantize(nn.Module):
 
         for key, cb in items:
             from utils import CORE_ELEMENTS
-            if int(key) not in CORE_ELEMENTS:
+            if str(key) not in CORE_ELEMENTS:
                 continue
             kstr = "all" if key is None else str(key)
 
