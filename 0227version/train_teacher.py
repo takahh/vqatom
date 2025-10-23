@@ -284,6 +284,7 @@ def run(args):
     #     conf = get_training_config(args.model_config_path, args.teacher, args.dataset)
     conf = dict(args.__dict__, **conf)
     conf["device"] = device
+
     # logger.info(f"conf: {conf}")
     """ Model init """
     from models import EquivariantThreeHopGINE

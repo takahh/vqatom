@@ -244,6 +244,7 @@ class ContrastiveLoss(nn.Module):
             z = z.unsqueeze(0)
         print(f"z {z.shape}")
         if z.shape[0] == 1:
+            print(f"latent count is only 1. Not calculating losses.")
             return 0, 0, 0, 0, 0
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
@@ -1469,6 +1470,9 @@ class VectorQuantize(nn.Module):
             return z, idx_local
 
         for key, cb in items:
+            from utils import CORE_ELEMENTS
+            if key not in CORE_ELEMENTS:
+                continue
             kstr = "all" if key is None else str(key)
 
             # --- mask/indices を取得し index tensor に統一（まずはグローバルとして整形） ---

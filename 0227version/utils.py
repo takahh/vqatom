@@ -14,7 +14,7 @@ CPF_data = ["cora", "citeseer", "pubmed", "a-computer", "a-photo"]
 OGB_data = ["ogbn-arxiv", "ogbn-products"]
 NonHom_data = ["pokec", "penn94"]
 BGNN_data = ["house_class", "vk_class"]
-
+CORE_ELEMENTS = {6, 7, 8, 15, 16, 14, 5}
 
 def set_seed(seed):
     torch.manual_seed(seed)
