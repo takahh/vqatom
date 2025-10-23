@@ -749,7 +749,7 @@ class EuclideanCodebook(nn.Module):
     def silhouette_score_torch(self,
                                X: torch.Tensor,
                                labels: torch.Tensor,
-                               row_block: int = 8192,
+                               row_block: int = 2048,
                                device: str | torch.device | None = None) -> float:
         """
         Silhouette score on GPU if available, otherwise CPU.
@@ -777,6 +777,8 @@ class EuclideanCodebook(nn.Module):
         N = X.shape[0]
         if N <= 1:
             return 0.0
+        if N < row_block:
+            N = row_block
 
         # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
         uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
