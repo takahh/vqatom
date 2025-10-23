@@ -1540,7 +1540,7 @@ class VectorQuantize(nn.Module):
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
-            return zero, zero
+            return zero, zero, zero, zero
 
         # ==============================
         # commitment loss 平均の計算
