@@ -635,7 +635,7 @@ class EuclideanCodebook(nn.Module):
             skey = str(key)
 
             from utils import CORE_ELEMENTS
-            if key not in CORE_ELEMENTS:
+            if int(key) not in CORE_ELEMENTS:
                 continue
 
             # Target cb size from allocation ratio
