@@ -27,7 +27,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
     # Forward pass
     with torch.cuda.amp.autocast():
         # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        # (g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+        #          data, features, chunk_i, mask_dict=None, logger=None, epoch=None, batched_graph_base=None, mode=None):
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch)
         (loss, cb, loss_list3) = outputs
     #
@@ -48,7 +48,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
         loss.detach(),                     # keep as tensor if you want
         [l.item() if hasattr(l, 'item') else l for l in loss_list3]
     )
-
+# evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
