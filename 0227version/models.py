@@ -265,7 +265,7 @@ class EquivariantThreeHopGINE(nn.Module):
             )
         elif mode == "init_kmeans_final":
             self.vq(
-                data, None, mask_dict, logger, chunk_i, epoch, mode
+                data, features, mask_dict, logger, chunk_i, epoch, mode
             )
             return 0
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output

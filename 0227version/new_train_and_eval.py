@@ -8,6 +8,7 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
+
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Ensure model is on device
@@ -340,6 +341,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 latents \
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+                if i == 0:
+                    first_batch_feat = batched_feats
 
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
@@ -356,7 +359,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # -------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest)
         # -------------------------------------------------------------------
-        evaluate(model, all_latents_tensor, batched_feats, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
+        evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
         print("initial kmeans done....")
         model.vq._codebook.latent_size_sum = 0
 

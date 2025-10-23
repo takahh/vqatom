@@ -836,6 +836,7 @@ class EuclideanCodebook(nn.Module):
         return float(sil_sum / max(processed, 1))
 
     @torch.amp.autocast('cuda', enabled=False)
+    #               data, features, mask_dict, logger, chunk_i, epoch, mode
     def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
         # 0. prepare input の少し上 or 直下あたりに
@@ -1566,8 +1567,8 @@ class VectorQuantize(nn.Module):
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
-
-    def forward(self, x, init_feat, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
+    #              data, features, mask_dict, logger, chunk_i, epoch, mode
+    def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
         only_one = x.ndim == 2
         x = x.to("cuda")
         if only_one:
@@ -1585,10 +1586,12 @@ class VectorQuantize(nn.Module):
         # _codebook (run kmeans, sil score, and EMA)
         # -------------------------------------------
         if mode == "init_kmeans_final":
-            self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
+            print(f"mask_dict[6] {mask_dict[6]}")
+            print(f"feature {feature[:10, 0]}")
+            self._codebook(x, mask_dict, logger, chunk_i, epoch, mode, feature)
             return 0
         else:
-            quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode)
+            quantize_dict, embed_ind_dict, embed = self._codebook(x, mask_dict, logger, chunk_i, epoch, mode, feature)
         # # -------------------------------
         # # repel loss calculation
         # # -------------------------------
