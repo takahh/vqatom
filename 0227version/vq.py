@@ -311,10 +311,10 @@ class ContrastiveLoss(nn.Module):
                     c = float(center)
                     s = float(sigma)
                     rel = float(((d_in - c).abs().mean() / max(1e-8, (high - low))))
-                    print(f"[repel diag] in-window pairs={mask.sum().item()} "
-                          f"mean(d)={m:.4f} center={c:.4f} "
-                          f"mean|d-center|={float((d_in - c).abs().mean()):.4f} "
-                          f"rel_to_band={rel:.3f}")
+                    # print(f"[repel diag] in-window pairs={mask.sum().item()} "
+                    #       f"mean(d)={m:.4f} center={c:.4f} "
+                    #       f"mean|d-center|={float((d_in - c).abs().mean()):.4f} "
+                    #       f"rel_to_band={rel:.3f}")
 
             assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
             B, D = z.shape
@@ -392,7 +392,7 @@ class ContrastiveLoss(nn.Module):
                     out = out + 0.0 * (zi.sum() + zj.sum())
 
                 return out
-            print("--- 0 ---")
+            # print("--- 0 ---")
             i = 0
             total = z.new_zeros(())
             while i < B:
@@ -415,7 +415,7 @@ class ContrastiveLoss(nn.Module):
 
             out = total / n_blocks_total
 
-            print("--- 1 ---")
+            # print("--- 1 ---")
             return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
@@ -472,7 +472,7 @@ class ContrastiveLoss(nn.Module):
             use_checkpoint=True,  # 推奨: True
             stream_backward=False,  # forward 内では False
         )
-        print(f"latent_repel_loss_mid {latent_repel_loss_mid}")
+        # print(f"latent_repel_loss_mid {latent_repel_loss_mid}")
         # ほかの損失と合算して最後に一度だけ backward()
         # 参考指標（元式に相当）
         repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
