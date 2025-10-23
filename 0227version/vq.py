@@ -875,15 +875,16 @@ class EuclideanCodebook(nn.Module):
             # -------------------- select latents for this element --------------------
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
-            else:
+            else:  # train
                 # slice current minibatch range
                 gmask = (mask_dict[key] >= self.latent_size_sum) & (
                         mask_dict[key] < self.latent_size_sum + B
                 )
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
+                features_batched = feature[gmask]
                 print(f"loc {loc[:10]}")
-                print(f"feature {feature[:10, 0]}")
+                print(f"feature {features_batched[:10, 0]}")
 
             if masked_latents.numel() == 0:
                 continue

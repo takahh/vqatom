@@ -261,7 +261,7 @@ class EquivariantThreeHopGINE(nn.Module):
             return h
         if mode == None:  # train
             quantize_output = self.vq(
-                h, init_feat, mask_dict, logger, chunk_i, epoch, mode
+                h, features, mask_dict, logger, chunk_i, epoch, mode
             )
         elif mode == "init_kmeans_final":
             self.vq(
