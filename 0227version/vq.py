@@ -634,6 +634,10 @@ class EuclideanCodebook(nn.Module):
             # Normalize key usage (ParameterDict/Dict keys often stored as str)
             skey = str(key)
 
+            from utils import CORE_ELEMENTS
+            if key not in CORE_ELEMENTS:
+                continue
+
             # Target cb size from allocation ratio
             try:
                 ratio = self.cb_dict[skey]
