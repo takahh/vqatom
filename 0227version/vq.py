@@ -1591,7 +1591,7 @@ class VectorQuantize(nn.Module):
             self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
             return 0
         else:
-            quantize_dict, embed_ind_dict, embed = self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode, feature)
+            quantize_dict, embed_ind_dict, embed = self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
         # # -------------------------------
         # # repel loss calculation
         # # -------------------------------
