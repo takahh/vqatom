@@ -837,7 +837,7 @@ class EuclideanCodebook(nn.Module):
 
     @torch.amp.autocast('cuda', enabled=False)
     #               data, features, mask_dict, logger, chunk_i, epoch, mode
-    def forward(self, x, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
+    def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
         # 0. prepare input の少し上 or 直下あたりに
         if mode != "init_kmeans_final" and chunk_i is not None and chunk_i == 0:
@@ -882,6 +882,8 @@ class EuclideanCodebook(nn.Module):
                 )
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
+                print(f"loc {loc[:10]}")
+                print(f"feature {feature[:10, 0]}")
 
             if masked_latents.numel() == 0:
                 continue
@@ -1586,8 +1588,6 @@ class VectorQuantize(nn.Module):
         # _codebook (run kmeans, sil score, and EMA)
         # -------------------------------------------
         if mode == "init_kmeans_final":
-            print(f"mask_dict[6] {mask_dict[6]}")
-            print(f"feature {feature[:10, 0]}")
             self._codebook(x, mask_dict, logger, chunk_i, epoch, mode, feature)
             return 0
         else:
