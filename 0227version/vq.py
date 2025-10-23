@@ -243,6 +243,8 @@ class ContrastiveLoss(nn.Module):
         if z.dim() == 1:
             z = z.unsqueeze(0)
         print(f"z {z.shape}")
+        if z.shape[0] == 1:
+            return 0, 0, 0, 0, 0
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
         # （巨大時）サンプルを間引き
