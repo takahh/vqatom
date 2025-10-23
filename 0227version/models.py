@@ -222,6 +222,7 @@ class EquivariantThreeHopGINE(nn.Module):
             self.gine4 = self.gine4.to(device)
             self.vq = self.vq.to(device)
             self.bond_weight = self.bond_weight.to(device)
+            features_first = features
             features = self.feat_embed(features).to(device)
             features = features.to(device)
             h = self.linear_0(features)
@@ -261,7 +262,7 @@ class EquivariantThreeHopGINE(nn.Module):
             return h
         if mode == None:  # train
             quantize_output = self.vq(
-                h, features, mask_dict, logger, chunk_i, epoch, mode
+                h, features_first, mask_dict, logger, chunk_i, epoch, mode
             )
         elif mode == "init_kmeans_final":
             self.vq(
