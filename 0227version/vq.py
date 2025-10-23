@@ -1475,7 +1475,7 @@ class VectorQuantize(nn.Module):
 
         for key, cb in items:
             from utils import CORE_ELEMENTS
-            if key not in CORE_ELEMENTS:
+            if int(key) not in CORE_ELEMENTS:
                 continue
             kstr = "all" if key is None else str(key)
 
