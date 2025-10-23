@@ -1588,7 +1588,7 @@ class VectorQuantize(nn.Module):
         # _codebook (run kmeans, sil score, and EMA)
         # -------------------------------------------
         if mode == "init_kmeans_final":
-            self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode, feature)
+            self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
             return 0
         else:
             quantize_dict, embed_ind_dict, embed = self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode, feature)
