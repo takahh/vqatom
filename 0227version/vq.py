@@ -350,8 +350,8 @@ class ContrastiveLoss(nn.Module):
             def block_loss(
                     zi, zj,
                     low_t, high_t, center_t,
-                    sigma, sharp, eps, detach_weight,
-                    gamma: float = 1.0
+                    sigma, sharp, eps, detach_weight, diagonal=True,
+                    gamma: float = 1.0,
             ):
                 import torch
 
@@ -366,6 +366,8 @@ class ContrastiveLoss(nn.Module):
                 sigma32 = torch.clamp(torch.as_tensor(sigma, device=zi.device, dtype=torch.float32), min=1e-6)
 
                 d = torch.cdist(zi32, zj32, p=2)  # [bi, bj]
+                mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+                d = d[mask]  # keep i<j only
 
                 # gating window
                 x1 = (sharp * (d - low32)).clamp(-40.0, 40.0)
@@ -399,16 +401,14 @@ class ContrastiveLoss(nn.Module):
                 bi = min(row_block, B - i)
                 zi = z[i:i + bi]
 
-                j = i + row_block
+                j = i  # include diagonal blocks
                 while j < B:
                     bj = min(col_block, B - j)
                     zj = z[j:j + bj]
-
-                    if use_checkpoint:
-                        lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight,
-                                           use_reentrant=False)
-                    else:
-                        lb = block_loss(zi, zj, low, high, center, sigma, sharp, eps, detach_weight)
+                    diagonal = (i == j)  # inside block, keep only i<j if diagonal
+                    lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight,
+                                        diagonal=diagonal,use_reentrant=False)
+                    # lb = block_loss(zi, zj, ..., diagonal=diagonal)
                     total = total + lb
                     j += col_block
                 i += row_block
@@ -749,7 +749,7 @@ class EuclideanCodebook(nn.Module):
     def silhouette_score_torch(self,
                                X: torch.Tensor,
                                labels: torch.Tensor,
-                               row_block: int = 2048,
+                               row_block: int = 8192,
                                device: str | torch.device | None = None) -> float:
         """
         Silhouette score on GPU if available, otherwise CPU.
@@ -777,8 +777,6 @@ class EuclideanCodebook(nn.Module):
         N = X.shape[0]
         if N <= 1:
             return 0.0
-        if N < row_block:
-            N = row_block
 
         # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
         uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
