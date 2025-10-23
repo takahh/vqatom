@@ -866,6 +866,11 @@ class EuclideanCodebook(nn.Module):
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
         for key in mask_dict.keys():
+            skey = str(key)
+            from utils import CORE_ELEMENTS
+            if skey not in CORE_ELEMENTS:
+                continue
+
             # -------------------- select latents for this element --------------------
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
