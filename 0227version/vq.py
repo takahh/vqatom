@@ -979,6 +979,12 @@ class EuclideanCodebook(nn.Module):
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
         for key in mask_dict.keys():
+
+            skey = str(key)
+            from utils import CORE_ELEMENTS
+            if skey not in CORE_ELEMENTS:
+                continue
+
             gmask = (mask_dict[key] >= self.latent_size_sum) & (
                     mask_dict[key] < self.latent_size_sum + B
             )
