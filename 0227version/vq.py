@@ -884,8 +884,7 @@ class EuclideanCodebook(nn.Module):
                 masked_latents = flatten[0][loc]
                 print("---------------")
                 print(f"key {key}")
-                print(f"feature {feature[:20, 0]}, mask {mask_dict[key][:20]}"
-                      f", batched feat {feature[gmask][:20, 0]}, loc {loc[:20]}")
+                print(f"feature {feature[:20, 0]}, mask {mask_dict[key][:20]}, loc {loc[:20]}")
 
             if masked_latents.numel() == 0:
                 continue
