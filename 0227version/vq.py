@@ -882,7 +882,7 @@ class EuclideanCodebook(nn.Module):
         if mode == "init_kmeans_final":
             self.init_embed_(flatten, mask_dict)
             print("init_embed is done")
-
+        mask_dict = self._normalize_mask_dict(mask_dict)
         # ------------------------------------------------------------------
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
