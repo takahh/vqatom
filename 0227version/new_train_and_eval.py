@@ -140,8 +140,8 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
         for j in range(M):
             elem_vec = elem_all[j]
-            if i == 0 and j == 1:
-                print(elem_vec) # (100,)
+            print(elem_vec) # (100,)
+            print(f"masks_dict[6] {masks_dict[6][:3]}")
             valid = (elem_vec != 0)                 # 実在原子マスク
             if not valid.any():
                 mol_id += 1
@@ -156,7 +156,6 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
             atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
             mol_id += 1
-    print(f"masks_dict[6] {masks_dict[6][:50]}")
 
     return masks_dict, atom_offset, mol_id
 
