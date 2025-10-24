@@ -882,8 +882,10 @@ class EuclideanCodebook(nn.Module):
                 )
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
+                print(f"feature {feature.shape}, loc {loc.shape}, gmask {gmask.shape}")
                 feature_nonzero = feature[feature[:, 0] != 0]
-                print(f"feature {feature_nonzero.shape}, loc {loc.shape}, gmask {gmask.shape}")
+                print(f"feature nonzero {feature_nonzero.shape}, loc {loc.shape}, gmask {gmask.shape}")
+                print(f"feature {feature_nonzero}")
                 features_batched = feature[loc]
                 print(f"key {key} , loc {loc[:10]}")
                 print(f"feature_nonzero {feature_nonzero[:10, 0]}")
