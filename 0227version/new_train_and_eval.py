@@ -320,7 +320,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         import numpy as np
         # Initialize a dict of lists to collect masks per atom type
         all_masks_dict = defaultdict(list)
-
+        first_batch_feat = None
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
             glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
@@ -342,7 +342,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
                 if i == 0 and idx == 0:
-                    first_batch_feat = batched_feats
+                    first_batch_feat = batched_feats.clone()
 
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
