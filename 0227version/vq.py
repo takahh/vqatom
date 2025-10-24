@@ -984,6 +984,27 @@ class EuclideanCodebook(nn.Module):
         # ------------------------------------------------------------------
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
+        def _normalize_mask_dict(self, mask_dict):
+            """
+            Accepts a dict with keys as str/int, values as:
+              - list/tuple/np.array of indices
+              - bool tensor mask
+              - index tensor
+            Returns: dict with both int and str aliases, values kept as-is (normalized later).
+            """
+            if mask_dict is None:
+                return None
+            norm = dict(mask_dict)  # shallow copy
+            for k, v in list(mask_dict.items()):
+                # add int alias if k is digit-string
+                if isinstance(k, str) and k.isdigit():
+                    norm.setdefault(int(k), v)
+                # add str alias if k is int
+                if isinstance(k, int):
+                    norm.setdefault(str(k), v)
+            return norm
+
+        mask_dict = _normalize_mask_dict(mask_dict)
         for key in mask_dict.keys():
 
             skey = str(key)
