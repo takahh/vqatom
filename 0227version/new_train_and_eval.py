@@ -154,8 +154,8 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
             atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
             mol_id += 1
-    print(f"masks_dict[6] {masks_dict[6]}")
-    print(f"global_idxs {global_idxs}")
+    print(f"masks_dict[6] {masks_dict[6][:10]}")
+    print(f"global_idxs {global_idxs[:10]}")
     return masks_dict, atom_offset, mol_id
 
 
