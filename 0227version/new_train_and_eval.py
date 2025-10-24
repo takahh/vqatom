@@ -137,7 +137,6 @@ def collect_global_indices_compact(adj_batch, attr_batch,
         # 必要列だけCPUへ（転送回数削減）
         elem_all = attr_matrices[..., 0].detach().to('cpu', non_blocking=True).numpy()  # (M, 100)
         M = elem_all.shape[0]
-        count = 0
         for j in range(M):
             elem_vec = elem_all[j]
             valid = (elem_vec != 0)                 # 実在原子マスク
@@ -150,20 +149,11 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             for elem in uniq:
                 local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
                 global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
-                print(f"elem {elem}")
-                print(f"global_idxs: {global_idxs}")
                 masks_dict[int(elem)].extend(map(int, global_idxs))
-                # masks_dict[int(elem)].extend(global_idxs)
-                print("masks_dict[int(elem)]")
                 print(masks_dict[int(elem)])
 
             atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
             mol_id += 1
-            count += 1
-            if count > 10:
-                break
-        break
-
     return masks_dict, atom_offset, mol_id
 
 def convert_to_dgl(adj_batch, attr_batch):
