@@ -152,7 +152,8 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                 global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
                 print(f"elem {elem}")
                 print(f"global_idxs: {global_idxs}")
-                masks_dict[int(elem)].extend(global_idxs)
+                masks_dict[int(elem)].extend(map(int, global_idxs))
+                # masks_dict[int(elem)].extend(global_idxs)
                 print("masks_dict[int(elem)]")
                 print(masks_dict[int(elem)])
 
