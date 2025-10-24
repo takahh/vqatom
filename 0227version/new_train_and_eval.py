@@ -146,7 +146,7 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                 continue
 
             nz = elem_vec[valid]                    # 実在原子の元素ラベル列 (len = n_atoms_in_mol)
-            uniq = list(np.unique(nz))
+            uniq = np.unique(nz)
             for elem in uniq:
                 local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
                 global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
