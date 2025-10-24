@@ -937,7 +937,7 @@ class EuclideanCodebook(nn.Module):
         # ------------------------------------------------------------------
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
-        for key in mask_dict.keys():
+        for key in {int(k) for k in mask_dict.keys() if str(k).isdigit()}:
             skey = str(key)
             from utils import CORE_ELEMENTS
             if skey not in CORE_ELEMENTS:
@@ -1056,7 +1056,7 @@ class EuclideanCodebook(nn.Module):
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
         mask_dict = self._normalize_mask_dict(mask_dict)
-        for key in mask_dict.keys():
+        for key in {int(k) for k in mask_dict.keys() if str(k).isdigit()}:
 
             skey = str(key)
             from utils import CORE_ELEMENTS

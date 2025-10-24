@@ -363,8 +363,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                     # train step
                     # (model, g, feats, optimizer, chunk_i, logger, epoch):
-                    print(f"IN THE RUN_INDUCTIVE....")
-                    print(f"batched_feats {batched_feats[:10, :0]}")
                     loss, loss_list_train = train_sage(
                         model, batched_graph, batched_feats, optimizer, i, masks_2, logger, epoch, chunk_size
                     )
