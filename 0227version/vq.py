@@ -835,6 +835,26 @@ class EuclideanCodebook(nn.Module):
 
         return float(sil_sum / max(processed, 1))
 
+    def _normalize_mask_dict(self, mask_dict):
+        """
+        Accepts a dict with keys as str/int, values as:
+          - list/tuple/np.array of indices
+          - bool tensor mask
+          - index tensor
+        Returns: dict with both int and str aliases, values kept as-is (normalized later).
+        """
+        if mask_dict is None:
+            return None
+        norm = dict(mask_dict)  # shallow copy
+        for k, v in list(mask_dict.items()):
+            # add int alias if k is digit-string
+            if isinstance(k, str) and k.isdigit():
+                norm.setdefault(int(k), v)
+            # add str alias if k is int
+            if isinstance(k, int):
+                norm.setdefault(str(k), v)
+        return norm
+
     @torch.amp.autocast('cuda', enabled=False)
     #               data, features, mask_dict, logger, chunk_i, epoch, mode
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
@@ -984,27 +1004,7 @@ class EuclideanCodebook(nn.Module):
         # ------------------------------------------------------------------
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
-        def _normalize_mask_dict(self, mask_dict):
-            """
-            Accepts a dict with keys as str/int, values as:
-              - list/tuple/np.array of indices
-              - bool tensor mask
-              - index tensor
-            Returns: dict with both int and str aliases, values kept as-is (normalized later).
-            """
-            if mask_dict is None:
-                return None
-            norm = dict(mask_dict)  # shallow copy
-            for k, v in list(mask_dict.items()):
-                # add int alias if k is digit-string
-                if isinstance(k, str) and k.isdigit():
-                    norm.setdefault(int(k), v)
-                # add str alias if k is int
-                if isinstance(k, int):
-                    norm.setdefault(str(k), v)
-            return norm
-
-        mask_dict = _normalize_mask_dict(mask_dict)
+        mask_dict = self._normalize_mask_dict(mask_dict)
         for key in mask_dict.keys():
 
             skey = str(key)
