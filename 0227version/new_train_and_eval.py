@@ -331,9 +331,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # np.save("all_masks_dict.npy", all_masks_dict)
         np.savez_compressed("all_masks_dict.npz", all_masks_dict)
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
-        # -------------------------------------------------------------------
-        # Run k-means on the collected latent vectors (goes to the deepest)
-        # -------------------------------------------------------------------
+        # --------------------------------------------------------------------------------------
+        # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
+        # --------------------------------------------------------------------------------------
         evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
         print("initial kmeans done....")
         model.vq._codebook.latent_size_sum = 0
@@ -352,7 +352,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     break
                 print(f"idx {idx}")
                 glist_base, glist, masks_2 = convert_to_dgl(adj_batch, attr_batch)
-                print(f"masks_2[6] {masks_2[6]}")
                 chunk_size = conf["chunk_size"]
                 for i in range(0, len(glist), chunk_size):
                     # # ------------- remove thi soon --------------
@@ -369,7 +368,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     print(f"IN THE RUN_INDUCTIVE....")
                     print(f"batched_feats {batched_feats[:10, :0]}")
                     loss, loss_list_train = train_sage(
-                        model, batched_graph, batched_feats, optimizer, i, all_masks_dict, logger, epoch, chunk_size
+                        model, batched_graph, batched_feats, optimizer, i, masks_2, logger, epoch, chunk_size
                     )
 
                     # record scalar losses
@@ -435,7 +434,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     batched_feats = batched_graph.ndata["feat"]
 
                 test_loss, loss_list_test, latent_train_cpu, latents_cpu, sample_list_test, quantized, cb_num_unique = \
-                    evaluate(model, batched_graph, batched_feats, epoch, logger, batched_graph_base, idx)
+                    evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
 
                 test_loss_list.append(test_loss.cpu().item())
                 cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
