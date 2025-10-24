@@ -877,7 +877,6 @@ class EuclideanCodebook(nn.Module):
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
             else:  # train
                 # slice current minibatch range
-                print(f"mask_dict[key], {mask_dict[key]}")
                 gmask = (mask_dict[key] >= self.latent_size_sum) & (
                         mask_dict[key] < self.latent_size_sum + B
                 )
