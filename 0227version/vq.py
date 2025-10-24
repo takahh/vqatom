@@ -242,7 +242,7 @@ class ContrastiveLoss(nn.Module):
         # z: [B, D]
         if z.dim() == 1:
             z = z.unsqueeze(0)
-        print(f"z {z.shape}")
+        # print(f"z {z.shape}")
         if z.shape[0] == 1:
             print(f"latent count is only 1. Not calculating losses.")
             return 0, 0, 0, 0, 0
@@ -953,11 +953,6 @@ class EuclideanCodebook(nn.Module):
                 )
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
-                print("---------------")
-                print(f"key {key}")
-                print(f"feature {feature[:20, 0]}")
-                print(f"mask {mask_dict[key][:20]}")
-                print(f"loc {loc[:20]}")
 
             if masked_latents.numel() == 0:
                 continue
@@ -1369,7 +1364,7 @@ class VectorQuantize(nn.Module):
         repel_avg = repel_wsum / w_total
         cb_repel_avg = cb_repel_wsum / w_total
         sil_avg = sil_wsum / w_total
-        print(f"repel_avg {repel_avg}")  # this is nonzero
+        # print(f"repel_avg {repel_avg}")  # this is nonzero
         return {
             "repel_loss": repel_avg,
             "cb_repel_loss": cb_repel_avg,
