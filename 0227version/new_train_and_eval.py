@@ -344,7 +344,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 latents \
                     = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
-                if i == 0:
+                if i == 0 and idx == 0:
                     first_batch_feat = batched_feats
 
 

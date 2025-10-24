@@ -222,7 +222,7 @@ class EquivariantThreeHopGINE(nn.Module):
             self.gine4 = self.gine4.to(device)
             self.vq = self.vq.to(device)
             self.bond_weight = self.bond_weight.to(device)
-            features_first = features
+            features_first = features.clone()
             features = self.feat_embed(features).to(device)
             features = features.to(device)
             h = self.linear_0(features)
