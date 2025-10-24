@@ -150,7 +150,6 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                 local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
                 global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
                 masks_dict[int(elem)].extend(map(int, global_idxs))
-                print(masks_dict[int(elem)])
 
             atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
             mol_id += 1
