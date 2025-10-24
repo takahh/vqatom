@@ -835,25 +835,76 @@ class EuclideanCodebook(nn.Module):
 
         return float(sil_sum / max(processed, 1))
 
-    def _normalize_mask_dict(self, mask_dict):
-        """
-        Accepts a dict with keys as str/int, values as:
-          - list/tuple/np.array of indices
-          - bool tensor mask
-          - index tensor
-        Returns: dict with both int and str aliases, values kept as-is (normalized later).
-        """
+    def _normalize_mask_dict(self, mask_dict, device=None):
+        import torch, numpy as np
         if mask_dict is None:
             return None
-        norm = dict(mask_dict)  # shallow copy
-        for k, v in list(mask_dict.items()):
-            # add int alias if k is digit-string
-            if isinstance(k, str) and k.isdigit():
-                norm.setdefault(int(k), v)
-            # add str alias if k is int
-            if isinstance(k, int):
-                norm.setdefault(str(k), v)
+        norm = {}
+        for k, v in mask_dict.items():
+            # unify key types
+            k_int = int(k) if isinstance(k, str) and k.isdigit() else k
+            k_str = str(k_int)
+            # convert value to tensor
+            if isinstance(v, (list, tuple, np.ndarray)):
+                v = torch.as_tensor(v, dtype=torch.long, device=device)
+            elif isinstance(v, torch.Tensor) and v.dtype == torch.bool:
+                v = torch.nonzero(v.flatten(), as_tuple=False).flatten().long().to(device)
+            norm[k_int] = v
+            norm[k_str] = v
         return norm
+
+    def _as_index_tensor(self, x, N=None, device=None):
+        """
+        Convert x -> LongTensor[NumIdx] of indices (not boolean).
+        - list/tuple/np.ndarray/np.int64 → tensor.long()
+        - bool tensor → nonzero indices
+        - long/int tensor → .long()
+        - None → None
+        If N is provided and x is a bool tensor of length N, convert to indices.
+        """
+        import torch
+        import numpy as np
+
+        if x is None:
+            return None
+
+        if isinstance(x, torch.Tensor):
+            t = x.to(device)
+            if t.dtype == torch.bool:
+                if N is None:
+                    N = t.numel()
+                idx = torch.nonzero(t.view(-1), as_tuple=False).flatten()
+                return idx.long()
+            return t.long()
+
+        if isinstance(x, (list, tuple)):
+            if len(x) == 0:
+                return torch.empty(0, dtype=torch.long, device=device)
+            # allow nested np.int64, etc.
+            return torch.as_tensor([int(i) for i in x], dtype=torch.long, device=device)
+
+        if isinstance(x, np.ndarray):  # type: ignore[name-defined]
+            if x.dtype == np.bool_:  # boolean mask
+                x = torch.as_tensor(x, device=device)
+                idx = torch.nonzero(x.view(-1), as_tuple=False).flatten()
+                return idx.long()
+            return torch.as_tensor(x, dtype=torch.long, device=device)
+
+        # single scalar index
+        return torch.as_tensor([int(x)], dtype=torch.long, device=device)
+
+    def _global_to_local_indices(self, global_idx, global_start, local_size):
+        """
+        Given global indices and the current chunk window [global_start, global_start+local_size),
+        return local indices within [0, local_size).
+        """
+        import torch
+        lo = global_start
+        hi = global_start + local_size
+        in_window = (global_idx >= lo) & (global_idx < hi)
+        if not torch.any(in_window):
+            return global_idx.new_empty((0,), dtype=torch.long)
+        return (global_idx[in_window] - lo).long()
 
     @torch.amp.autocast('cuda', enabled=False)
     #               data, features, mask_dict, logger, chunk_i, epoch, mode
