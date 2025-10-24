@@ -348,15 +348,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print("TRAIN ---------------")
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-
-                # # ------------- remove thi soon --------------
-                # if idx == 1:
-                #     break
-                # # ------------- remove thi soon --------------
                 if idx == 5:
                     break
                 print(f"idx {idx}")
                 glist_base, glist, masks_2 = convert_to_dgl(adj_batch, attr_batch)
+                print(f"masks_2[6] {masks_2[6]}")
                 chunk_size = conf["chunk_size"]
                 for i in range(0, len(glist), chunk_size):
                     # # ------------- remove thi soon --------------
