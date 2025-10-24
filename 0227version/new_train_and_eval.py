@@ -147,7 +147,6 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
             nz = elem_vec[valid]                    # 実在原子の元素ラベル列 (len = n_atoms_in_mol)
             uniq = np.unique(nz)
-            count = 0
             for elem in uniq:
                 local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
                 global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
@@ -156,14 +155,9 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                 masks_dict[int(elem)].append(global_idxs)
                 print("masks_dict[int(elem)]")
                 print(masks_dict[int(elem)])
-                count += 1
-                if count > 40:
-                    break
 
             atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
-            mol_id += 1
-            break
-        break
+            mol_id += 1        break
 
     return masks_dict, atom_offset, mol_id
 
