@@ -296,6 +296,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         first_batch_feat = None
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
                                                       start=kmeans_start_num):
+            # ======== Delete this soon ==============
+            if idx == 1:
+                break
+            # ========================================
             glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
@@ -346,6 +350,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print("TRAIN ---------------")
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                # ======== Delete this soon ==============
+                if idx == 1:
+                    break
+                # ========================================
                 if idx == 5:
                     break
                 print(f"idx {idx}")
