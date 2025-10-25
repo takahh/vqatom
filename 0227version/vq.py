@@ -995,7 +995,7 @@ class EuclideanCodebook(nn.Module):
                         msg = (f"Silhouette Score (subsample): {key} {sil:.4f}, "
                                f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}")
                         print(msg)
-                        # logger.info(msg)
+                        logger.info(msg)
                     else:
                         print("n <= 1 !!!!!!!!!")
                 except Exception as e:
