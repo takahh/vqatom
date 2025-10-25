@@ -485,7 +485,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         logger.info(f"test - commit_loss: {sum(loss_list_list_test[0]) / max(1,len(loss_list_list_test[0])):.6f}, "
                     f"test - lat_repel_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f},"
                     f"test - cb_repel_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
-        print(f"test - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
+        print(f"test - total_loss: {sum(test_loss_list) / max(1,len(test_loss_list)):.6f}")
         logger.info(f"test - total_loss: {sum(test_loss_list) / max(1,len(test_loss_list)):.6f}")
 
         # if conf['train_or_infer'] in ("hptune", "train"):
