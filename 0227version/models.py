@@ -275,6 +275,7 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"sil_loss {sil_loss}")
         print(f"repel_loss {repel_loss}")
         print(f"cb_repel_loss {cb_repel_loss}")
+        logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
         losslist = [0, commit_loss.item(), cb_loss.item(), 0,
                     repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist

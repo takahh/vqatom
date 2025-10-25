@@ -995,7 +995,7 @@ class EuclideanCodebook(nn.Module):
                         msg = (f"Silhouette Score (subsample): {key} {sil:.4f}, "
                                f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}")
                         print(msg)
-                        if logger: logger.info(msg)
+                        logger.info(msg)
                     else:
                         print("n <= 1 !!!!!!!!!")
                 except Exception as e:
@@ -1612,6 +1612,7 @@ class VectorQuantize(nn.Module):
             total_latent += Ni
             commit_num = commit_num + commit_part * Ni
             codebk_num = codebk_num + codebk_part * Ni
+
             # ==============================
             # repel loss 計算　＋重み付け
             # ==============================
@@ -1621,6 +1622,10 @@ class VectorQuantize(nn.Module):
             print(f"{key} : commit {commit_part}, repel {repel_value}, cb_repel {cb_repel_value}")
             repel_num = repel_num + repel_value * Ni
             cb_repel_num = cb_repel_num + cb_repel_value * Ni
+            # ==============================
+            # 記録
+            # ==============================
+            logger.info(f"{key} : commit {commit_part}, lat_repel {repel_value}, cb_repel {cb_repel_value}")
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
