@@ -1622,7 +1622,7 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)])
             repel_value = ret[0]
             cb_repel_value = ret[3]
-            print(f"{key} : commit {commit_part}, repel {repel_value}, cb_repel {cb_repel_value}")
+            print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
             repel_num = repel_num + repel_value * Ni
             cb_repel_num = cb_repel_num + cb_repel_value * Ni
             # ==============================
