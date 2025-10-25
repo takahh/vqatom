@@ -421,15 +421,15 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     loss_list_list_test[j].append(val)
                 test_loss_list.append(test_loss.detach().cpu().item())
                 # cleanup
-                del batched_graph, batched_feats, chunk, loss, loss_list_train
+                del batched_graph, batched_feats, chunk, test_loss, loss_list_test
                 gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-
-                # rethink codes below
-                test_loss_list.append(test_loss.cpu().item())
-                # cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
-                loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
+                #
+                # # rethink codes below
+                # test_loss_list.append(test_loss.cpu().item())
+                # # cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
+                # loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
 
                 # optionally save small parts per chunk instead of keeping in lists
                 # try:
