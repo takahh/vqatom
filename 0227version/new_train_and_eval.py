@@ -461,7 +461,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # ---------------------------
         flat = list(ind_counts.elements())
         print(f"len(flat) = {len(flat)}, unique = {len(set(flat))}")
-        used_cb_vectors_all_epochs = model.vq._codebook.embed[0][torch.unique(torch.tensor(flat), sorted=True).long()]
+        # used_cb_vectors_all_epochs = model.vq._codebook.embed[0][torch.unique(torch.tensor(flat), sorted=True).long()]
 
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
