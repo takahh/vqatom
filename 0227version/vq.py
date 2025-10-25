@@ -271,7 +271,6 @@ class ContrastiveLoss(nn.Module):
                 s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
                 hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
                 vals = hist.tolist()
-                print("vals")
                 print(vals)
                 logger.info(vals)
 
