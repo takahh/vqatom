@@ -260,7 +260,7 @@ class EquivariantThreeHopGINE(nn.Module):
             #     print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
         if mode == "init_kmeans_loop":
             return h
-        if mode == None:  # train
+        if mode == None:  # train or test
             quantize_output = self.vq(
                 h, features_first, mask_dict, logger, chunk_i, epoch, mode
             )
@@ -276,8 +276,7 @@ class EquivariantThreeHopGINE(nn.Module):
         print(f"repel_loss {repel_loss}")
         print(f"cb_repel_loss {cb_repel_loss}")
         logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
-        losslist = [0, commit_loss.item(), cb_loss.item(), 0,
-                    repel_loss.item(), cb_repel_loss.item()]
+        losslist = [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist
 
 

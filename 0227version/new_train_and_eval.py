@@ -48,6 +48,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
         loss.detach(),                     # keep as tensor if you want
         [l.item() if hasattr(l, 'item') else l for l in loss_list3]
     )
+
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,34 +62,15 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
         elif mode == "init_kmeans_final":
             model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
             return 0
-        else:
-            (
-                _,
-                logits,
-                test_loss,
-                _,
-                cb,
-                test_loss_list3,
-                latent_train,
-                quantized,
-                test_latents,
-                sample_list_test,
-                num_unique,
-            ) = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+        else:  # test
+            outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+            (loss, cb, loss_list3) = outputs
 
-    # detach and move to cpu
-    latent_train_cpu = latent_train.detach().cpu()
-    cb_cpu = cb.detach().cpu()
-    test_latents_cpu = test_latents.detach().cpu()
-    test_loss = test_loss.to(device)
-
-    # cleanup
-    del logits, latent_train, cb, test_latents
-    torch.cuda.empty_cache()
-
-    # return single tensors, not lists
-    return test_loss, test_loss_list3, latent_train_cpu, test_latents_cpu, sample_list_test, quantized, num_unique
-
+    # Return only what’s needed
+    return (
+        loss.detach(),                     # keep as tensor if you want
+        [l.item() if hasattr(l, 'item') else l for l in loss_list3]
+    )
 
 class MoleculeGraphDataset(Dataset):
     def __init__(self, adj_dir, attr_dir):
@@ -261,7 +243,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
     datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
     for epoch in range(1, conf["max_epoch"] + 1):
@@ -287,7 +268,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
         all_latents = []
-        latents = None
 
         from collections import defaultdict
         import numpy as np
@@ -320,7 +300,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
                 if i == 0 and idx == 0:
                     first_batch_feat = batched_feats.clone()
-
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
@@ -407,7 +386,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # TEST
         # ---------------------------
         test_loss_list = []
-        quantized = None
         if conf['train_or_infer'] == "hptune":
             start_num, end_num = 5, 6
         elif conf['train_or_infer'] == "analysis":
@@ -425,7 +403,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             chunk_size = conf["chunk_size"]
 
             for i in range(0, len(glist), chunk_size):
-
                 # # ------------- remove thi soon --------------
                 # if i == chunk_size:
                 #     break
@@ -436,30 +413,36 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 batched_graph_base = dgl.batch(chunk_base)
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
+                test_loss, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
+                # record scalar losses
+                clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
+                                for l in loss_list_test]
+                for j, val in enumerate(clean_losses):
+                    loss_list_list_test[j].append(val)
+                test_loss_list.append(test_loss.detach().cpu().item())
+                # cleanup
+                del batched_graph, batched_feats, chunk, loss, loss_list_train
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
 
-                test_loss, loss_list_test, latent_train_cpu, latents_cpu, sample_list_test, quantized, cb_num_unique = \
-                    evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
-
+                # rethink codes below
                 test_loss_list.append(test_loss.cpu().item())
-                cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
+                # cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
                 loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
 
                 # optionally save small parts per chunk instead of keeping in lists
-                try:
-                    ind_chunk = sample_list_test[0].cpu().numpy()
-                    latent_chunk = sample_list_test[2].cpu().numpy()
-                    # save per chunk to avoid huge accumulation
-                    np.savez(f"./tmp_ind_{epoch}_{idx}_{i}.npz", ind_chunk=ind_chunk)
-                    np.savez(f"./tmp_latent_{epoch}_{idx}_{i}.npz", latent_chunk=latent_chunk)
-                    del latent_chunk
-                    # count indices
-                    ind_counts.update(ind_chunk.flatten().tolist())
-                except Exception as e:
-                    print(f"[WARN] collecting chunk failed: {e}")
-
-                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
-                gc.collect()
-                torch.cuda.empty_cache()
+                # try:
+                #     ind_chunk = sample_list_test[0].cpu().numpy()
+                #     latent_chunk = sample_list_test[2].cpu().numpy()
+                #     # save per chunk to avoid huge accumulation
+                #     np.savez(f"./tmp_ind_{epoch}_{idx}_{i}.npz", ind_chunk=ind_chunk)
+                #     np.savez(f"./tmp_latent_{epoch}_{idx}_{i}.npz", latent_chunk=latent_chunk)
+                #     del latent_chunk
+                #     # count indices
+                #     ind_counts.update(ind_chunk.flatten().tolist())
+                # except Exception as e:
+                #     print(f"[WARN] collecting chunk failed: {e}")
 
             # cleanup graphs after idx
             for g in glist:
@@ -482,16 +465,32 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
+        # ----------------------------------------------
+        # log train raw losses
+        # ----------------------------------------------
+        print(f"train - commit_loss: {sum(loss_list_list_train[0]) / max(1,len(loss_list_list_train[0])):.6f}, "
+              f"train - lat_repel_loss: {sum(loss_list_list_train[1]) / max(1,len(loss_list_list_train[1])):.6f},"
+              f"train - cb_repel_loss: {sum(loss_list_list_train[2]) / max(1,len(loss_list_list_train[2])):.6f}")
+        logger.info(f"train - commit_loss: {sum(loss_list_list_train[0]) / max(1,len(loss_list_list_train[0])):.6f}, "
+                    f"train - lat_repel_loss: {sum(loss_list_list_train[1]) / max(1,len(loss_list_list_train[1])):.6f},"
+                    f"train - cb_repel_loss: {sum(loss_list_list_train[2]) / max(1,len(loss_list_list_train[2])):.6f}")
+        print(f"train - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
+        logger.info(f"train - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
+        # ----------------------------------------------
+        # log test raw losses
+        # ----------------------------------------------
+        print(f"test - commit_loss: {sum(loss_list_list_test[0]) / max(1,len(loss_list_list_test[0])):.6f}, "
+              f"test - lat_repel_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f},"
+              f"test - cb_repel_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
+        logger.info(f"test - commit_loss: {sum(loss_list_list_test[0]) / max(1,len(loss_list_list_test[0])):.6f}, "
+                    f"test - lat_repel_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f},"
+                    f"test - cb_repel_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
+        print(f"test - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
+        logger.info(f"test - total_loss: {sum(test_loss_list) / max(1,len(test_loss_list)):.6f}")
 
-        # log stats
-        print(f"test - commit_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f}, "
-              f"test - cb_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
-        logger.info(f"test - commit_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f}, "
-                    f"test - cb_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
-
-        if conf['train_or_infer'] in ("hptune", "train"):
-            print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
-            np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
+        # if conf['train_or_infer'] in ("hptune", "train"):
+        #     print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
+        #     np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
 
         model.vq._codebook.latent_size_sum = 0
         # cleanup big lists
@@ -503,12 +502,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         gc.collect()
         torch.cuda.empty_cache()
 
-        # debug growth
-        # import objgraph
-        # objgraph.show_growth(limit=10)
-        # del model
-        gc.collect()
-        torch.cuda.empty_cache()
         print(next(model.parameters()).device)  # should say cuda:0
 
         # for name, buf in model.named_buffers():
