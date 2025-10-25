@@ -233,8 +233,6 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, z, chunk, logger, codebook, key):
         import torch
-        import torch.nn.functional as F
-
         device = z.device
         eps = 1e-8
         z = z.squeeze()
