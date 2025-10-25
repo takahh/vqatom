@@ -451,10 +451,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             del glist, glist_base
             gc.collect()
 
-            args = get_args()
-            if args.get_umap_data:
-                cb_new = model.vq._codebook.embed
-                np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
+            # args = get_args()
+            # if args.get_umap_data:
+            #     cb_new = model.vq._codebook.embed
+            #     np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
 
         # ---------------------------
         # stats and save
