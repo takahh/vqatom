@@ -231,7 +231,7 @@ class ContrastiveLoss(nn.Module):
         idx = idx_cpu.to(t.device, non_blocking=True)
         return t[idx]
 
-    def forward(self, z, chunk, logger, codebook):
+    def forward(self, z, chunk, logger, codebook, key):
         import torch
         import torch.nn.functional as F
 
@@ -271,7 +271,7 @@ class ContrastiveLoss(nn.Module):
                 s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
                 hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
                 vals = hist.tolist()
-                print(vals)
+                print(f"{key} {vals}")
                 logger.info(vals)
 
         def latent_repel_mid_chunked(
@@ -1618,7 +1618,7 @@ class VectorQuantize(nn.Module):
             # ==============================
             # repel loss 計算　＋重み付け
             # ==============================
-            ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)])
+            ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)], key)
             repel_value = ret[0]
             cb_repel_value = ret[3]
             print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
