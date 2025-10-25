@@ -315,8 +315,8 @@ class ContrastiveLoss(nn.Module):
                     #       f"mean(d)={m:.4f} center={c:.4f} "
                     #       f"mean|d-center|={float((d_in - c).abs().mean()):.4f} "
                     #       f"rel_to_band={rel:.3f}")
-
-            assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
+            if self.training:
+                assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
             B, D = z.shape
             device, dtype = z.device, z.dtype
 
@@ -390,8 +390,11 @@ class ContrastiveLoss(nn.Module):
                 out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
                 # gradient safety
-                if not out.requires_grad:
-                    out = out + 0.0 * (zi.sum() + zj.sum())
+                if self.training:
+                    if not out.requires_grad:
+                        out = out + 0.0 * (zi.sum() + zj.sum())
+                    else:
+                        pass
 
                 return out
             # print("--- 0 ---")
