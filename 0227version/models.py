@@ -270,11 +270,11 @@ class EquivariantThreeHopGINE(nn.Module):
             )
             return 0
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-        print(f"commit_loss {commit_loss}")
-        print(f"cb_loss {cb_loss}")
-        print(f"sil_loss {sil_loss}")
-        print(f"repel_loss {repel_loss}")
-        print(f"cb_repel_loss {cb_repel_loss}")
+        # print(f"commit_loss {commit_loss}")
+        # print(f"cb_loss {cb_loss}")
+        # print(f"sil_loss {sil_loss}")
+        # print(f"repel_loss {repel_loss}")
+        # print(f"cb_repel_loss {cb_repel_loss}")
         logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
         losslist = [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
         return loss, embed, losslist
