@@ -1504,6 +1504,7 @@ class VectorQuantize(nn.Module):
              ローカル index (= global - chunk_start) に変換してから使用する。
         """
         total_cb_count = 0
+        encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
