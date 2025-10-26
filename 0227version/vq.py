@@ -1690,39 +1690,31 @@ class VectorQuantize(nn.Module):
         # only repel losses at the first several steps
         # ---------------------------------------------
         def _as_scalar_tensor(val, ref_tensor):
-            """
-            Convert val (Tensor / float-int / list/tuple/dict of those) into a 0D Tensor on ref_tensor's device/dtype.
-            - Lists/tuples/dicts -> mean of elements (grad-safe zeros for empties).
-            - Pure Python numbers -> tensor(val) (detached, which is fine for constants).
-            """
             import torch
 
-            def _zero_like_ref():
-                # grad-safe zero that keeps graph if ref requires_grad
-                z = ref_tensor.sum() * 0
-                return z
+            def zlike():
+                # keeps graph if ref requires grad
+                return ref_tensor.sum() * 0.0
 
             if isinstance(val, torch.Tensor):
-                # scalar -> return; non-scalar -> mean
                 return val if val.ndim == 0 else val.mean()
 
             if isinstance(val, (list, tuple)):
-                if len(val) == 0:
-                    return _zero_like_ref()
+                if not val:
+                    return zlike()
                 elems = [_as_scalar_tensor(v, ref_tensor) for v in val]
                 return torch.stack(elems).mean()
 
             if isinstance(val, dict):
-                if len(val) == 0:
-                    return _zero_like_ref()
+                if not val:
+                    return zlike()
                 elems = [_as_scalar_tensor(v, ref_tensor) for v in val.values()]
                 return torch.stack(elems).mean()
 
             if isinstance(val, (float, int)):
                 return torch.tensor(val, device=ref_tensor.device, dtype=ref_tensor.dtype)
 
-            # Fallback (None / unknown): grad-safe zero
-            return _zero_like_ref()
+            return zlike()
 
         ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
 
@@ -1730,15 +1722,26 @@ class VectorQuantize(nn.Module):
         cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
         commit_loss = _as_scalar_tensor(commit_loss, ref)
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
-        alpha = 1 / ((epoch + 1) ** 2)
-        repel_loss *= alpha
+        # Example: warmup 5 epochs, then gentle exponential decay
+        warmup = 5
+        if epoch < warmup:
+            alpha = 1.0
+        else:
+            # half-life ~ 50 epochs
+            alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
+        repel_loss = repel_loss * alpha
         # if epoch < 3:
         #     loss = repel_loss
         # elif epoch >= 3:
         #     print(f"repel {repel_loss}") # or some decaying schedule
-        beta = 0.1
-        loss = repel_loss + commit_loss + cb_repel_loss + codebook_loss
-            #
+        # Assuming commitment_loss returns raw components:
+        beta_commit = 0.25  # try 0.25–0.5 if you see codebook collapse
+        gamma_cb = 0.25  # codebook (EMA) regularizer
+        delta_mid = 1.0  # repel (midpoints)
+        delta_cb = 0.5  # codebook-codebook repel
+
+        loss = (delta_mid * repel_loss) + (delta_cb * cb_repel_loss) \
+               + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)            #
             # commit_loss 0.0
             # cb_loss 0.0
             # sil_loss []
