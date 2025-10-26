@@ -1724,12 +1724,6 @@ class VectorQuantize(nn.Module):
         commit_loss = _as_scalar_tensor(commit_loss, ref)
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
         # Example: warmup 5 epochs, then gentle exponential decay
-        warmup = 5
-        if epoch < warmup:
-            alpha = 1.0
-        else:
-            # half-life ~ 50 epochs
-            alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
         # repel_loss = repel_loss * alpha
         beta_commit = 10  # try 0.25–0.5 if you see codebook collapse
         gamma_cb = 3  # codebook (EMA) regularizer
@@ -1744,8 +1738,15 @@ class VectorQuantize(nn.Module):
         print(f"commit_loss {commit_loss}")
         print(f"codebook_loss {codebook_loss}")
 
-        loss = (delta_mid * repel_loss) + (delta_cb * cb_repel_loss) \
-               + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)            #
+        warmup = 5
+        alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
+        if epoch < warmup:
+            loss = repel_loss
+        else:
+            # half-life ~ 50 epochs
+            repel_loss = alpha * repel_loss
+            loss = (delta_mid * repel_loss) + (delta_cb * cb_repel_loss) \
+                   + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)            #
             # commit_loss 0.0
             # cb_loss 0.0
             # sil_loss []
