@@ -1730,12 +1730,7 @@ class VectorQuantize(nn.Module):
         else:
             # half-life ~ 50 epochs
             alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
-        repel_loss = repel_loss * alpha
-        # if epoch < 3:
-        #     loss = repel_loss
-        # elif epoch >= 3:
-        #     print(f"repel {repel_loss}") # or some decaying schedule
-        # Assuming commitment_loss returns raw components:
+        # repel_loss = repel_loss * alpha
         beta_commit = 10  # try 0.25–0.5 if you see codebook collapse
         gamma_cb = 3  # codebook (EMA) regularizer
         delta_mid = 1  # repel (midpoints)
