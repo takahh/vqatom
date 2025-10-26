@@ -1503,6 +1503,7 @@ class VectorQuantize(nn.Module):
              本関数内でチャンク境界 [chunk_start, chunk_start+B) に入るものだけを残し、
              ローカル index (= global - chunk_start) に変換してから使用する。
         """
+        total_cb_count = 0
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
@@ -1621,7 +1622,8 @@ class VectorQuantize(nn.Module):
             cb_repel_value = ret[3]
             print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
             repel_num = repel_num + repel_value * Ni
-            cb_repel_num = cb_repel_num + cb_repel_value * Ni
+            total_cb_count += K
+            cb_repel_num = cb_repel_num + cb_repel_value * K
             # ==============================
             # 記録
             # ==============================
@@ -1640,7 +1642,7 @@ class VectorQuantize(nn.Module):
         # repel loss 平均の計算
         # ==============================
         repel_loss = repel_num / total_latent
-        cb_repel_loss = (cb_repel_num / total_latent)
+        cb_repel_loss = (cb_repel_num / total_cb_count)
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
@@ -1729,12 +1731,12 @@ class VectorQuantize(nn.Module):
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
         alpha = 1 / ((epoch + 1) ** 2)
         repel_loss *= alpha
-        if epoch < 3:
-            loss = repel_loss
-        elif epoch >= 3:
-            print(f"repel {repel_loss}") # or some decaying schedule
-            beta = 0.0001
-            loss = beta * (commit_loss) + repel_loss
+        # if epoch < 3:
+        #     loss = repel_loss
+        # elif epoch >= 3:
+        #     print(f"repel {repel_loss}") # or some decaying schedule
+        beta = 0.1
+        loss = repel_loss + commit_loss + cb_repel_loss + codebook_loss
             #
             # commit_loss 0.0
             # cb_loss 0.0
