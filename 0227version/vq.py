@@ -1736,9 +1736,9 @@ class VectorQuantize(nn.Module):
         # elif epoch >= 3:
         #     print(f"repel {repel_loss}") # or some decaying schedule
         # Assuming commitment_loss returns raw components:
-        beta_commit = 100  # try 0.25–0.5 if you see codebook collapse
-        gamma_cb = 30  # codebook (EMA) regularizer
-        delta_mid = 0.1  # repel (midpoints)
+        beta_commit = 10  # try 0.25–0.5 if you see codebook collapse
+        gamma_cb = 3  # codebook (EMA) regularizer
+        delta_mid = 1  # repel (midpoints)
         delta_cb = 0.0003  # codebook-codebook repel
         # commit_loss 2.4284323444589972e-05  >> 2e-02
         # codebook_loss 9.713729377835989e-05
