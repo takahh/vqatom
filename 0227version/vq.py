@@ -1507,6 +1507,7 @@ class VectorQuantize(nn.Module):
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
+        print(f"B = {B}, D = {D}")
 
         # chunk_start が未指定なら 0（= 既にローカル index を渡しているケースに対応）
         if chunk_start is None:
@@ -1684,7 +1685,7 @@ class VectorQuantize(nn.Module):
         # commit loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x.squeeze(), mask_dict, self._codebook.embed, logger, chunk_i)
+        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x, mask_dict, self._codebook.embed, logger, chunk_i)
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
