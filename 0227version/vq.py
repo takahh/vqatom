@@ -1740,6 +1740,10 @@ class VectorQuantize(nn.Module):
         gamma_cb = 0.25  # codebook (EMA) regularizer
         delta_mid = 1.0  # repel (midpoints)
         delta_cb = 0.5  # codebook-codebook repel
+        print(f"repel_loss {repel_loss}")
+        print(f"cb_repel_loss {cb_repel_loss}")
+        print(f"commit_loss {commit_loss}")
+        print(f"codebook_loss {codebook_loss}")
 
         loss = (delta_mid * repel_loss) + (delta_cb * cb_repel_loss) \
                + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)            #
