@@ -94,95 +94,198 @@ def all_gather_variably_sized(x, sizes, dim=0):
     distributed.barrier()
     return all_x
 
-
 from einops import rearrange, repeat
 
 def l2norm(t, dim=-1, eps=1e-8):
     return F.normalize(t, dim=dim, eps=eps)
 
+import torch
+
 def noop(x):
     return x
 
-def batched_bincount(indices, minlength):
-    H, N = indices.shape
-    bins = torch.zeros(H, minlength, device=indices.device, dtype=torch.long)
-    for h in range(H):
-        bins[h].scatter_add_(0, indices[h], torch.ones_like(indices[h]))
-    return bins
+def batched_bincount(buckets: torch.Tensor, minlength: int) -> torch.Tensor:
+    """
+    buckets: [H, N] int64/long with values in [0, minlength-1]
+    returns: [H, minlength] counts per head
+    """
+    H, N = buckets.shape
+    out = torch.zeros(H, minlength, device=buckets.device, dtype=torch.long)
+    out.scatter_add_(1, buckets, torch.ones_like(buckets, dtype=torch.long))
+    return out
 
-def kmeans(samples, num_clusters, use_cosine_sim=False, all_reduce_fn=noop, eps=1e-12):
-    # samples: [H, N, D]
+@torch.no_grad()
+def _kmeanspp_init(samples, k, use_cosine_sim, eps):
+    """
+    samples: [H, N, D], returns means_init: [H, k, D]
+    """
     H, N, D = samples.shape
     device, dtype = samples.device, samples.dtype
 
-    # 1) Cap K to available unique samples (robust for small N cases)
-    #    (H=1 in your logs; for H>1 you can compute per-H if needed)
-    # uniq = torch.unique(samples.reshape(-1, D), dim=0).shape[0]
-    num_clusters = int(min(num_clusters, N))
-    if num_clusters <= 0:
+    means = torch.zeros((H, k, D), device=device, dtype=dtype)
+    # pick first center uniformly at random per head
+    first_idx = torch.randint(0, N, (H,), device=device)
+    means[:, 0] = samples[torch.arange(H, device=device), first_idx]
+
+    for c in range(1, k):
+        if use_cosine_sim:
+            # distance = 1 - cosine_similarity in [0,2]
+            # samples: [H,N,D], means[:,:c]: [H,c,D]
+            d = 1.0 - (samples @ means[:, :c].transpose(1, 2))      # [H,N,c]
+        else:
+            d = torch.cdist(samples, means[:, :c], p=2)              # [H,N,c]
+
+        min_d = d.min(dim=-1).values                                 # [H,N]
+        min_d = torch.clamp(min_d, min=0)
+        row_sum = min_d.sum(dim=-1, keepdim=True)                    # [H,1]
+
+        # safe probs per head
+        safe_probs = torch.where(
+            row_sum > 0, min_d / (row_sum + eps), torch.full_like(min_d, 1.0 / N)
+        )
+        safe_probs = torch.nan_to_num(safe_probs, nan=0.0, posinf=0.0, neginf=0.0)
+        safe_probs = safe_probs / (safe_probs.sum(dim=-1, keepdim=True) + eps)
+
+        next_idx = torch.multinomial(safe_probs, 1).squeeze(-1)      # [H]
+        means[:, c] = samples[torch.arange(H, device=device), next_idx]
+    return means
+
+def kmeans(
+    samples: torch.Tensor,
+    num_clusters: int,
+    use_cosine_sim: bool = False,
+    all_reduce_fn = noop,
+    eps: float = 1e-12,
+    max_iters: int = 30,
+    tol: float = 0.0,
+):
+    """
+    K-Means w/ K-Means++ init and Lloyd steps (batched over H heads).
+
+    Args:
+        samples: [H, N, D]
+        num_clusters: desired K (capped to N)
+        use_cosine_sim: if True, cluster with cosine similarity (L2-normalized)
+        all_reduce_fn: callable(tensor) -> None for distributed sum-reduce (in-place ok)
+        eps: numerical epsilon
+        max_iters: Lloyd iterations
+        tol: early-stop on mean center shift (average L2 per head) if > 0
+
+    Returns:
+        means: [H, K, D] (cluster centers, some may be unused)
+        bins:  [H, K]   (counts per cluster)
+    """
+    H, N, D = samples.shape
+    device, dtype = samples.device, samples.dtype
+
+    # cap K to N
+    K = int(min(num_clusters, N))
+    if K <= 0:
         raise ValueError("No samples to cluster.")
 
-    # 2) Prepare means
-    means = torch.zeros((H, num_clusters, D), device=device, dtype=dtype)
-    means[:, 0] = samples[:, torch.randint(0, N, (1,), device=device)]
-
-    # Optional: proper cosine distance (nonnegative)
+    # optional cosine normalization
     if use_cosine_sim:
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
 
-    with torch.no_grad():
-        # ---- K-Means++ init ----
-        for k in range(1, num_clusters):
-            if use_cosine_sim:
-                # cosine distance in [0, 2]
-                d = 1.0 - (samples @ means[:, :k].transpose(1, 2))
-            else:
-                d = torch.cdist(samples, means[:, :k], p=2)         # [H, N, k]
+    # ---- K-Means++ init ----
+    means = _kmeanspp_init(samples, K, use_cosine_sim, eps)
 
-            min_d = d.min(dim=-1).values                            # [H, N]
-            min_d = torch.clamp(min_d, min=0)                       # no negatives
-            row_sum = min_d.sum(dim=-1, keepdim=True)               # [H, 1]
+    # ---- Lloyd steps ----
+    prev_means = None
+    for _ in range(max_iters):
+        if use_cosine_sim:
+            # similarity: higher is closer
+            dists = samples @ means.transpose(1, 2)                   # [H,N,K]
+        else:
+            # negative Euclidean so argmax == nearest (largest negative is smallest distance)
+            dists = -torch.cdist(samples, means, p=2)                 # [H,N,K]
 
-            # Safe probs: if sum==0 (all points exactly at chosen centers), fallback to uniform
-            safe_probs = torch.where(
-                row_sum > 0,
-                min_d / (row_sum + eps),
-                torch.full_like(min_d, 1.0 / N)
-            )
+        buckets = torch.argmax(dists, dim=-1)                         # [H,N] int
+        bins = batched_bincount(buckets, minlength=K)                 # [H,K]
+        all_reduce_fn(bins)
 
-            # multinomial requires nonnegative and finite
-            safe_probs = torch.nan_to_num(safe_probs, nan=0.0, posinf=0.0, neginf=0.0)
-            # Guarantee rows sum to 1
-            safe_probs = safe_probs / (safe_probs.sum(dim=-1, keepdim=True) + eps)
+        zero_mask = (bins == 0)                                       # [H,K]
+        bins_safe = bins.masked_fill(zero_mask, 1)
 
-            next_idx = torch.multinomial(safe_probs, 1).squeeze(-1) # [H]
-            means[:, k] = samples[torch.arange(H, device=device), next_idx]
+        new_means = torch.zeros_like(means)                           # [H,K,D]
+        # accumulate sums per cluster
+        new_means.scatter_add_(
+            1,
+            buckets.unsqueeze(-1).expand(-1, -1, D),                  # [H,N,D] indices
+            samples                                                   # [H,N,D] src
+        )
+        # average
+        new_means = new_means / bins_safe.unsqueeze(-1)               # [H,K,D]
+        all_reduce_fn(new_means)
 
-        # ---- Lloyd steps ----
-        for _ in range(30):
-            if use_cosine_sim:
-                dists = samples @ means.transpose(1, 2)             # similarity
-            else:
-                dists = -torch.cdist(samples, means, p=2)           # negative distance
+        if use_cosine_sim:
+            new_means = torch.nn.functional.normalize(new_means, p=2, dim=-1)
 
-            buckets = torch.argmax(dists, dim=-1)                   # [H, N]
-            bins = batched_bincount(buckets, minlength=num_clusters)
-            all_reduce_fn(bins)
+        # keep old centers for empty clusters
+        if tol > 0.0:
+            prev_means = means
+        means = torch.where(zero_mask.unsqueeze(-1), means, new_means)
 
-            zero_mask = bins == 0
-            bins_safe = bins.masked_fill(zero_mask, 1)
+        if tol > 0.0:
+            # average L2 shift per head
+            shift = (means - prev_means).pow(2).sum(-1).sqrt().mean() # scalar
+            if float(shift) <= tol:
+                break
 
-            new_means = torch.zeros_like(means)
-            new_means.scatter_add_(1, buckets.unsqueeze(-1).expand(-1, -1, D), samples)
-            new_means = new_means / bins_safe.unsqueeze(-1)
-
-            all_reduce_fn(new_means)
-            if use_cosine_sim:
-                new_means = torch.nn.functional.normalize(new_means, p=2, dim=-1)
-
-            means = torch.where(zero_mask.unsqueeze(-1), means, new_means)
+    # final counts (so caller sees counts matching returned means)
+    if use_cosine_sim:
+        dists = samples @ means.transpose(1, 2)
+    else:
+        dists = -torch.cdist(samples, means, p=2)
+    buckets = torch.argmax(dists, dim=-1)
+    bins = batched_bincount(buckets, minlength=K)
+    all_reduce_fn(bins)
 
     return means, bins
+
+
+def compact_clusters(means: torch.Tensor, bins: torch.Tensor, pad_to_max: bool = True):
+    """
+    Filter out empty clusters head-by-head.
+
+    Args:
+        means: [H, K, D]
+        bins:  [H, K]
+        pad_to_max: if True, returns padded tensors [H, K_used_max, ...];
+                    if False, returns Python lists per head (ragged).
+
+    Returns:
+        If pad_to_max:
+            used_means:  [H, K_used_max, D]
+            used_bins:   [H, K_used_max]
+            used_mask:   [H, K] boolean (where original clusters were used)
+        Else:
+            used_means_list: list of H tensors with shapes [K_h, D]
+            used_bins_list:  list of H tensors with shapes [K_h]
+            used_mask:       [H, K] boolean
+    """
+    H, K, D = means.shape
+    used_mask = bins > 0
+
+    if not pad_to_max:
+        means_list, bins_list = [], []
+        for h in range(H):
+            m = means[h, used_mask[h]]
+            b = bins[h, used_mask[h]]
+            means_list.append(m)
+            bins_list.append(b)
+        return means_list, bins_list, used_mask
+
+    max_used = int(used_mask.sum(dim=1).max().item()) if H > 0 else 0
+    used_means = means.new_zeros((H, max_used, D))
+    used_bins = bins.new_zeros((H, max_used), dtype=bins.dtype)
+    for h in range(H):
+        idx = used_mask[h].nonzero(as_tuple=False).squeeze(-1)
+        k_h = idx.numel()
+        if k_h > 0:
+            used_means[h, :k_h] = means[h, idx]
+            used_bins[h, :k_h] = bins[h, idx]
+    return used_means, used_bins, used_mask
 
 
 def batched_embedding(indices, embed):
@@ -644,6 +747,9 @@ class EuclideanCodebook(nn.Module):
             except KeyError:
                 ratio = self.cb_dict[key]
             cbsize = int(self.codebook_size * ratio / 10000)
+            if key in []:
+                new_cbsize = cbsize * 2
+                self.cb_dict[key] = new_cbsize
 
             idx = mask_dict[key]  # indices for this element
             masked = data[0][idx]  # (Ni, D)
@@ -651,6 +757,7 @@ class EuclideanCodebook(nn.Module):
 
             # Run k-means (expects [H, N, D]); here H=1
             embed_k, cluster_size_k = kmeans(masked.unsqueeze(0), cbsize)
+            embed_k, cluster_size_k, used_mask = compact_clusters(embed_k, cluster_size_k, pad_to_max=True)
 
             # Normalize k-means outputs to (K, D) and (K,)
             if embed_k.dim() == 3:  # (1, K, D) -> (K, D)
@@ -1021,27 +1128,27 @@ class EuclideanCodebook(nn.Module):
             #     contributed_keys.append((key, n))
 
 
-            # -------------------- EMA codebook update (hard-EMA) --------------------
-            if self.training and epoch is not None and epoch < 30:
-                with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
-                    cs = getattr(self, f"cluster_size_{key}")  # [K_e]
-                    eps = getattr(self, "eps", 1e-6)
-                    decay = float(self.decay)
-
-                    ea.mul_(decay)
-                    cs.mul_(decay)
-
-                    one = torch.ones_like(idx, dtype=cs.dtype)
-                    cs.index_add_(0, idx, one * (1.0 - decay))
-                    ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
-
-                    means = ea / (cs.unsqueeze(-1) + eps)
-
-                    code_param = self.embed[str(key)]
-                    code_param.data.copy_(
-                        means.unsqueeze(0) if code_param.ndim == 3 else means
-                    )
+            # # -------------------- EMA codebook update (hard-EMA) --------------------
+            # if self.training and epoch is not None and epoch < 30:
+            #     with torch.no_grad():
+            #         ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
+            #         cs = getattr(self, f"cluster_size_{key}")  # [K_e]
+            #         eps = getattr(self, "eps", 1e-6)
+            #         decay = float(self.decay)
+            #
+            #         ea.mul_(decay)
+            #         cs.mul_(decay)
+            #
+            #         one = torch.ones_like(idx, dtype=cs.dtype)
+            #         cs.index_add_(0, idx, one * (1.0 - decay))
+            #         ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
+            #
+            #         means = ea / (cs.unsqueeze(-1) + eps)
+            #
+            #         code_param = self.embed[str(key)]
+            #         code_param.data.copy_(
+            #             means.unsqueeze(0) if code_param.ndim == 3 else means
+            #         )
 
             del masked_latents, code, idx, quantize
 
