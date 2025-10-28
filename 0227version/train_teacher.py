@@ -287,9 +287,9 @@ def run(args):
 
     # logger.info(f"conf: {conf}")
     """ Model init """
-    from models import EquivariantThreeHopGINE
+    from models import EquivariantFourHopGINE
     # in_feats, hidden_feats, out_feats, args
-    model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
+    model = EquivariantFourHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
     # model = Model(conf)
 
     # if conf["train_or_infer"] == "infer":
