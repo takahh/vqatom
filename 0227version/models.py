@@ -219,7 +219,7 @@ class EquivariantFourHopGINE(nn.Module):
         edge_index = torch.stack([src, dst], dim=0)  # [2, E] on model_device
 
         # Edge attributes
-        eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
+        eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=dev))
         e = torch.cat([eb, eb], 0).to(dev, non_blocking=True)
         e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
         edge_attr = self.bond_emb(e.long())
