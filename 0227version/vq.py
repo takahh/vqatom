@@ -104,50 +104,42 @@ import torch
 def noop(x):
     return x
 
-def batched_bincount(buckets: torch.Tensor, minlength: int) -> torch.Tensor:
-    """
-    buckets: [H, N] int64/long with values in [0, minlength-1]
-    returns: [H, minlength] counts per head
-    """
-    H, N = buckets.shape
-    out = torch.zeros(H, minlength, device=buckets.device, dtype=torch.long)
-    out.scatter_add_(1, buckets, torch.ones_like(buckets, dtype=torch.long))
+def batched_bincount(x: torch.Tensor, minlength: int) -> torch.Tensor:
+    # x: [H, N] int64 on CUDA
+    H, N = x.shape
+    out = torch.zeros(H, minlength, device=x.device, dtype=torch.int64)
+    one = torch.ones_like(x, dtype=torch.int64)
+    out.scatter_add_(1, x, one)            # all CUDA if x is CUDA
     return out
 
-@torch.no_grad()
-def _kmeanspp_init(samples, k, use_cosine_sim, eps):
-    """
-    samples: [H, N, D], returns means_init: [H, k, D]
-    """
+def _kmeanspp_init(samples: torch.Tensor, K: int, use_cosine_sim: bool, eps: float):
+    # samples: [H,N,D] on CUDA
     H, N, D = samples.shape
     device, dtype = samples.device, samples.dtype
+    # pick first centers uniformly at random per head
+    idx0 = torch.randint(N, (H,), device=device)             # CUDA
+    means = samples[torch.arange(H, device=device), idx0].clone()   # [H,D]
+    means = means.unsqueeze(1)                                # [H,1,D]
 
-    means = torch.zeros((H, k, D), device=device, dtype=dtype)
-    # pick first center uniformly at random per head
-    first_idx = torch.randint(0, N, (H,), device=device)
-    means[:, 0] = samples[torch.arange(H, device=device), first_idx]
-
-    for c in range(1, k):
+    # kmeans++: add centers greedily
+    while means.shape[1] < K:
         if use_cosine_sim:
-            # distance = 1 - cosine_similarity in [0,2]
-            # samples: [H,N,D], means[:,:c]: [H,c,D]
-            d = 1.0 - (samples @ means[:, :c].transpose(1, 2))      # [H,N,c]
+            # max(0, 1 - cos) as distance
+            sims = samples @ torch.nn.functional.normalize(means, p=2, dim=-1).transpose(1,2)
+            d2 = (1 - sims.clamp(min=-1+eps, max=1-eps)).clamp_min(0)
         else:
-            d = torch.cdist(samples, means[:, :c], p=2)              # [H,N,c]
+            d2 = torch.cdist(samples, means, p=2)            # [H,N,Kt]
+        # min distance to any chosen center
+        min_d = d2.min(dim=-1).values                        # [H,N]
+        # sample next center proportional to distance
+        probs = (min_d + eps) / (min_d.sum(dim=-1, keepdim=True) + eps)
+        # multinomial per head (vectorized)
+        next_idx = torch.multinomial(probs, 1).squeeze(-1)   # [H]
+        next_centers = samples[torch.arange(H, device=device), next_idx]  # [H,D]
+        means = torch.cat([means, next_centers.unsqueeze(1)], dim=1)      # [H, Kt+1, D]
 
-        min_d = d.min(dim=-1).values                                 # [H,N]
-        min_d = torch.clamp(min_d, min=0)
-        row_sum = min_d.sum(dim=-1, keepdim=True)                    # [H,1]
-
-        # safe probs per head
-        safe_probs = torch.where(
-            row_sum > 0, min_d / (row_sum + eps), torch.full_like(min_d, 1.0 / N)
-        )
-        safe_probs = torch.nan_to_num(safe_probs, nan=0.0, posinf=0.0, neginf=0.0)
-        safe_probs = safe_probs / (safe_probs.sum(dim=-1, keepdim=True) + eps)
-
-        next_idx = torch.multinomial(safe_probs, 1).squeeze(-1)      # [H]
-        means[:, c] = samples[torch.arange(H, device=device), next_idx]
+    if use_cosine_sim:
+        means = torch.nn.functional.normalize(means, p=2, dim=-1)
     return means
 
 def kmeans(
