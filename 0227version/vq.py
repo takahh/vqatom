@@ -710,121 +710,138 @@ class EuclideanCodebook(nn.Module):
                     embed[:, n:K].copy_(embed[:, :1])
 
     @torch.jit.ignore
-    def init_embed_(self, data, mask_dict=None):
+    def init_embed_(self, data, mask_dict=None, use_cosine_sim: bool = False):
         """
-        Initialize per-element codebooks using K-means on masked latents.
-
-        Guarantees for each element `key`:
-          - self.cb_dict[str(key)] == actual K found by k-means
-          - self.embed[str(key)].shape == (K, D)
-          - getattr(self, f"cluster_size_{key}").shape == (K,)
-          - Copies centroids and counts with proper dtypes/devices
+        Initialize per-element codebooks using absolute K from self.cb_dict.
+        - self.cb_dict[skey] is absolute K_req (int).
+        - We DO NOT cap the final codebook size: embed and cluster_size buffers
+          are created with shape (K_req, D) and (K_req,), even if K_req > N_i.
+        - K-Means is executed with K_run = min(K_req, N_i) and then padded.
         """
-        print("++++++++++++++++ RUNNING init_embed !!! ++++++++++++++++++++++++++++++")
         assert mask_dict is not None, "mask_dict is required"
-        cluster_sizes_all = []
+        print("++++++++++++++++ RUNNING init_embed (ABS K, NO FINAL CAP) +++++++++++++")
 
-        # Deterministic order
-        for key in sorted(mask_dict.keys()):
-            # Normalize key usage (ParameterDict/Dict keys often stored as str)
-            skey = str(key)
+        device = data.device
+        D = data.shape[-1]
 
-            from utils import CORE_ELEMENTS
+        from utils import CORE_ELEMENTS  # e.g. {"6","7","8",...} as strings
+
+        def get_idx(md, k):
+            return md.get(k, md.get(str(k), md.get(int(k))))
+
+        def get_absK(d, k):
+            v = d.get(k, d.get(str(k), d.get(int(k))))
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except Exception:
+                raise ValueError(f"cb_dict[{k}] must be an integer (got {type(v)}: {v})")
+
+        # simple padding helper: pad to K_req with zero-count, small-noise means
+        def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
+            """
+            means_1kd: [1, K_run, D]
+            counts_1k: [1, K_run]
+            returns means_pad [K_req, D], counts_pad [K_req]
+            """
+            H, K_run, Dd = means_1kd.shape
+            assert H == 1 and Dd == D
+            means_kd = means_1kd[0]  # [K_run, D]
+            counts_k = counts_1k[0]  # [K_run]
+
+            if K_req <= K_run:
+                return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
+
+            # allocate output
+            K_pad = K_req - K_run
+            out_means = torch.empty((K_req, D), device=means_kd.device, dtype=means_kd.dtype)
+            out_counts = torch.zeros((K_req,), device=counts_k.device, dtype=counts_k.dtype)
+
+            # copy existing
+            out_means[:K_run].copy_(means_kd)
+            out_counts[:K_run].copy_(counts_k)
+
+            # init extra slots: small noise around data mean (or zeros as fallback)
+            if data_stats is not None:
+                mu, sigma = data_stats  # [D], scalar
+                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
+                out_means[K_run:] = mu + noise
+            else:
+                out_means[K_run:] = 0
+
+            # counts remain zero for padded slots
+            return out_means, out_counts
+
+        # precompute global stats per element batch (for better pad init)
+        def _stats(x_nd):
+            # x_nd: [N_i, D]
+            if x_nd.numel() == 0:
+                return None
+            mu = x_nd.mean(dim=0)
+            # robust scalar scale for noise: median absolute deviation proxy
+            with torch.no_grad():
+                dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
+                sigma = torch.quantile(dev, 0.5)  # median L2 radius
+            return mu, sigma
+
+        for raw_key in sorted(mask_dict.keys(), key=lambda x: int(str(x))):
+            skey = str(raw_key)
             if skey not in CORE_ELEMENTS:
                 continue
 
-            # Target cb size from allocation ratio
-            try:
-                ratio = self.cb_dict[skey]
-            except KeyError:
-                ratio = self.cb_dict[key]
-            cbsize = int(self.codebook_size * ratio / 10000)
-            if key in [6, 7, 8]:
-                print(f"codebook number is increased for {key}!!")
-                new_cbsize = cbsize * 2
-                self.cb_dict[key] = new_cbsize
+            idx = get_idx(mask_dict, skey)
+            if idx is None:
+                print(f"[init_embed_] skip Z={skey}: no indices in mask_dict")
+                continue
 
-            idx = mask_dict[key]  # indices for this element
-            masked = data[0][idx]  # (Ni, D)
-            # print(f"[key={key}] cbsize={cbsize}, masked.shape={tuple(masked.shape)}")
+            masked = data[0][idx]  # (N_i, D)
+            N_i = masked.shape[0]
+            if N_i == 0:
+                print(f"[init_embed_] skip Z={skey}: N_i=0")
+                continue
 
-            # Run k-means (expects [H, N, D]); here H=1
-            embed_k, cluster_size_k = kmeans(masked.unsqueeze(0), cbsize)
-            embed_k, cluster_size_k, used_mask = compact_clusters(embed_k, cluster_size_k, pad_to_max=True)
+            # ---- absolute K requested (you can set bigger values for 6/7/8 in cb_dict) ----
+            K_req = get_absK(self.cb_dict, skey)
+            if K_req is None or K_req <= 0:
+                print(f"[init_embed_] warn Z={skey}: invalid K in cb_dict -> default to 1")
+                K_req = 1
 
-            # Normalize k-means outputs to (K, D) and (K,)
-            if embed_k.dim() == 3:  # (1, K, D) -> (K, D)
-                embed_k = embed_k[0].contiguous()
-            if cluster_size_k.dim() == 2:  # (1, K)    -> (K,)
-                cluster_size_k = cluster_size_k[0].contiguous()
+            # K-Means can only produce up to N_i distinct centers; run with K_run
+            K_run = min(K_req, N_i)
 
-            K_found = int(embed_k.shape[0])
-            D_curr = int(self.embed[skey].shape[-1])
-            # print(f"[key={key}] K_found={K_found}, D={D_curr}")
+            # run kmeans (on CUDA); returns [1,K_run,D], [1,K_run]
+            means_1kd, counts_1k = kmeans(
+                masked.unsqueeze(0).to(device),
+                num_clusters=K_run,
+                use_cosine_sim=use_cosine_sim,
+            )
 
-            # Record the actual K used for this element
-            self.cb_dict[skey] = K_found
+            # compact if you have dead centers (optional, keeps K_run ≤ produced)
+            # If your compact_clusters always pads to max of its input, you can skip it here.
+            # Otherwise, do:
+            # means_1kd, counts_1k, used_mask = compact_clusters(means_1kd, counts_1k, pad_to_max=True)
 
-            # ---------- Ensure codebook parameter has shape [K_found, D] ----------
-            code = self.embed[skey]
-            if code.shape[0] != K_found:
-                new_code = torch.empty(
-                    K_found, D_curr, device=code.device, dtype=code.dtype
+            # pad up to K_req (NO CAP on final size)
+            means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
+
+            # allocate/resize destination params & buffers to EXACTLY K_req
+            if skey not in self.embed or self.embed[skey].shape != (K_req, D):
+                self.embed[skey] = torch.nn.Parameter(
+                    means_kd.detach().to(device=device, dtype=means_kd.dtype),
+                    requires_grad=True
                 )
-                nn.init.normal_(new_code, mean=0.0, std=0.01)
-                self.embed[skey] = nn.Parameter(new_code, requires_grad=True)
-                code = self.embed[skey]  # refresh reference
-
-                # update "embed_avg_{key}" shape
-                self._buffers[f"embed_avg_{key}"] = torch.zeros(K_found, D_curr)
-
-            # ---------- Ensure cluster_size buffer has shape [K_found] ------------
-            cs_name = f"cluster_size_{key}"
-            cs_buf = getattr(self, cs_name)
-            if cs_buf.numel() != K_found:
-                new_cs = torch.zeros(
-                    K_found, device=cs_buf.device, dtype=cs_buf.dtype
-                )
-                # Re-register the buffer with the new shape
-                self.register_buffer(cs_name, new_cs)
-                cs_buf = getattr(self, cs_name)
             else:
-                cs_buf.zero_()
+                self.embed[skey].data.copy_(means_kd)
 
-            # (Optional) If you keep EMA stats per element, resize them here too.
-            # Example (guarded):
-            # for buf in (f"embed_avg_{key}", f"ema_cluster_size_{key}"):
-            #     if hasattr(self, buf):
-            #         old = getattr(self, buf)
-            #         if old.dim() == 2 and old.shape[0] != K_found:  # (K, D)
-            #             new = torch.zeros(K_found, D_curr, device=old.device, dtype=old.dtype)
-            #             self.register_buffer(buf, new)
-            #         elif old.dim() == 1 and old.numel() != K_found: # (K,)
-            #             new = torch.zeros(K_found, device=old.device, dtype=old.dtype)
-            #             self.register_buffer(buf, new)
+            buf_name = f"cluster_size_{skey}"
+            if not hasattr(self, buf_name) or getattr(self, buf_name).shape[0] != K_req:
+                self.register_buffer(buf_name, counts_k.detach().to(device=device))
+            else:
+                getattr(self, buf_name).data.copy_(counts_k)
 
-            # ----------------------- Copy centroids & counts -----------------------
-            with torch.no_grad():
-                # Centroids
-                if code.dim() == 3:  # (1, K, D) – unlikely here, but keep safety
-                    code.data.copy_(embed_k.unsqueeze(0).to(code.dtype))
-                else:  # (K, D)
-                    code.data.copy_(embed_k.to(code.dtype))
-
-                # Counts
-                assert cs_buf.shape[0] == cluster_size_k.shape[0], \
-                    f"cluster_size buffer {cs_buf.shape} vs kmeans {cluster_size_k.shape} for key={key}"
-                cs_buf.add_(cluster_size_k.to(cs_buf.dtype))
-
-            # For optional logging
-            cluster_sizes_all.append(cluster_size_k)
-
-            # print(f"[key={key}] codebook={tuple(code.shape)}, cluster_size_buf={tuple(cs_buf.shape)}")
-
-        # Mark initialized
-        self.initted.data.copy_(torch.tensor([True], device=self.initted.device))
-        # Return last embed_k for compatibility (or return None / dict if you prefer)
-        return embed_k
+            nz = int((counts_k > 0).sum().item())
+            print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
