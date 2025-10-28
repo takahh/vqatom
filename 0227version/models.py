@@ -156,25 +156,25 @@ class EquivariantFourHopGINE(nn.Module):
         nn1 = mlp(args.hidden_dim, hidden_feats)
         nn2 = mlp(hidden_feats, hidden_feats)
         nn3 = mlp(hidden_feats, hidden_feats)
-        nn4 = mlp(hidden_feats, hidden_feats)
+        # nn4 = mlp(hidden_feats, hidden_feats)
 
         self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
         self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
         self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
-        self.gine4 = GINEConv(nn4, edge_dim=edge_emb_dim)
+        # self.gine4 = GINEConv(nn4, edge_dim=edge_emb_dim)
 
         # LayerNorms
         self.ln_in = nn.LayerNorm(args.hidden_dim)
         self.ln1 = nn.LayerNorm(hidden_feats)
         self.ln2 = nn.LayerNorm(hidden_feats)
         self.ln3 = nn.LayerNorm(hidden_feats)
-        self.ln4 = nn.LayerNorm(hidden_feats)
+        # self.ln4 = nn.LayerNorm(hidden_feats)
 
         # Residual scales (learned, start small)
         self.res1 = nn.Parameter(torch.tensor(0.5))
         self.res2 = nn.Parameter(torch.tensor(0.5))
         self.res3 = nn.Parameter(torch.tensor(0.5))
-        self.res4 = nn.Parameter(torch.tensor(0.5))
+        # self.res4 = nn.Parameter(torch.tensor(0.5))
 
         # Jumping-Knowledge: concat h0 + h1..h4
         jk_dim = args.hidden_dim + 4 * hidden_feats
@@ -232,10 +232,10 @@ class EquivariantFourHopGINE(nn.Module):
         h1 = self.ln1(self.gine1(h0, edge_index, edge_attr) * self.res1 + h0)
         h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) * self.res2 + h1)
         h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) * self.res3 + h2)
-        h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) * self.res4 + h3)
+        # h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) * self.res4 + h3)
 
         # JK concat (include h0)
-        h_cat = torch.cat([h0, h1, h2, h3, h4], dim=-1)
+        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
         h_mid = self.mix(h_cat)
         h_out = self.out_proj(h_mid)  # [N, args.hidden_dim]
 
