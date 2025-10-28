@@ -748,6 +748,7 @@ class EuclideanCodebook(nn.Module):
                 ratio = self.cb_dict[key]
             cbsize = int(self.codebook_size * ratio / 10000)
             if key in [6, 7, 8]:
+                print(f"codebook number is increased for {key}!!")
                 new_cbsize = cbsize * 2
                 self.cb_dict[key] = new_cbsize
 
