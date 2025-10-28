@@ -212,11 +212,11 @@ class EquivariantFourHopGINE(nn.Module):
             self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
             return 0
 
-        # Build undirected edges
-        s1, d1 = data.edges()
-        src = torch.cat([s1, d1], 0).to(dev, non_blocking=True)
-        dst = torch.cat([d1, s1], 0).to(dev, non_blocking=True)
-        edge_index = torch.stack([src, dst], 0)
+        # 3) Build undirected edge_index & edge_attr on the same device
+        src_one, dst_one = data.edges()  # likely CPU tensors
+        src = torch.cat([src_one, dst_one], dim=0)
+        dst = torch.cat([dst_one, src_one], dim=0)
+        edge_index = torch.stack([src, dst], dim=0)  # [2, E] on model_device
 
         # Edge attributes
         eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
