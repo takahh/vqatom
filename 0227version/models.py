@@ -136,7 +136,6 @@ class AtomEmbedding(nn.Module):
         return out
 
 class EquivariantFourHopGINE(nn.Module):
-    import torch
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
         if args is None:
@@ -194,7 +193,7 @@ class EquivariantFourHopGINE(nn.Module):
     def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
                 batched_graph_base=None, mode=None):
         device = features.device  # assume caller moved model & inputs to device
-
+        import torch
         if mode != "init_kmeans_final":
             # Build undirected edge_index by mirroring edges
             src_one, dst_one = data.edges()
