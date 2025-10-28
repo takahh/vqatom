@@ -1138,27 +1138,27 @@ class EuclideanCodebook(nn.Module):
             #     contributed_keys.append((key, n))
 
 
-            # # -------------------- EMA codebook update (hard-EMA) --------------------
-            # if self.training and epoch is not None and epoch < 30:
-            #     with torch.no_grad():
-            #         ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
-            #         cs = getattr(self, f"cluster_size_{key}")  # [K_e]
-            #         eps = getattr(self, "eps", 1e-6)
-            #         decay = float(self.decay)
-            #
-            #         ea.mul_(decay)
-            #         cs.mul_(decay)
-            #
-            #         one = torch.ones_like(idx, dtype=cs.dtype)
-            #         cs.index_add_(0, idx, one * (1.0 - decay))
-            #         ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
-            #
-            #         means = ea / (cs.unsqueeze(-1) + eps)
-            #
-            #         code_param = self.embed[str(key)]
-            #         code_param.data.copy_(
-            #             means.unsqueeze(0) if code_param.ndim == 3 else means
-            #         )
+            # -------------------- EMA codebook update (hard-EMA) --------------------
+            if self.training and epoch is not None and epoch < 30:
+                with torch.no_grad():
+                    ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
+                    cs = getattr(self, f"cluster_size_{key}")  # [K_e]
+                    eps = getattr(self, "eps", 1e-6)
+                    decay = float(self.decay)
+
+                    ea.mul_(decay)
+                    cs.mul_(decay)
+
+                    one = torch.ones_like(idx, dtype=cs.dtype)
+                    cs.index_add_(0, idx, one * (1.0 - decay))
+                    ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
+
+                    means = ea / (cs.unsqueeze(-1) + eps)
+
+                    code_param = self.embed[str(key)]
+                    code_param.data.copy_(
+                        means.unsqueeze(0) if code_param.ndim == 3 else means
+                    )
 
             del masked_latents, code, idx, quantize
 
