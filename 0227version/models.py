@@ -1,5 +1,6 @@
 from train_teacher import get_args
 import torch.nn as nn
+import torch
 
 
 class BondWeightLayer(nn.Module):
@@ -135,129 +136,122 @@ class AtomEmbedding(nn.Module):
                          x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26], dim=-1)  # shape: [num_atoms, total_embedding_dim]
         return out
 
-class EquivariantFourHopGINE(nn.Module):
-    def __init__(self, in_feats, hidden_feats, out_feats, args):
-        super().__init__()
-        if args is None:
-            args = get_args()
 
-        self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(120, args.hidden_dim)
+    class EquivariantFourHopGINE(nn.Module):
+        def __init__(self, in_feats, hidden_feats, out_feats, args):
+            super().__init__()
+            if args is None:
+                args = get_args()
 
-        # Bond embedding for 4 bond types (1..4), 0 = padding
-        edge_emb_dim = getattr(args, "edge_emb_dim", 16)
-        self.bond_emb = nn.Embedding(num_embeddings=5, embedding_dim=edge_emb_dim, padding_idx=0)
+            self.feat_embed = AtomEmbedding()
+            self.linear_0 = nn.Linear(120, args.hidden_dim)  # h0
+            edge_emb_dim = getattr(args, "edge_emb_dim", 32)  # widen a bit
 
-        # GINE MLPs
-        nn1 = nn.Sequential(nn.Linear(args.hidden_dim, hidden_feats), nn.ReLU())
-        nn2 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
-        nn3 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
-        nn4 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
+            self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
 
-        # Four GINEConv layers (edge_dim matches bond_emb)
-        self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
-        self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
-        self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
-        self.gine4 = GINEConv(nn4, edge_dim=edge_emb_dim)
+            # GINE MLPs
+            def mlp(in_f, out_f):
+                return nn.Sequential(nn.Linear(in_f, out_f), nn.ReLU(), nn.Linear(out_f, out_f), nn.ReLU())
 
-        # Norms (Pre-LN via residual: y = LN(x + f(x, e)))
-        self.ln_in = nn.LayerNorm(args.hidden_dim)
-        self.ln1 = nn.LayerNorm(hidden_feats)
-        self.ln2 = nn.LayerNorm(hidden_feats)
-        self.ln3 = nn.LayerNorm(hidden_feats)
-        self.ln4 = nn.LayerNorm(hidden_feats)
+            nn1 = mlp(args.hidden_dim, hidden_feats)
+            nn2 = mlp(hidden_feats, hidden_feats)
+            nn3 = mlp(hidden_feats, hidden_feats)
+            nn4 = mlp(hidden_feats, hidden_feats)
 
-        # Concatenate 4 hops → project back to hidden_feats
-        self.linear_1 = nn.Sequential(
-            nn.Linear(hidden_feats * 4, 2 * hidden_feats),
-            nn.ReLU(),
-            nn.Linear(2 * hidden_feats, 2 * hidden_feats),
-            nn.ReLU(),
-            nn.Linear(2 * hidden_feats, hidden_feats),
-            nn.ReLU(),
-        )
+            self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
+            self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
+            self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
+            self.gine4 = GINEConv(nn4, edge_dim=edge_emb_dim)
 
-        # Vector quantizer
-        self.vq = VectorQuantize(
-            dim=args.hidden_dim,
-            codebook_size=args.codebook_size,
-            decay=0.8,
-            threshold_ema_dead_code=2,
-        )
+            # LayerNorms
+            self.ln_in = nn.LayerNorm(args.hidden_dim)
+            self.ln1 = nn.LayerNorm(hidden_feats)
+            self.ln2 = nn.LayerNorm(hidden_feats)
+            self.ln3 = nn.LayerNorm(hidden_feats)
+            self.ln4 = nn.LayerNorm(hidden_feats)
 
-        self.train_or_infer = args.train_or_infer
+            # Residual scales (learned, start small)
+            self.res1 = nn.Parameter(torch.tensor(0.5))
+            self.res2 = nn.Parameter(torch.tensor(0.5))
+            self.res3 = nn.Parameter(torch.tensor(0.5))
+            self.res4 = nn.Parameter(torch.tensor(0.5))
 
-    def reset_kmeans(self):
-        self.vq._codebook.reset_kmeans()
+            # Jumping-Knowledge: concat h0 + h1..h4
+            jk_dim = args.hidden_dim + 4 * hidden_feats
+            self.mix = nn.Sequential(
+                nn.Linear(jk_dim, 2 * hidden_feats),
+                nn.ReLU(),
+                nn.Linear(2 * hidden_feats, hidden_feats),
+                nn.ReLU(),
+            )
 
-    def forward(
-        self,
-        data,
-        features,
-        chunk_i,
-        mask_dict=None,
-        logger=None,
-        epoch=None,
-        batched_graph_base=None,
-        mode=None,
-    ):
-        import torch
+            # Final projection to exactly args.hidden_dim (so VQ dim matches)
+            self.out_proj = nn.Linear(hidden_feats, args.hidden_dim)
 
-        # Always anchor to the model's device
-        model_device = next(self.parameters()).device
+            # Pre-VQ norm option
+            self.pre_vq_ln = nn.LayerNorm(args.hidden_dim)
 
-        # ---- K-Means final init path (no GNN needed) ----
-        if mode == "init_kmeans_final":
-            # Both 'data' and 'features' may be None or tensors.
-            # Only move them if they are tensors.
-            if torch.is_tensor(data):
-                data = data.to(model_device, non_blocking=True)
-            if torch.is_tensor(features):
-                features = features.to(model_device, non_blocking=True)
+            # Vector quantizer (expects args.hidden_dim)
+            self.vq = VectorQuantize(
+                dim=args.hidden_dim,
+                codebook_size=args.codebook_size,
+                decay=getattr(args, "ema_decay", 0.8),
+                threshold_ema_dead_code=2,
+            )
 
-            # Your VQ init is called here; it should tolerate features=None if not needed.
-            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
-            return 0  # keep your original contract
+        def reset_kmeans(self):
+            self.vq._codebook.reset_kmeans()
 
-        # ---- From here on, we need real graph + features (GNN path) ----
-        # Move features to model device (now we expect a Tensor)
-        features = features.to(model_device, non_blocking=True)
+        def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
+                    batched_graph_base=None, mode=None):
+            dev = next(self.parameters()).device
+            if mode == "init_kmeans_final":
+                # features may be None here; VQ should handle it
+                if torch.is_tensor(data): data = data.to(dev, non_blocking=True)
+                if torch.is_tensor(features): features = features.to(dev, non_blocking=True)
+                self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
+                return 0
 
-        # Build undirected edge_index on the same device
-        src_one, dst_one = data.edges()  # likely CPU tensors from DGL
-        src = torch.cat([src_one, dst_one], dim=0).to(model_device, non_blocking=True)
-        dst = torch.cat([dst_one, src_one], dim=0).to(model_device, non_blocking=True)
-        edge_index = torch.stack([src, dst], dim=0)
+            # Build undirected edges
+            s1, d1 = data.edges()
+            src = torch.cat([s1, d1], 0).to(dev, non_blocking=True)
+            dst = torch.cat([d1, s1], 0).to(dev, non_blocking=True)
+            edge_index = torch.stack([src, dst], 0)
 
-        # Edge attributes: bond types {1..4}, 0 otherwise
-        e_base = data.edata.get(
-            "weight",
-            torch.zeros(data.num_edges(), dtype=torch.long, device=src_one.device),
-        )
-        e = torch.cat([e_base, e_base], dim=0).to(model_device, non_blocking=True)
-        e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
-        edge_attr = self.bond_emb(e.long())  # [E, edge_emb_dim] on model_device
+            # Edge attributes
+            eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
+            e = torch.cat([eb, eb], 0).to(dev, non_blocking=True)
+            e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+            edge_attr = self.bond_emb(e.long())
 
-        # Node features and 4-hop GINE
-        x0 = self.feat_embed(features)
-        h  = self.linear_0(x0)
-        h  = self.ln_in(h)
+            # Node features
+            features = features.to(dev, non_blocking=True)
+            h0 = self.ln_in(self.linear_0(self.feat_embed(features)))  # [N, args.hidden_dim]
 
-        h1 = self.ln1(self.gine1(h,  edge_index, edge_attr) + h)
-        h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) + h1)
-        h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) + h2)
-        h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) + h3)
+            # 4 hops with scaled residuals
+            h1 = self.ln1(self.gine1(h0, edge_index, edge_attr) * self.res1 + h0)
+            h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) * self.res2 + h1)
+            h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) * self.res3 + h2)
+            h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) * self.res4 + h3)
 
-        h_out = self.linear_1(torch.cat([h1, h2, h3, h4], dim=-1))
+            # JK concat (include h0)
+            h_cat = torch.cat([h0, h1, h2, h3, h4], dim=-1)
+            h_mid = self.mix(h_cat)
+            h_out = self.out_proj(h_mid)  # [N, args.hidden_dim]
 
-        if mode == "init_kmeans_loop":
-            return h_out
+            if mode == "init_kmeans_loop":
+                # Optionally L2-normalize here if you compute silhouette on latents pre-VQ
+                return h_out
 
-        quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
-        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-        if logger is not None:
-            logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
-        return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+            # Pre-VQ normalization (try both LN and L2 in ablations)
+            h_vq = self.pre_vq_ln(h_out)
+            # or: h_vq = torch.nn.functional.normalize(h_out, p=2, dim=-1)
+
+            quantize_output = self.vq(h_vq, features, mask_dict, logger, chunk_i, epoch, mode)
+            (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
+            if logger is not None:
+                logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
+            return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
 
 
 class Model(nn.Module):
