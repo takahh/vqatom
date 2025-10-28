@@ -213,7 +213,13 @@ class EquivariantFourHopGINE(nn.Module):
             return 0
 
         # 3) Build undirected edge_index & edge_attr on the same device
-        src_one, dst_one = data.edges()  # likely CPU tensors
+        # model_device: get it once at top of forward
+        model_device = next(self.parameters()).device
+        # ---- Build undirected edge_index on model_device ----
+        src_one, dst_one = data.edges()  # these are usually CPU tensors from DGL
+        # move them to model_device before concatenation
+        src_one = src_one.to(model_device, non_blocking=True)
+        dst_one = dst_one.to(model_device, non_blocking=True)
         src = torch.cat([src_one, dst_one], dim=0)
         dst = torch.cat([dst_one, src_one], dim=0)
         edge_index = torch.stack([src, dst], dim=0)  # [2, E] on model_device
