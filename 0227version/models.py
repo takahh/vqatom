@@ -136,6 +136,7 @@ class AtomEmbedding(nn.Module):
         return out
 
 class EquivariantFourHopGINE(nn.Module):
+    import torch
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
         if args is None:
