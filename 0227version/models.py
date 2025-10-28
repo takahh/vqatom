@@ -190,74 +190,74 @@ class EquivariantFourHopGINE(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-def forward(
-    self,
-    data,
-    features,
-    chunk_i,
-    mask_dict=None,
-    logger=None,
-    epoch=None,
-    batched_graph_base=None,
-    mode=None,
-):
-    import torch
+    def forward(
+        self,
+        data,
+        features,
+        chunk_i,
+        mask_dict=None,
+        logger=None,
+        epoch=None,
+        batched_graph_base=None,
+        mode=None,
+    ):
+        import torch
 
-    # Always anchor to the model's device
-    model_device = next(self.parameters()).device
+        # Always anchor to the model's device
+        model_device = next(self.parameters()).device
 
-    # ---- K-Means final init path (no GNN needed) ----
-    if mode == "init_kmeans_final":
-        # Both 'data' and 'features' may be None or tensors.
-        # Only move them if they are tensors.
-        if torch.is_tensor(data):
-            data = data.to(model_device, non_blocking=True)
-        if torch.is_tensor(features):
-            features = features.to(model_device, non_blocking=True)
+        # ---- K-Means final init path (no GNN needed) ----
+        if mode == "init_kmeans_final":
+            # Both 'data' and 'features' may be None or tensors.
+            # Only move them if they are tensors.
+            if torch.is_tensor(data):
+                data = data.to(model_device, non_blocking=True)
+            if torch.is_tensor(features):
+                features = features.to(model_device, non_blocking=True)
 
-        # Your VQ init is called here; it should tolerate features=None if not needed.
-        self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
-        return 0  # keep your original contract
+            # Your VQ init is called here; it should tolerate features=None if not needed.
+            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
+            return 0  # keep your original contract
 
-    # ---- From here on, we need real graph + features (GNN path) ----
-    # Move features to model device (now we expect a Tensor)
-    features = features.to(model_device, non_blocking=True)
+        # ---- From here on, we need real graph + features (GNN path) ----
+        # Move features to model device (now we expect a Tensor)
+        features = features.to(model_device, non_blocking=True)
 
-    # Build undirected edge_index on the same device
-    src_one, dst_one = data.edges()  # likely CPU tensors from DGL
-    src = torch.cat([src_one, dst_one], dim=0).to(model_device, non_blocking=True)
-    dst = torch.cat([dst_one, src_one], dim=0).to(model_device, non_blocking=True)
-    edge_index = torch.stack([src, dst], dim=0)
+        # Build undirected edge_index on the same device
+        src_one, dst_one = data.edges()  # likely CPU tensors from DGL
+        src = torch.cat([src_one, dst_one], dim=0).to(model_device, non_blocking=True)
+        dst = torch.cat([dst_one, src_one], dim=0).to(model_device, non_blocking=True)
+        edge_index = torch.stack([src, dst], dim=0)
 
-    # Edge attributes: bond types {1..4}, 0 otherwise
-    e_base = data.edata.get(
-        "weight",
-        torch.zeros(data.num_edges(), dtype=torch.long, device=src_one.device),
-    )
-    e = torch.cat([e_base, e_base], dim=0).to(model_device, non_blocking=True)
-    e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
-    edge_attr = self.bond_emb(e.long())  # [E, edge_emb_dim] on model_device
+        # Edge attributes: bond types {1..4}, 0 otherwise
+        e_base = data.edata.get(
+            "weight",
+            torch.zeros(data.num_edges(), dtype=torch.long, device=src_one.device),
+        )
+        e = torch.cat([e_base, e_base], dim=0).to(model_device, non_blocking=True)
+        e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+        edge_attr = self.bond_emb(e.long())  # [E, edge_emb_dim] on model_device
 
-    # Node features and 4-hop GINE
-    x0 = self.feat_embed(features)
-    h  = self.linear_0(x0)
-    h  = self.ln_in(h)
+        # Node features and 4-hop GINE
+        x0 = self.feat_embed(features)
+        h  = self.linear_0(x0)
+        h  = self.ln_in(h)
 
-    h1 = self.ln1(self.gine1(h,  edge_index, edge_attr) + h)
-    h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) + h1)
-    h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) + h2)
-    h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) + h3)
+        h1 = self.ln1(self.gine1(h,  edge_index, edge_attr) + h)
+        h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) + h1)
+        h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) + h2)
+        h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) + h3)
 
-    h_out = self.linear_1(torch.cat([h1, h2, h3, h4], dim=-1))
+        h_out = self.linear_1(torch.cat([h1, h2, h3, h4], dim=-1))
 
-    if mode == "init_kmeans_loop":
-        return h_out
+        if mode == "init_kmeans_loop":
+            return h_out
 
-    quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
-    (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-    if logger is not None:
-        logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
-    return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+        quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
+        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
+        if logger is not None:
+            logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
+        return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
 
 
 class Model(nn.Module):
