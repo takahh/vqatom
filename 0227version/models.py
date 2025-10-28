@@ -93,12 +93,13 @@ class AtomEmbedding(nn.Module):
     def forward(self, atom_inputs):
         """
         atom_inputs: LongTensor of shape [num_atoms, 7]
-        Each column is an integer feature:
+        Each column:
         [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
         """
+        # Get the model's device from any parameter
         import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        atom_inputs = atom_inputs.to(device)
+        device = next(self.parameters()).device
+        atom_inputs = atom_inputs.to(device, non_blocking=True)
 
         x0 = self.element_embed(atom_inputs[:, 0].long())
         x1 = self.degree_embed(atom_inputs[:, 1].long())
@@ -107,7 +108,6 @@ class AtomEmbedding(nn.Module):
         x4 = self.aromatic_embed(atom_inputs[:, 4].long())
         x5 = self.hybrid_embed(atom_inputs[:, 5].long())
         x6 = self.hydrogen_embed(atom_inputs[:, 6].long())
-
         # functional group flags
         x7 = self.func_embed_0(atom_inputs[:, 7].long())
         x8 = self.func_embed_1(atom_inputs[:, 8].long())
@@ -190,61 +190,69 @@ class EquivariantFourHopGINE(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
-                batched_graph_base=None, mode=None):
-        device = features.device  # assume caller moved model & inputs to device
+    def forward(
+            self,
+            data,
+            features,
+            chunk_i,
+            mask_dict=None,
+            logger=None,
+            epoch=None,
+            batched_graph_base=None,
+            mode=None,
+    ):
         import torch
-        if mode != "init_kmeans_final":
-            # Build undirected edge_index by mirroring edges
-            src_one, dst_one = data.edges()
-            src = torch.cat([src_one, dst_one], dim=0).to(device)
-            dst = torch.cat([dst_one, src_one], dim=0).to(device)
-            edge_index = torch.stack([src, dst], dim=0)  # [2, E]
 
-            # Node features
-            x0 = self.feat_embed(features).to(device)    # [N, 120]
-            h = self.linear_0(x0)                        # [N, H]
-            h = self.ln_in(h)
+        # 1) Trust the model's device (not features)
+        model_device = next(self.parameters()).device
 
-            # Edge attributes: bond types in {1..4}, 0 if missing/other
-            e_base = data.edata.get('weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device))
-            e = torch.cat([e_base, e_base], dim=0).to(device)
-            e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
-            edge_attr = self.bond_emb(e)                 # [E, edge_emb_dim]
+        # 2) Move inputs to the model's device
+        features = features.to(model_device, non_blocking=True)
 
-            # 4-hop GINE with residual + LN
-            h1_in = h
-            h1 = self.gine1(h1_in, edge_index, edge_attr)
-            h1 = self.ln1(h1 + h1_in)
+        if mode == "init_kmeans_final":
+            # If your VQ init expects graph/feats on GPU, send them too
+            data = data.to(model_device)
+            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
+            return 0
 
-            h2_in = h1
-            h2 = self.gine2(h2_in, edge_index, edge_attr)
-            h2 = self.ln2(h2 + h2_in)
+        # 3) Build undirected edge_index & edge_attr on the same device
+        src_one, dst_one = data.edges()  # likely CPU tensors
+        src = torch.cat([src_one, dst_one], dim=0).to(model_device, non_blocking=True)
+        dst = torch.cat([dst_one, src_one], dim=0).to(model_device, non_blocking=True)
+        edge_index = torch.stack([src, dst], dim=0)  # [2, E] on model_device
 
-            h3_in = h2
-            h3 = self.gine3(h3_in, edge_index, edge_attr)
-            h3 = self.ln3(h3 + h3_in)
+        e_base = data.edata.get(
+            "weight",
+            torch.zeros(data.num_edges(), dtype=torch.long, device=src_one.device),
+        )
+        e = torch.cat([e_base, e_base], dim=0).to(model_device, non_blocking=True)
+        e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+        edge_attr = self.bond_emb(e.long())  # [E, edge_emb_dim] on model_device
 
-            h4_in = h3
-            h4 = self.gine4(h4_in, edge_index, edge_attr)
-            h4 = self.ln4(h4 + h4_in)
+        # 4) Node features -> embeddings -> linear on model_device
+        x0 = self.feat_embed(features)  # must return model_device tensor
+        h = self.linear_0(x0)  # [N, H] (no device mismatch)
+        h = self.ln_in(h)
 
-            # concat multi-hop reps, then project
-            h_cat = torch.cat([h1, h2, h3, h4], dim=-1)  # [N, 4*hidden_feats]
-            h_out = self.linear_1(h_cat)                 # [N, hidden_feats]
+        # 5) Four GINE hops with residual + LN
+        h1 = self.ln1(self.gine1(h, edge_index, edge_attr) + h)
+        h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) + h1)
+        h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) + h2)
+        h4 = self.ln4(self.gine4(h3, edge_index, edge_attr) + h3)
+
+        # 6) Concatenate hops, project
+        h_cat = torch.cat([h1, h2, h3, h4], dim=-1)  # [N, 4*hidden_feats]
+        h_out = self.linear_1(h_cat)  # [N, hidden_feats]
 
         if mode == "init_kmeans_loop":
             return h_out
 
-        if mode is None:  # train/test
-            quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
-        elif mode == "init_kmeans_final":
-            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
-            return 0
-
+        quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-        logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
+        if logger is not None:
+            logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
         return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+
 
 class Model(nn.Module):
     """
