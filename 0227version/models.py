@@ -135,150 +135,116 @@ class AtomEmbedding(nn.Module):
                          x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26], dim=-1)  # shape: [num_atoms, total_embedding_dim]
         return out
 
-
-class EquivariantThreeHopGINE(nn.Module):
+class EquivariantFourHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
-        super(EquivariantThreeHopGINE, self).__init__()
+        super().__init__()
         if args is None:
-            args = get_args()  # Ensure this function is defined elsewhere
+            args = get_args()
+
         self.feat_embed = AtomEmbedding()
         self.linear_0 = nn.Linear(120, args.hidden_dim)
-        # GINEConv layers with specified edge_dim
-        nn1 = nn.Sequential(
-            nn.Linear(args.hidden_dim, hidden_feats),
+
+        # Bond embedding for 4 bond types (1..4), 0 = padding
+        edge_emb_dim = getattr(args, "edge_emb_dim", 16)
+        self.bond_emb = nn.Embedding(num_embeddings=5, embedding_dim=edge_emb_dim, padding_idx=0)
+
+        # GINE MLPs
+        nn1 = nn.Sequential(nn.Linear(args.hidden_dim, hidden_feats), nn.ReLU())
+        nn2 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
+        nn3 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
+        nn4 = nn.Sequential(nn.Linear(hidden_feats, hidden_feats), nn.ReLU())
+
+        # Four GINEConv layers (edge_dim matches bond_emb)
+        self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
+        self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
+        self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
+        self.gine4 = GINEConv(nn4, edge_dim=edge_emb_dim)
+
+        # Norms (Pre-LN via residual: y = LN(x + f(x, e)))
+        self.ln_in = nn.LayerNorm(args.hidden_dim)
+        self.ln1 = nn.LayerNorm(hidden_feats)
+        self.ln2 = nn.LayerNorm(hidden_feats)
+        self.ln3 = nn.LayerNorm(hidden_feats)
+        self.ln4 = nn.LayerNorm(hidden_feats)
+
+        # Concatenate 4 hops → project back to hidden_feats
+        self.linear_1 = nn.Sequential(
+            nn.Linear(hidden_feats * 4, 2 * hidden_feats),
+            nn.ReLU(),
+            nn.Linear(2 * hidden_feats, 2 * hidden_feats),
+            nn.ReLU(),
+            nn.Linear(2 * hidden_feats, hidden_feats),
             nn.ReLU(),
         )
-        nn2 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
-            nn.ReLU(),
-        )
-        nn3 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
-            nn.ReLU(),
-        )
-        nn4 = nn.Sequential(
-            nn.Linear(hidden_feats, hidden_feats),
-        )
-        self.gine1 = GINEConv(nn1, edge_dim=1)
-        self.gine2 = GINEConv(nn2, edge_dim=1)
-        self.gine3 = GINEConv(nn3, edge_dim=1)
-        self.gine4 = GINEConv(nn4, edge_dim=1)
-        # Vector quantization layer
+
+        # Vector quantizer
         self.vq = VectorQuantize(
             dim=args.hidden_dim,
             codebook_size=args.codebook_size,
             decay=0.8,
             threshold_ema_dead_code=2,
         )
-        # Bond weight layer
-        self.bond_weight = BondWeightLayer(bond_types=4, hidden_dim=args.hidden_dim)
-        # Activation and normalization layers
-        self.leaky_relu0 = nn.LeakyReLU(0.2)
-        self.leaky_relu1 = nn.LeakyReLU(0.2)
-        self.ln0 = nn.LayerNorm(args.hidden_dim)
-        self.ln1 = nn.LayerNorm(args.hidden_dim)
-        self.ln2 = nn.LayerNorm(args.hidden_dim)
-        self.ln3 = nn.LayerNorm(args.hidden_dim)
-        # self.linear_1 = nn.Linear(hidden_feats, hidden_feats)
-        self.linear_1 = nn.Sequential(
-            nn.Linear(hidden_feats * 3, 2 * hidden_feats),
-            nn.ReLU(),
-            # nn.Dropout(0.1),
-            nn.Linear(2 * hidden_feats, 2 * hidden_feats),
-            nn.ReLU(),
-            nn.Linear(2 * hidden_feats, hidden_feats),
-            nn.ReLU()
-        )
+
         self.train_or_infer = args.train_or_infer
 
     def reset_kmeans(self):
-        """Reset k-means clustering for vector quantization."""
         self.vq._codebook.reset_kmeans()
 
-    def is_bidirectional(self, src, dst):
-        # Create a set of all edges as tuples
-        edges = set([(int(u), int(v)) for u, v in zip(src, dst)])        # Check if the reverse of each edge exists
-        for u, v in edges:
-            if u == v:
-                continue
-            elif (v, u) not in edges:
-                print(f"Edge ({u}, {v}) doesn't have corresponding reverse edge ({v}, {u})")
-                return False
-        return True
+    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
+                batched_graph_base=None, mode=None):
+        device = features.device  # assume caller moved model & inputs to device
 
-    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        import torch
-        torch.set_printoptions(threshold=10_000)  # Set a high threshold to print all elements
-        import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        data = data.to(device)
         if mode != "init_kmeans_final":
-            src_one_way, dst_one_way = data.edges()
-            src = torch.cat([src_one_way, dst_one_way])
-            dst = torch.cat([dst_one_way, src_one_way])
-            self.gine1 = self.gine1.to(device)
-            self.gine2 = self.gine2.to(device)
-            self.gine3 = self.gine3.to(device)
-            self.gine4 = self.gine4.to(device)
-            self.vq = self.vq.to(device)
-            self.bond_weight = self.bond_weight.to(device)
-            features_first = features.clone()
-            features = self.feat_embed(features).to(device)
-            features = features.to(device)
-            h = self.linear_0(features)
-            init_feat = h
-            edge_weight = data.edata.get(
-                'weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device)
-            )
-            edge_weight = torch.cat([edge_weight, edge_weight])
-            mapped_indices = torch.where(
-                (edge_weight >= 1) & (edge_weight <= 4),
-                edge_weight - 1,
-                torch.zeros_like(edge_weight)
-            )
-            mapped_indices = mapped_indices.long()
-            transformed_edge_weight = self.bond_weight(mapped_indices).squeeze(-1)  # [num_edges]
-            transformed_edge_weight = transformed_edge_weight.unsqueeze(
-                -1) if transformed_edge_weight.dim() == 1 else transformed_edge_weight
-            edge_index = torch.stack([src, dst], dim=0)  #　隣接情報
-            edge_attr = transformed_edge_weight
-            edge_attr = torch.ones(edge_attr.shape).to(device)
-            # 2 Three GNN Layers
-            h_list = []
-            h1 = self.ln0(self.gine1(h, edge_index, edge_attr))
-            h_list.append(h1)
-            h2 = self.ln1(self.gine2(h1, edge_index, edge_attr))
-            h_list.append(h2)
-            h3 = self.ln2(self.gine3(h2, edge_index, edge_attr))
-            h_list.append(h3)
-            h = torch.cat(h_list, dim=-1)  # concat mode
-            # h = sum(h_list)              # sum mode
-            h = self.linear_1(h)
-            # h = F.normalize(h, p=2, dim=1)  # e.g. scaling_factor = 1.0 ~ 2.0
-            # norms = h.norm(dim=1)
-            # if chunk_i % 50 == 0:
-            #     print("###### ===  h norm stats:", norms.min().item(), norms.mean().item(), norms.max().item())
-        if mode == "init_kmeans_loop":
-            return h
-        if mode == None:  # train or test
-            quantize_output = self.vq(
-                h, features_first, mask_dict, logger, chunk_i, epoch, mode
-            )
-        elif mode == "init_kmeans_final":
-            self.vq(
-                data, features, mask_dict, logger, chunk_i, epoch, mode
-            )
-            return 0
-        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-        # print(f"commit_loss {commit_loss}")
-        # print(f"cb_loss {cb_loss}")
-        # print(f"sil_loss {sil_loss}")
-        # print(f"repel_loss {repel_loss}")
-        # print(f"cb_repel_loss {cb_repel_loss}")
-        logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
-        losslist = [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
-        return loss, embed, losslist
+            # Build undirected edge_index by mirroring edges
+            src_one, dst_one = data.edges()
+            src = torch.cat([src_one, dst_one], dim=0).to(device)
+            dst = torch.cat([dst_one, src_one], dim=0).to(device)
+            edge_index = torch.stack([src, dst], dim=0)  # [2, E]
 
+            # Node features
+            x0 = self.feat_embed(features).to(device)    # [N, 120]
+            h = self.linear_0(x0)                        # [N, H]
+            h = self.ln_in(h)
+
+            # Edge attributes: bond types in {1..4}, 0 if missing/other
+            e_base = data.edata.get('weight', torch.zeros(data.num_edges(), dtype=torch.long, device=device))
+            e = torch.cat([e_base, e_base], dim=0).to(device)
+            e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+            edge_attr = self.bond_emb(e)                 # [E, edge_emb_dim]
+
+            # 4-hop GINE with residual + LN
+            h1_in = h
+            h1 = self.gine1(h1_in, edge_index, edge_attr)
+            h1 = self.ln1(h1 + h1_in)
+
+            h2_in = h1
+            h2 = self.gine2(h2_in, edge_index, edge_attr)
+            h2 = self.ln2(h2 + h2_in)
+
+            h3_in = h2
+            h3 = self.gine3(h3_in, edge_index, edge_attr)
+            h3 = self.ln3(h3 + h3_in)
+
+            h4_in = h3
+            h4 = self.gine4(h4_in, edge_index, edge_attr)
+            h4 = self.ln4(h4 + h4_in)
+
+            # concat multi-hop reps, then project
+            h_cat = torch.cat([h1, h2, h3, h4], dim=-1)  # [N, 4*hidden_feats]
+            h_out = self.linear_1(h_cat)                 # [N, hidden_feats]
+
+        if mode == "init_kmeans_loop":
+            return h_out
+
+        if mode is None:  # train/test
+            quantize_output = self.vq(h_out, features, mask_dict, logger, chunk_i, epoch, mode)
+        elif mode == "init_kmeans_final":
+            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
+            return 0
+
+        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
+        logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
+        return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
 
 class Model(nn.Module):
     """
