@@ -186,7 +186,7 @@ def kmeans(
             C[h, 0] = X[h, idx]
             closest = None
             for k in range(1, K):
-                print(f"k {k}")
+                print(f"h {h} - k {k}")
                 # compute distances to current centers (streaming over k centers is fine here: k <= K so small early)
                 if cosine:
                     sims = X[h] @ C[h, :k].T                 # [N,k]
