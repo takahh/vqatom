@@ -142,13 +142,14 @@ def _kmeanspp_init(samples: torch.Tensor, K: int, use_cosine_sim: bool, eps: flo
     if use_cosine_sim:
         means = torch.nn.functional.normalize(means, p=2, dim=-1)
     return means
+
 def kmeans(
     samples: torch.Tensor,          # [H, N, D]
     num_clusters: int,
     use_cosine_sim: bool = False,
     all_reduce_fn = lambda x: None, # in-place sum for DDP (noop by default)
     eps: float = 1e-12,
-    max_iters: int = 30,
+    max_iters: int = 20,
     tol: float = 0.0,
     n_block: int = 131072,          # tile size over N (points)
     k_block: int = 4096,            # tile size over K (centers)
