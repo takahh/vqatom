@@ -15,6 +15,8 @@ OGB_data = ["ogbn-arxiv", "ogbn-products"]
 NonHom_data = ["pokec", "penn94"]
 BGNN_data = ["house_class", "vk_class"]
 CORE_ELEMENTS = {"5", "6", "7", "8", "14", "15", "16"}
+CBDICT = {1: 47, 3: 10, 5: 24, 6: 36000, 7: 4500, 8: 4000, 9: 730, 11: 50, 14: 10, 15: 61, 16: 434,
+                        17: 500, 19: 19, 34: 27, 35: 190, 53: 85}
 
 def set_seed(seed):
     torch.manual_seed(seed)

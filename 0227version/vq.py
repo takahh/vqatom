@@ -1,5 +1,6 @@
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
+from utils import CBDICT
 from torch import nn, einsum
 
 from train_teacher import get_args
@@ -628,8 +629,7 @@ class EuclideanCodebook(nn.Module):
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
         self.use_checkpoint = args.use_checkpoint
-        self.cb_dict = {1: 47, 3: 10, 5: 24, 6: 36000, 7: 4500, 8: 4000, 9: 730, 11: 50, 14: 10, 15: 61, 16: 434,
-                        17: 500, 19: 19, 34: 27, 35: 190, 53: 85}
+        self.cb_dict = CBDICT
         # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
         assert not (
                     use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
