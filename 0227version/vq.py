@@ -172,40 +172,72 @@ def kmeans(
     # optional cosine normalizations
     if use_cosine_sim:
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
+    import torch
 
-    # ---- K-Means++ init (kept from your version) ----
-    def _kmeanspp_init(X, K, cosine, eps):
-        # X: [H,N,D]
-        # simple per-head seeding
+    @torch.no_grad()
+    def kmeanspp_init(X: torch.Tensor, K: int, cosine: bool = False, eps: float = 1e-12, square_prob: bool = True):
+        """
+        X: [H, N, D]  (heads, items, dim)
+        Returns centers C: [H, K, D]
+        - cosine=True: do KMeans++ in cosine space (unit-normalized).
+        - square_prob=True: classic k-means++ uses probability ~ d^2.
+        """
         H, N, D = X.shape
-        C = torch.empty(H, K, D, device=X.device, dtype=X.dtype)
-        for h in range(H):
-            print(f"h {h}")
-            # pick first seed randomly
-            idx = torch.randint(0, N, (1,), device=X.device)
-            C[h, 0] = X[h, idx]
-            closest = None
-            for k in range(1, K):
-                print(f"h {h} - k {k}")
-                # compute distances to current centers (streaming over k centers is fine here: k <= K so small early)
-                if cosine:
-                    sims = X[h] @ C[h, :k].T                 # [N,k]
-                    d2 = (1 - sims).clamp_min(0)            # proxy
-                else:
-                    x2 = (X[h]**2).sum(-1, keepdim=True)     # [N,1]
-                    c2 = (C[h, :k]**2).sum(-1).unsqueeze(0)  # [1,k]
-                    xc = X[h] @ C[h, :k].T                   # [N,k]
-                    d2 = (x2 + c2 - 2*xc).clamp_min(0)
-                if closest is None:
-                    closest = d2.min(dim=1).values
-                else:
-                    closest = torch.minimum(closest, d2.min(dim=1).values)  # [N]
-                probs = (closest + eps)
-                idx = torch.multinomial(probs / probs.sum(), 1)
-                C[h, k] = X[h, idx]
-        if use_cosine_sim:
+        device, dtype = X.device, X.dtype
+
+        # Work in normalized space for cosine; keep original X for returning centers if you prefer
+        if cosine:
+            Xn = torch.nn.functional.normalize(X, p=2, dim=-1)
+            Xwork = Xn
+        else:
+            Xwork = X
+            # Precompute ||x||^2 for all points once
+            x2 = (X ** 2).sum(-1)  # [H, N]
+
+        C = torch.empty((H, K, D), device=device, dtype=dtype)
+
+        # 1) First seed per head: random
+        idx0 = torch.randint(0, N, (H, 1), device=device)  # [H,1]
+        C[:, 0, :] = X.gather(1, idx0.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
+
+        # Helper to get distances from all X to a center (one center per head)
+        def dist_to_center(x_all: torch.Tensor, c_one: torch.Tensor):
+            # x_all: [H, N, D], c_one: [H, D] -> returns [H, N] distances (nonnegative)
+            if cosine:
+                # distance proxy for cosine: 1 - dot(x, c)  (both unit)
+                d = (1.0 - (x_all * c_one.unsqueeze(1)).sum(-1)).clamp_min_(0)
+            else:
+                c2 = (c_one ** 2).sum(-1)  # [H]
+                xc = (x_all * c_one.unsqueeze(1)).sum(-1)  # [H, N]
+                d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min_(0)
+            return d
+
+        # 2) Initialize "closest distance so far" with the first center
+        closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N]
+
+        # 3) Iteratively sample new centers
+        for k in range(1, K):
+            # Choose next center proportional to distance (optionally squared)
+            probs = closest + eps
+            if square_prob:
+                probs = probs * probs
+
+            # torch.multinomial supports batched rows: sample one index per head
+            idxk = torch.multinomial(probs, num_samples=1)  # [H,1]
+
+            # Gather new centers from original X (not Xwork) to keep true vectors
+            C[:, k, :] = X.gather(1, idxk.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
+
+            # Update the running closest distances with just the new center
+            dk = dist_to_center(Xwork, C[:, k, :])  # [H, N]
+            closest = torch.minimum(closest, dk)
+
+        # If cosine, keep centers normalized (optional; usually desirable)
+        if cosine:
             C = torch.nn.functional.normalize(C, p=2, dim=-1)
+
         return C
+
     print(f"init ...")
     means = _kmeanspp_init(samples, K, use_cosine_sim, eps)   # [H,K,D]
 
