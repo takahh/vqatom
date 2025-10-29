@@ -180,11 +180,13 @@ def kmeans(
         H, N, D = X.shape
         C = torch.empty(H, K, D, device=X.device, dtype=X.dtype)
         for h in range(H):
+            print(f"h {h}")
             # pick first seed randomly
             idx = torch.randint(0, N, (1,), device=X.device)
             C[h, 0] = X[h, idx]
             closest = None
             for k in range(1, K):
+                print(f"k {k}")
                 # compute distances to current centers (streaming over k centers is fine here: k <= K so small early)
                 if cosine:
                     sims = X[h] @ C[h, :k].T                 # [N,k]
