@@ -138,59 +138,56 @@ class AtomEmbedding(nn.Module):
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
+        import torch
         if args is None:
             args = get_args()
 
-        # --- Node embedding (must output 120 dims as per your setup)
-        self.feat_embed = AtomEmbedding()     # -> [N, 120]
-        FEAT_DIM0 = 120                       # AtomEmbedding output dim
+        self.feat_embed = AtomEmbedding()
+        self.linear_0 = nn.Linear(120, args.hidden_dim)  # h0
 
-        # --- Edge embedding
         edge_emb_dim = getattr(args, "edge_emb_dim", 32)
         self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
 
-        # --- GINE MLPs (match input dims!)
         def mlp(in_f, out_f):
             return nn.Sequential(
                 nn.Linear(in_f, out_f), nn.ReLU(),
                 nn.Linear(out_f, out_f), nn.ReLU()
             )
-        nn1 = mlp(FEAT_DIM0, hidden_feats)    # hop1 takes 120 -> hidden_feats
+
+        nn1 = mlp(args.hidden_dim, hidden_feats)
         nn2 = mlp(hidden_feats, hidden_feats)
         nn3 = mlp(hidden_feats, hidden_feats)
 
-        # GINEConv: let PyG handle edge projection via edge_dim
         self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
         self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
         self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
 
-        # --- Norms
-        self.ln1 = nn.LayerNorm(hidden_feats)
-        self.ln2 = nn.LayerNorm(hidden_feats)
-        self.ln3 = nn.LayerNorm(hidden_feats)
+        self.ln_in = nn.LayerNorm(args.hidden_dim)
+        self.ln1   = nn.LayerNorm(hidden_feats)
+        self.ln2   = nn.LayerNorm(hidden_feats)
+        self.ln3   = nn.LayerNorm(hidden_feats)
 
-        # --- Residual scales
+        # Residual scales
         self.res1 = nn.Parameter(torch.tensor(0.5))
         self.res2 = nn.Parameter(torch.tensor(0.5))
         self.res3 = nn.Parameter(torch.tensor(0.5))
 
-        # --- First-hop skip (120 -> hidden_feats) if needed
+        # If args.hidden_dim != hidden_feats, project skip for hop1
         self.skip0 = None
-        if FEAT_DIM0 != hidden_feats:
-            self.skip0 = nn.Linear(FEAT_DIM0, hidden_feats, bias=False)
+        if args.hidden_dim != hidden_feats:
+            self.skip0 = nn.Linear(args.hidden_dim, hidden_feats, bias=False)
 
-        # --- JK mix: concat h0(=120) + h1,h2,h3 (3×hidden_feats)
-        jk_dim = FEAT_DIM0 + 3 * hidden_feats
+        # JK: concat h0 + h1 + h2 + h3  -> correct dim
+        jk_dim = args.hidden_dim + 3 * hidden_feats
         self.mix = nn.Sequential(
             nn.Linear(jk_dim, 2 * hidden_feats), nn.ReLU(),
             nn.Linear(2 * hidden_feats, hidden_feats), nn.ReLU(),
         )
 
-        # --- Project to VQ dim exactly
-        self.out_proj  = nn.Linear(hidden_feats, args.hidden_dim)
-        self.pre_vq_ln = nn.LayerNorm(args.hidden_dim)
+        # Project to VQ dim
+        self.out_proj   = nn.Linear(hidden_feats, args.hidden_dim)
+        self.pre_vq_ln  = nn.LayerNorm(args.hidden_dim)
 
-        # --- VQ (expects args.hidden_dim)
         self.vq = VectorQuantize(
             dim=args.hidden_dim,
             codebook_size=args.codebook_size,
@@ -206,55 +203,56 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         dev = next(self.parameters()).device
 
-        # --- KMeans-only path ---
         if mode == "init_kmeans_final":
-            if hasattr(data, "to"):  # DGLGraph supports .to
+            # Only move if tensors (features may be None)
+            if hasattr(data, "to"):  # dgl graph has .to()
                 data = data.to(dev)
             if torch.is_tensor(features):
                 features = features.to(dev, non_blocking=True)
             self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
             return 0
 
-        # --- Build undirected edge_index on dev ---
+        # Edges (mirror for undirected) -> dev
         s1, d1 = data.edges()
-        s1, d1 = s1.to(dev, non_blocking=True), d1.to(dev, non_blocking=True)
-        src, dst = torch.cat([s1, d1], 0), torch.cat([d1, s1], 0)
+        s1 = s1.to(dev, non_blocking=True); d1 = d1.to(dev, non_blocking=True)
+        src = torch.cat([s1, d1], 0); dst = torch.cat([d1, s1], 0)
         edge_index = torch.stack([src, dst], 0)
 
-        # --- Edge attributes (bond types {1..4}, else 0) ---
+        # Edge attributes (bond types {1..4}, 0 otherwise)
         eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
         eb = eb.to(dev, non_blocking=True)
         e  = torch.cat([eb, eb], 0)
         e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
-        edge_attr = self.bond_emb(e.long())  # [E, edge_emb_dim]
+        edge_attr = self.bond_emb(e.long())
 
-        # --- Node features (no linear_0 / ln_in) ---
+        # Node features -> h0
         features = features.to(dev, non_blocking=True)
-        h0 = self.feat_embed(features)       # [N, 120]
+        h0 = self.ln_in(self.linear_0(self.feat_embed(features)))  # [N, args.hidden_dim]
 
-        # --- Three GINE hops with safe residuals ---
-        h0_for1 = self.skip0(h0) if self.skip0 is not None else h0          # to hidden_feats
+        # Hop 1 (dimension-safe residual)
+        h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
         h1 = self.gine1(h0, edge_index, edge_attr)
-        h1 = self.ln1(h1 * self.res1 + h0_for1)                              # [N, hidden_feats]
+        h1 = self.ln1(h1 * self.res1 + h0_for1)  # [N, hidden_feats]
 
+        # Hop 2
         h2 = self.gine2(h1, edge_index, edge_attr)
-        h2 = self.ln2(h2 * self.res2 + h1)                                   # [N, hidden_feats]
+        h2 = self.ln2(h2 * self.res2 + h1)       # [N, hidden_feats]
 
+        # Hop 3
         h3 = self.gine3(h2, edge_index, edge_attr)
-        h3 = self.ln3(h3 * self.res3 + h2)                                   # [N, hidden_feats]
+        h3 = self.ln3(h3 * self.res3 + h2)       # [N, hidden_feats]
 
-        # --- JK concat + projection ---
-        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)                          # [N, 120 + 3*hidden_feats]
+        # JK concat (include h0)
+        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)  # [N, args.hidden_dim + 3*hidden_feats]
         h_mid = self.mix(h_cat)
-        h_out = self.out_proj(h_mid)                                         # [N, args.hidden_dim]
+        h_out = self.out_proj(h_mid)                 # [N, args.hidden_dim]
 
         if mode == "init_kmeans_loop":
             return h_out
 
         h_vq = self.pre_vq_ln(h_out)
-        loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = self.vq(
-            h_vq, features, mask_dict, logger, chunk_i, epoch, mode
-        )
+        quantize_output = self.vq(h_vq, features, mask_dict, logger, chunk_i, epoch, mode)
+        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
         if logger is not None:
             logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
         return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
