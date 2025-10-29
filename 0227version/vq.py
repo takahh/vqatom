@@ -204,7 +204,7 @@ def kmeans(
         if use_cosine_sim:
             C = torch.nn.functional.normalize(C, p=2, dim=-1)
         return C
-
+    print(f"init ...")
     means = _kmeanspp_init(samples, K, use_cosine_sim, eps)   # [H,K,D]
 
     # Precompute norms once per iteration (cheap) in chunks
@@ -292,8 +292,10 @@ def kmeans(
 
         return new_means, bins
 
+    print(f"Loyds...")
     prev_means = None
     for _ in range(max_iters):
+        print(f"{_},", end="")
         buckets = assign_pass(samples, means)                       # [H,N]
         new_means, bins = update_pass(samples, buckets, K)          # [H,K,D], [H,K]
         if tol > 0.0:
@@ -305,7 +307,9 @@ def kmeans(
                 break
 
     # final counts matched to final means
+    print(f"assign pass...")
     buckets = assign_pass(samples, means)
+    print(f"update_pass...")
     _, bins = update_pass(samples, buckets, K)
 
     return means, bins
