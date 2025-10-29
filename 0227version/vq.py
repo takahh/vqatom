@@ -142,32 +142,24 @@ def _kmeanspp_init(samples: torch.Tensor, K: int, use_cosine_sim: bool, eps: flo
     if use_cosine_sim:
         means = torch.nn.functional.normalize(means, p=2, dim=-1)
     return means
-
 def kmeans(
-    samples: torch.Tensor,
+    samples: torch.Tensor,          # [H, N, D]
     num_clusters: int,
     use_cosine_sim: bool = False,
-    all_reduce_fn = noop,
+    all_reduce_fn = lambda x: None, # in-place sum for DDP (noop by default)
     eps: float = 1e-12,
     max_iters: int = 30,
     tol: float = 0.0,
+    n_block: int = 131072,          # tile size over N (points)
+    k_block: int = 4096,            # tile size over K (centers)
 ):
     """
-    K-Means w/ K-Means++ init and Lloyd steps (batched over H heads).
-
-    Args:
-        samples: [H, N, D]
-        num_clusters: desired K (capped to N)
-        use_cosine_sim: if True, cluster with cosine similarity (L2-normalized)
-        all_reduce_fn: callable(tensor) -> None for distributed sum-reduce (in-place ok)
-        eps: numerical epsilon
-        max_iters: Lloyd iterations
-        tol: early-stop on mean center shift (average L2 per head) if > 0
-
+    Lloyd K-Means w/ K-Means++ init, **streaming/blocked**, no [H,N,K] allocation.
     Returns:
-        means: [H, K, D] (cluster centers, some may be unused)
-        bins:  [H, K]   (counts per cluster)
+        means: [H, K, D]
+        bins:  [H, K]
     """
+    import torch
     H, N, D = samples.shape
     device, dtype = samples.device, samples.dtype
 
@@ -176,63 +168,144 @@ def kmeans(
     if K <= 0:
         raise ValueError("No samples to cluster.")
 
-    # optional cosine normalization
+    # optional cosine normalizations
     if use_cosine_sim:
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
 
-    # ---- K-Means++ init ----
-    means = _kmeanspp_init(samples, K, use_cosine_sim, eps)
-
-    # ---- Lloyd steps ----
-    prev_means = None
-    for _ in range(max_iters):
+    # ---- K-Means++ init (kept from your version) ----
+    def _kmeanspp_init(X, K, cosine, eps):
+        # X: [H,N,D]
+        # simple per-head seeding
+        H, N, D = X.shape
+        C = torch.empty(H, K, D, device=X.device, dtype=X.dtype)
+        for h in range(H):
+            # pick first seed randomly
+            idx = torch.randint(0, N, (1,), device=X.device)
+            C[h, 0] = X[h, idx]
+            closest = None
+            for k in range(1, K):
+                # compute distances to current centers (streaming over k centers is fine here: k <= K so small early)
+                if cosine:
+                    sims = X[h] @ C[h, :k].T                 # [N,k]
+                    d2 = (1 - sims).clamp_min(0)            # proxy
+                else:
+                    x2 = (X[h]**2).sum(-1, keepdim=True)     # [N,1]
+                    c2 = (C[h, :k]**2).sum(-1).unsqueeze(0)  # [1,k]
+                    xc = X[h] @ C[h, :k].T                   # [N,k]
+                    d2 = (x2 + c2 - 2*xc).clamp_min(0)
+                if closest is None:
+                    closest = d2.min(dim=1).values
+                else:
+                    closest = torch.minimum(closest, d2.min(dim=1).values)  # [N]
+                probs = (closest + eps)
+                idx = torch.multinomial(probs / probs.sum(), 1)
+                C[h, k] = X[h, idx]
         if use_cosine_sim:
-            # similarity: higher is closer
-            dists = samples @ means.transpose(1, 2)                   # [H,N,K]
-        else:
-            # negative Euclidean so argmax == nearest (largest negative is smallest distance)
-            dists = -torch.cdist(samples, means, p=2)                 # [H,N,K]
+            C = torch.nn.functional.normalize(C, p=2, dim=-1)
+        return C
 
-        buckets = torch.argmax(dists, dim=-1)                         # [H,N] int
-        bins = batched_bincount(buckets, minlength=K)                 # [H,K]
+    means = _kmeanspp_init(samples, K, use_cosine_sim, eps)   # [H,K,D]
+
+    # Precompute norms once per iteration (cheap) in chunks
+    def assign_pass(X, C):
+        """
+        Returns:
+          buckets [H,N] (long)
+        Streaming over K tiles and N tiles to find argmin distances per point.
+        """
+        H, N, D = X.shape
+        _, K, _ = C.shape
+        buckets = torch.empty(H, N, device=device, dtype=torch.long)
+
+        for h in range(H):
+            # running best per point in this head
+            best_val = torch.full((N,), float('inf'), device=device, dtype=X.dtype) if not use_cosine_sim else torch.full((N,), -float('inf'), device=device, dtype=X.dtype)
+            best_idx = torch.zeros((N,), device=device, dtype=torch.long)
+
+            # precompute norms of X[h] once (for L2)
+            if not use_cosine_sim:
+                x2_full = (X[h]**2).sum(-1)  # [N]
+
+            # tile over K
+            for k0 in range(0, K, k_block):
+                k1 = min(k0 + k_block, K)
+                Ck = C[h, k0:k1]                                   # [kb, D]
+                if use_cosine_sim:
+                    # we’ll process N in blocks to bound the matmul output
+                    for n0 in range(0, N, n_block):
+                        n1 = min(n0 + n_block, N)
+                        sims = X[h, n0:n1] @ Ck.T                  # [nb,kb]
+                        vals, idxs = sims.max(dim=1)               # [nb]
+                        # compare with running best
+                        update = vals > best_val[n0:n1]
+                        best_val[n0:n1] = torch.where(update, vals, best_val[n0:n1])
+                        best_idx[n0:n1] = torch.where(update, (idxs + k0), best_idx[n0:n1])
+                else:
+                    c2 = (Ck**2).sum(-1)                           # [kb]
+                    for n0 in range(0, N, n_block):
+                        n1 = min(n0 + n_block, N)
+                        # d^2 = ||x||^2 + ||c||^2 - 2 x·c
+                        xc = X[h, n0:n1] @ Ck.T                    # [nb,kb]
+                        d2 = (x2_full[n0:n1].unsqueeze(1) + c2.unsqueeze(0) - 2*xc).clamp_min(0)
+                        vals, idxs = d2.min(dim=1)                 # [nb]
+                        update = vals < best_val[n0:n1]
+                        best_val[n0:n1] = torch.where(update, vals, best_val[n0:n1])
+                        best_idx[n0:n1] = torch.where(update, (idxs + k0), best_idx[n0:n1])
+
+            buckets[h] = best_idx
+
+        return buckets
+
+    def update_pass(X, buckets, K):
+        """
+        Accumulates sums and counts in chunks of N.
+        Returns:
+          new_means [H,K,D], bins [H,K]
+        """
+        H, N, D = X.shape
+        new_means = torch.zeros(H, K, D, device=device, dtype=X.dtype)
+        bins      = torch.zeros(H, K,     device=device, dtype=torch.long)
+
+        for h in range(H):
+            for n0 in range(0, N, n_block):
+                n1 = min(n0 + n_block, N)
+                b = buckets[h, n0:n1]                              # [nb]
+                x = X[h, n0:n1]                                    # [nb,D]
+                # counts
+                bins[h].index_add_(0, b, torch.ones_like(b, dtype=torch.long, device=device))
+                # sums
+                new_means[h].index_add_(0, b, x)
+
         all_reduce_fn(bins)
-
-        zero_mask = (bins == 0)                                       # [H,K]
-        bins_safe = bins.masked_fill(zero_mask, 1)
-
-        new_means = torch.zeros_like(means)                           # [H,K,D]
-        # accumulate sums per cluster
-        new_means.scatter_add_(
-            1,
-            buckets.unsqueeze(-1).expand(-1, -1, D),                  # [H,N,D] indices
-            samples                                                   # [H,N,D] src
-        )
-        # average
-        new_means = new_means / bins_safe.unsqueeze(-1)               # [H,K,D]
         all_reduce_fn(new_means)
+
+        # safe divide
+        zero_mask = (bins == 0)
+        denom = bins.clamp_min(1).unsqueeze(-1)                    # [H,K,1]
+        new_means = new_means / denom
+        # keep old center for empty bins
+        new_means = torch.where(zero_mask.unsqueeze(-1), means, new_means)
 
         if use_cosine_sim:
             new_means = torch.nn.functional.normalize(new_means, p=2, dim=-1)
 
-        # keep old centers for empty clusters
+        return new_means, bins
+
+    prev_means = None
+    for _ in range(max_iters):
+        buckets = assign_pass(samples, means)                       # [H,N]
+        new_means, bins = update_pass(samples, buckets, K)          # [H,K,D], [H,K]
         if tol > 0.0:
             prev_means = means
-        means = torch.where(zero_mask.unsqueeze(-1), means, new_means)
-
+        means = new_means
         if tol > 0.0:
-            # average L2 shift per head
-            shift = (means - prev_means).pow(2).sum(-1).sqrt().mean() # scalar
+            shift = (means - prev_means).pow(2).sum(-1).sqrt().mean()
             if float(shift) <= tol:
                 break
 
-    # final counts (so caller sees counts matching returned means)
-    if use_cosine_sim:
-        dists = samples @ means.transpose(1, 2)
-    else:
-        dists = -torch.cdist(samples, means, p=2)
-    buckets = torch.argmax(dists, dim=-1)
-    bins = batched_bincount(buckets, minlength=K)
-    all_reduce_fn(bins)
+    # final counts matched to final means
+    buckets = assign_pass(samples, means)
+    _, bins = update_pass(samples, buckets, K)
 
     return means, bins
 
