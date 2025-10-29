@@ -204,59 +204,53 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         dev = next(self.parameters()).device
 
+        # --- KMeans-only path ---
         if mode == "init_kmeans_final":
-            # Only move if tensors (features may be None)
-            if hasattr(data, "to"):  # dgl graph has .to()
-                data = data.to(dev)
-            if torch.is_tensor(features):
-                features = features.to(dev, non_blocking=True)
+            if hasattr(data, "to"): data = data.to(dev)
+            if torch.is_tensor(features): features = features.to(dev, non_blocking=True)
             self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
             return 0
 
-        # Edges (mirror for undirected) -> dev
+        # --- Edges ---
         s1, d1 = data.edges()
-        s1 = s1.to(dev, non_blocking=True); d1 = d1.to(dev, non_blocking=True)
-        src = torch.cat([s1, d1], 0); dst = torch.cat([d1, s1], 0)
+        s1, d1 = s1.to(dev, non_blocking=True), d1.to(dev, non_blocking=True)
+        src, dst = torch.cat([s1, d1], 0), torch.cat([d1, s1], 0)
         edge_index = torch.stack([src, dst], 0)
 
-        # Edge attributes (bond types {1..4}, 0 otherwise)
+        # --- Edge attributes ---
         eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
         eb = eb.to(dev, non_blocking=True)
-        e  = torch.cat([eb, eb], 0)
-        e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+        e = torch.cat([eb, eb], 0)
+        e = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
         edge_attr = self.bond_emb(e.long())
 
-        # Node features -> h0
+        # --- Node features (no linear_0 or ln_in) ---
         features = features.to(dev, non_blocking=True)
-        h0 = self.ln_in(self.linear_0(self.feat_embed(features)))  # [N, args.hidden_dim]
+        h0 = self.feat_embed(features)  # directly use AtomEmbedding output
+        # h0 now replaces the old linear_0+ln_in path
 
-        # Hop 1 (dimension-safe residual)
+        # --- Three GINE hops ---
         h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
-        h1 = self.gine1(h0, edge_index, edge_attr)
-        h1 = self.ln1(h1 * self.res1 + h0_for1)  # [N, hidden_feats]
+        h1 = self.ln1(self.gine1(h0, edge_index, edge_attr) * self.res1 + h0_for1)
+        h2 = self.ln2(self.gine2(h1, edge_index, edge_attr) * self.res2 + h1)
+        h3 = self.ln3(self.gine3(h2, edge_index, edge_attr) * self.res3 + h2)
 
-        # Hop 2
-        h2 = self.gine2(h1, edge_index, edge_attr)
-        h2 = self.ln2(h2 * self.res2 + h1)       # [N, hidden_feats]
-
-        # Hop 3
-        h3 = self.gine3(h2, edge_index, edge_attr)
-        h3 = self.ln3(h3 * self.res3 + h2)       # [N, hidden_feats]
-
-        # JK concat (include h0)
-        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)  # [N, args.hidden_dim + 3*hidden_feats]
+        # --- Jumping-Knowledge concat ---
+        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
         h_mid = self.mix(h_cat)
-        h_out = self.out_proj(h_mid)                 # [N, args.hidden_dim]
+        h_out = self.out_proj(h_mid)  # [N, args.hidden_dim]
 
         if mode == "init_kmeans_loop":
             return h_out
 
+        # --- Quantization ---
         h_vq = self.pre_vq_ln(h_out)
         quantize_output = self.vq(h_vq, features, mask_dict, logger, chunk_i, epoch, mode)
-        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
+        loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = quantize_output
         if logger is not None:
             logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
         return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+
 
 class Model(nn.Module):
     """
