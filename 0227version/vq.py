@@ -628,7 +628,7 @@ class EuclideanCodebook(nn.Module):
         self.threshold_ema_dead_code = threshold_ema_dead_code
         self.sample_codebook_temp = sample_codebook_temp
         self.use_checkpoint = args.use_checkpoint
-        self.cb_dict = {1: 47, 3: 10, 5: 24, 6: 12000, 7: 3000, 8: 2700, 9: 730, 11: 50, 14: 10, 15: 61, 16: 434,
+        self.cb_dict = {1: 47, 3: 10, 5: 24, 6: 18000, 7: 4500, 8: 4000, 9: 730, 11: 50, 14: 10, 15: 61, 16: 434,
                         17: 500, 19: 19, 34: 27, 35: 190, 53: 85}
         # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
         assert not (
