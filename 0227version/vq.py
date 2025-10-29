@@ -217,6 +217,7 @@ def kmeans(
 
         # 3) Iteratively sample new centers
         for k in range(1, K):
+            print(f"{k},", end="")
             # Choose next center proportional to distance (optionally squared)
             probs = closest + eps
             if square_prob:
