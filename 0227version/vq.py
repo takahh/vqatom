@@ -297,7 +297,7 @@ def kmeans(
 
         # --- outer loop: pick K-1 more centers ---
         for k in range(1, K):
-            if k % 100 == 0:
+            if k % 1000 == 0:
                 print(f"{k},", end="")
 
             # build stabilized probabilities from current closest distances
