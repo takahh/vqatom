@@ -298,8 +298,8 @@ def kmeans(
 
         # --- outer loop: pick K-1 more centers ---
         for k in range(1, K):
-            if k % 1000 == 0:
-                print(f"{k},", end="")
+            # if k % 1000 == 0:
+            #     print(f"{k},", end="")
 
             # build stabilized probabilities from current closest distances
             rp = closest
@@ -319,7 +319,6 @@ def kmeans(
             C = torch.nn.functional.normalize(C, p=2, dim=-1)
         return C
 
-    print("init ...")
     means = kmeanspp_init_blockwise(samples, K, use_cosine_sim, eps)   # [H,K,D]
 
     # ---- Lloyd steps (streaming/blocked) ----
@@ -406,7 +405,6 @@ def kmeans(
 
         return new_means, bins
 
-    print("Lloyds...")
     prev_means = None
     for it in range(max_iters):
         print(f"{it},", end="")
@@ -421,9 +419,7 @@ def kmeans(
                 break
 
     # final counts matched to final means
-    print("assign pass...")
     buckets = assign_pass(samples, means)
-    print("update_pass...")
     _, bins = update_pass(samples, buckets, K)
 
     # ---- NEW: report actually-used codebook size per head ----
@@ -436,8 +432,8 @@ def kmeans(
         used_per_label = {element_names[h]: int(used_per_head[h].item()) for h in range(H)}
         # neat printout
         print("\n[Used codebook size per element]")
-        for name, cnt in used_per_label.items():
-            print(f"  {name:>4s} : {cnt}")
+        # for name, cnt in used_per_label.items():
+        #     print(f"  {name:>4s} : {cnt}")
 
     return means, bins, used_per_head, used_per_label
 
