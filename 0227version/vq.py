@@ -1339,27 +1339,27 @@ class EuclideanCodebook(nn.Module):
             #     contributed_keys.append((key, n))
 
 
-            # # -------------------- EMA codebook update (hard-EMA) --------------------
-            # if self.training and epoch is not None and epoch < 30:
-            #     with torch.no_grad():
-            #         ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
-            #         cs = getattr(self, f"cluster_size_{key}")  # [K_e]
-            #         eps = getattr(self, "eps", 1e-6)
-            #         decay = float(self.decay)
-            #
-            #         ea.mul_(decay)
-            #         cs.mul_(decay)
-            #
-            #         one = torch.ones_like(idx, dtype=cs.dtype)
-            #         cs.index_add_(0, idx, one * (1.0 - decay))
-            #         ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
-            #
-            #         means = ea / (cs.unsqueeze(-1) + eps)
-            #
-            #         code_param = self.embed[str(key)]
-            #         code_param.data.copy_(
-            #             means.unsqueeze(0) if code_param.ndim == 3 else means
-            #         )
+            # -------------------- EMA codebook update (hard-EMA) --------------------
+            if self.training and epoch is not None and epoch < 30:
+                with torch.no_grad():
+                    ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
+                    cs = getattr(self, f"cluster_size_{key}")  # [K_e]
+                    eps = getattr(self, "eps", 1e-6)
+                    decay = float(self.decay)
+
+                    ea.mul_(decay)
+                    cs.mul_(decay)
+
+                    one = torch.ones_like(idx, dtype=cs.dtype)
+                    cs.index_add_(0, idx, one * (1.0 - decay))
+                    ea.index_add_(0, idx, masked_latents.to(ea.dtype) * (1.0 - decay))
+
+                    means = ea / (cs.unsqueeze(-1) + eps)
+
+                    code_param = self.embed[str(key)]
+                    code_param.data.copy_(
+                        means.unsqueeze(0) if code_param.ndim == 3 else means
+                    )
 
             del masked_latents, code, idx, quantize
 
@@ -2043,9 +2043,9 @@ class VectorQuantize(nn.Module):
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
         # Example: warmup 5 epochs, then gentle exponential decay
         # repel_loss = repel_loss * alpha
-        beta_commit = 10  # try 0.25–0.5 if you see codebook collapse
-        gamma_cb = 3  # codebook (EMA) regularizer
-        delta_mid = 1  # repel (midpoints)
+        beta_commit = 1  # try 0.25–0.5 if you see codebook collapse
+        gamma_cb = 0.05  # codebook (EMA) regularizer
+        delta_mid = 0.05  # repel (midpoints)
         delta_cb = 0.0003  # codebook-codebook repel
         # commit_loss 2.4284323444589972e-05  >> 2e-02
         # codebook_loss 9.713729377835989e-05
@@ -2059,7 +2059,7 @@ class VectorQuantize(nn.Module):
         warmup = 5
         alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
         # if epoch < warmup:
-        loss = beta_commit * commit_loss
+        loss = (delta_mid * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
         # else:
         #     # half-life ~ 50 epochs
         #     repel_loss = alpha * repel_loss
