@@ -173,75 +173,146 @@ def kmeans(
     if use_cosine_sim:
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
     import torch
+    import torch
 
     @torch.no_grad()
-    def kmeanspp_init(X: torch.Tensor, K: int, cosine: bool = False, eps: float = 1e-12, square_prob: bool = True):
+    def kmeanspp_init_blockwise(
+            X: torch.Tensor,
+            K: int,
+            cosine: bool = False,
+            eps: float = 1e-12,
+            square_prob: bool = True,
+            sample_block_elems: int = 1_000_000,  # tune per memory budget
+            dtype_prob: torch.dtype = torch.float32
+    ):
         """
-        X: [H, N, D]  (heads, items, dim)
-        Returns centers C: [H, K, D]
-        - cosine=True: do KMeans++ in cosine space (unit-normalized).
-        - square_prob=True: classic k-means++ uses probability ~ d^2.
+        Memory-safe KMeans++:
+          - Uses blockwise multinomial sampling to avoid large temporaries.
+          - Samples one index per head at each step without building a full CDF tensor.
+
+        X: [H, N, D]
+        Returns C: [H, K, D]
         """
         H, N, D = X.shape
-        device, dtype = X.device, X.dtype
+        device = X.device
+        C = torch.empty((H, K, D), device=device, dtype=X.dtype)
 
-        # Work in normalized space for cosine; keep original X for returning centers if you prefer
+        # Work tensor for distance space
         if cosine:
-            Xn = torch.nn.functional.normalize(X, p=2, dim=-1)
-            Xwork = Xn
+            Xwork = torch.nn.functional.normalize(X, p=2, dim=-1)
+            x2 = None
         else:
             Xwork = X
-            # Precompute ||x||^2 for all points once
-            x2 = (X ** 2).sum(-1)  # [H, N]
-
-        C = torch.empty((H, K, D), device=device, dtype=dtype)
+            # Precompute ||x||^2 once (kept in prob-dtype to reduce peak memory)
+            x2 = (X ** 2).sum(-1).to(dtype_prob)  # [H, N]
 
         # 1) First seed per head: random
-        idx0 = torch.randint(0, N, (H, 1), device=device)  # [H,1]
+        idx0 = torch.randint(0, N, (H, 1), device=device)
         C[:, 0, :] = X.gather(1, idx0.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
 
-        # Helper to get distances from all X to a center (one center per head)
         def dist_to_center(x_all: torch.Tensor, c_one: torch.Tensor):
-            # x_all: [H, N, D], c_one: [H, D] -> returns [H, N] distances (nonnegative)
+            # x_all: [H, N, D], c_one: [H, D] -> [H, N] (returned in dtype_prob)
             if cosine:
-                # distance proxy for cosine: 1 - dot(x, c)  (both unit)
                 d = (1.0 - (x_all * c_one.unsqueeze(1)).sum(-1)).clamp_min_(0)
             else:
+                # (x - c)^2 = ||x||^2 + ||c||^2 - 2 x·c
                 c2 = (c_one ** 2).sum(-1)  # [H]
                 xc = (x_all * c_one.unsqueeze(1)).sum(-1)  # [H, N]
                 d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min_(0)
-            return d
+            return d.to(dtype_prob)
 
-        # 2) Initialize "closest distance so far" with the first center
-        closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N]
+        # 2) Initialize closest distances with first center
+        closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N], prob-dtype
 
-        # 3) Iteratively sample new centers
+        # --- Blockwise sampler (one index per head) ---
+        def sample_one_index_blockwise(row_probs: torch.Tensor) -> torch.Tensor:
+            """
+            row_probs: [H, N], nonnegative
+            Returns idx: [H] selected indices, using probabilities proportional to row_probs.
+            Memory: O(sample_block_elems) instead of O(H*N).
+            """
+            # Stabilize: shift by row-min to reduce tiny negatives and keep eps effective
+            rp = row_probs
+            rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
+            if square_prob:
+                rp = rp * rp
+
+            # Total mass per head
+            totals = rp.sum(dim=1)  # [H]
+            # Guard: if any head has zero mass (degenerate), fall back to uniform
+            zero_mask = totals <= 0
+            # Draw uniform targets in [0, total)
+            u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
+
+            # We scan blocks until cumulative mass crosses u
+            idx_out = torch.empty(H, device=rp.device, dtype=torch.long)
+            cum = torch.zeros(H, device=rp.device, dtype=dtype_prob)
+
+            found = torch.zeros(H, device=rp.device, dtype=torch.bool)
+
+            start = 0
+            while start < N:
+                end = min(start + sample_block_elems, N)
+                block = rp[:, start:end]  # [H, B]
+                block_sum = block.sum(dim=1)  # [H]
+
+                # Heads that will be resolved inside this block
+                target_in_block = (~found) & (cum + block_sum >= u)
+
+                if target_in_block.any():
+                    # For those heads, find exact position within block
+                    # Compute per-head cumulative in the block, but only for unresolved heads
+                    h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
+                    # Gather rows for those heads
+                    sub = block[h_idx]  # [H_sel, B]
+                    # Cumulative along B
+                    sub_cum = sub.cumsum(dim=1)
+                    # target "remaining mass" per head to locate inside this block
+                    need = (u[h_idx] - cum[h_idx]).unsqueeze(1)  # [H_sel,1]
+                    # First column where cum >= need
+                    pos = (sub_cum >= need).float().argmax(dim=1)  # [H_sel]
+                    idx_out[h_idx] = start + pos
+                    found[h_idx] = True
+
+                # Update cumulative for all unresolved heads
+                not_found = ~found
+                cum[not_found] = cum[not_found] + block_sum[not_found]
+
+                start = end
+
+                # Early exit if all heads found
+                if found.all():
+                    break
+
+            # Any still-unresolved (pathological numerical cases): default to last index
+            if (~found).any():
+                idx_out[~found] = N - 1
+
+            # For zero-mass rows, fall back to uniform random
+            if zero_mask.any():
+                idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=rp.device)
+
+            return idx_out  # [H]
+
+        # 3) Iteratively add centers
         for k in range(1, K):
             if k % 100 == 0:
                 print(f"{k},", end="")
-            # Choose next center proportional to distance (optionally squared)
-            probs = closest + eps
-            if square_prob:
-                probs = probs * probs
 
-            # torch.multinomial supports batched rows: sample one index per head
-            idxk = torch.multinomial(probs, num_samples=1)  # [H,1]
+            # Sample next index per head without building a massive CDF
+            idxk = sample_one_index_blockwise(closest)  # [H]
+            C[:, k, :] = X[torch.arange(H, device=device), idxk, :]
 
-            # Gather new centers from original X (not Xwork) to keep true vectors
-            C[:, k, :] = X.gather(1, idxk.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
-
-            # Update the running closest distances with just the new center
+            # Update closest with distances to the new center (one pass)
             dk = dist_to_center(Xwork, C[:, k, :])  # [H, N]
             closest = torch.minimum(closest, dk)
 
-        # If cosine, keep centers normalized (optional; usually desirable)
         if cosine:
             C = torch.nn.functional.normalize(C, p=2, dim=-1)
-
         return C
 
     print(f"init ...")
-    means = _kmeanspp_init(samples, K, use_cosine_sim, eps)   # [H,K,D]
+    means = kmeanspp_init_blockwise(samples, K, use_cosine_sim, eps)   # [H,K,D]
 
     # Precompute norms once per iteration (cheap) in chunks
     def assign_pass(X, C):
