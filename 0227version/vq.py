@@ -116,6 +116,7 @@ def batched_bincount(x: torch.Tensor, minlength: int) -> torch.Tensor:
 import torch
 from typing import Optional, Sequence, Dict, Tuple
 
+
 def kmeans(
     samples: torch.Tensor,          # [H, N, D]
     num_clusters: int,
@@ -1016,7 +1017,7 @@ class EuclideanCodebook(nn.Module):
             K_run = min(K_req, N_i)
 
             # run kmeans (on CUDA); returns [1,K_run,D], [1,K_run]
-            means_1kd, counts_1k = kmeans(
+            means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
                 masked.unsqueeze(0).to(device),
                 num_clusters=K_run,
                 use_cosine_sim=use_cosine_sim,
