@@ -113,35 +113,8 @@ def batched_bincount(x: torch.Tensor, minlength: int) -> torch.Tensor:
     out.scatter_add_(1, x, one)            # all CUDA if x is CUDA
     return out
 
-def _kmeanspp_init(samples: torch.Tensor, K: int, use_cosine_sim: bool, eps: float):
-    # samples: [H,N,D] on CUDA
-    H, N, D = samples.shape
-    device, dtype = samples.device, samples.dtype
-    # pick first centers uniformly at random per head
-    idx0 = torch.randint(N, (H,), device=device)             # CUDA
-    means = samples[torch.arange(H, device=device), idx0].clone()   # [H,D]
-    means = means.unsqueeze(1)                                # [H,1,D]
-
-    # kmeans++: add centers greedily
-    while means.shape[1] < K:
-        if use_cosine_sim:
-            # max(0, 1 - cos) as distance
-            sims = samples @ torch.nn.functional.normalize(means, p=2, dim=-1).transpose(1,2)
-            d2 = (1 - sims.clamp(min=-1+eps, max=1-eps)).clamp_min(0)
-        else:
-            d2 = torch.cdist(samples, means, p=2)            # [H,N,Kt]
-        # min distance to any chosen center
-        min_d = d2.min(dim=-1).values                        # [H,N]
-        # sample next center proportional to distance
-        probs = (min_d + eps) / (min_d.sum(dim=-1, keepdim=True) + eps)
-        # multinomial per head (vectorized)
-        next_idx = torch.multinomial(probs, 1).squeeze(-1)   # [H]
-        next_centers = samples[torch.arange(H, device=device), next_idx]  # [H,D]
-        means = torch.cat([means, next_centers.unsqueeze(1)], dim=1)      # [H, Kt+1, D]
-
-    if use_cosine_sim:
-        means = torch.nn.functional.normalize(means, p=2, dim=-1)
-    return means
+import torch
+from typing import Optional, Sequence, Dict, Tuple
 
 def kmeans(
     samples: torch.Tensor,          # [H, N, D]
@@ -153,14 +126,17 @@ def kmeans(
     tol: float = 0.0,
     n_block: int = 131072,          # tile size over N (points)
     k_block: int = 4096,            # tile size over K (centers)
-):
+    element_names: Optional[Sequence[str]] = None,  # optional: labels for heads (e.g., ["C","N","O",...])
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[Dict[str, int]]]:
     """
-    Lloyd K-Means w/ K-Means++ init, **streaming/blocked**, no [H,N,K] allocation.
+    Lloyd K-Means w/ K-Means++ init, streaming/blocked (no [H,N,K] allocation).
+
     Returns:
-        means: [H, K, D]
-        bins:  [H, K]
+        means:          [H, K, D]
+        bins:           [H, K]        # counts per cluster
+        used_per_head:  [H]           # number of non-empty clusters per head
+        used_per_label: dict[str,int] # only if element_names provided, else None
     """
-    import torch
     H, N, D = samples.shape
     device, dtype = samples.device, samples.dtype
 
@@ -169,42 +145,23 @@ def kmeans(
     if K <= 0:
         raise ValueError("No samples to cluster.")
 
-    # optional cosine normalizations
+    # optional cosine normalizations (for Lloyd steps; init handles inside)
     if use_cosine_sim:
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
-    import torch
-    import torch
-    import torch
 
     @torch.no_grad()
     def kmeanspp_init_blockwise(
-            X: torch.Tensor,
-            K: int,
-            cosine: bool = False,
-            eps: float = 1e-12,
-            square_prob: bool = True,
-            sample_block_elems: int = 262_144,  # tune to your memory budget
-            dtype_prob: torch.dtype = torch.float32,  # keep distances/probs in fp32
-            deterministic: str = "cpu_cumsum",  # "cpu_cumsum" | "gpu_scan" | "auto"
+        X: torch.Tensor,
+        K: int,
+        cosine: bool = False,
+        eps: float = 1e-12,
+        square_prob: bool = True,
+        sample_block_elems: int = 262_144,      # tune to your memory budget
+        dtype_prob: torch.dtype = torch.float32,# keep distances/probs in fp32
+        deterministic: str = "auto",            # "cpu_cumsum" | "gpu_scan" | "auto"
     ):
         """
         Memory-safe KMeans++ initializer with deterministic-safe sampling.
-
-        Args:
-          X: [H, N, D]
-          K: number of centers
-          cosine: do kmeans++ in cosine space (unit-normalized)
-          eps: numerical floor for probabilities
-          square_prob: classic kmeans++ uses probability ~ d^2
-          sample_block_elems: block size for streaming multinomial sampling
-          dtype_prob: dtype to keep running 'closest' and probs (fp32 recommended)
-          deterministic:
-            - "cpu_cumsum": deterministic; small per-block cum-sum on CPU
-            - "gpu_scan": deterministic; avoids cumsum via row-wise scan on GPU
-            - "auto": if torch.are_deterministic_algorithms_enabled() -> "cpu_cumsum" else "gpu_scan"
-
-        Returns:
-          C: [H, K, D] centers
         """
         assert deterministic in ("cpu_cumsum", "gpu_scan", "auto")
         if deterministic == "auto":
@@ -231,21 +188,16 @@ def kmeans(
             if cosine:
                 d = (1.0 - (x_all * c_one.unsqueeze(1)).sum(-1)).clamp_min_(0)
             else:
-                c2 = (c_one ** 2).sum(-1)  # [H]
-                xc = (x_all * c_one.unsqueeze(1)).sum(-1)  # [H,N]
-                d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min_(0)
+                c2 = (c_one ** 2).sum(-1)                # [H]
+                xc = (x_all * c_one.unsqueeze(1)).sum(-1)# [H,N]
+                d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min(0)
             return d.to(dtype_prob)
 
         # 2) initialize closest distances
         closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N], fp32
 
-        # --- samplers (deterministic-safe) ---
+        # --- deterministic-safe samplers ---
         def _sample_block_cpu_cumsum(rp: torch.Tensor) -> torch.Tensor:
-            """
-            Deterministic path: per-block cumulative on CPU (float64) with searchsorted.
-            rp: [H, N] nonnegative probs (already stabilized and squared if needed)
-            Returns: idx [H] on device
-            """
             totals = rp.sum(dim=1)  # [H]
             zero_mask = totals <= 0
             u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
@@ -257,8 +209,8 @@ def kmeans(
             start = 0
             while start < N:
                 end = min(start + sample_block_elems, N)
-                block = rp[:, start:end]  # [H,B]
-                block_sum = block.sum(dim=1)  # [H]
+                block = rp[:, start:end]              # [H,B]
+                block_sum = block.sum(dim=1)          # [H]
 
                 target_in_block = (~found) & (cum + block_sum >= u)
                 if target_in_block.any():
@@ -266,9 +218,9 @@ def kmeans(
 
                     # CPU hop for deterministic cumsum
                     sub_cpu = block[h_idx].to("cpu", dtype=torch.float64, non_blocking=False)  # [H_sel,B]
-                    sub_cum_cpu = sub_cpu.cumsum(dim=1)  # deterministic
+                    sub_cum_cpu = sub_cpu.cumsum(dim=1)                                        # deterministic
                     need_cpu = (u[h_idx] - cum[h_idx]).to("cpu", dtype=torch.float64).unsqueeze(1)
-                    pos_cpu = torch.searchsorted(sub_cum_cpu, need_cpu, right=False).squeeze(1)  # [H_sel]
+                    pos_cpu = torch.searchsorted(sub_cum_cpu, need_cpu, right=False).squeeze(1) # [H_sel]
                     pos = pos_cpu.to(device=rp.device, dtype=torch.long, non_blocking=False)
 
                     idx_out[h_idx] = start + pos
@@ -283,7 +235,7 @@ def kmeans(
                 if found.all():
                     break
 
-            # finalize any unresolved / degenerate rows
+            # finalize unresolved / degenerate
             if (~found).any():
                 idx_out[~found] = N - 1
             if zero_mask.any():
@@ -291,10 +243,6 @@ def kmeans(
             return idx_out
 
         def _sample_block_gpu_scan(rp: torch.Tensor) -> torch.Tensor:
-            """
-            Deterministic path without cumsum: row-wise linear scan on GPU.
-            rp: [H, N]
-            """
             totals = rp.sum(dim=1)  # [H]
             zero_mask = totals <= 0
             u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
@@ -306,21 +254,20 @@ def kmeans(
             start = 0
             while start < N:
                 end = min(start + sample_block_elems, N)
-                block = rp[:, start:end]  # [H,B]
-                block_sum = block.sum(dim=1)  # [H]
+                block = rp[:, start:end]              # [H,B]
+                block_sum = block.sum(dim=1)          # [H]
 
                 target_in_block = (~found) & (cum + block_sum >= u)
                 if target_in_block.any():
                     h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
-                    sub = block[h_idx]  # [H_sel,B]
-                    need = (u[h_idx] - cum[h_idx])  # [H_sel]
+                    sub = block[h_idx]                # [H_sel,B]
+                    need = (u[h_idx] - cum[h_idx])    # [H_sel]
 
-                    # row-wise deterministic scan
+                    # row-wise deterministic scan (no cumsum)
                     pos = torch.empty_like(h_idx, dtype=torch.long, device=rp.device)
-                    # simple loop over selected heads (H is small)
                     for n in range(sub.size(0)):
-                        row = sub[n]  # [B]
-                        running = torch.tensor(0.0, device=rp.device, dtype=row.dtype)
+                        row = sub[n]                  # [B]
+                        running = torch.zeros((), device=rp.device, dtype=row.dtype)
                         j = 0
                         B = row.numel()
                         while j < B:
@@ -333,7 +280,7 @@ def kmeans(
                     idx_out[h_idx] = start + pos
                     found[h_idx] = True
 
-                # advance cumulative for unresolved heads
+                # advance cum for unresolved heads
                 not_found = ~found
                 if not_found.any():
                     cum[not_found] = cum[not_found] + block_sum[not_found]
@@ -356,14 +303,9 @@ def kmeans(
             # build stabilized probabilities from current closest distances
             rp = closest
             rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
-            if square_prob:
-                rp = rp * rp
+            rp = rp * rp  # squared prob is standard k-means++
 
-            # sample one index per head
-            if deterministic == "cpu_cumsum":
-                idxk = _sample_block_cpu_cumsum(rp)  # [H]
-            else:
-                idxk = _sample_block_gpu_scan(rp)  # [H]
+            idxk = _sample_block_cpu_cumsum(rp) if deterministic == "cpu_cumsum" else _sample_block_gpu_scan(rp)
 
             # set new center
             C[:, k, :] = X[torch.arange(H, device=device), idxk, :]
@@ -376,15 +318,14 @@ def kmeans(
             C = torch.nn.functional.normalize(C, p=2, dim=-1)
         return C
 
-    print(f"init ...")
+    print("init ...")
     means = kmeanspp_init_blockwise(samples, K, use_cosine_sim, eps)   # [H,K,D]
 
-    # Precompute norms once per iteration (cheap) in chunks
+    # ---- Lloyd steps (streaming/blocked) ----
     def assign_pass(X, C):
         """
-        Returns:
-          buckets [H,N] (long)
-        Streaming over K tiles and N tiles to find argmin distances per point.
+        Returns buckets [H,N] (long)
+        Streaming over K tiles and N tiles to find argmin per point.
         """
         H, N, D = X.shape
         _, K, _ = C.shape
@@ -392,7 +333,10 @@ def kmeans(
 
         for h in range(H):
             # running best per point in this head
-            best_val = torch.full((N,), float('inf'), device=device, dtype=X.dtype) if not use_cosine_sim else torch.full((N,), -float('inf'), device=device, dtype=X.dtype)
+            if use_cosine_sim:
+                best_val = torch.full((N,), -float('inf'), device=device, dtype=X.dtype)
+            else:
+                best_val = torch.full((N,), float('inf'), device=device, dtype=X.dtype)
             best_idx = torch.zeros((N,), device=device, dtype=torch.long)
 
             # precompute norms of X[h] once (for L2)
@@ -404,12 +348,10 @@ def kmeans(
                 k1 = min(k0 + k_block, K)
                 Ck = C[h, k0:k1]                                   # [kb, D]
                 if use_cosine_sim:
-                    # we’ll process N in blocks to bound the matmul output
                     for n0 in range(0, N, n_block):
                         n1 = min(n0 + n_block, N)
                         sims = X[h, n0:n1] @ Ck.T                  # [nb,kb]
                         vals, idxs = sims.max(dim=1)               # [nb]
-                        # compare with running best
                         update = vals > best_val[n0:n1]
                         best_val[n0:n1] = torch.where(update, vals, best_val[n0:n1])
                         best_idx[n0:n1] = torch.where(update, (idxs + k0), best_idx[n0:n1])
@@ -417,7 +359,6 @@ def kmeans(
                     c2 = (Ck**2).sum(-1)                           # [kb]
                     for n0 in range(0, N, n_block):
                         n1 = min(n0 + n_block, N)
-                        # d^2 = ||x||^2 + ||c||^2 - 2 x·c
                         xc = X[h, n0:n1] @ Ck.T                    # [nb,kb]
                         d2 = (x2_full[n0:n1].unsqueeze(1) + c2.unsqueeze(0) - 2*xc).clamp_min(0)
                         vals, idxs = d2.min(dim=1)                 # [nb]
@@ -464,10 +405,10 @@ def kmeans(
 
         return new_means, bins
 
-    print(f"Loyds...")
+    print("Lloyds...")
     prev_means = None
-    for _ in range(max_iters):
-        print(f"{_},", end="")
+    for it in range(max_iters):
+        print(f"{it},", end="")
         buckets = assign_pass(samples, means)                       # [H,N]
         new_means, bins = update_pass(samples, buckets, K)          # [H,K,D], [H,K]
         if tol > 0.0:
@@ -479,12 +420,26 @@ def kmeans(
                 break
 
     # final counts matched to final means
-    print(f"assign pass...")
+    print("assign pass...")
     buckets = assign_pass(samples, means)
-    print(f"update_pass...")
+    print("update_pass...")
     _, bins = update_pass(samples, buckets, K)
 
-    return means, bins
+    # ---- NEW: report actually-used codebook size per head ----
+    used_per_head = (bins > 0).sum(dim=1)   # [H]
+
+    used_per_label: Optional[Dict[str, int]] = None
+    if element_names is not None:
+        if len(element_names) != H:
+            raise ValueError(f"element_names must have length H={H}, got {len(element_names)}")
+        used_per_label = {element_names[h]: int(used_per_head[h].item()) for h in range(H)}
+        # neat printout
+        print("\n[Used codebook size per element]")
+        for name, cnt in used_per_label.items():
+            print(f"  {name:>4s} : {cnt}")
+
+    return means, bins, used_per_head, used_per_label
+
 
 
 def compact_clusters(means: torch.Tensor, bins: torch.Tensor, pad_to_max: bool = True):
