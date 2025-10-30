@@ -407,7 +407,6 @@ def kmeans(
 
     prev_means = None
     for it in range(max_iters):
-        print(f"{it},", end="")
         buckets = assign_pass(samples, means)                       # [H,N]
         new_means, bins = update_pass(samples, buckets, K)          # [H,K,D], [H,K]
         if tol > 0.0:
