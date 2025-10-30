@@ -174,6 +174,7 @@ def kmeans(
         samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
     import torch
     import torch
+    import torch
 
     @torch.no_grad()
     def kmeanspp_init_blockwise(
@@ -182,129 +183,193 @@ def kmeans(
             cosine: bool = False,
             eps: float = 1e-12,
             square_prob: bool = True,
-            sample_block_elems: int = 1_000_000,  # tune per memory budget
-            dtype_prob: torch.dtype = torch.float32
+            sample_block_elems: int = 262_144,  # tune to your memory budget
+            dtype_prob: torch.dtype = torch.float32,  # keep distances/probs in fp32
+            deterministic: str = "cpu_cumsum",  # "cpu_cumsum" | "gpu_scan" | "auto"
     ):
         """
-        Memory-safe KMeans++:
-          - Uses blockwise multinomial sampling to avoid large temporaries.
-          - Samples one index per head at each step without building a full CDF tensor.
+        Memory-safe KMeans++ initializer with deterministic-safe sampling.
 
-        X: [H, N, D]
-        Returns C: [H, K, D]
+        Args:
+          X: [H, N, D]
+          K: number of centers
+          cosine: do kmeans++ in cosine space (unit-normalized)
+          eps: numerical floor for probabilities
+          square_prob: classic kmeans++ uses probability ~ d^2
+          sample_block_elems: block size for streaming multinomial sampling
+          dtype_prob: dtype to keep running 'closest' and probs (fp32 recommended)
+          deterministic:
+            - "cpu_cumsum": deterministic; small per-block cum-sum on CPU
+            - "gpu_scan": deterministic; avoids cumsum via row-wise scan on GPU
+            - "auto": if torch.are_deterministic_algorithms_enabled() -> "cpu_cumsum" else "gpu_scan"
+
+        Returns:
+          C: [H, K, D] centers
         """
+        assert deterministic in ("cpu_cumsum", "gpu_scan", "auto")
+        if deterministic == "auto":
+            deterministic = "cpu_cumsum" if torch.are_deterministic_algorithms_enabled() else "gpu_scan"
+
         H, N, D = X.shape
         device = X.device
         C = torch.empty((H, K, D), device=device, dtype=X.dtype)
 
-        # Work tensor for distance space
+        # --- distance workspace ---
         if cosine:
             Xwork = torch.nn.functional.normalize(X, p=2, dim=-1)
             x2 = None
         else:
             Xwork = X
-            # Precompute ||x||^2 once (kept in prob-dtype to reduce peak memory)
             x2 = (X ** 2).sum(-1).to(dtype_prob)  # [H, N]
 
-        # 1) First seed per head: random
+        # 1) first seed per head
         idx0 = torch.randint(0, N, (H, 1), device=device)
         C[:, 0, :] = X.gather(1, idx0.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
 
-        def dist_to_center(x_all: torch.Tensor, c_one: torch.Tensor):
-            # x_all: [H, N, D], c_one: [H, D] -> [H, N] (returned in dtype_prob)
+        def dist_to_center(x_all: torch.Tensor, c_one: torch.Tensor) -> torch.Tensor:
+            # x_all: [H,N,D], c_one: [H,D] -> [H,N] (dtype_prob)
             if cosine:
                 d = (1.0 - (x_all * c_one.unsqueeze(1)).sum(-1)).clamp_min_(0)
             else:
-                # (x - c)^2 = ||x||^2 + ||c||^2 - 2 x·c
                 c2 = (c_one ** 2).sum(-1)  # [H]
-                xc = (x_all * c_one.unsqueeze(1)).sum(-1)  # [H, N]
+                xc = (x_all * c_one.unsqueeze(1)).sum(-1)  # [H,N]
                 d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min_(0)
             return d.to(dtype_prob)
 
-        # 2) Initialize closest distances with first center
-        closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N], prob-dtype
+        # 2) initialize closest distances
+        closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N], fp32
 
-        # --- Blockwise sampler (one index per head) ---
-        def sample_one_index_blockwise(row_probs: torch.Tensor) -> torch.Tensor:
+        # --- samplers (deterministic-safe) ---
+        def _sample_block_cpu_cumsum(rp: torch.Tensor) -> torch.Tensor:
             """
-            row_probs: [H, N], nonnegative
-            Returns idx: [H] selected indices, using probabilities proportional to row_probs.
-            Memory: O(sample_block_elems) instead of O(H*N).
+            Deterministic path: per-block cumulative on CPU (float64) with searchsorted.
+            rp: [H, N] nonnegative probs (already stabilized and squared if needed)
+            Returns: idx [H] on device
             """
-            # Stabilize: shift by row-min to reduce tiny negatives and keep eps effective
-            rp = row_probs
-            rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
-            if square_prob:
-                rp = rp * rp
-
-            # Total mass per head
             totals = rp.sum(dim=1)  # [H]
-            # Guard: if any head has zero mass (degenerate), fall back to uniform
             zero_mask = totals <= 0
-            # Draw uniform targets in [0, total)
             u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
 
-            # We scan blocks until cumulative mass crosses u
             idx_out = torch.empty(H, device=rp.device, dtype=torch.long)
             cum = torch.zeros(H, device=rp.device, dtype=dtype_prob)
-
             found = torch.zeros(H, device=rp.device, dtype=torch.bool)
 
             start = 0
             while start < N:
                 end = min(start + sample_block_elems, N)
-                block = rp[:, start:end]  # [H, B]
+                block = rp[:, start:end]  # [H,B]
                 block_sum = block.sum(dim=1)  # [H]
 
-                # Heads that will be resolved inside this block
                 target_in_block = (~found) & (cum + block_sum >= u)
-
                 if target_in_block.any():
-                    # For those heads, find exact position within block
-                    # Compute per-head cumulative in the block, but only for unresolved heads
                     h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
-                    # Gather rows for those heads
-                    sub = block[h_idx]  # [H_sel, B]
-                    # Cumulative along B
-                    sub_cum = sub.cumsum(dim=1)
-                    # target "remaining mass" per head to locate inside this block
-                    need = (u[h_idx] - cum[h_idx]).unsqueeze(1)  # [H_sel,1]
-                    # First column where cum >= need
-                    pos = (sub_cum >= need).float().argmax(dim=1)  # [H_sel]
+
+                    # CPU hop for deterministic cumsum
+                    sub_cpu = block[h_idx].to("cpu", dtype=torch.float64, non_blocking=False)  # [H_sel,B]
+                    sub_cum_cpu = sub_cpu.cumsum(dim=1)  # deterministic
+                    need_cpu = (u[h_idx] - cum[h_idx]).to("cpu", dtype=torch.float64).unsqueeze(1)
+                    pos_cpu = torch.searchsorted(sub_cum_cpu, need_cpu, right=False).squeeze(1)  # [H_sel]
+                    pos = pos_cpu.to(device=rp.device, dtype=torch.long, non_blocking=False)
+
                     idx_out[h_idx] = start + pos
                     found[h_idx] = True
 
-                # Update cumulative for all unresolved heads
+                # advance cum for unresolved heads
                 not_found = ~found
-                cum[not_found] = cum[not_found] + block_sum[not_found]
+                if not_found.any():
+                    cum[not_found] = cum[not_found] + block_sum[not_found]
 
                 start = end
-
-                # Early exit if all heads found
                 if found.all():
                     break
 
-            # Any still-unresolved (pathological numerical cases): default to last index
+            # finalize any unresolved / degenerate rows
             if (~found).any():
                 idx_out[~found] = N - 1
-
-            # For zero-mass rows, fall back to uniform random
             if zero_mask.any():
                 idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=rp.device)
+            return idx_out
 
-            return idx_out  # [H]
+        def _sample_block_gpu_scan(rp: torch.Tensor) -> torch.Tensor:
+            """
+            Deterministic path without cumsum: row-wise linear scan on GPU.
+            rp: [H, N]
+            """
+            totals = rp.sum(dim=1)  # [H]
+            zero_mask = totals <= 0
+            u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
 
-        # 3) Iteratively add centers
+            idx_out = torch.empty(H, device=rp.device, dtype=torch.long)
+            cum = torch.zeros(H, device=rp.device, dtype=dtype_prob)
+            found = torch.zeros(H, device=rp.device, dtype=torch.bool)
+
+            start = 0
+            while start < N:
+                end = min(start + sample_block_elems, N)
+                block = rp[:, start:end]  # [H,B]
+                block_sum = block.sum(dim=1)  # [H]
+
+                target_in_block = (~found) & (cum + block_sum >= u)
+                if target_in_block.any():
+                    h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
+                    sub = block[h_idx]  # [H_sel,B]
+                    need = (u[h_idx] - cum[h_idx])  # [H_sel]
+
+                    # row-wise deterministic scan
+                    pos = torch.empty_like(h_idx, dtype=torch.long, device=rp.device)
+                    # simple loop over selected heads (H is small)
+                    for n in range(sub.size(0)):
+                        row = sub[n]  # [B]
+                        running = torch.tensor(0.0, device=rp.device, dtype=row.dtype)
+                        j = 0
+                        B = row.numel()
+                        while j < B:
+                            running = running + row[j]
+                            if running >= need[n]:
+                                break
+                            j += 1
+                        pos[n] = j if j < B else (B - 1)
+
+                    idx_out[h_idx] = start + pos
+                    found[h_idx] = True
+
+                # advance cumulative for unresolved heads
+                not_found = ~found
+                if not_found.any():
+                    cum[not_found] = cum[not_found] + block_sum[not_found]
+
+                start = end
+                if found.all():
+                    break
+
+            if (~found).any():
+                idx_out[~found] = N - 1
+            if zero_mask.any():
+                idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=rp.device)
+            return idx_out
+
+        # --- outer loop: pick K-1 more centers ---
         for k in range(1, K):
             if k % 100 == 0:
                 print(f"{k},", end="")
 
-            # Sample next index per head without building a massive CDF
-            idxk = sample_one_index_blockwise(closest)  # [H]
+            # build stabilized probabilities from current closest distances
+            rp = closest
+            rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
+            if square_prob:
+                rp = rp * rp
+
+            # sample one index per head
+            if deterministic == "cpu_cumsum":
+                idxk = _sample_block_cpu_cumsum(rp)  # [H]
+            else:
+                idxk = _sample_block_gpu_scan(rp)  # [H]
+
+            # set new center
             C[:, k, :] = X[torch.arange(H, device=device), idxk, :]
 
-            # Update closest with distances to the new center (one pass)
-            dk = dist_to_center(Xwork, C[:, k, :])  # [H, N]
+            # update closest distances in one pass
+            dk = dist_to_center(Xwork, C[:, k, :])  # [H,N]
             closest = torch.minimum(closest, dk)
 
         if cosine:
