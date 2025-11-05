@@ -185,7 +185,7 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
     freq = {k: len(v) for k, v in masks_dict.items()}
     # 多い順に表示
-    for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:20]:
+    for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
         print(k, c)
 
     print("------")
