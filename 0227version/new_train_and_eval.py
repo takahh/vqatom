@@ -104,38 +104,65 @@ from collections import defaultdict
 import numpy as np
 from collections import defaultdict
 import numpy as np
+from collections import defaultdict
+import numpy as np
 
 def collect_global_indices_compact(adj_batch, attr_batch,
-                                   start_atom_id=0,  # 有効原子のグローバル開始ID
-                                   start_mol_id=0): # 必要なら返すだけ
-    masks_dict = defaultdict(list)  # {elem: [global_idx_array(int64), ...]}
-    B = len(attr_batch)
+                                   start_atom_id=0,
+                                   start_mol_id=0):
+    """
+    masks_dict: key = (Z, charge, hyb, aromatic, ring), value = [global_idx...]
+    """
+    masks_dict = defaultdict(list)
 
+    B = len(attr_batch)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
 
     for i in range(B):
+        # (M, 100, 27)
         attr_matrices = attr_batch[i].view(-1, 100, 27)
-        # 必要列だけCPUへ（転送回数削減）
-        elem_all = attr_matrices[..., 0].detach().to('cpu', non_blocking=True).numpy()  # (M, 100)
+
+        # 必要列だけCPUへ
+        elem_all = attr_matrices[..., 0].detach().to('cpu', non_blocking=True).numpy()            # (M,100)
+        attr_all = attr_matrices[..., [0, 2, 3, 4, 5]].detach().to('cpu', non_blocking=True).numpy()  # (M,100,5)
+
         M = elem_all.shape[0]
         for j in range(M):
-            elem_vec = elem_all[j]
-            valid = (elem_vec != 0)                 # 実在原子マスク
+            elem_vec = elem_all[j]            # (100,)
+            A = attr_all[j]                   # (100,5)  [Z, charge, hyb, aromatic, ring]
+
+            valid = (elem_vec != 0)
             if not valid.any():
                 mol_id += 1
                 continue
 
-            nz = elem_vec[valid]                    # 実在原子の元素ラベル列 (len = n_atoms_in_mol)
-            uniq = np.unique(nz)
-            for elem in uniq:
-                local_idxs = np.flatnonzero(nz == elem).astype(np.int64)  # 0..(n_atoms_in_mol-1)
-                global_idxs = atom_offset + local_idxs                    # ★ ここが“全体インデックス”
-                masks_dict[int(elem)].extend(map(int, global_idxs))
+            nz_elems = elem_vec[valid]        # (n_atoms,)
+            nz_attrs = A[valid]               # (n_atoms,5)
 
-            atom_offset += nz.size  # 次の分子へ（有効原子数ぶん進める）
+            # --- 元素で効率よく回す（np.unique はここだけに使用）---
+            uniq_ele = np.unique(nz_elems.astype(np.int64))
+            for elem in uniq_ele:
+                # この元素だけ抜き出し（原子は潰さない）
+                mask_e = (nz_elems == elem)                   # (n_atoms,)
+                local_idxs = np.flatnonzero(mask_e).astype(np.int64)  # 分子内インデックス
+                rows_e = nz_attrs[mask_e]                     # (n_e,5)
+
+                # 各原子を5属性キーで登録
+                for k_local, row in zip(local_idxs, rows_e):
+                    key = tuple(int(x) for x in row)          # (Z, charge, hyb, aromatic, ring)
+                    global_idx = atom_offset + int(k_local)
+                    masks_dict[key].append(global_idx)
+
+            # 次の分子へ（有効原子分だけオフセットを進める）
+            atom_offset += nz_attrs.shape[0]
             mol_id += 1
+    print(masks_dict)
+    print(mol_id)
+    print(atom_offset)
+    print("-----------")
     return masks_dict, atom_offset, mol_id
+
 
 def convert_to_dgl(adj_batch, attr_batch):
     from collections import defaultdict
@@ -143,6 +170,7 @@ def convert_to_dgl(adj_batch, attr_batch):
 
     base_graphs = []
     extended_graphs = []
+    attr_matrices_all = []
 
     for i in range(len(adj_batch)):
         args = get_args()
@@ -206,10 +234,10 @@ def convert_to_dgl(adj_batch, attr_batch):
             remaining_features = attr_matrix[num_total_nodes:]
             if remaining_features.numel() and not torch.all(remaining_features == 0):
                 print("⚠️ WARNING: Non-zero values found in remaining features!")
-
+            attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
             extended_graphs.append(extended_g)
 
-    return base_graphs, extended_graphs, masks_dict  # ✅ fixed
+    return base_graphs, extended_graphs, masks_dict, attr_matrices_all  # ✅ fixed
 
 
 from torch.utils.data import Dataset
@@ -268,6 +296,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
         all_latents = []
+        all_attr = []
 
         from collections import defaultdict
         import numpy as np
@@ -280,7 +309,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             if idx == 1:
                 break
             # ========================================
-            glist_base, glist, masks_dict = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            glist_base, glist, masks_dict, attr_matrices = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            all_attr.append(attr_matrices)
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
             for atom_type, masks in masks_dict.items():
@@ -310,7 +340,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         #     all_masks_dict[key] = torch.cat(value)
         # Save to file (optional)
         # np.save("all_masks_dict.npy", all_masks_dict)
-        np.savez_compressed("all_masks_dict.npz", all_masks_dict)
+        # np.savez_compressed("all_masks_dict.npz", all_masks_dict)
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         # --------------------------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
