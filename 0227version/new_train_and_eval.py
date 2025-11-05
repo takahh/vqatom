@@ -102,16 +102,21 @@ import dgl
 import torch
 from collections import defaultdict
 import numpy as np
-from collections import defaultdict
-import numpy as np
-from collections import defaultdict
-import numpy as np
+
+# 許容パターン（表のルール）
+ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
+ALLOWED_CHARGE = {-1, 0, 1}
+ALLOWED_HYB    = {2, 3, 4}
+ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
 def collect_global_indices_compact(adj_batch, attr_batch,
                                    start_atom_id=0,
                                    start_mol_id=0):
     """
-    masks_dict: key = (Z, charge, hyb, aromatic, ring), value = [global_idx...]
+    戻り値:
+      masks_dict: {(Z, charge, hyb, aromatic, ring): [global_idx, ...], ...}
+      atom_offset: 次の開始ID
+      mol_id:     処理した分子数
     """
     masks_dict = defaultdict(list)
 
@@ -121,47 +126,68 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
     for i in range(B):
         # (M, 100, 27)
-        attr_matrices = attr_batch[i].view(-1, 100, 27)
+        attr_mats = attr_batch[i].view(-1, 100, 27)
 
-        # 必要列だけCPUへ
-        elem_all = attr_matrices[..., 0].detach().to('cpu', non_blocking=True).numpy()            # (M,100)
-        attr_all = attr_matrices[..., [0, 2, 3, 4, 5]].detach().to('cpu', non_blocking=True).numpy()  # (M,100,5)
+        # 必要列だけ CPU へ: [Z, charge, hyb, aromatic, ring]
+        cols = [0, 2, 3, 4, 5]
+        Aall = (
+            attr_mats[..., cols]
+            .detach()
+            .to("cpu", non_blocking=True)
+            .numpy()
+            .astype(np.int32)      # 以降の isin 判定を安定化
+        )
+        # Z だけ別に参照（実在原子判定）
+        Zall = Aall[..., 0]
 
-        M = elem_all.shape[0]
+        M = Aall.shape[0]
         for j in range(M):
-            elem_vec = elem_all[j]            # (100,)
-            A = attr_all[j]                   # (100,5)  [Z, charge, hyb, aromatic, ring]
+            A = Aall[j]            # (100, 5) = [Z,chg,hyb,aro,ring]
+            Z = Zall[j]            # (100,)
 
-            valid = (elem_vec != 0)
-            if not valid.any():
+            # 実在原子（Z!=0）
+            exist = (Z != 0)
+            if not exist.any():
                 mol_id += 1
                 continue
 
-            nz_elems = elem_vec[valid]        # (n_atoms,)
-            nz_attrs = A[valid]               # (n_atoms,5)
+            # 実在原子だけ切り出し
+            rows = A[exist]        # (n_atoms, 5) int32
+            Ze   = rows[:, 0]
 
-            # --- 元素で効率よく回す（np.unique はここだけに使用）---
-            uniq_ele = np.unique(nz_elems.astype(np.int64))
-            for elem in uniq_ele:
-                # この元素だけ抜き出し（原子は潰さない）
-                mask_e = (nz_elems == elem)                   # (n_atoms,)
-                local_idxs = np.flatnonzero(mask_e).astype(np.int64)  # 分子内インデックス
-                rows_e = nz_attrs[mask_e]                     # (n_e,5)
+            # ---- 元素で回す（np.uniqueはここだけに使用）----
+            for elem in np.unique(Ze):
+                # 元素フィルタ（まずは元素だけ許容）
+                if elem not in ALLOWED_Z:
+                    continue
 
-                # 各原子を5属性キーで登録
-                for k_local, row in zip(local_idxs, rows_e):
-                    key = tuple(int(x) for x in row)          # (Z, charge, hyb, aromatic, ring)
-                    global_idx = atom_offset + int(k_local)
-                    masks_dict[key].append(global_idx)
+                mask_e = (Ze == elem)
+                local_idxs = np.flatnonzero(mask_e).astype(np.int64)   # 分子内 index
+                rows_e = rows[mask_e]                                  # (n_e,5)
 
-            # 次の分子へ（有効原子分だけオフセットを進める）
-            atom_offset += nz_attrs.shape[0]
+                # 各原子を個別にチェックして登録（ユニーク化しない）
+                for k_local, r in zip(local_idxs, rows_e):
+                    Zv, chg, hyb, aro, ring = map(int, r)
+
+                    # ルール適合チェック
+                    if (chg in ALLOWED_CHARGE and
+                        hyb in ALLOWED_HYB and
+                        aro in ALLOWED_BOOL and
+                        ring in ALLOWED_BOOL):
+                        key = (Zv, chg, hyb, aro, ring)               # 5属性キー
+                        global_idx = atom_offset + int(k_local)
+                        masks_dict[key].append(global_idx)
+                    # ルール外は鍵を作らずスキップ
+
+            # 実在原子ぶん進める（ルール外でも offset は進める）
+            atom_offset += rows.shape[0]
             mol_id += 1
-    print(masks_dict)
-    print(mol_id)
+    print(masks_dict.keys)
     print(atom_offset)
-    print("-----------")
+    print(mol_id)
+    print("------")
     return masks_dict, atom_offset, mol_id
+
 
 
 def convert_to_dgl(adj_batch, attr_batch):
