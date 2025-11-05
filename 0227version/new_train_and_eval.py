@@ -183,9 +183,11 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             atom_offset += rows.shape[0]
             mol_id += 1
 
-    from collections import Counter
-    freq = Counter(masks_dict)
-    print(freq.most_common())
+    freq = {k: len(v) for k, v in masks_dict.items()}
+    # 多い順に表示
+    for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:20]:
+        print(k, c)
+
     print("------")
     return masks_dict, atom_offset, mol_id
 
