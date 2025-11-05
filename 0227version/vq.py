@@ -986,7 +986,7 @@ class EuclideanCodebook(nn.Module):
                 sigma = torch.quantile(dev, 0.5)  # median L2 radius
             return mu, sigma
 
-        for raw_key in sorted(mask_dict.keys(), key=lambda x: int(str(x))):
+        for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
             skey = str(raw_key)
             if skey not in CORE_ELEMENTS:
                 continue
