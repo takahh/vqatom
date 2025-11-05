@@ -184,7 +184,7 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             mol_id += 1
 
     from collections import Counter
-    freq = Counter(masks_dict.keys())
+    freq = Counter(masks_dict)
     print(freq.most_common())
     print("------")
     return masks_dict, atom_offset, mol_id
