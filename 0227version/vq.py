@@ -1261,6 +1261,7 @@ class EuclideanCodebook(nn.Module):
             if skey not in CORE_ELEMENTS:
                 continue
             print(f" feat in ecuclid forward {feature.shape}")
+            print(f" flatten in ecuclid forward {flatten.shape}")
             # -------------------- select latents for this element --------------------
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
