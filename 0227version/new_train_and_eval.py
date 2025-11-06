@@ -325,6 +325,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         import numpy as np
         # Initialize a dict of lists to collect masks per atom type
         all_masks_dict = defaultdict(list)
+        masks_count = defaultdict(list)
         first_batch_feat = None
         start_atom_id = 0
         start_mol_id = 0
@@ -342,7 +343,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             # Aggregate masks into all_masks_dict
             for atom_type, masks in masks_dict.items():
                 all_masks_dict[atom_type].extend(masks)
-
+            # collect counts
+            for atom_type, masks in masks_dict.items():
+                masks_count[atom_type] += len(masks)
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
@@ -360,7 +363,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
 
-        freq = {k: len(v) for k, v in all_masks_dict.items()}
+        freq = {k: v for k, v in masks_count.items()}
         # 多い順に表示
         for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
             print(k, c)
