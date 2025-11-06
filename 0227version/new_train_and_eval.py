@@ -325,7 +325,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         import numpy as np
         # Initialize a dict of lists to collect masks per atom type
         all_masks_dict = defaultdict(list)
-        masks_count = defaultdict(list)
+        masks_count = defaultdict(int)
         first_batch_feat = None
         start_atom_id = 0
         start_mol_id = 0
