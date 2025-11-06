@@ -187,7 +187,7 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
 
 
-def convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id):
+def convert_to_dgl(adj_batch, attr_batch, start_atom_id=None, start_mol_id=None):
     from collections import defaultdict
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, start_atom_id, start_mol_id)   # ✅ unpack
 
