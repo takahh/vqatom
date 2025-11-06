@@ -183,12 +183,6 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             atom_offset += rows.shape[0]
             mol_id += 1
 
-    freq = {k: len(v) for k, v in masks_dict.items()}
-    # 多い順に表示
-    for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
-        print(k, c)
-
-    print("------")
     return masks_dict, atom_offset, mol_id
 
 
@@ -365,6 +359,13 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     first_batch_feat = batched_feats.clone()
 
         all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+
+        freq = {k: len(v) for k, v in all_masks_dict.items()}
+        # 多い順に表示
+        for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
+            print(k, c)
+
+        print("------")
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
