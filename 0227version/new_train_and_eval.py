@@ -193,9 +193,9 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
 
 
-def convert_to_dgl(adj_batch, attr_batch):
+def convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id):
     from collections import defaultdict
-    masks_dict, _, _ = collect_global_indices_compact(adj_batch, attr_batch)  # ✅ unpack
+    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, start_atom_id, start_mol_id)   # ✅ unpack
 
     base_graphs = []
     extended_graphs = []
@@ -266,7 +266,7 @@ def convert_to_dgl(adj_batch, attr_batch):
             attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
             extended_graphs.append(extended_g)
 
-    return base_graphs, extended_graphs, masks_dict, attr_matrices_all  # ✅ fixed
+    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
 
 
 from torch.utils.data import Dataset
@@ -332,13 +332,17 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Initialize a dict of lists to collect masks per atom type
         all_masks_dict = defaultdict(list)
         first_batch_feat = None
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
-                                                      start=kmeans_start_num):
+        start_atom_id = 0
+        start_mol_id = 0
+        # for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
+        #                                               start=kmeans_start_num):
+        for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+            print(f"idx {idx}")
             # ======== Delete this soon ==============
-            if idx == 1:
+            if idx == 5:
                 break
             # ========================================
-            glist_base, glist, masks_dict, attr_matrices = convert_to_dgl(adj_batch, attr_batch)  # 10000 molecules per glist
+            glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id)  # 10000 molecules per glist
             all_attr.append(attr_matrices)
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
