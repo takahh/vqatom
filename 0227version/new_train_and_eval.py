@@ -400,7 +400,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 if idx == 5:
                     break
                 print(f"idx {idx}")
-                glist_base, glist, masks_2, attr_matrices_all = convert_to_dgl(adj_batch, attr_batch)
+                # base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
+                glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(adj_batch, attr_batch)
                 chunk_size = conf["chunk_size"]
                 for i in range(0, len(glist), chunk_size):
                     print(f"chunk {i}")
