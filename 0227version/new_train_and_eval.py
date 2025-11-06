@@ -398,6 +398,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 glist_base, glist, masks_2, attr_matrices_all = convert_to_dgl(adj_batch, attr_batch)
                 chunk_size = conf["chunk_size"]
                 for i in range(0, len(glist), chunk_size):
+                    print(f"chunk {i}")
                     # # ------------- remove thi soon --------------
                     # if i == chunk_size:
                     #     break
