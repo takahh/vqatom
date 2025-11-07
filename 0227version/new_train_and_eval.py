@@ -64,13 +64,13 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
             return 0
         else:  # test
             outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
-            (loss, cb, loss_list3) = outputs
+            return outputs
 
-    # Return only what’s needed
-    return (
-        loss.detach(),                     # keep as tensor if you want
-        [l.item() if hasattr(l, 'item') else l for l in loss_list3]
-    )
+    # # Return only what’s needed
+    # return (
+    #     loss.detach(),                     # keep as tensor if you want
+    #     [l.item() if hasattr(l, 'item') else l for l in loss_list3]
+    # )
 
 class MoleculeGraphDataset(Dataset):
     def __init__(self, adj_dir, attr_dir):
@@ -471,7 +471,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
-            glist_base, glist, masks_3 = convert_to_dgl(adj_batch, attr_batch)
+            glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(adj_batch, attr_batch)
             chunk_size = conf["chunk_size"]
 
             for i in range(0, len(glist), chunk_size):
@@ -485,7 +485,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 batched_graph_base = dgl.batch(chunk_base)
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
-                test_loss, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
+                #  loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+                test_loss, test_emb, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
                 # record scalar losses
                 clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
                                 for l in loss_list_test]
