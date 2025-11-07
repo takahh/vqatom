@@ -838,14 +838,13 @@ class EuclideanCodebook(nn.Module):
         self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
         self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
         self.register_buffer('initted', torch.Tensor([not kmeans_init]))
-        element_keys = [1, 3, 5, 6, 7, 8, 9, 11, 14, 15, 16, 17, 19, 34, 35, 53]
-        for elem in element_keys:
+        for elem in self.cb_dict.keys():
             self.register_buffer(f"cluster_size_{elem}", torch.zeros(self.cb_dict[elem]))
             self.register_buffer(f"embed_avg_{elem}", torch.zeros(self.cb_dict[elem], dim))
         self.learnable_codebook = learnable_codebook
         self.embed = nn.ParameterDict()
         # self.embed_avg = nn.ParameterDict()
-        for key in element_keys:
+        for key in self.cb_dict.keys():
             # Make a fresh tensor copy per element
             K_e = self.cb_dict[key]  # e.g. 4360 for carbon
             D = dim
