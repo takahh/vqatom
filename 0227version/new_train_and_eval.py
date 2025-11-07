@@ -175,6 +175,9 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                         aro in ALLOWED_BOOL and
                         ring in ALLOWED_BOOL):
                         key = f"{Zv}_{chg}_{hyb}_{aro}_{ring}"               # 5属性キー
+                        from utils import CBDICT
+                        if key not in CBDICT.keys():
+                            continue
                         global_idx = atom_offset + int(k_local)
                         masks_dict[key].append(global_idx)
                     # ルール外は鍵を作らずスキップ
