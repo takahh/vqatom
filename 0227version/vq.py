@@ -1254,11 +1254,11 @@ class EuclideanCodebook(nn.Module):
         # ------------------------------------------------------------------
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
-        for key in {int(k) for k in mask_dict.keys() if str(k).isdigit()}:
+        for key in {str(k) for k in mask_dict.keys() if str(k).isdigit()}:
             skey = str(key)
-            from utils import CORE_ELEMENTS
-            if skey not in CORE_ELEMENTS:
-                continue
+            # from utils import CORE_ELEMENTS
+            # if skey not in CORE_ELEMENTS:
+            #     continue
             print(f" feat in ecuclid forward {feature.shape}")
             print(f" flatten in ecuclid forward {flatten.shape}")
             # -------------------- select latents for this element --------------------
@@ -1369,12 +1369,12 @@ class EuclideanCodebook(nn.Module):
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
         mask_dict = self._normalize_mask_dict(mask_dict)
-        for key in {int(k) for k in mask_dict.keys() if str(k).isdigit()}:
+        for key in {str(k) for k in mask_dict.keys() if str(k).isdigit()}:
 
             skey = str(key)
-            from utils import CORE_ELEMENTS
-            if skey not in CORE_ELEMENTS:
-                continue
+            # from utils import CORE_ELEMENTS
+            # if skey not in CORE_ELEMENTS:
+            #     continue
 
             gmask = (mask_dict[key] >= self.latent_size_sum) & (
                     mask_dict[key] < self.latent_size_sum + B
@@ -1879,9 +1879,9 @@ class VectorQuantize(nn.Module):
             return z, idx_local
 
         for key, cb in items:
-            from utils import CORE_ELEMENTS
-            if str(key) not in CORE_ELEMENTS:
-                continue
+            # from utils import CORE_ELEMENTS
+            # if str(key) not in CORE_ELEMENTS:
+            #     continue
             kstr = "all" if key is None else str(key)
 
             # --- mask/indices を取得し index tensor に統一（まずはグローバルとして整形） ---
