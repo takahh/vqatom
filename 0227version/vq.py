@@ -988,7 +988,7 @@ class EuclideanCodebook(nn.Module):
 
         for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
             skey = str(raw_key)
-            if skey not in CORE_ELEMENTS:
+            if skey not in self.cb_dict.keys():
                 continue
 
             idx = get_idx(mask_dict, skey)
