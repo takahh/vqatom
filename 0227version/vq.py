@@ -1254,8 +1254,7 @@ class EuclideanCodebook(nn.Module):
         # ------------------------------------------------------------------
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
-        for key in {str(k) for k in mask_dict.keys() if str(k).isdigit()}:
-            skey = str(key)
+        for key in mask_dict.keys():
             # from utils import CORE_ELEMENTS
             # if skey not in CORE_ELEMENTS:
             #     continue
