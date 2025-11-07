@@ -927,10 +927,10 @@ class EuclideanCodebook(nn.Module):
         from utils import CORE_ELEMENTS  # e.g. {"6","7","8",...} as strings
 
         def get_idx(md, k):
-            return md.get(k, md.get(str(k), md.get(int(k))))
+            return md.get(k, md.get(str(k), md.get(str(k))))
 
         def get_absK(d, k):
-            v = d.get(k, d.get(str(k), d.get(int(k))))
+            v = d.get(k, d.get(str(k), d.get(str(k))))
             if v is None:
                 return None
             try:
@@ -939,7 +939,7 @@ class EuclideanCodebook(nn.Module):
                 raise ValueError(f"cb_dict[{k}] must be an integer (got {type(v)}: {v})")
 
         # simple padding helper: pad to K_req with zero-count, small-noise means
-        def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
+        def _pad_to_K(means_1kd, counts_1k, K_req: str, data_stats=None):
             """
             means_1kd: [1, K_run, D]
             counts_1k: [1, K_run]
