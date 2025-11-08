@@ -200,7 +200,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.vq._codebook.reset_kmeans()
 
     def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
-                batched_graph_base=None, mode=None):
+                batched_graph_base=None, mode=None, attr_list=None):
         import torch
         dev = next(self.parameters()).device
 
@@ -210,7 +210,7 @@ class EquivariantThreeHopGINE(nn.Module):
                 data = data.to(dev)
             if torch.is_tensor(features):
                 features = features.to(dev, non_blocking=True)
-            self.vq(data, features, mask_dict, logger, chunk_i, epoch, mode)
+            self.vq(data, attr_list, mask_dict, logger, chunk_i, epoch, mode)
             return 0
 
         # Edges (mirror for undirected) -> dev
@@ -252,7 +252,7 @@ class EquivariantThreeHopGINE(nn.Module):
             return h_out
 
         h_vq = self.pre_vq_ln(h_out)
-        quantize_output = self.vq(h_vq, features, mask_dict, logger, chunk_i, epoch, mode)
+        quantize_output = self.vq(h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode)
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
         if logger is not None:
             logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")

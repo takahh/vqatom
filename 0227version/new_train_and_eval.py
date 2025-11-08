@@ -50,20 +50,20 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
     )
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
-def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None):
+def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None, attr_list=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
 
     with torch.no_grad():
         if mode == "init_kmeans_loop":
-            latents = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+            latents = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return latents
         elif mode == "init_kmeans_final":
-            model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+            model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return 0
         else:  # test
-            outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode)
+            outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return outputs
 
     # # Return only what’s needed
@@ -342,6 +342,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             # ========================================
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id)  # 10000 molecules per glist
             all_attr.append(attr_matrices)
+            print(f"len(attr_matrices) {len(attr_matrices)}")
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
             for atom_type, masks in masks_dict.items():
@@ -352,6 +353,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             for i in range(0, len(glist), chunk_size):
                 # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
+                attr_chunk = attr_matrices[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
@@ -359,7 +361,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     batched_feats = batched_graph.ndata["feat"]
                 # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
                 latents \
-                    = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop")
+                    = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop", attr_chunk)
                 all_latents.append(latents.cpu())  # move to CPU if needed to save memory
                 if i == 0 and idx == 0:
                     first_batch_feat = batched_feats.clone()
