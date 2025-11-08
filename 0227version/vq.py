@@ -1260,9 +1260,15 @@ class EuclideanCodebook(nn.Module):
             #     continue
             print(f" feat in ecuclid forward {feature.shape}")
             print(f" flatten in ecuclid forward {flatten.shape}")
+            # feat in ecuclid forward torch.Size([30994, 27])
+            # flatten in ecuclid forward torch.Size([1, 30994, 16])
             # -------------------- select latents for this element --------------------
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
+                # check mask is correct
+                some_feature = feature[mask_dict[key]][:10, [0, 2, 3, 4, 5]]
+                print(f"key {key}")
+                print(some_feature)
             else:  # train
                 # slice current minibatch range
                 gmask = (mask_dict[key] >= self.latent_size_sum) & (
@@ -1270,6 +1276,10 @@ class EuclideanCodebook(nn.Module):
                 )
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
+                # check mask is correct
+                some_feature = feature[loc][:10, [0, 2, 3, 4, 5]]
+                print(f"key {key}")
+                print(some_feature)
 
             if masked_latents.numel() == 0:
                 continue
