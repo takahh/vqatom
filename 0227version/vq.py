@@ -1259,6 +1259,8 @@ class EuclideanCodebook(nn.Module):
             # if skey not in CORE_ELEMENTS:
             #     continue
             print(f" len(feature) {len(feature)}")
+            # len(feature) 1000
+            # flatten in ecuclid forward torch.Size([1, 30979, 16])
             print(f" flatten in ecuclid forward {flatten.shape}")
             # feat in ecuclid forward torch.Size([30994, 27])
             # flatten in ecuclid forward torch.Size([1, 30994, 16])
@@ -1278,8 +1280,7 @@ class EuclideanCodebook(nn.Module):
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
                 # check mask is correct
-                print("feature.shape")
-                print(feature.shape)
+                print(feature[0])
                 some_feature = feature[loc][:, [0, 2, 3, 4, 5]]
                 print(f"key {key}")
                 print(some_feature)
