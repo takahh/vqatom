@@ -1266,10 +1266,10 @@ class EuclideanCodebook(nn.Module):
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
                 # check mask is correct
-                sample_size = min(flatten[0].shape[0], 10)
-                some_feature = feature[0]
+                some_feature = feature[mask_dict[key]][:3, [0, 2, 3, 4, 5]]
                 print(f"key {key}")
-                print(some_feature.shape)
+                print(some_feature)
+                # torch.Size([28, 27])
             else:  # train
                 # slice current minibatch range
                 gmask = (mask_dict[key] >= self.latent_size_sum) & (
