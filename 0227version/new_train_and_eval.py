@@ -387,7 +387,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # --------------------------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
         # --------------------------------------------------------------------------------------
-        evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
+        evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final", attr_matrices)
         print("initial kmeans done....")
         model.vq._codebook.latent_size_sum = 0
 
