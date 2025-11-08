@@ -384,6 +384,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # np.save("all_masks_dict.npy", all_masks_dict)
         # np.savez_compressed("all_masks_dict.npz", all_masks_dict)
         print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
+        print(f"init_kmeans_final start ")
         # --------------------------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
         # --------------------------------------------------------------------------------------
