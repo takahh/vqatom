@@ -9,7 +9,7 @@ from collections import Counter
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
 
-def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None):
+def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None, attr=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Ensure model is on device
     model = model.to(device)
@@ -28,7 +28,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
     with torch.cuda.amp.autocast():
         # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
         #          data, features, chunk_i, mask_dict=None, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch)
+        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, "train", attr)
         (loss, cb, loss_list3) = outputs
     #
     # # Sync codebook weights
@@ -427,13 +427,15 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     # # ------------- remove thi soon --------------
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk)
+                    attr_chunk = attr_matrices_all[i:i + chunk_size]
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
 
                     # train step
                     # (model, g, feats, optimizer, chunk_i, logger, epoch):
                     loss, loss_list_train = train_sage(
-                        model, batched_graph, batched_feats, optimizer, i, masks_2, logger, epoch, chunk_size
+                        # model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None, attr=None
+                        model, batched_graph, batched_feats, optimizer, i, masks_2, logger, epoch, chunk_size, attr_chunk
                     )
 
                     # record scalar losses
