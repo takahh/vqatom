@@ -1258,7 +1258,7 @@ class EuclideanCodebook(nn.Module):
             # from utils import CORE_ELEMENTS
             # if skey not in CORE_ELEMENTS:
             #     continue
-            print(f" feat in ecuclid forward {feature.shape}")
+            print(f" len(feature) {len(feature)}")
             print(f" flatten in ecuclid forward {flatten.shape}")
             # feat in ecuclid forward torch.Size([30994, 27])
             # flatten in ecuclid forward torch.Size([1, 30994, 16])
