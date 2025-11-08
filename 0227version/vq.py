@@ -1280,8 +1280,13 @@ class EuclideanCodebook(nn.Module):
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
                 # check mask is correct
-                print(feature[0])
-                some_feature = feature[loc][:, [0, 2, 3, 4, 5]]
+                # feature: List[Tensor[Mi,27]]
+                feat_flat = torch.cat(feature, dim=0)  # [N,27]
+                feat_flat = feat_flat.contiguous().to(flatten.device)
+                assert feat_flat.ndim == 2 and feat_flat.size(1) == 27
+                assert feat_flat.size(0) == flatten.size(1)  # must match latents
+                some_feature = feat_flat[loc][:, [0, 2, 3, 4, 5]]
+
                 print(f"key {key}")
                 print(some_feature)
 
