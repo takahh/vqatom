@@ -26,9 +26,9 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, ch
 
     # Forward pass
     with torch.cuda.amp.autocast():
-        # data, features, chunk_i, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        #          data, features, chunk_i, mask_dict=None, logger=None, epoch=None, batched_graph_base=None, mode=None):
-        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, "train", attr)
+        # data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
+        #                 batched_graph_base=None, mode=None, attr_list=None):
+        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
         (loss, cb, loss_list3) = outputs
     #
     # # Sync codebook weights
