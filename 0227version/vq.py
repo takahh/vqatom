@@ -1278,7 +1278,7 @@ class EuclideanCodebook(nn.Module):
                 loc = mask_dict[key][gmask] - self.latent_size_sum
                 masked_latents = flatten[0][loc]
                 # check mask is correct
-                some_feature = feature[loc][:10, [0, 2, 3, 4, 5]]
+                some_feature = feature[loc][:, [0, 2, 3, 4, 5]]
                 print(f"key {key}")
                 print(some_feature)
 
