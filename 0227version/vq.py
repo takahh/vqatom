@@ -1258,7 +1258,7 @@ class EuclideanCodebook(nn.Module):
             # from utils import CORE_ELEMENTS
             # if skey not in CORE_ELEMENTS:
             #     continue
-            print(f" feat in ecuclid forward {len(feature)}")
+            print(f" feat in ecuclid forward {feature.shape}")
             print(f" flatten in ecuclid forward {flatten.shape}")
             # feat in ecuclid forward torch.Size([30994, 27])
             # flatten in ecuclid forward torch.Size([1, 30994, 16])
@@ -1266,10 +1266,9 @@ class EuclideanCodebook(nn.Module):
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
                 # check mask is correct
-                some_feature = feature[mask_dict[key]]
+                some_feature = feature[mask_dict[key]][:, [0, 2, 3, 4, 5]]
                 print(f"key {key}")
                 print(some_feature)
-                print(some_feature[:, [0,2,3,4,5]])
                 # torch.Size([28, 27])
             else:  # train
                 # slice current minibatch range
