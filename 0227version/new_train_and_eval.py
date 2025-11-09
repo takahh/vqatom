@@ -178,7 +178,8 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             # グローバルID範囲（この分子の実ノード数 N）
             N = int(nm.sum())
 
-            # 使わない key はスルー
+            # まとめてキー配列を生成 (N,6)
+            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
             from utils import CBDICT
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
             for row in keys:
