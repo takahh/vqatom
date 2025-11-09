@@ -177,14 +177,14 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
             # グローバルID範囲（この分子の実ノード数 N）
             N = int(nm.sum())
-            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # まとめてキー配列を生成 (N,6)
-            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
+            # 使わない key はスルー
             from utils import CBDICT
-            k = tuple(int(x) for x in np.asarray(keys).tolist())  # -> (6, 0, 3, 1, 1) など
-            if k not in CBDICT.keys():
-                continue
+            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
+            for row in keys:
+                k = "_".join(map(str, row))
+                if k not in CBDICT:
+                    continue
 
             # 行単位の unique（高速）：複合 dtype へ view して unique
             row_view = keys.view([('', np.int32)] * 6).squeeze()
