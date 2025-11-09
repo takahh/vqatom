@@ -182,7 +182,8 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             # まとめてキー配列を生成 (N,6)
             keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
             from utils import CBDICT
-            if keys not in CBDICT.keys():
+            k = tuple(int(x) for x in np.asarray(keys).tolist())  # -> (6, 0, 3, 1, 1) など
+            if k not in CBDICT.keys():
                 continue
 
             # 行単位の unique（高速）：複合 dtype へ view して unique
