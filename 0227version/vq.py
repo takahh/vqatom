@@ -1230,6 +1230,9 @@ class EuclideanCodebook(nn.Module):
         # 0. prepare input の少し上 or 直下あたりに
         if mode != "init_kmeans_final" and chunk_i is not None and chunk_i == 0:
             self.latent_size_sum = 0
+        # forwardの冒頭
+        if mode in ("test", "eval"):
+            self.latent_size_sum = 0
 
         # ------------------------------------------------------------------
         # 0. prepare input
