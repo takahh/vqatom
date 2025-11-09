@@ -109,14 +109,13 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-
 def collect_global_indices_compact(adj_batch, attr_batch,
                                    start_atom_id=0,
                                    start_mol_id=0,
                                    degree_cap=None):
     """
     戻り値:
-      masks_dict: {(Z, charge, hyb, aromatic, ring, degree): [global_idx, ...], ...}
+      masks_dict: {'Z_charge_hyb_aromatic_ring_degree': [global_idx, ...], ...}
       atom_offset: 次の開始ID
       mol_id:     処理した分子数
 
@@ -142,28 +141,22 @@ def collect_global_indices_compact(adj_batch, attr_batch,
         attr_mats = attr_batch[i].view(-1, 100, 27)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        # CPU / numpy へ (元コードの方針に合わせる)
-        # 必要列のみ抽出
-        A_sel = (
-            attr_mats[..., cols]
-            .detach()
-            .to("cpu", non_blocking=True)
-            .numpy()
-            .astype(np.int32)
-        )
-        # 実ノード判定（ゼロ埋め除去）
-        node_mask = (
-            attr_mats.detach().to("cpu", non_blocking=True).numpy()
-        )
-        node_mask = (np.abs(node_mask).sum(axis=2) > 0)  # (M, 100) bool
+        # ---- to CPU / numpy（1回だけ）----
+        attr_np = attr_mats.detach().to("cpu", non_blocking=True).numpy()
+        adj_np  = adj_mats.detach().to("cpu", non_blocking=True).numpy()
 
-        # degree 計算（非ゼロエッジ数の行和）
-        A_adj = (
-            adj_mats.detach()
-            .to("cpu", non_blocking=True)
-            .numpy()
-        )
-        degrees = (A_adj != 0).sum(axis=2).astype(np.int32)  # (M, 100)
+        # 必要列だけ抽出 (int32)
+        A_sel = attr_np[..., cols].astype(np.int32)            # (M, 100, 5)
+
+        # 実ノード判定（ゼロ埋め除去）
+        node_mask = (np.abs(attr_np).sum(axis=2) > 0)          # (M, 100) bool
+
+        # degree 計算（非ゼロエッジ数の行和; self-loop をカウントしない）
+        # total degree counting nonzeros per row
+        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32) # (M, 100)
+        # subtract diagonal if non-zero to exclude self-loops
+        diag_nonzero = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)  # (M, 100)
+        degrees = deg_total - diag_nonzero
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
 
@@ -174,51 +167,49 @@ def collect_global_indices_compact(adj_batch, attr_batch,
             if not nm.any():
                 continue
 
-            z      = A_sel[m, :, 0]
-            charge = A_sel[m, :, 1]
-            hyb    = A_sel[m, :, 2]
-            arom   = A_sel[m, :, 3]
-            ring   = A_sel[m, :, 4]
-            deg    = degrees[m]
-
-            # 実ノードだけに限定
-            z, charge, hyb, arom, ring, deg = (
-                z[nm], charge[nm], hyb[nm], arom[nm], ring[nm], deg[nm]
-            )
+            # (N,) each
+            z      = A_sel[m, :, 0][nm]
+            charge = A_sel[m, :, 1][nm]
+            hyb    = A_sel[m, :, 2][nm]
+            arom   = A_sel[m, :, 3][nm]
+            ring   = A_sel[m, :, 4][nm]
+            deg    = degrees[m][nm]
 
             # グローバルID範囲（この分子の実ノード数 N）
             N = int(nm.sum())
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # キーをまとめて作成し、高速にグルーピング
-            # shape: (N, 6) -> structured array -> unique
-            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1)
-            # structured dtype で unique
-            dt = np.dtype([
-                ("z", np.int32), ("q", np.int32), ("h", np.int32),
-                ("a", np.int32), ("r", np.int32), ("d", np.int32),
-            ])
-            keys_struct = keys.view(dt).squeeze()
+            # まとめてキー配列を生成 (N,6)
+            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
 
-            uniq, inv = np.unique(keys_struct, return_inverse=True)
-            # uniq をふたたびタプル化
-            uniq_tuples = [tuple(row.tolist()) for row in keys]
+            # 行単位の unique（高速）：複合 dtype へ view して unique
+            row_view = keys.view([('', np.int32)] * 6).squeeze()
+            uniq_rows, inv = np.unique(row_view, return_inverse=True)  # uniq_rows: (#uniq,)
+            uniq_ints = uniq_rows.view(np.int32).reshape(-1, 6)        # (#uniq, 6)
 
-            # inv を使って indices をバケツ分け
-            from collections import defaultdict as _dd
-            buckets = _dd(list)
+            # 各ユニーク行を 'Z_q_h_a_r_d' 文字列に変換
+            key_strings = np.char.add(
+                np.char.add(np.char.add(np.char.add(np.char.add(
+                    uniq_ints[:, 0].astype(str), '_'),
+                    uniq_ints[:, 1].astype(str)), '_'),
+                    uniq_ints[:, 2].astype(str)), '_')
+            key_strings = np.char.add(
+                np.char.add(key_strings, uniq_ints[:, 3].astype(str)), '_')
+            key_strings = np.char.add(
+                np.char.add(key_strings, uniq_ints[:, 4].astype(str)), '_')
+            key_strings = np.char.add(key_strings, uniq_ints[:, 5].astype(str))  # shape: (#uniq,)
+
+            # inv を使って直接マージ（追加のバケツ作成は不要）
             for idx_local, bucket_id in enumerate(inv):
-                buckets[bucket_id].append(int(global_ids[idx_local]))
+                k = key_strings[bucket_id].item()  # python str
+                masks_dict[k].append(int(global_ids[idx_local]))
 
-            for bucket_id, gid_list in buckets.items():
-                # uniq_tuples[bucket_id] は (z, q, h, a, r, d)
-                masks_dict[uniq_tuples[bucket_id]].extend(gid_list)
-
-            # 次の分子のために atom_offset を進める
+            # 次の分子のために atom_offset / mol_id を進める
             atom_offset += N
             mol_id += 1
 
     return masks_dict, atom_offset, mol_id
+
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
