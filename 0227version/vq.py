@@ -1224,7 +1224,6 @@ class EuclideanCodebook(nn.Module):
         return (global_idx[in_window] - lo).long()
 
     @torch.amp.autocast('cuda', enabled=False)
-    #               data, features, mask_dict, logger, chunk_i, epoch, mode
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
         # 0. prepare input の少し上 or 直下あたりに
@@ -1258,22 +1257,11 @@ class EuclideanCodebook(nn.Module):
         # 2. per-element quantization loop
         # ------------------------------------------------------------------
         for key in mask_dict.keys():
-            # from utils import CORE_ELEMENTS
-            # if skey not in CORE_ELEMENTS:
-            #     continue
-            print(f" len(feature) {len(feature)}")
-            # len(feature) 1000
-            # flatten in ecuclid forward torch.Size([1, 30979, 16])
-            print(f" flatten in ecuclid forward {flatten.shape}")
-            # feat in ecuclid forward torch.Size([30994, 27])
-            # flatten in ecuclid forward torch.Size([1, 30994, 16])
             # -------------------- select latents for this element --------------------
             if mode == "init_kmeans_final":
                 masked_latents = flatten[0][mask_dict[key]]  # global pass
                 # check mask is correct
                 some_feature = feature[mask_dict[key]][:, [0, 2, 3, 4, 5]]
-                print(f"key {key}")
-                print(some_feature)
                 # torch.Size([28, 27])
             else:  # train
                 # slice current minibatch range
@@ -1285,14 +1273,10 @@ class EuclideanCodebook(nn.Module):
                 # check mask is correct
                 # feature: List[Tensor[Mi,27]]
                 feat_flat = torch.cat(feature, dim=0)  # [N,27]
-                print(f"feat_flat {feat_flat.shape}")
                 feat_flat = feat_flat.contiguous().to(flatten.device)
                 assert feat_flat.ndim == 2 and feat_flat.size(1) == 27
                 assert feat_flat.size(0) == flatten.size(1)  # must match latents
                 some_feature = feat_flat[loc][:, [0, 2, 3, 4, 5]]
-
-                print(f"key {key}")
-                print(some_feature)
 
             if masked_latents.numel() == 0:
                 continue

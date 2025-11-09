@@ -311,13 +311,13 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # ------------------------------------------
         # 2 batch data で kmeans, CB 確定
         # ------------------------------------------
-        if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
-            kmeans_start_num = 6
-            # kmeans_end_num = 18
-            kmeans_end_num = 7
-        if conf["train_or_infer"] == "analysis":
-            kmeans_start_num = 0
-            kmeans_end_num = 1
+        # if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
+        #     kmeans_start_num = 6
+        #     # kmeans_end_num = 18
+        #     kmeans_end_num = 7
+        # if conf["train_or_infer"] == "analysis":
+        #     kmeans_start_num = 0
+        #     kmeans_end_num = 1
         # ------------------------------------------
         # Collect latent vectors (goes to model.py)
         # ------------------------------------------
@@ -342,7 +342,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             # ========================================
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id)  # 10000 molecules per glist
             all_attr.append(attr_matrices)
-            print(f"len(attr_matrices) {len(attr_matrices)}")
+            # print(f"len(attr_matrices) {len(attr_matrices)}")
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             # Aggregate masks into all_masks_dict
             for atom_type, masks in masks_dict.items():
@@ -383,7 +383,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Save to file (optional)
         # np.save("all_masks_dict.npy", all_masks_dict)
         # np.savez_compressed("all_masks_dict.npz", all_masks_dict)
-        print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
+        # print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
         print(f"init_kmeans_final start ")
         # --------------------------------------------------------------------------------------
         # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
@@ -393,7 +393,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         flat_list = [t for batch in all_attr for t in batch]
         # Now concat along the atom dimension
         all_attr_tensor = torch.cat(flat_list, dim=0)  # (N, 27)
-        print("all_attr_tensor shape:", all_attr_tensor.shape)
+        # print("all_attr_tensor shape:", all_attr_tensor.shape)
 
         evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final", all_attr_tensor)
         print("initial kmeans done....")
@@ -409,10 +409,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             print("TRAIN ---------------")
 
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                # ======== Delete this soon ==============
-                if idx == 1:
-                    break
-                # ========================================
+                # # ======== Delete this soon ==============
+                # if idx == 1:
+                #     break
+                # # ========================================
                 if idx == 5:
                     break
                 print(f"idx {idx}")
