@@ -109,85 +109,116 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
+
 def collect_global_indices_compact(adj_batch, attr_batch,
                                    start_atom_id=0,
-                                   start_mol_id=0):
+                                   start_mol_id=0,
+                                   degree_cap=None):
     """
     戻り値:
-      masks_dict: {(Z, charge, hyb, aromatic, ring): [global_idx, ...], ...}
+      masks_dict: {(Z, charge, hyb, aromatic, ring, degree): [global_idx, ...], ...}
       atom_offset: 次の開始ID
       mol_id:     処理した分子数
+
+    備考:
+      - degree はデパッド前の元 adjacency から算出（self-loop を数えない）
+      - degree_cap を指定するとその値で上限をクリップ（例: 6 なら 7 以上は 6 で束ねる）
     """
+    from collections import defaultdict
+    import numpy as np
+    import torch
+
     masks_dict = defaultdict(list)
 
     B = len(attr_batch)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
 
-    for i in range(B):
-        # (M, 100, 27)
-        attr_mats = attr_batch[i].view(-1, 100, 27)
+    # 属性列の選択: [Z, charge, hyb, aromatic, ring]
+    cols = [0, 2, 3, 4, 5]
 
-        # 必要列だけ CPU へ: [Z, charge, hyb, aromatic, ring]
-        cols = [0, 2, 3, 4, 5]
-        Aall = (
+    for i in range(B):
+        # (M, 100, 27) / (M, 100, 100)
+        attr_mats = attr_batch[i].view(-1, 100, 27)
+        adj_mats  = adj_batch[i].view(-1, 100, 100)
+
+        # CPU / numpy へ (元コードの方針に合わせる)
+        # 必要列のみ抽出
+        A_sel = (
             attr_mats[..., cols]
             .detach()
             .to("cpu", non_blocking=True)
             .numpy()
-            .astype(np.int32)      # 以降の isin 判定を安定化
+            .astype(np.int32)
         )
-        # Z だけ別に参照（実在原子判定）
-        Zall = Aall[..., 0]
+        # 実ノード判定（ゼロ埋め除去）
+        node_mask = (
+            attr_mats.detach().to("cpu", non_blocking=True).numpy()
+        )
+        node_mask = (np.abs(node_mask).sum(axis=2) > 0)  # (M, 100) bool
 
-        M = Aall.shape[0]
-        for j in range(M):
-            A = Aall[j]            # (100, 5) = [Z,chg,hyb,aro,ring]
-            Z = Zall[j]            # (100,)
+        # degree 計算（非ゼロエッジ数の行和）
+        A_adj = (
+            adj_mats.detach()
+            .to("cpu", non_blocking=True)
+            .numpy()
+        )
+        degrees = (A_adj != 0).sum(axis=2).astype(np.int32)  # (M, 100)
+        if degree_cap is not None:
+            degrees = np.minimum(degrees, int(degree_cap))
 
-            # 実在原子（Z!=0）
-            exist = (Z != 0)
-            if not exist.any():
-                mol_id += 1
+        # 各分子ごとに実ノードのみ処理
+        M = A_sel.shape[0]
+        for m in range(M):
+            nm = node_mask[m]               # (100,)
+            if not nm.any():
                 continue
 
-            # 実在原子だけ切り出し
-            rows = A[exist]        # (n_atoms, 5) int32
-            Ze   = rows[:, 0]
+            z      = A_sel[m, :, 0]
+            charge = A_sel[m, :, 1]
+            hyb    = A_sel[m, :, 2]
+            arom   = A_sel[m, :, 3]
+            ring   = A_sel[m, :, 4]
+            deg    = degrees[m]
 
-            # ---- 元素で回す（np.uniqueはここだけに使用）----
-            for elem in np.unique(Ze):
-                # 元素フィルタ（まずは元素だけ許容）
-                if elem not in ALLOWED_Z:
-                    continue
+            # 実ノードだけに限定
+            z, charge, hyb, arom, ring, deg = (
+                z[nm], charge[nm], hyb[nm], arom[nm], ring[nm], deg[nm]
+            )
 
-                mask_e = (Ze == elem)
-                local_idxs = np.flatnonzero(mask_e).astype(np.int64)   # 分子内 index
-                rows_e = rows[mask_e]                                  # (n_e,5)
+            # グローバルID範囲（この分子の実ノード数 N）
+            N = int(nm.sum())
+            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-                # 各原子を個別にチェックして登録（ユニーク化しない）
-                for k_local, r in zip(local_idxs, rows_e):
-                    Zv, chg, hyb, aro, ring = map(int, r)
+            # キーをまとめて作成し、高速にグルーピング
+            # shape: (N, 6) -> structured array -> unique
+            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1)
+            # structured dtype で unique
+            dt = np.dtype([
+                ("z", np.int32), ("q", np.int32), ("h", np.int32),
+                ("a", np.int32), ("r", np.int32), ("d", np.int32),
+            ])
+            keys_struct = keys.view(dt).squeeze()
 
-                    # ルール適合チェック
-                    if (chg in ALLOWED_CHARGE and
-                        hyb in ALLOWED_HYB and
-                        aro in ALLOWED_BOOL and
-                        ring in ALLOWED_BOOL):
-                        key = f"{Zv}_{chg}_{hyb}_{aro}_{ring}"               # 5属性キー
-                        from utils import CBDICT
-                        if key not in CBDICT.keys():
-                            continue
-                        global_idx = atom_offset + int(k_local)
-                        masks_dict[key].append(global_idx)
-                    # ルール外は鍵を作らずスキップ
+            uniq, inv = np.unique(keys_struct, return_inverse=True)
+            # uniq をふたたびタプル化
+            uniq_tuples = [tuple(row.tolist()) for row in keys]
 
-            # 実在原子ぶん進める（ルール外でも offset は進める）
-            atom_offset += rows.shape[0]
+            # inv を使って indices をバケツ分け
+            from collections import defaultdict as _dd
+            buckets = _dd(list)
+            for idx_local, bucket_id in enumerate(inv):
+                buckets[bucket_id].append(int(global_ids[idx_local]))
+
+            for bucket_id, gid_list in buckets.items():
+                # uniq_tuples[bucket_id] は (z, q, h, a, r, d)
+                masks_dict[uniq_tuples[bucket_id]].extend(gid_list)
+
+            # 次の分子のために atom_offset を進める
+            atom_offset += N
             mol_id += 1
 
     return masks_dict, atom_offset, mol_id
-
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
