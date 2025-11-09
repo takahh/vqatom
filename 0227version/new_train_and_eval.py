@@ -483,7 +483,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
             print(f"TEST --------------- {idx}")
-            glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(adj_batch, attr_batch)
+            glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(adj_batch, attr_batch)
             chunk_size = conf["chunk_size"]
 
             for i in range(0, len(glist), chunk_size):
@@ -495,10 +495,11 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 chunk_base = glist_base[i:i + chunk_size]
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
+                attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
                 #  loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
-                test_loss, test_emb, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx)
+                test_loss, test_emb, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx, "test", attr_chunk_test)
                 # record scalar losses
                 clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
                                 for l in loss_list_test]
@@ -506,7 +507,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     loss_list_list_test[j].append(val)
                 test_loss_list.append(test_loss.detach().cpu().item())
                 # cleanup
-                del batched_graph, batched_feats, chunk, test_loss, loss_list_test
+                del batched_graph, batched_feats, chunk, test_loss, loss_list_test, attr_chunk_test
                 gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
