@@ -1280,7 +1280,8 @@ class EuclideanCodebook(nn.Module):
 
             if masked_latents.numel() == 0:
                 continue
-
+            if key not in CBDICT.keys():
+                continue
             code = self.embed[str(key)]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
 
