@@ -235,7 +235,7 @@ def collect_global_indices_compact(adj_batch, attr_batch,
                 atom_offset += N
                 mol_id += 1
 
-            return masks_dict, atom_offset, mol_id
+    return masks_dict, atom_offset, mol_id
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
