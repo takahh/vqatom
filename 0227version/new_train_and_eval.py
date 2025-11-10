@@ -260,7 +260,7 @@ def collect_global_indices_compact(
             if keys.ndim == 1:
                 keys = keys.reshape(1, -1)
             N = int(keys.shape[0])
-
+            print(keys)
             # Global ids for these atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
