@@ -112,7 +112,6 @@ ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
-    *,
     start_atom_id=0,
     start_mol_id=0,
     degree_cap=None,
