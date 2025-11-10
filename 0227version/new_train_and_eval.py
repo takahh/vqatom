@@ -116,75 +116,64 @@ def collect_global_indices_compact(
     start_atom_id: int = 0,
     start_mol_id: int = 0,
     degree_cap: int | None = None,
-    check_degree_col: bool = False,
 ):
     """
     Returns:
       masks_dict: {'Z_charge_hyb_aromatic_ring_degree': [global_idx, ...], ...}
-      atom_offset: next starting global atom id
-      mol_id:      processed molecule count
+      atom_offset: next global atom id to start from
+      mol_id:      number of molecules processed
 
     Notes:
-      - degree is computed from the *original* (unpadded) adjacency, excluding self-loops
-      - if degree_cap is given, we clamp degree to that max (e.g., 6 groups 7+ as 6)
-      - if check_degree_col=True, we assert the adjacency-derived degree equals the
-        degree in attr[:, 1] wherever nodes are real (can tolerate rare mismatches by
-        warning instead of raising if you prefer)
+      - Column layout (from your screenshot):
+          0: Z (Atomic number)
+          1: Degree               <-- we ignore and recompute from adjacency
+          2: Formal charge
+          3: Hybridization
+          4: Aromatic flag
+          5: Ring flag (bool)
+          6: Total Hs
+          7..: functional group flags, then H-bond flags
+      - Degree is computed from the *unpadded original* adjacency (self-loop excluded).
+      - If degree_cap is given, degrees are clipped to that max (e.g., 6 → all >=7 become 6).
+      - Keys are 'Z_charge_hyb_aromatic_ring_degree' (no ring size; only ring flag).
     """
     import numpy as np
     from collections import defaultdict
 
-    # --- Column indices in your atom_to_feature_vector() ---
-    IDX_Z       = 0
-    IDX_DEG     = 1   # degree (from RDKit) present in the feature vector
-    IDX_CHARGE  = 2
-    IDX_HYB     = 3
-    IDX_AROM    = 4
-    IDX_RING    = 5
-    # (IDX_TOT_H = 6, others follow, not used here)
+    # Indices in attr feature vector (per screenshot)
+    Z_IDX        = 0
+    CHARGE_IDX   = 2
+    HYB_IDX      = 3
+    AROM_IDX     = 4
+    RINGFLAG_IDX = 5
 
     masks_dict = defaultdict(list)
 
     B = len(attr_batch)
     atom_offset = int(start_atom_id)
-    mol_id      = int(start_mol_id)
-
-    # We only need these five columns for the key (degree is appended from adjacency)
-    cols = [IDX_Z, IDX_CHARGE, IDX_HYB, IDX_AROM, IDX_RING]
+    mol_id = int(start_mol_id)
 
     for i in range(B):
-        # Shapes: attr: (M, 100, 27), adj: (M, 100, 100)
-        attr_mats = attr_batch[i].view(-1, 100, attr_batch[i].shape[-1])
+        # Shapes: (M, 100, 27) / (M, 100, 100)   (M = molecules in this item)
+        attr_mats = attr_batch[i].view(-1, 100, 27)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        # --- move once to CPU/NumPy ---
+        # ---- move once to CPU numpy ----
         attr_np = attr_mats.detach().to("cpu", non_blocking=True).numpy()
         adj_np  = adj_mats.detach().to("cpu", non_blocking=True).numpy()
 
-        # Node is real if any feature ≠ 0 (padding rows are all zeros)
+        # real node mask (exclude padded rows): any nonzero feature in the row
         node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M, 100) bool
 
-        # Compute degree from adjacency; exclude self-loops
-        deg_total     = (adj_np != 0).sum(axis=2).astype(np.int32)  # row sums
-        diag_nonzero  = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
-        degrees_adj   = deg_total - diag_nonzero                    # (M, 100)
+        # degree from adjacency (count nonzeros per row, then drop diagonal)
+        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)   # (M, 100)
+        diag_nz   = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
+        degrees   = deg_total - diag_nz
         if degree_cap is not None:
-            degrees_adj = np.minimum(degrees_adj, int(degree_cap))
+            degrees = np.minimum(degrees, int(degree_cap))
 
-        # Optional consistency check vs the degree column at index 1
-        if check_degree_col:
-            deg_col = attr_np[..., IDX_DEG].astype(np.int32)
-            # only check real nodes
-            mismatch = (deg_col != degrees_adj) & node_mask
-            if mismatch.any():
-                # If you'd rather fail hard:
-                # raise ValueError(f"Degree mismatch at {mismatch.sum()} nodes.")
-                # Otherwise warn:
-                import warnings
-                warnings.warn(f"[collect_global_indices_compact] Degree mismatch at {int(mismatch.sum())} nodes.")
-
-        # Slice the needed columns for keys (Z, charge, hyb, arom, ring)
-        A_sel = attr_np[..., cols].astype(np.int32)                # (M, 100, 5)
+        # select columns we need (Z, charge, hyb, aromatic, ringflag)
+        A_sel = attr_np[..., [Z_IDX, CHARGE_IDX, HYB_IDX, AROM_IDX, RINGFLAG_IDX]].astype(np.int32)
 
         M = A_sel.shape[0]
         for m in range(M):
@@ -192,45 +181,41 @@ def collect_global_indices_compact(
             if not nm.any():
                 continue
 
-            # (N,) arrays
-            z      = A_sel[m, nm, 0]
-            charge = A_sel[m, nm, 1]
-            hyb    = A_sel[m, nm, 2]
-            arom   = A_sel[m, nm, 3]
-            ring   = A_sel[m, nm, 4]
-            deg    = degrees_adj[m, nm]
+            # gather valid rows
+            selected = A_sel[m][nm]        # (N, 5) -> Z, charge, hyb, arom, ringflag
+            deg_vec  = degrees[m][nm]      # (N,)
 
-            # Stack into (N, 6) → [Z, charge, hyb, arom, ring, degree]
-            keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
-            N = int(keys.shape[0])
+            # build (N, 6) integer keys in one go
+            keys_6 = np.concatenate([selected, deg_vec[:, None]], axis=1).astype(np.int32)  # (N, 6)
+            N = int(keys_6.shape[0])
 
-            # Global ids for this molecule's real atoms
+            # build contiguous global ids for these N atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # Vectorized string key: 'Z_q_h_a_r_d'
-            ks = keys.astype(str)
-            key_strings = (
-                ks[:, 0] + '_' + ks[:, 1] + '_' + ks[:, 2] + '_' + ks[:, 3] + '_' + ks[:, 4] + '_' + ks[:, 5]
-            )
+            # convert to 'Z_q_h_a_r_d' strings vectorized (avoid Python loops)
+            ks = keys_6.astype(str)  # (N, 6), dtype='<U..'
+            # ((((Z_ + q)_ + h)_ + _a)_ + r)_ + _d
+            s = np.char.add(np.char.add(np.char.add(np.char.add(np.char.add(
+                    ks[:, 0], '_'), ks[:, 1]), '_'), ks[:, 2]), '_')
+            s = np.char.add(np.char.add(np.char.add(s, ks[:, 3]), '_'), ks[:, 4])
+            s = np.char.add(np.char.add(s, '_'), ks[:, 5])  # final (N,)
 
-            # Keep only keys present in CBDICT (avoids building buckets you won't use)
+            # keep only keys present in CBDICT
             from utils import CBDICT
-            # vectorized membership
-            _in = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
-            valid = _in(key_strings).astype(bool)
-
-            if valid.any():
-                filt_keys = key_strings[valid]
-                filt_ids  = global_ids[valid]
+            ufunc_in = np.frompyfunc(lambda x: x in CBDICT, 1, 1)
+            keep = ufunc_in(s).astype(bool)
+            if keep.any():
+                kept_keys = s[keep]           # (K,)
+                kept_ids  = global_ids[keep]  # (K,)
 
                 # group by unique key and append ids
-                uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
+                uniq, inv = np.unique(kept_keys, return_inverse=True)
                 inv = np.asarray(inv).reshape(-1)
-                for idx_u, bucket in enumerate(inv):
-                    k = uniq_keys[bucket].item()  # Python str
-                    masks_dict[k].append(int(filt_ids[idx_u]))
+                for idx_in_batch, bucket in enumerate(inv):
+                    k = uniq[bucket].item()   # Python str
+                    masks_dict[k].append(int(kept_ids[idx_in_batch]))
 
-            # advance offsets
+            # advance offsets per molecule
             atom_offset += N
             mol_id += 1
 
