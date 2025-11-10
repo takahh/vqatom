@@ -109,133 +109,133 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-def collect_global_indices_compact(adj_batch, attr_batch,
-                                   start_atom_id=0,
-                                   start_mol_id=0,
-                                   degree_cap=None):
-    """
-    戻り値:
-      masks_dict: {'Z_charge_hyb_aromatic_ring_degree': [global_idx, ...], ...}
-      atom_offset: 次の開始ID
-      mol_id:     処理した分子数
 
-    備考:
-      - degree はデパッド前の元 adjacency から算出（self-loop を数えない）
-      - degree_cap を指定するとその値で上限をクリップ（例: 6 なら 7 以上は 6 で束ねる）
+def collect_global_indices_compact(
+    adj_batch,
+    attr_batch,
+    start_atom_id: int = 0,
+    start_mol_id: int = 0,
+    degree_cap: int | None = None,
+    check_degree_col: bool = False,
+):
     """
-    from collections import defaultdict
+    Returns:
+      masks_dict: {'Z_charge_hyb_aromatic_ring_degree': [global_idx, ...], ...}
+      atom_offset: next starting global atom id
+      mol_id:      processed molecule count
+
+    Notes:
+      - degree is computed from the *original* (unpadded) adjacency, excluding self-loops
+      - if degree_cap is given, we clamp degree to that max (e.g., 6 groups 7+ as 6)
+      - if check_degree_col=True, we assert the adjacency-derived degree equals the
+        degree in attr[:, 1] wherever nodes are real (can tolerate rare mismatches by
+        warning instead of raising if you prefer)
+    """
     import numpy as np
-    import torch
+    from collections import defaultdict
+
+    # --- Column indices in your atom_to_feature_vector() ---
+    IDX_Z       = 0
+    IDX_DEG     = 1   # degree (from RDKit) present in the feature vector
+    IDX_CHARGE  = 2
+    IDX_HYB     = 3
+    IDX_AROM    = 4
+    IDX_RING    = 5
+    # (IDX_TOT_H = 6, others follow, not used here)
 
     masks_dict = defaultdict(list)
 
     B = len(attr_batch)
     atom_offset = int(start_atom_id)
-    mol_id = int(start_mol_id)
+    mol_id      = int(start_mol_id)
 
-    # 属性列の選択: [Z, charge, hyb, aromatic, ring]
-    cols = [0, 2, 3, 4, 5]
+    # We only need these five columns for the key (degree is appended from adjacency)
+    cols = [IDX_Z, IDX_CHARGE, IDX_HYB, IDX_AROM, IDX_RING]
 
     for i in range(B):
-        # (M, 100, 27) / (M, 100, 100)
-        attr_mats = attr_batch[i].view(-1, 100, 27)
+        # Shapes: attr: (M, 100, 27), adj: (M, 100, 100)
+        attr_mats = attr_batch[i].view(-1, 100, attr_batch[i].shape[-1])
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        # ---- to CPU / numpy（1回だけ）----
+        # --- move once to CPU/NumPy ---
         attr_np = attr_mats.detach().to("cpu", non_blocking=True).numpy()
         adj_np  = adj_mats.detach().to("cpu", non_blocking=True).numpy()
 
-        # 必要列だけ抽出 (int32)
-        A_sel = attr_np[..., cols].astype(np.int32)            # (M, 100, 5)
+        # Node is real if any feature ≠ 0 (padding rows are all zeros)
+        node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M, 100) bool
 
-        # 実ノード判定（ゼロ埋め除去）
-        node_mask = (np.abs(attr_np).sum(axis=2) > 0)          # (M, 100) bool
-
-        # degree 計算（非ゼロエッジ数の行和; self-loop をカウントしない）
-        # total degree counting nonzeros per row
-        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32) # (M, 100)
-        # subtract diagonal if non-zero to exclude self-loops
-        diag_nonzero = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)  # (M, 100)
-        degrees = deg_total - diag_nonzero
+        # Compute degree from adjacency; exclude self-loops
+        deg_total     = (adj_np != 0).sum(axis=2).astype(np.int32)  # row sums
+        diag_nonzero  = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
+        degrees_adj   = deg_total - diag_nonzero                    # (M, 100)
         if degree_cap is not None:
-            degrees = np.minimum(degrees, int(degree_cap))
+            degrees_adj = np.minimum(degrees_adj, int(degree_cap))
 
-        # 各分子ごとに実ノードのみ処理
+        # Optional consistency check vs the degree column at index 1
+        if check_degree_col:
+            deg_col = attr_np[..., IDX_DEG].astype(np.int32)
+            # only check real nodes
+            mismatch = (deg_col != degrees_adj) & node_mask
+            if mismatch.any():
+                # If you'd rather fail hard:
+                # raise ValueError(f"Degree mismatch at {mismatch.sum()} nodes.")
+                # Otherwise warn:
+                import warnings
+                warnings.warn(f"[collect_global_indices_compact] Degree mismatch at {int(mismatch.sum())} nodes.")
+
+        # Slice the needed columns for keys (Z, charge, hyb, arom, ring)
+        A_sel = attr_np[..., cols].astype(np.int32)                # (M, 100, 5)
+
         M = A_sel.shape[0]
         for m in range(M):
-            nm = node_mask[m]               # (100,)
+            nm = node_mask[m]  # (100,)
             if not nm.any():
                 continue
 
-            # (N,) each
-            z      = A_sel[m, :, 0][nm]
-            charge = A_sel[m, :, 1][nm]
-            hyb    = A_sel[m, :, 2][nm]
-            arom   = A_sel[m, :, 3][nm]
-            ring   = A_sel[m, :, 4][nm]
-            deg    = degrees[m][nm]
+            # (N,) arrays
+            z      = A_sel[m, nm, 0]
+            charge = A_sel[m, nm, 1]
+            hyb    = A_sel[m, nm, 2]
+            arom   = A_sel[m, nm, 3]
+            ring   = A_sel[m, nm, 4]
+            deg    = degrees_adj[m, nm]
 
-            # グローバルID範囲（この分子の実ノード数 N）
-            N = int(nm.sum())
-            # まとめてキー配列を生成 (N,6)  ※ N 既知前提
+            # Stack into (N, 6) → [Z, charge, hyb, arom, ring, degree]
             keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
-
-            # 念のため 2-D 化（単一原子で (6,) になるのを防ぐ）
-            if keys.ndim == 1:
-                keys = keys.reshape(1, -1)
-
-            # 次に使うので N を keys から再取得
             N = int(keys.shape[0])
 
-            from utils import CBDICT
+            # Global ids for this molecule's real atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # ---- 文字列キーを一括作成: 'Z_q_h_a_r_d' ----
-            # np.char 系で高速連結（Python ループ回避）
+            # Vectorized string key: 'Z_q_h_a_r_d'
             ks = keys.astype(str)
-            key_strings = np.char.add(
-                np.char.add(
-                    np.char.add(
-                        np.char.add(
-                            np.char.add(ks[:, 0], '_'), ks[:, 1]),
-                        '_'),
-                    ks[:, 2]),
-                '_')
-            key_strings = np.char.add(
-                np.char.add(
-                    np.char.add(key_strings, ks[:, 3]), '_'),
-                ks[:, 4])
-            key_strings = np.char.add(np.char.add(key_strings, '_'), ks[:, 5])
-            # key_strings: shape (N,), dtype='<U...' (NumPyの文字列)
+            key_strings = (
+                ks[:, 0] + '_' + ks[:, 1] + '_' + ks[:, 2] + '_' + ks[:, 3] + '_' + ks[:, 4] + '_' + ks[:, 5]
+            )
 
-            # ---- CBDICT に存在するキーのみ残す（ベクトル化）----
-            # Python set を使った包含判定を ufunc 化（高速＆スカラ安全）
-            _valid_in_dict = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
-            valid_mask = _valid_in_dict(key_strings).astype(bool)
+            # Keep only keys present in CBDICT (avoids building buckets you won't use)
+            from utils import CBDICT
+            # vectorized membership
+            _in = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
+            valid = _in(key_strings).astype(bool)
 
-            # 何も残らない場合はオフセットだけ進めて次へ
-            if not valid_mask.any():
-                atom_offset += N
-                mol_id += 1
-            else:
-                filt_keys = key_strings[valid_mask]  # (M,)
-                filt_ids = global_ids[valid_mask]  # (M,)
+            if valid.any():
+                filt_keys = key_strings[valid]
+                filt_ids  = global_ids[valid]
 
-                # ---- ユニークキーと逆写像（スカラ安全）----
+                # group by unique key and append ids
                 uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
-                inv = np.asarray(inv).reshape(-1)  # 0-D 回避（M==1 でも 1-D 化）
+                inv = np.asarray(inv).reshape(-1)
+                for idx_u, bucket in enumerate(inv):
+                    k = uniq_keys[bucket].item()  # Python str
+                    masks_dict[k].append(int(filt_ids[idx_u]))
 
-                # ---- inv に従って直接マージ ----
-                # 各要素 i は filt_keys[i] に対応し、その属する uniq_keys のバケツ index が inv[i]
-                for i, bucket_id in enumerate(inv):
-                    k = uniq_keys[bucket_id].item()  # Python str
-                    masks_dict[k].append(int(filt_ids[i]))
-
-                # 次の分子のために atom_offset / mol_id を進める
-                atom_offset += N
-                mol_id += 1
+            # advance offsets
+            atom_offset += N
+            mol_id += 1
 
     return masks_dict, atom_offset, mol_id
+
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
