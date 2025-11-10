@@ -109,113 +109,182 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
-    start_atom_id: int = 0,
-    start_mol_id: int = 0,
-    degree_cap: int | None = None,
+    *,
+    start_atom_id=0,
+    start_mol_id=0,
+    degree_cap=None,
+    ring_size_cap=8,
+    arom_nbrs_cap=6,
+    fused_id_cap=255,
+    # If your new features are already packed in attr_batch, give their column indices:
+    ring_size_col=None,
+    arom_nbrs_col=None,
+    fused_id_col=None,
+    # Or pass them separately (same batching/shape as attr_batch[...,0]):
+    ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
+    arom_nbrs_batch=None,         # ditto
+    fused_ring_id_batch=None,     # ditto
+    # Which fields to include in the string key and in what order:
+    include_keys=("Z","charge","hyb","arom","ring","deg","ringSize","aromNbrs","fusedId"),
 ):
     """
     Returns:
-      masks_dict: {'Z_charge_hyb_aromatic_ring_degree': [global_idx, ...], ...}
-      atom_offset: next global atom id to start from
-      mol_id:      number of molecules processed
+      masks_dict: { 'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId' : [global_idx, ...], ... }
+      atom_offset: next start atom id
+      mol_id:      number of processed molecules
 
     Notes:
-      - Column layout (from your screenshot):
-          0: Z (Atomic number)
-          1: Degree               <-- we ignore and recompute from adjacency
-          2: Formal charge
-          3: Hybridization
-          4: Aromatic flag
-          5: Ring flag (bool)
-          6: Total Hs
-          7..: functional group flags, then H-bond flags
-      - Degree is computed from the *unpadded original* adjacency (self-loop excluded).
-      - If degree_cap is given, degrees are clipped to that max (e.g., 6 → all >=7 become 6).
-      - Keys are 'Z_charge_hyb_aromatic_ring_degree' (no ring size; only ring flag).
+      - degree is computed from the *unpadded* adjacency (self-loops excluded).
+      - *_cap parameters clamp large values to keep the key space bounded.
+      - You can supply ring size / aromatic neighbor count / fused ring id either
+        via column indices in attr_batch (ring_size_col, arom_nbrs_col, fused_id_col),
+        or as separate batched tensors/ndarrays (*_batch). If both given, column
+        indices take precedence.
     """
-    import numpy as np
     from collections import defaultdict
+    import numpy as np
+    import torch
 
-    # Indices in attr feature vector (per screenshot)
-    Z_IDX        = 0
-    CHARGE_IDX   = 2
-    HYB_IDX      = 3
-    AROM_IDX     = 4
-    RINGFLAG_IDX = 5
+    # Base columns you already use
+    COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
+    BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
+
+    def _to_cpu_np(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().to("cpu", non_blocking=True).numpy()
+        return x
 
     masks_dict = defaultdict(list)
-
-    B = len(attr_batch)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
 
+    B = len(attr_batch)
+
+    # ---------- helper: fetch or build the three new feature matrices per mini-batch item ----------
+    def fetch_feature_mats(i, M):
+        """
+        Returns (ring_size_np, arom_nbrs_np, fused_id_np) as np.int32 arrays of shape (M, 100)
+        for the i-th batch item.
+        """
+        # Prefer columns embedded in attr
+        if ring_size_col is not None or arom_nbrs_col is not None or fused_id_col is not None:
+            # We'll read from attr_mats_np[..., col]
+            return None, None, None  # placeholder; handled inline below
+
+        # Else use side-channel batches if provided
+        rs = an = fid = None
+        if ring_size_batch is not None:
+            rs = _to_cpu_np(ring_size_batch[i]).astype(np.int32).reshape(-1, 100)
+        if arom_nbrs_batch is not None:
+            an = _to_cpu_np(arom_nbrs_batch[i]).astype(np.int32).reshape(-1, 100)
+        if fused_ring_id_batch is not None:
+            fid = _to_cpu_np(fused_ring_id_batch[i]).astype(np.int32).reshape(-1, 100)
+        return rs, an, fid
+
+    # ---------- main loop over batch items ----------
     for i in range(B):
-        # Shapes: (M, 100, 27) / (M, 100, 100)   (M = molecules in this item)
+        # Shapes: (M,100,27) / (M,100,100)
         attr_mats = attr_batch[i].view(-1, 100, 27)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        # ---- move once to CPU numpy ----
-        attr_np = attr_mats.detach().to("cpu", non_blocking=True).numpy()
-        adj_np  = adj_mats.detach().to("cpu", non_blocking=True).numpy()
+        attr_np = _to_cpu_np(attr_mats)
+        adj_np  = _to_cpu_np(adj_mats)
 
-        # real node mask (exclude padded rows): any nonzero feature in the row
-        node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M, 100) bool
+        M = attr_np.shape[0]
 
-        # degree from adjacency (count nonzeros per row, then drop diagonal)
-        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)   # (M, 100)
+        # Base attributes (Z, charge, hyb, arom, ring)
+        A_sel = attr_np[..., BASE_COLS].astype(np.int32)         # (M,100,5)
+
+        # Valid (unpadded) node mask
+        node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M,100) bool
+
+        # Degree from adjacency (exclude self-loops)
+        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)   # (M,100)
         diag_nz   = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
         degrees   = deg_total - diag_nz
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
 
-        # select columns we need (Z, charge, hyb, aromatic, ringflag)
-        A_sel = attr_np[..., [Z_IDX, CHARGE_IDX, HYB_IDX, AROM_IDX, RINGFLAG_IDX]].astype(np.int32)
+        # ---- bring in ringSize / aromNbrs / fusedId ----
+        # Case A: using columns inside attr
+        if (ring_size_col is not None) or (arom_nbrs_col is not None) or (fused_id_col is not None):
+            ring_size_np = (attr_np[..., ring_size_col].astype(np.int32) if ring_size_col is not None
+                            else np.zeros((M,100), dtype=np.int32))
+            arom_nbrs_np = (attr_np[..., arom_nbrs_col].astype(np.int32) if arom_nbrs_col is not None
+                            else np.zeros((M,100), dtype=np.int32))
+            fused_id_np  = (attr_np[..., fused_id_col].astype(np.int32) if fused_id_col is not None
+                            else np.zeros((M,100), dtype=np.int32))
+        else:
+            # Case B: side-channel tensors
+            rs, an, fid = fetch_feature_mats(i, M)
+            ring_size_np = rs if rs is not None else np.zeros((M,100), dtype=np.int32)
+            arom_nbrs_np = an if an is not None else np.zeros((M,100), dtype=np.int32)
+            fused_id_np  = fid if fid is not None else np.zeros((M,100), dtype=np.int32)
 
-        M = A_sel.shape[0]
+        # Caps
+        if ring_size_cap is not None:
+            ring_size_np = np.minimum(ring_size_np, int(ring_size_cap))
+        if arom_nbrs_cap is not None:
+            arom_nbrs_np = np.minimum(arom_nbrs_np, int(arom_nbrs_cap))
+        if fused_id_cap is not None:
+            fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
+
+        # ---- per-molecule pass (still vectorized within the molecule) ----
         for m in range(M):
             nm = node_mask[m]  # (100,)
             if not nm.any():
                 continue
 
-            # gather valid rows
-            selected = A_sel[m][nm]        # (N, 5) -> Z, charge, hyb, arom, ringflag
-            deg_vec  = degrees[m][nm]      # (N,)
+            # Extract base cols
+            z      = A_sel[m, :, 0][nm]
+            charge = A_sel[m, :, 1][nm]
+            hyb    = A_sel[m, :, 2][nm]
+            arom   = A_sel[m, :, 3][nm]
+            ring   = A_sel[m, :, 4][nm]
+            deg    = degrees[m][nm]
 
-            # build (N, 6) integer keys in one go
-            keys_6 = np.concatenate([selected, deg_vec[:, None]], axis=1).astype(np.int32)  # (N, 6)
-            N = int(keys_6.shape[0])
+            # New features
+            rs     = ring_size_np[m][nm]
+            an     = arom_nbrs_np[m][nm]
+            fid    = fused_id_np[m][nm]
 
-            # build contiguous global ids for these N atoms
+            # Choose which fields to include and stack in that order
+            fields = {
+                "Z": z, "charge": charge, "hyb": hyb, "arom": arom, "ring": ring, "deg": deg,
+                "ringSize": rs, "aromNbrs": an, "fusedId": fid
+            }
+            cols_to_stack = [fields[name] for name in include_keys]
+            keys = np.stack(cols_to_stack, axis=1).astype(np.int32)   # (N, K)
+            if keys.ndim == 1:
+                keys = keys.reshape(1, -1)
+            N = int(keys.shape[0])
+
+            # Global ids for these atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # convert to 'Z_q_h_a_r_d' strings vectorized (avoid Python loops)
-            ks = keys_6.astype(str)  # (N, 6), dtype='<U..'
-            # ((((Z_ + q)_ + h)_ + _a)_ + r)_ + _d
-            s = np.char.add(np.char.add(np.char.add(np.char.add(np.char.add(
-                    ks[:, 0], '_'), ks[:, 1]), '_'), ks[:, 2]), '_')
-            s = np.char.add(np.char.add(np.char.add(s, ks[:, 3]), '_'), ks[:, 4])
-            s = np.char.add(np.char.add(s, '_'), ks[:, 5])  # final (N,)
+            # Build string keys fast with np.char
+            ks = keys.astype(str)
+            key_strings = ks[:, 0]
+            for c in range(1, ks.shape[1]):
+                key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            # keep only keys present in CBDICT
+            # Keep only keys present in CBDICT
             from utils import CBDICT
-            ufunc_in = np.frompyfunc(lambda x: x in CBDICT, 1, 1)
-            keep = ufunc_in(s).astype(bool)
-            if keep.any():
-                kept_keys = s[keep]           # (K,)
-                kept_ids  = global_ids[keep]  # (K,)
-
-                # group by unique key and append ids
-                uniq, inv = np.unique(kept_keys, return_inverse=True)
+            _in = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
+            valid_mask = _in(key_strings).astype(bool)
+            if valid_mask.any():
+                filt_keys = key_strings[valid_mask]
+                filt_ids  = global_ids[valid_mask]
+                uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
                 inv = np.asarray(inv).reshape(-1)
-                for idx_in_batch, bucket in enumerate(inv):
-                    k = uniq[bucket].item()   # Python str
-                    masks_dict[k].append(int(kept_ids[idx_in_batch]))
+                for ii, bucket in enumerate(inv):
+                    k = uniq_keys[bucket].item()
+                    masks_dict[k].append(int(filt_ids[ii]))
 
-            # advance offsets per molecule
+            # advance offsets per molecule regardless
             atom_offset += N
             mol_id += 1
 
