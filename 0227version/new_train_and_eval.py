@@ -177,44 +177,65 @@ def collect_global_indices_compact(adj_batch, attr_batch,
 
             # グローバルID範囲（この分子の実ノード数 N）
             N = int(nm.sum())
-
-            # まとめてキー配列を生成 (N,6)
+            # まとめてキー配列を生成 (N,6)  ※ N 既知前提
             keys = np.stack([z, charge, hyb, arom, ring, deg], axis=1).astype(np.int32)
+
+            # 念のため 2-D 化（単一原子で (6,) になるのを防ぐ）
+            if keys.ndim == 1:
+                keys = keys.reshape(1, -1)
+
+            # 次に使うので N を keys から再取得
+            N = int(keys.shape[0])
+
             from utils import CBDICT
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
-            for row in keys:
-                k = "_".join(map(str, row))
-                if k not in CBDICT:
-                    continue
 
-            # 行単位の unique（高速）：複合 dtype へ view して unique
-            row_view = keys.view([('', np.int32)] * 6).squeeze()
-            uniq_rows, inv = np.unique(row_view, return_inverse=True)  # uniq_rows: (#uniq,)
-            uniq_ints = uniq_rows.view(np.int32).reshape(-1, 6)        # (#uniq, 6)
-
-            # 各ユニーク行を 'Z_q_h_a_r_d' 文字列に変換
+            # ---- 文字列キーを一括作成: 'Z_q_h_a_r_d' ----
+            # np.char 系で高速連結（Python ループ回避）
+            ks = keys.astype(str)
             key_strings = np.char.add(
-                np.char.add(np.char.add(np.char.add(np.char.add(
-                    uniq_ints[:, 0].astype(str), '_'),
-                    uniq_ints[:, 1].astype(str)), '_'),
-                    uniq_ints[:, 2].astype(str)), '_')
+                np.char.add(
+                    np.char.add(
+                        np.char.add(
+                            np.char.add(ks[:, 0], '_'), ks[:, 1]),
+                        '_'),
+                    ks[:, 2]),
+                '_')
             key_strings = np.char.add(
-                np.char.add(key_strings, uniq_ints[:, 3].astype(str)), '_')
-            key_strings = np.char.add(
-                np.char.add(key_strings, uniq_ints[:, 4].astype(str)), '_')
-            key_strings = np.char.add(key_strings, uniq_ints[:, 5].astype(str))  # shape: (#uniq,)
+                np.char.add(
+                    np.char.add(key_strings, ks[:, 3]), '_'),
+                ks[:, 4])
+            key_strings = np.char.add(np.char.add(key_strings, '_'), ks[:, 5])
+            # key_strings: shape (N,), dtype='<U...' (NumPyの文字列)
 
-            # inv を使って直接マージ（追加のバケツ作成は不要）
-            for idx_local, bucket_id in enumerate(inv):
-                k = key_strings[bucket_id].item()  # python str
-                masks_dict[k].append(int(global_ids[idx_local]))
+            # ---- CBDICT に存在するキーのみ残す（ベクトル化）----
+            # Python set を使った包含判定を ufunc 化（高速＆スカラ安全）
+            _valid_in_dict = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
+            valid_mask = _valid_in_dict(key_strings).astype(bool)
 
-            # 次の分子のために atom_offset / mol_id を進める
-            atom_offset += N
-            mol_id += 1
+            # 何も残らない場合はオフセットだけ進めて次へ
+            if not valid_mask.any():
+                atom_offset += N
+                mol_id += 1
+            else:
+                filt_keys = key_strings[valid_mask]  # (M,)
+                filt_ids = global_ids[valid_mask]  # (M,)
 
-    return masks_dict, atom_offset, mol_id
+                # ---- ユニークキーと逆写像（スカラ安全）----
+                uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
+                inv = np.asarray(inv).reshape(-1)  # 0-D 回避（M==1 でも 1-D 化）
 
+                # ---- inv に従って直接マージ ----
+                # 各要素 i は filt_keys[i] に対応し、その属する uniq_keys のバケツ index が inv[i]
+                for i, bucket_id in enumerate(inv):
+                    k = uniq_keys[bucket_id].item()  # Python str
+                    masks_dict[k].append(int(filt_ids[i]))
+
+                # 次の分子のために atom_offset / mol_id を進める
+                atom_offset += N
+                mol_id += 1
+
+            return masks_dict, atom_offset, mol_id
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
