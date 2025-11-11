@@ -241,10 +241,14 @@ def collect_global_indices_compact(
             an     = arom_nbrs_np[m][nm]
             fid    = fused_id_np[m][nm]
 
+            # --- after you have z, charge, hyb, arom, ring, deg (np.int32) ---
+            # pos: 0=内周 / 1=外周（sp2芳香環Cでdeg==2を外周とみなす）
+            pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
+
             # Choose which fields to include and stack in that order
             fields = {
                 "Z": z, "charge": charge, "hyb": hyb, "arom": arom, "ring": ring, "deg": deg,
-                "ringSize": rs, "aromNbrs": an, "fusedId": fid
+                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos
             }
             cols_to_stack = [fields[name] for name in include_keys]
             keys = np.stack(cols_to_stack, axis=1).astype(np.int32)   # (N, K)
