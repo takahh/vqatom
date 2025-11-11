@@ -269,7 +269,7 @@ def collect_global_indices_compact(
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
-
+            print(key_strings)
             # Keep only keys present in CBDICT
             from utils import CBDICT
             _in = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
