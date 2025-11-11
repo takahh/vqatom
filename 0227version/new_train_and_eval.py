@@ -108,7 +108,6 @@ ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
 ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -128,6 +127,8 @@ def collect_global_indices_compact(
     fused_ring_id_batch=None,     # ditto
     # Which fields to include in the string key and in what order:
     include_keys=("Z","charge","hyb","arom","ring","deg","ringSize","aromNbrs","fusedId"),
+    debug=False,
+    debug_max_print=10,
 ):
     """
     Returns:
@@ -140,14 +141,13 @@ def collect_global_indices_compact(
       - *_cap parameters clamp large values to keep the key space bounded.
       - You can supply ring size / aromatic neighbor count / fused ring id either
         via column indices in attr_batch (ring_size_col, arom_nbrs_col, fused_id_col),
-        or as separate batched tensors/ndarrays (*_batch). If both given, column
-        indices take precedence.
+        or as separate batched tensors/ndarrays (*_batch). Column indices take precedence.
     """
     from collections import defaultdict
     import numpy as np
     import torch
 
-    # Base columns you already use
+    # Base columns in attr: [Z, charge, hyb, arom, ring]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
 
@@ -162,18 +162,11 @@ def collect_global_indices_compact(
 
     B = len(attr_batch)
 
-    # ---------- helper: fetch or build the three new feature matrices per mini-batch item ----------
     def fetch_feature_mats(i, M):
         """
         Returns (ring_size_np, arom_nbrs_np, fused_id_np) as np.int32 arrays of shape (M, 100)
-        for the i-th batch item.
+        for the i-th batch item. Only used when *_col is None.
         """
-        # Prefer columns embedded in attr
-        if ring_size_col is not None or arom_nbrs_col is not None or fused_id_col is not None:
-            # We'll read from attr_mats_np[..., col]
-            return None, None, None  # placeholder; handled inline below
-
-        # Else use side-channel batches if provided
         rs = an = fid = None
         if ring_size_batch is not None:
             rs = _to_cpu_np(ring_size_batch[i]).astype(np.int32).reshape(-1, 100)
@@ -207,21 +200,39 @@ def collect_global_indices_compact(
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
 
-        # ---- bring in ringSize / aromNbrs / fusedId ----
-        # Case A: using columns inside attr
-        if (ring_size_col is not None) or (arom_nbrs_col is not None) or (fused_id_col is not None):
-            ring_size_np = (attr_np[..., ring_size_col].astype(np.int32) if ring_size_col is not None
-                            else np.zeros((M,100), dtype=np.int32))
-            arom_nbrs_np = (attr_np[..., arom_nbrs_col].astype(np.int32) if arom_nbrs_col is not None
-                            else np.zeros((M,100), dtype=np.int32))
-            fused_id_np  = (attr_np[..., fused_id_col].astype(np.int32) if fused_id_col is not None
-                            else np.zeros((M,100), dtype=np.int32))
+        # ---- ringSize / aromNbrs / fusedId ----
+        # Prefer columns inside attr if specified
+        if ring_size_col is not None:
+            ring_size_np = attr_np[..., ring_size_col].astype(np.int32)
         else:
-            # Case B: side-channel tensors
-            rs, an, fid = fetch_feature_mats(i, M)
-            ring_size_np = rs if rs is not None else np.zeros((M,100), dtype=np.int32)
-            arom_nbrs_np = an if an is not None else np.zeros((M,100), dtype=np.int32)
-            fused_id_np  = fid if fid is not None else np.zeros((M,100), dtype=np.int32)
+            ring_size_np = None
+        if arom_nbrs_col is not None:
+            arom_nbrs_np = attr_np[..., arom_nbrs_col].astype(np.int32)
+        else:
+            arom_nbrs_np = None
+        if fused_id_col is not None:
+            fused_id_np  = attr_np[..., fused_id_col].astype(np.int32)
+        else:
+            fused_id_np  = None
+
+        # Fall back to side-channel tensors
+        if ring_size_np is None:
+            ring_size_np = (fetch_feature_mats(i, M)[0]
+                            if (ring_size_col is None) else None)
+            if ring_size_np is None:
+                ring_size_np = np.zeros((M,100), np.int32)
+
+        if arom_nbrs_np is None:
+            arom_nbrs_np = (fetch_feature_mats(i, M)[1]
+                            if (arom_nbrs_col is None) else None)
+            if arom_nbrs_np is None:
+                arom_nbrs_np = np.zeros((M,100), np.int32)
+
+        if fused_id_np is None:
+            fused_id_np = (fetch_feature_mats(i, M)[2]
+                           if (fused_id_col is None) else None)
+            if fused_id_np is None:
+                fused_id_np = np.zeros((M,100), np.int32)
 
         # Caps
         if ring_size_cap is not None:
@@ -231,7 +242,7 @@ def collect_global_indices_compact(
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
 
-        # ---- per-molecule pass (still vectorized within the molecule) ----
+        # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
             nm = node_mask[m]  # (100,)
             if not nm.any():
@@ -260,7 +271,7 @@ def collect_global_indices_compact(
             if keys.ndim == 1:
                 keys = keys.reshape(1, -1)
             N = int(keys.shape[0])
-            # print(keys)
+
             # Global ids for these atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
@@ -269,25 +280,32 @@ def collect_global_indices_compact(
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
-            print(key_strings)
-            # Keep only keys present in CBDICT
-            from utils import CBDICT
-            _in = np.frompyfunc(lambda s: s in CBDICT, 1, 1)
-            valid_mask = _in(key_strings).astype(bool)
-            if valid_mask.any():
-                filt_keys = key_strings[valid_mask]
-                filt_ids  = global_ids[valid_mask]
-                uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
-                inv = np.asarray(inv).reshape(-1)
-                for ii, bucket in enumerate(inv):
-                    k = uniq_keys[bucket].item()
-                    masks_dict[k].append(int(filt_ids[ii]))
 
-            # advance offsets per molecule regardless
+            if debug and i == 0 and m == 0:
+                peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
+                print("[collect][peek] first keys:", peek)
+
+            # ---- Append *all* keys (no filtering) ----
+            # Group by unique key and extend once per key for speed
+            uniq_keys, inv = np.unique(key_strings, return_inverse=True)
+            # Build buckets
+            buckets = [[] for _ in range(len(uniq_keys))]
+            inv_list = inv.tolist()
+            for row_idx, bucket_id in enumerate(inv_list):
+                buckets[bucket_id].append(int(global_ids[row_idx]))
+            # Extend dict
+            for uk, ids in zip(uniq_keys.tolist(), buckets):
+                masks_dict[uk].extend(ids)
+
+            # advance offsets per molecule
             atom_offset += N
             mol_id += 1
 
+    if debug:
+        print(f"[collect] total buckets: {len(masks_dict)}")
+
     return masks_dict, atom_offset, mol_id
+
 
 
 
