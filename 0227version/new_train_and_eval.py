@@ -109,7 +109,6 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -241,8 +240,7 @@ def collect_global_indices_compact(
             an     = arom_nbrs_np[m][nm]
             fid    = fused_id_np[m][nm]
 
-            # --- after you have z, charge, hyb, arom, ring, deg (np.int32) ---
-            # pos: 0=内周 / 1=外周（sp2芳香環Cでdeg==2を外周とみなす）
+            # Optional: position flag for sp2 aromatic ring carbons with degree==2 (outer rim)
             pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
 
             # Choose which fields to include and stack in that order
@@ -269,8 +267,9 @@ def collect_global_indices_compact(
                 peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
                 print("[collect][peek] first keys:", peek)
 
-            # Group by unique key and extend once per key (no CB_DICT filtering)
+            # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
+            # Bucket append (Python list-of-lists for minimal overhead)
             buckets = [[] for _ in range(len(uniq_keys))]
             inv_list = inv.tolist()
             for row_idx, bucket_id in enumerate(inv_list):
