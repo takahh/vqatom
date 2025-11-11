@@ -135,23 +135,18 @@ def collect_global_indices_compact(
     """
     Returns:
       masks_dict: { 'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId' : [global_idx, ...], ... }
-      atom_offset: next start atom id
+      atom_offset: next start atom id (global)
       mol_id:      number of processed molecules
+
+    Notes:
+      - attr columns assumed base: [Z, charge, hyb, arom, ring] at indices [0,2,3,4,5]
+      - Degree computed from adjacency excluding self-loops
+      - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
+      - No CB_DICT/CBDICT filtering is applied
     """
     from collections import defaultdict
     import numpy as np
     import torch
-
-    # ---- load codebook filter dict ----
-    try:
-        from utils import CB_DICT as _CB_DICT
-    except ImportError:
-        try:
-            from utils import CBDICT as _CB_DICT  # fallback if you still use this name
-        except ImportError:
-            raise RuntimeError("utils.CB_DICT (or CBDICT) not found. Put your filter dict in utils.py")
-
-    key_set = set(_CB_DICT.keys())
 
     # Base columns in attr: [Z, charge, hyb, arom, ring]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
@@ -162,14 +157,8 @@ def collect_global_indices_compact(
             return x.detach().to("cpu", non_blocking=True).numpy()
         return x
 
-    masks_dict = defaultdict(list)
-    atom_offset = int(start_atom_id)
-    mol_id = int(start_mol_id)
-
-    B = len(attr_batch)
-
-    def fetch_feature_mats(i, M):
-        """Returns (ring_size_np, arom_nbrs_np, fused_id_np) as np.int32 arrays of shape (M, 100)."""
+    def _fetch_side_features(i, M):
+        """Returns (ring_size_np, arom_nbrs_np, fused_id_np) as np.int32 arrays of shape (M, 100), or None."""
         rs = an = fid = None
         if ring_size_batch is not None:
             rs = _to_cpu_np(ring_size_batch[i]).astype(np.int32).reshape(-1, 100)
@@ -179,14 +168,20 @@ def collect_global_indices_compact(
             fid = _to_cpu_np(fused_ring_id_batch[i]).astype(np.int32).reshape(-1, 100)
         return rs, an, fid
 
+    masks_dict = defaultdict(list)
+    atom_offset = int(start_atom_id)
+    mol_id = int(start_mol_id)
+
+    B = len(attr_batch)
+
     # ---------- main loop over batch items ----------
     for i in range(B):
         # Shapes: (M,100,27) / (M,100,100)
         attr_mats = attr_batch[i].view(-1, 100, 27)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        attr_np = _to_cpu_np(attr_mats)
-        adj_np  = _to_cpu_np(adj_mats)
+        attr_np = _to_cpu_np(attr_mats)  # (M,100,27)
+        adj_np  = _to_cpu_np(adj_mats)   # (M,100,100)
 
         M = attr_np.shape[0]
 
@@ -204,24 +199,19 @@ def collect_global_indices_compact(
             degrees = np.minimum(degrees, int(degree_cap))
 
         # ---- ringSize / aromNbrs / fusedId ----
-        # Prefer columns inside attr if specified
+        # Prefer columns inside attr if specified; else fall back to side-channel tensors; else zeros
         ring_size_np = attr_np[..., ring_size_col].astype(np.int32) if ring_size_col is not None else None
         arom_nbrs_np = attr_np[..., arom_nbrs_col].astype(np.int32) if arom_nbrs_col is not None else None
         fused_id_np  = attr_np[..., fused_id_col ].astype(np.int32) if fused_id_col  is not None else None
 
-        # Fall back to side-channel tensors
-        if ring_size_np is None:
-            ring_size_np = (fetch_feature_mats(i, M)[0] if (ring_size_col is None) else None)
+        if (ring_size_np is None) or (arom_nbrs_np is None) or (fused_id_np is None):
+            rs_side, an_side, fid_side = _fetch_side_features(i, M)
             if ring_size_np is None:
-                ring_size_np = np.zeros((M,100), np.int32)
-        if arom_nbrs_np is None:
-            arom_nbrs_np = (fetch_feature_mats(i, M)[1] if (arom_nbrs_col is None) else None)
+                ring_size_np = rs_side if rs_side is not None else np.zeros((M,100), np.int32)
             if arom_nbrs_np is None:
-                arom_nbrs_np = np.zeros((M,100), np.int32)
-        if fused_id_np is None:
-            fused_id_np = (fetch_feature_mats(i, M)[2] if (fused_id_col is None) else None)
+                arom_nbrs_np = an_side if an_side is not None else np.zeros((M,100), np.int32)
             if fused_id_np is None:
-                fused_id_np = np.zeros((M,100), np.int32)
+                fused_id_np = fid_side if fid_side is not None else np.zeros((M,100), np.int32)
 
         # Caps
         if ring_size_cap is not None:
@@ -235,6 +225,7 @@ def collect_global_indices_compact(
         for m in range(M):
             nm = node_mask[m]  # (100,)
             if not nm.any():
+                mol_id += 1
                 continue
 
             # Extract base cols
@@ -274,30 +265,21 @@ def collect_global_indices_compact(
                 peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
                 print("[collect][peek] first keys:", peek)
 
-            # ---- Filtering with CB_DICT / CBDICT ----
-            # Boolean membership mask
-            # (list comprehension is typically faster than np.frompyfunc here)
-            valid_mask = np.fromiter((k in key_set for k in key_strings), dtype=bool, count=len(key_strings))
-
-            if valid_mask.any():
-                filt_keys = key_strings[valid_mask]
-                filt_ids  = global_ids[valid_mask]
-
-                # Group by unique key and extend once per key
-                uniq_keys, inv = np.unique(filt_keys, return_inverse=True)
-                buckets = [[] for _ in range(len(uniq_keys))]
-                inv_list = inv.tolist()
-                for row_idx, bucket_id in enumerate(inv_list):
-                    buckets[bucket_id].append(int(filt_ids[row_idx]))
-                for uk, ids in zip(uniq_keys.tolist(), buckets):
-                    masks_dict[uk].extend(ids)
+            # Group by unique key and extend once per key (no CB_DICT filtering)
+            uniq_keys, inv = np.unique(key_strings, return_inverse=True)
+            buckets = [[] for _ in range(len(uniq_keys))]
+            inv_list = inv.tolist()
+            for row_idx, bucket_id in enumerate(inv_list):
+                buckets[bucket_id].append(int(global_ids[row_idx]))
+            for uk, ids in zip(uniq_keys.tolist(), buckets):
+                masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
             atom_offset += N
             mol_id += 1
 
     if debug:
-        print(f"[collect] total buckets (after CB_DICT filter): {len(masks_dict)}")
+        print(f"[collect] total buckets: {len(masks_dict)}")
 
     return masks_dict, atom_offset, mol_id
 
