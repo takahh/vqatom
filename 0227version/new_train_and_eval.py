@@ -294,7 +294,7 @@ def collect_global_indices_compact(
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
     from collections import defaultdict
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, start_atom_id, start_mol_id)   # ✅ unpack
-
+    print(masks_dict.keys())
     base_graphs = []
     extended_graphs = []
     attr_matrices_all = []
