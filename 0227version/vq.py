@@ -2066,7 +2066,8 @@ class VectorQuantize(nn.Module):
         warmup = 5
         alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
         # if epoch < warmup:
-        loss = (delta_mid * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
+        loss = (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
+        # loss = (alpha * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
         # else:
         #     # half-life ~ 50 epochs
         #     repel_loss = alpha * repel_loss
