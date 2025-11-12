@@ -292,8 +292,8 @@ def collect_global_indices_compact(
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
     from collections import defaultdict
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, start_atom_id, start_mol_id)   # ✅ unpack
-    print("masks_dict.keys()")
-    print(masks_dict.keys())
+    # print("masks_dict.keys()")
+    # print(masks_dict.keys())
     base_graphs = []
     extended_graphs = []
     attr_matrices_all = []
@@ -470,10 +470,10 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         freq = {k: v for k, v in masks_count.items()}
         # 多い順に表示
-        for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
-            print(k, c)
+        # for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
+        #     print(k, c)
 
-        print("------")
+        # print("------")
 
         # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
         # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
@@ -577,7 +577,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             start_num, end_num = 0, 1
         else:  # infer
             start_num, end_num = 6, 10
-        print(f"start num {start_num}, end num {end_num}")
+        # print(f"start num {start_num}, end num {end_num}")
 
         ind_counts = Counter()
 
@@ -646,7 +646,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # stats and save
         # ---------------------------
         flat = list(ind_counts.elements())
-        print(f"len(flat) = {len(flat)}, unique = {len(set(flat))}")
+        # print(f"len(flat) = {len(flat)}, unique = {len(set(flat))}")
         # used_cb_vectors_all_epochs = model.vq._codebook.embed[0][torch.unique(torch.tensor(flat), sorted=True).long()]
 
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
@@ -688,7 +688,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         gc.collect()
         torch.cuda.empty_cache()
 
-        print(next(model.parameters()).device)  # should say cuda:0
+        # print(next(model.parameters()).device)  # should say cuda:0
 
         # for name, buf in model.named_buffers():
         #     print(f"{name}: {buf.shape} {buf.device}")

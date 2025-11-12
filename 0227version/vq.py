@@ -430,7 +430,7 @@ def kmeans(
             raise ValueError(f"element_names must have length H={H}, got {len(element_names)}")
         used_per_label = {element_names[h]: int(used_per_head[h].item()) for h in range(H)}
         # neat printout
-        print("\n[Used codebook size per element]")
+        # print("\n[Used codebook size per element]")
         # for name, cnt in used_per_label.items():
         #     print(f"  {name:>4s} : {cnt}")
 
@@ -566,7 +566,7 @@ class ContrastiveLoss(nn.Module):
                 s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
                 hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
                 vals = hist.tolist()
-                print(f"{key} {vals}")
+                # print(f"{key} {vals}")
                 # logger.info(vals)
 
         def latent_repel_mid_chunked(
@@ -992,19 +992,19 @@ class EuclideanCodebook(nn.Module):
 
             idx = get_idx(mask_dict, skey)
             if idx is None:
-                print(f"[init_embed_] skip Z={skey}: no indices in mask_dict")
+                # print(f"[init_embed_] skip Z={skey}: no indices in mask_dict")
                 continue
 
             masked = data[0][idx]  # (N_i, D)
             N_i = masked.shape[0]
             if N_i == 0:
-                print(f"[init_embed_] skip Z={skey}: N_i=0")
+                # print(f"[init_embed_] skip Z={skey}: N_i=0")
                 continue
 
             # ---- absolute K requested (you can set bigger values for 6/7/8 in cb_dict) ----
             K_req = get_absK(self.cb_dict, skey)
             if K_req is None or K_req <= 0:
-                print(f"[init_embed_] warn Z={skey}: invalid K in cb_dict -> default to 1")
+                # print(f"[init_embed_] warn Z={skey}: invalid K in cb_dict -> default to 1")
                 K_req = 1
 
             # K-Means can only produce up to N_i distinct centers; run with K_run
@@ -1041,7 +1041,7 @@ class EuclideanCodebook(nn.Module):
                 getattr(self, buf_name).data.copy_(counts_k)
 
             nz = int((counts_k > 0).sum().item())
-            print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+            # print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
     def replace(self, batch_samples, batch_mask):
         self.initted.data.copy_(torch.Tensor([True]))
@@ -1833,7 +1833,7 @@ class VectorQuantize(nn.Module):
         assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
-        print(f"B = {B}, D = {D}")
+        # print(f"B = {B}, D = {D}")
 
         # chunk_start が未指定なら 0（= 既にローカル index を渡しているケースに対応）
         if chunk_start is None:
@@ -1947,14 +1947,14 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)], key)
             repel_value = ret[0]
             cb_repel_value = ret[3]
-            print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
+            # print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
             repel_num = repel_num + repel_value * Ni
             total_cb_count += K
             cb_repel_num = cb_repel_num + cb_repel_value * K
             # ==============================
             # 記録
             # ==============================
-            logger.info(f"{key} : commit {commit_part}, lat_repel {repel_value}, cb_repel {cb_repel_value}")
+            # logger.info(f"{key} : commit {commit_part}, lat_repel {repel_value}, cb_repel {cb_repel_value}")
 
         if total_latent == 0:
             zero = encoder_outputs.new_zeros(())
@@ -2058,10 +2058,10 @@ class VectorQuantize(nn.Module):
         # codebook_loss 9.713729377835989e-05
         # repel_loss 0.32586005330085754
         # cb_repel_loss 0.9953231811523438
-        print(f"repel_loss {repel_loss}")
-        print(f"cb_repel_loss {cb_repel_loss}")
-        print(f"commit_loss {commit_loss}")
-        print(f"codebook_loss {codebook_loss}")
+        # print(f"repel_loss {repel_loss}")
+        # print(f"cb_repel_loss {cb_repel_loss}")
+        # print(f"commit_loss {commit_loss}")
+        # print(f"codebook_loss {codebook_loss}")
 
         warmup = 5
         alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
