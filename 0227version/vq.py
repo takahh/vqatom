@@ -2050,23 +2050,29 @@ class VectorQuantize(nn.Module):
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
         # Example: warmup 5 epochs, then gentle exponential decay
         # repel_loss = repel_loss * alpha
-        beta_commit = 1  # try 0.25–0.5 if you see codebook collapse
-        gamma_cb = 0.05  # codebook (EMA) regularizer
-        delta_mid = 0.05  # repel (midpoints)
-        delta_cb = 0.0003  # codebook-codebook repel
-        # commit_loss 2.4284323444589972e-05  >> 2e-02
-        # codebook_loss 9.713729377835989e-05
-        # repel_loss 0.32586005330085754
-        # cb_repel_loss 0.9953231811523438
-        # print(f"repel_loss {repel_loss}")
-        # print(f"cb_repel_loss {cb_repel_loss}")
-        # print(f"commit_loss {commit_loss}")
-        # print(f"codebook_loss {codebook_loss}")
+        beta_commit = 1.0  # commitment
+        delta_mid = 0.05  # weight for lat_repel_loss
+        delta_cb = 0.0003  # weight for cb_repel_loss
 
         warmup = 5
-        alpha = float(torch.exp(torch.tensor(-(epoch - warmup) / 50.0)))
-        # if epoch < warmup:
-        loss = beta_commit * commit_loss
+        import math
+        # alpha is 1.0 at epoch == warmup, then decays to ~0
+        alpha = math.exp(-max(0, epoch - warmup) / 50.0)
+
+        if epoch < warmup:
+            # Phase 1: no repel yet, just recon + commit
+            total_loss = beta_commit * commit_loss
+        else:
+            # Phase 2: gradually turn on repel as (1 - alpha) grows from 0 to 1
+            w_lat_repel = delta_mid * (1.0 - alpha)
+            w_cb_repel = delta_cb * (1.0 - alpha)
+
+            total_loss = (
+                     beta_commit * commit_loss
+                    + w_lat_repel * repel_loss
+                    + w_cb_repel * cb_repel_loss
+            )
+
         # loss = (alpha * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
         # else:
         #     # half-life ~ 50 epochs
@@ -2079,4 +2085,4 @@ class VectorQuantize(nn.Module):
             # repel_loss 0.24993233382701874
             # cb_repel_loss 0.995575487613678
             # loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss
-        return (loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
+        return (total_loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
