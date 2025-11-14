@@ -1223,6 +1223,50 @@ class EuclideanCodebook(nn.Module):
             return global_idx.new_empty((0,), dtype=torch.long)
         return (global_idx[in_window] - lo).long()
 
+    def _cdist_argmin_chunked(self, queries, codebook, chunk_size=1024, p=2, use_half=False):
+        """
+        メモリ節約版 cdist:
+          queries:  (N, D)
+          codebook: (K, D)
+        戻り値:
+          idx: (N,)  各クエリの最も近いコードブックインデックス
+        """
+        device = queries.device
+        dtype = queries.dtype
+
+        N = queries.size(0)
+        K = codebook.size(0)
+
+        idx_all = torch.empty(N, device=device, dtype=torch.long)
+
+        # 半精度でさらにメモリ削減（任意）
+        if use_half:
+            codebook_half = codebook.to(torch.float16)
+        else:
+            codebook_half = codebook
+
+        for start in range(0, N, chunk_size):
+            end = min(start + chunk_size, N)
+            q = queries[start:end]  # (chunk, D)
+
+            if use_half:
+                q_half = q.to(torch.float16)
+                dist = torch.cdist(q_half, codebook_half, p=p)  # (chunk, K)
+                # argmin だけ使うので dtype は half のままでOK
+            else:
+                dist = torch.cdist(q, codebook, p=p)
+
+            dist = dist.pow(2)
+            _, idx_chunk = dist.min(dim=-1)  # (chunk,)
+
+            idx_all[start:end] = idx_chunk
+
+            del dist, idx_chunk
+            # empty_cache はオプション（多用しすぎると逆に遅くなることもある）
+            # torch.cuda.empty_cache()
+
+        return idx_all
+
     @torch.amp.autocast('cuda', enabled=False)
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
@@ -1284,13 +1328,25 @@ class EuclideanCodebook(nn.Module):
                 continue
             code = self.embed[str(key)]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
-
-            # -------------------- nearest code indices (no grad) --------------------
+            # -------------------- nearest code indices (no grad, chunked cdist) --------------------
             with torch.no_grad():
-                dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                idx = dist.argmin(dim=-1)  # [Ni]
-                del dist
+                # メモリ節約版の cdist + argmin
+                idx = self._cdist_argmin_chunked(
+                    masked_latents,   # (Ni, D)
+                    code,             # (K_e, D)
+                    chunk_size=1024,  # 必要なら 512/2048 などに調整
+                    p=2,
+                    use_half=True,    # さらに安全にいくなら True
+                )  # -> (Ni,)
+
             quantize = code.index_select(0, idx)  # [Ni, D]
+
+            # # -------------------- nearest code indices (no grad) --------------------
+            # with torch.no_grad():
+            #     dist = torch.cdist(masked_latents, code, p=2).pow(2)
+            #     idx = dist.argmin(dim=-1)  # [Ni]
+            #     del dist
+            # quantize = code.index_select(0, idx)  # [Ni, D]
 
             self.quantize_dict[str(key)] = quantize
             self.embed_ind_dict[str(key)] = idx.to(torch.int32)
