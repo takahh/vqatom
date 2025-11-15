@@ -1328,17 +1328,12 @@ class EuclideanCodebook(nn.Module):
                 continue
             code = self.embed[str(key)]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
-            # -------------------- nearest code indices (no grad, chunked cdist) --------------------
-            with torch.no_grad():
-                # メモリ節約版の cdist + argmin
-                idx = self._cdist_argmin_chunked(
-                    masked_latents,   # (Ni, D)
-                    code,             # (K_e, D)
-                    chunk_size=1024,  # 必要なら 512/2048 などに調整
-                    p=2,
-                    use_half=True,    # さらに安全にいくなら True
-                )  # -> (Ni,)
 
+            # -------------------- nearest code indices (no grad) --------------------
+            with torch.no_grad():
+                dist = torch.cdist(masked_latents, code, p=2).pow(2)
+                idx = dist.argmin(dim=-1)  # [Ni]
+                del dist
             quantize = code.index_select(0, idx)  # [Ni, D]
 
             # # -------------------- nearest code indices (no grad) --------------------
