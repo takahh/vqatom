@@ -230,21 +230,70 @@ def collect_global_indices_compact(
         degrees   = deg_total - diag_nz
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
-
         # ---- ringSize / aromNbrs / fusedId ----
-        # Prefer columns inside attr if specified; else fall back to side-channel tensors; else zeros
-        ring_size_np = attr_np[..., ring_size_col].astype(np.int32) if ring_size_col is not None else None
-        arom_nbrs_np = attr_np[..., arom_nbrs_col].astype(np.int32) if arom_nbrs_col is not None else None
-        fused_id_np  = attr_np[..., fused_id_col ].astype(np.int32) if fused_id_col  is not None else None
 
-        if (ring_size_np is None) or (arom_nbrs_np is None) or (fused_id_np is None):
-            rs_side, an_side, fid_side = _fetch_side_features(i, M)
+        def _extract_side_feature(side_batch, i, M):
+            """
+            side_batch: None or
+                        - list/tuple: side_batch[i] -> (M,100) or (M,100,1) or (M*100,)
+                        - np.ndarray / torch.Tensor: side_batch[i] 同様
+            戻り値: np.int32 の (M,100) または None
+            """
+            if side_batch is None:
+                return None
+
+            # バッチ i を取り出して NumPy に
+            side_i = side_batch[i]
+            side_np = _to_cpu_np(side_i)
+
+            # いろんな shape をそれっぽく (M,100) に揃える
+            if side_np.ndim == 1:
+                # 長さ M*100 を想定
+                side_np = side_np.reshape(M, 100)
+            elif side_np.ndim == 2:
+                if side_np.shape == (M, 100):
+                    pass
+                elif side_np.shape[0] == M and side_np.shape[1] >= 100:
+                    # 余分なチャネルがあれば先頭100だけ使う
+                    side_np = side_np[:, :100]
+                elif side_np.shape[0] == M * 100 and side_np.shape[1] == 1:
+                    side_np = side_np.reshape(M, 100)
+                else:
+                    # とりあえず reshape で合わせに行く（要調整ポイント）
+                    side_np = side_np.reshape(M, 100)
+            elif side_np.ndim == 3:
+                # 典型例: (M,100,1)
+                if side_np.shape[0] == M and side_np.shape[1] == 100:
+                    side_np = side_np[..., 0]
+                else:
+                    side_np = side_np.reshape(M, 100)
+            else:
+                # 想定外はとりあえず flatten → reshape
+                side_np = side_np.reshape(M, 100)
+
+            return side_np.astype(np.int32)
+
+        # 1) attr 内の列を優先
+        if ring_size_col is not None:
+            ring_size_np = attr_np[..., ring_size_col].astype(np.int32)
+        else:
+            ring_size_np = _extract_side_feature(ring_size_batch, i, M)
             if ring_size_np is None:
-                ring_size_np = rs_side if rs_side is not None else np.zeros((M,100), np.int32)
+                ring_size_np = np.zeros((M, 100), np.int32)
+
+        if arom_nbrs_col is not None:
+            arom_nbrs_np = attr_np[..., arom_nbrs_col].astype(np.int32)
+        else:
+            arom_nbrs_np = _extract_side_feature(arom_nbrs_batch, i, M)
             if arom_nbrs_np is None:
-                arom_nbrs_np = an_side if an_side is not None else np.zeros((M,100), np.int32)
+                arom_nbrs_np = np.zeros((M, 100), np.int32)
+
+        if fused_id_col is not None:
+            fused_id_np = attr_np[..., fused_id_col].astype(np.int32)
+        else:
+            fused_id_np = _extract_side_feature(fused_ring_id_batch, i, M)
             if fused_id_np is None:
-                fused_id_np = fid_side if fid_side is not None else np.zeros((M,100), np.int32)
+                fused_id_np = np.zeros((M, 100), np.int32)
 
         # Caps
         if ring_size_cap is not None:
@@ -253,6 +302,7 @@ def collect_global_indices_compact(
             arom_nbrs_np = np.minimum(arom_nbrs_np, int(arom_nbrs_cap))
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
+
 
         # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
