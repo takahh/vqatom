@@ -302,6 +302,13 @@ def collect_global_indices_compact(
             arom_nbrs_np = np.minimum(arom_nbrs_np, int(arom_nbrs_cap))
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
+        if i == 0:
+            print(
+                "DEBUG side features unique:",
+                "ringSize", np.unique(ring_size_np),
+                "aromNbrs", np.unique(arom_nbrs_np),
+                "fusedId", np.unique(fused_id_np),
+            )
 
 
         # ---- per-molecule pass (vectorized within the molecule) ----
