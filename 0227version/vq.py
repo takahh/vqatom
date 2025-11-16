@@ -2101,14 +2101,14 @@ class VectorQuantize(nn.Module):
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
         # Example: warmup 5 epochs, then gentle exponential decay
         # repel_loss = repel_loss * alpha
-        beta_commit = 1.0  # commitment
-        delta_mid = 0.05  # weight for lat_repel_loss
-        delta_cb = 0.0003  # weight for cb_repel_loss
+        beta_commit = 2.0  # commitment
+        delta_mid = 0.03  # weight for lat_repel_loss
+        delta_cb = 0.00015  # weight for cb_repel_loss
 
         warmup = 5
         import math
         # alpha is 1.0 at epoch == warmup, then decays to ~0
-        alpha = math.exp(-max(0, epoch - warmup) / 50.0)
+        alpha = math.exp(-max(0, epoch - warmup) / 80.0)
 
         if epoch < warmup:
             # Phase 1: no repel yet, just recon + commit
