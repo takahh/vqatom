@@ -317,6 +317,8 @@ def collect_global_indices_compact(
 
     if debug:
         print(f"[collect] total buckets: {len(masks_dict)}")
+    for keys in masks_dict.keys():
+        print(f"key {keys} -- {len(masks_dict[keys])}")
 
     return masks_dict, atom_offset, mol_id
 
