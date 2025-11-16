@@ -8,46 +8,79 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
+def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
+               chunk_size=None, attr=None):
+    import torch
 
-def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None, attr=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Ensure model is on device
+
+    # Ensure model & data on device
     model = model.to(device)
     model.train()
 
-    # Move graph and features to device
     g = g.to(device)
-    g.ndata['feat'] = g.ndata['feat'].to(device) if 'feat' in g.ndata else g.ndata['feat']
+    if 'feat' in g.ndata:
+        g.ndata['feat'] = g.ndata['feat'].to(device)
     feats = feats.to(device)
 
-    # Gradient scaler for mixed precision
-    scaler = torch.cuda.amp.GradScaler(init_scale=1e2)
+    # Mixed precision scaler (new API)
+    scaler = torch.amp.GradScaler("cuda", init_scale=1e2) if device.type == "cuda" else None
     optimizer.zero_grad(set_to_none=True)
 
-    # Forward pass
-    with torch.cuda.amp.autocast():
-        # data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
-        #                 batched_graph_base=None, mode=None, attr_list=None):
+    # Forward pass (autocast only on CUDA)
+    if device.type == "cuda":
+        ctx = torch.amp.autocast("cuda")
+    else:
+        # no-op context manager
+        from contextlib import nullcontext
+        ctx = nullcontext()
+
+    with ctx:
+        # model(g, feats, chunk_i, mask_dict, logger, epoch,
+        #       batched_graph_base=None, mode=None, attr_list=None)
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
-        (loss, cb, loss_list3) = outputs
-    #
-    # # Sync codebook weights
-    # model.vq._codebook.embed.data.copy_(cb.to(device))
-    # -----------------
-    # update variables
-    # -----------------
-    scaler.scale(loss).backward()
-    scaler.unscale_(optimizer)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    scaler.step(optimizer)
-    scaler.update()
+        loss, cb, loss_list3 = outputs
+
+    # ---- loss の健全性チェック ----
+    if not isinstance(loss, torch.Tensor):
+        # float や numpy などなら Tensor にしておく（requires_grad=False）
+        loss = torch.tensor(float(loss), device=device)
+        if logger:
+            logger.warning(
+                f"[train_sage] loss is not a Tensor from model; "
+                f"got {type(loss)}. Converted to Tensor, no backward."
+            )
+        # backward しないで、そのまま返す
+        return loss.detach(), [float(l) for l in loss_list3]
+
+    if not loss.requires_grad:
+        # モデル内部で .detach() / .item() されたか、loss=0.0 Tensor を作っている可能性あり
+        if logger:
+            logger.warning(
+                f"[train_sage] loss.requires_grad=False; "
+                f"shape={getattr(loss, 'shape', None)}, "
+                f"device={loss.device}. Skipping backward for this chunk."
+            )
+        # backward は飛ばして、loss をそのまま返す
+        return loss.detach(), [float(l) for l in loss_list3]
+
+    # ---- ここまで来たら loss は勾配を持つので backward OK ----
+    if device.type == "cuda" and scaler is not None:
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        # CPU or no AMP
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
     optimizer.zero_grad(set_to_none=True)
 
-    # Return only what’s needed
-    return (
-        loss.detach(),                     # keep as tensor if you want
-        [l.item() if hasattr(l, 'item') else l for l in loss_list3]
-    )
+    # ログ用に detach したものを返す
+    return loss.detach(), [float(l) for l in loss_list3]
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None, attr_list=None):
@@ -387,10 +420,22 @@ def print_memory_usage(tag=""):
     allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # MB
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
-
 def run_inductive(conf, model, optimizer, accumulation_steps, logger):
-    import gc, itertools, torch, os
-    from collections import Counter
+    import gc, itertools, torch, os, copy
+    from collections import Counter, defaultdict
+    import numpy as np
+
+    # ----------------------------
+    # helpers
+    # ----------------------------
+    def safe_mean(xs):
+        return float(sum(xs) / max(1, len(xs)))
+
+    def to_scalar(x):
+        """Logging 用に loss を安全に float に変換"""
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().item()
+        return float(x)
 
     # ----------------------------
     # dataset and dataloader
@@ -398,179 +443,227 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
     datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+
+    # ここでの clip はほぼ意味がないので残すにしても一度だけ
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
+    device = next(model.parameters()).device
+
     for epoch in range(1, conf["max_epoch"] + 1):
-        print(f"epoch {epoch} ------------------------------")
+        print(f"\n====== epoch {epoch} ======")
         print("initial kmeans start ....")
+
         # fresh containers per epoch
         loss_list_list_train = [[] for _ in range(11)]
         loss_list_list_test = [[] for _ in range(11)]
         loss_list = []
+        test_loss_list = []
+
         cb_unique_num_list = []
         cb_unique_num_list_test = []
+
         # ------------------------------------------
-        # 2 batch data で kmeans, CB 確定
-        # ------------------------------------------
-        # if conf["train_or_infer"] == "infer" or conf["train_or_infer"] == "hptune":
-        #     kmeans_start_num = 6
-        #     # kmeans_end_num = 18
-        #     kmeans_end_num = 7
-        # if conf["train_or_infer"] == "analysis":
-        #     kmeans_start_num = 0
-        #     kmeans_end_num = 1
-        # ------------------------------------------
-        # Collect latent vectors (goes to model.py)
+        # 1) K-means 用 latent / attr 収集
         # ------------------------------------------
         all_latents = []
         all_attr = []
 
-        from collections import defaultdict
-        import numpy as np
-        # Initialize a dict of lists to collect masks per atom type
         all_masks_dict = defaultdict(list)
         masks_count = defaultdict(int)
         first_batch_feat = None
         start_atom_id = 0
         start_mol_id = 0
-        # for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, kmeans_start_num, kmeans_end_num),
-        #                                               start=kmeans_start_num):
+
         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-            print(f"idx {idx}")
-            # ======== Delete this soon ==============
+            print(f"[KMEANS] batch idx {idx}")
+
             if idx == 5:
                 break
-            # ========================================
-            glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(adj_batch, attr_batch, start_atom_id, start_mol_id)  # 10000 molecules per glist
+
+            glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
+                adj_batch, attr_batch, start_atom_id, start_mol_id
+            )  # 10000 molecules per glist
+
             all_attr.append(attr_matrices)
-            # print(f"len(attr_matrices) {len(attr_matrices)}")
-            chunk_size = conf["chunk_size"]  # in 10,000 molecules
-            # Aggregate masks into all_masks_dict
+
+            # masks を集約
             for atom_type, masks in masks_dict.items():
                 all_masks_dict[atom_type].extend(masks)
-            # collect counts
-            for atom_type, masks in masks_dict.items():
                 masks_count[atom_type] += len(masks)
+
+            chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
-                # print(f"init kmeans idx {i}/{len(glist) - 1}")
                 chunk = glist[i:i + chunk_size]
                 attr_chunk = attr_matrices[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+
                 batched_graph = dgl.batch(chunk)
                 batched_graph_base = dgl.batch(chunk_base)
+
                 with torch.no_grad():
-                    batched_feats = batched_graph.ndata["feat"]
+                    batched_feats = batched_graph.ndata["feat"].to(device)
+
                 # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
-                latents \
-                    = evaluate(model, batched_graph, batched_feats, epoch, all_masks_dict, logger, batched_graph_base, idx, "init_kmeans_loop", attr_chunk)
-                all_latents.append(latents.cpu())  # move to CPU if needed to save memory
+                latents = evaluate(
+                    model,
+                    batched_graph,
+                    batched_feats,
+                    epoch,
+                    all_masks_dict,
+                    logger,
+                    batched_graph_base,
+                    idx,
+                    "init_kmeans_loop",
+                    attr_chunk,
+                )
+                all_latents.append(latents.cpu())  # save on CPU
+
                 if i == 0 and idx == 0:
-                    first_batch_feat = batched_feats.clone()
+                    first_batch_feat = batched_feats.clone().cpu()
 
-        all_latents_tensor = torch.cat(all_latents, dim=0)  # Shape: [total_atoms_across_all_batches, latent_dim]
+                # cleanup small stuff
+                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
+                gc.collect()
+                torch.cuda.empty_cache()
 
-        freq = {k: v for k, v in masks_count.items()}
-        # 多い順に表示
-        # for k, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
-        #     print(k, c)
+            # glist をクリーンアップ
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base
+            gc.collect()
 
-        # print("------")
+        # all_latents: [ (#atoms_chunk, D), ... ] -> (N, D)
+        all_latents_tensor = torch.cat(all_latents, dim=0)  # [N, D]
 
-        # Flatten the list of lists into a single list of [h_mask, c_mask, n_mask, o_mask]
-        # flattened = [masks_per_sample for batch in all_masks for masks_per_sample in batch]
-        # for key, value in all_masks_dict.items():
-        #     value = [torch.from_numpy(v) if isinstance(v, np.ndarray) else v for v in value]
-        #     all_masks_dict[key] = torch.cat(value)
-        # Save to file (optional)
-        # np.save("all_masks_dict.npy", all_masks_dict)
-        # np.savez_compressed("all_masks_dict.npz", all_masks_dict)
-        # print(f"all_latents_tensor.shape {all_latents_tensor.shape}")
-        print(f"init_kmeans_final start ")
-        # --------------------------------------------------------------------------------------
-        # Run k-means on the collected latent vectors (goes to the deepest) and Silhuette score
-        # --------------------------------------------------------------------------------------
+        # attr を flatten: list[list[tensor (N_i,27)]] -> (N,27)
+        flat_attr_list = [t for batch in all_attr for t in batch]
+        all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
 
-        # first reshape all_attr to [atom count, 27]
-        flat_list = [t for batch in all_attr for t in batch]
-        # Now concat along the atom dimension
-        all_attr_tensor = torch.cat(flat_list, dim=0)  # (N, 27)
-        # print("all_attr_tensor shape:", all_attr_tensor.shape)
+        print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
+        print("[KMEANS] init_kmeans_final start")
+
         if epoch == 1:
-            evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final", all_attr_tensor)
-            print("initial kmeans done....")
+            # first_batch_feat は CPU に戻してあるので GPU へ
+            first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
+            evaluate(
+                model,
+                all_latents_tensor.to(device),
+                first_batch_feat_dev,
+                epoch,
+                all_masks_dict,
+                logger,
+                None,
+                None,
+                "init_kmeans_final",
+                all_attr_tensor.to(device),
+            )
+            print("[KMEANS] initial kmeans done.")
         model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
-        # TRAIN
+        # 2) TRAIN
         # ---------------------------
         if conf["train_or_infer"] in ("hptune", "train"):
             # re-init codebook
-            model.vq._codebook.initted.data.copy_(torch.tensor([False], device=model.vq._codebook.initted.device))
+            model.vq._codebook.initted.data.copy_(
+                torch.tensor([False], device=model.vq._codebook.initted.device)
+            )
             model.latent_size_sum = 0
             print("TRAIN ---------------")
 
+            # dataloader は再利用可能（新しい iterator が作られる）
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                # # ======== Delete this soon ==============
-                # if idx == 1:
-                #     break
-                # # ========================================
                 if idx == 5:
                     break
-                print(f"idx {idx}")
-                # base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
-                glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(adj_batch, attr_batch)
+
+                print(f"[TRAIN] batch idx {idx}")
+                glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
+                    adj_batch, attr_batch
+                )
                 chunk_size = conf["chunk_size"]
+
                 for i in range(0, len(glist), chunk_size):
-                    print(f"chunk {i}")
-                    # # ------------- remove thi soon --------------
-                    # if i == chunk_size:
-                    #     break
-                    # # ------------- remove thi soon --------------
+                    print(f"[TRAIN]   chunk {i}")
                     chunk = glist[i:i + chunk_size]
-                    batched_graph = dgl.batch(chunk)
+                    batched_graph = dgl.batch(chunk).to(device)
                     attr_chunk = attr_matrices_all[i:i + chunk_size]
+
                     with torch.no_grad():
                         batched_feats = batched_graph.ndata["feat"]
 
-                    # train step
-                    # (model, g, feats, optimizer, chunk_i, logger, epoch):
+                    # ここで train_sage は「学習込み（backward + optimizer.step）」までやる前提
                     loss, loss_list_train = train_sage(
-                        # model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch, chunk_size=None, attr=None
-                        model, batched_graph, batched_feats, optimizer, i, masks_2, logger, epoch, chunk_size, attr_chunk
+                        model,
+                        batched_graph,
+                        batched_feats,
+                        optimizer,
+                        i,
+                        masks_2,
+                        logger,
+                        epoch,
+                        chunk_size,
+                        attr_chunk,
                     )
 
+                    # ---- loss 安全チェック & ログ用整形 ----
+                    if loss is None:
+                        print("[WARN][TRAIN] train_sage returned loss=None, skipping logging for this chunk")
+                        del batched_graph, batched_feats, chunk, attr_chunk
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        continue
+
+                    if isinstance(loss, torch.Tensor):
+                        print(
+                            "[DEBUG][TRAIN] loss:",
+                            type(loss),
+                            getattr(loss, "shape", None),
+                            getattr(loss, "requires_grad", None),
+                            getattr(loss, "device", None),
+                        )
+                    else:
+                        print("[DEBUG][TRAIN] loss is not a Tensor:", type(loss))
+
                     # record scalar losses
-                    clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
-                                    for l in loss_list_train]
+                    clean_losses = [to_scalar(l) for l in loss_list_train]
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
-                    loss_list.append(loss.detach().cpu().item())
+                    loss_list.append(to_scalar(loss))
+
                     # cleanup
-                    del batched_graph, batched_feats, chunk, loss, loss_list_train
+                    del batched_graph, batched_feats, chunk, attr_chunk, loss, loss_list_train
                     gc.collect()
                     torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
 
-                # cleanup glist
+                # cleanup per batch
                 for g in glist:
                     g.ndata.clear()
                     g.edata.clear()
-                del glist, glist_base
+                for g in glist_base:
+                    g.ndata.clear()
+                    g.edata.clear()
+                del glist, glist_base, masks_2, attr_matrices_all
                 gc.collect()
 
         # ---------------------------
-        # SAVE MODEL
+        # 3) SAVE MODEL
         # ---------------------------
         if conf["train_or_infer"] != "analysis":
+            os.makedirs(".", exist_ok=True)
             state = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
-            # torch.save(model.__dict__, f"model_buffers_{epoch}.pth")  # ⚠️ removed to avoid leaks
             model.load_state_dict(state)
 
         # ---------------------------
-        # TEST
+        # 4) TEST
         # ---------------------------
-        test_loss_list = []
+        print("TEST ---------------")
+        ind_counts = Counter()
+
         if conf['train_or_infer'] == "hptune":
             start_num, end_num = 5, 6
         elif conf['train_or_infer'] == "analysis":
@@ -578,108 +671,102 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             start_num, end_num = 0, 1
         else:  # infer
             start_num, end_num = 6, 10
-        # print(f"start num {start_num}, end num {end_num}")
 
-        ind_counts = Counter()
-
-        for idx, (adj_batch, attr_batch) in enumerate(itertools.islice(dataloader, start_num, end_num), start=start_num):
-            print(f"TEST --------------- {idx}")
-            glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(adj_batch, attr_batch)
+        for idx, (adj_batch, attr_batch) in enumerate(
+            itertools.islice(dataloader, start_num, end_num),
+            start=start_num
+        ):
+            print(f"[TEST] batch idx {idx}")
+            glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
+                adj_batch, attr_batch
+            )
             chunk_size = conf["chunk_size"]
 
             for i in range(0, len(glist), chunk_size):
-                # # ------------- remove thi soon --------------
-                # if i == chunk_size:
-                #     break
-                # # ------------- remove thi soon --------------
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]
-                batched_graph = dgl.batch(chunk)
-                batched_graph_base = dgl.batch(chunk_base)
+
+                batched_graph = dgl.batch(chunk).to(device)
+                batched_graph_base = dgl.batch(chunk_base).to(device)
                 attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
+
                 with torch.no_grad():
                     batched_feats = batched_graph.ndata["feat"]
+
                 #  loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
-                test_loss, test_emb, loss_list_test = evaluate(model, batched_graph, batched_feats, epoch, masks_3, logger, batched_graph_base, idx, "test", attr_chunk_test)
+                test_loss, test_emb, loss_list_test = evaluate(
+                    model,
+                    batched_graph,
+                    batched_feats,
+                    epoch,
+                    masks_3,
+                    logger,
+                    batched_graph_base,
+                    idx,
+                    "test",
+                    attr_chunk_test,
+                )
+
                 # record scalar losses
-                clean_losses = [(l.detach().cpu().item() if hasattr(l, "detach") else float(l))
-                                for l in loss_list_test]
+                clean_losses = [to_scalar(l) for l in loss_list_test]
                 for j, val in enumerate(clean_losses):
                     loss_list_list_test[j].append(val)
-                test_loss_list.append(test_loss.detach().cpu().item())
+                test_loss_list.append(to_scalar(test_loss))
+
                 # cleanup
-                del batched_graph, batched_feats, chunk, test_loss, loss_list_test, attr_chunk_test
+                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
+                del test_loss, test_emb, loss_list_test, attr_chunk_test
                 gc.collect()
                 torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                #
-                # # rethink codes below
-                # test_loss_list.append(test_loss.cpu().item())
-                # # cb_unique_num_list_test.append(int(cb_num_unique) if torch.is_tensor(cb_num_unique) else cb_num_unique)
-                # loss_list_list_test = [x + [y] for x, y in zip(loss_list_list_test, loss_list_test)]
-
-                # optionally save small parts per chunk instead of keeping in lists
-                # try:
-                #     ind_chunk = sample_list_test[0].cpu().numpy()
-                #     latent_chunk = sample_list_test[2].cpu().numpy()
-                #     # save per chunk to avoid huge accumulation
-                #     np.savez(f"./tmp_ind_{epoch}_{idx}_{i}.npz", ind_chunk=ind_chunk)
-                #     np.savez(f"./tmp_latent_{epoch}_{idx}_{i}.npz", latent_chunk=latent_chunk)
-                #     del latent_chunk
-                #     # count indices
-                #     ind_counts.update(ind_chunk.flatten().tolist())
-                # except Exception as e:
-                #     print(f"[WARN] collecting chunk failed: {e}")
 
             # cleanup graphs after idx
             for g in glist:
                 g.ndata.clear()
                 g.edata.clear()
-            del glist, glist_base
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base, masks_3, attr_matrices_all_test
             gc.collect()
 
-            # args = get_args()
-            # if args.get_umap_data:
-            #     cb_new = model.vq._codebook.embed
-            #     np.savez(f"./init_codebook_{epoch}", cb_new.cpu().detach().numpy())
-
         # ---------------------------
-        # stats and save
+        # 5) stats and save
         # ---------------------------
-        flat = list(ind_counts.elements())
-        # print(f"len(flat) = {len(flat)}, unique = {len(set(flat))}")
-        # used_cb_vectors_all_epochs = model.vq._codebook.embed[0][torch.unique(torch.tensor(flat), sorted=True).long()]
-
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
-        # ----------------------------------------------
-        # log train raw losses
-        # ----------------------------------------------
-        print(f"train - commit_loss: {sum(loss_list_list_train[0]) / max(1,len(loss_list_list_train[0])):.6f}, "
-              f"train - lat_repel_loss: {sum(loss_list_list_train[1]) / max(1,len(loss_list_list_train[1])):.6f},"
-              f"train - cb_repel_loss: {sum(loss_list_list_train[2]) / max(1,len(loss_list_list_train[2])):.6f}")
-        logger.info(f"train - commit_loss: {sum(loss_list_list_train[0]) / max(1,len(loss_list_list_train[0])):.6f}, "
-                    f"train - lat_repel_loss: {sum(loss_list_list_train[1]) / max(1,len(loss_list_list_train[1])):.6f},"
-                    f"train - cb_repel_loss: {sum(loss_list_list_train[2]) / max(1,len(loss_list_list_train[2])):.6f}")
-        print(f"train - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
-        logger.info(f"train - total_loss: {sum(loss_list) / max(1,len(loss_list)):.6f}")
-        # ----------------------------------------------
-        # log test raw losses
-        # ----------------------------------------------
-        print(f"test - commit_loss: {sum(loss_list_list_test[0]) / max(1,len(loss_list_list_test[0])):.6f}, "
-              f"test - lat_repel_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f},"
-              f"test - cb_repel_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
-        logger.info(f"test - commit_loss: {sum(loss_list_list_test[0]) / max(1,len(loss_list_list_test[0])):.6f}, "
-                    f"test - lat_repel_loss: {sum(loss_list_list_test[1]) / max(1,len(loss_list_list_test[1])):.6f},"
-                    f"test - cb_repel_loss: {sum(loss_list_list_test[2]) / max(1,len(loss_list_list_test[2])):.6f}")
-        print(f"test - total_loss: {sum(test_loss_list) / max(1,len(test_loss_list)):.6f}")
-        logger.info(f"test - total_loss: {sum(test_loss_list) / max(1,len(test_loss_list)):.6f}")
 
-        # if conf['train_or_infer'] in ("hptune", "train"):
-        #     print(f"epoch {epoch}: loss {sum(loss_list)/len(loss_list):.9f}, test_loss {sum(test_loss_list)/len(test_loss_list):.9f}")
-        #     np.savez(f"./{kw}/used_cb_vectors_{epoch}", used_cb_vectors_all_epochs.detach().cpu().numpy())
+        # train logs
+        train_commit = safe_mean(loss_list_list_train[0])
+        train_latrep = safe_mean(loss_list_list_train[1])
+        train_cbrep = safe_mean(loss_list_list_train[2])
+        train_total = safe_mean(loss_list)
+
+        print(f"train - commit_loss: {train_commit:.6f}, "
+              f"train - lat_repel_loss: {train_latrep:.6f}, "
+              f"train - cb_repel_loss: {train_cbrep:.6f}")
+        logger.info(f"train - commit_loss: {train_commit:.6f}, "
+                    f"train - lat_repel_loss: {train_latrep:.6f}, "
+                    f"train - cb_repel_loss: {train_cbrep:.6f}")
+        print(f"train - total_loss: {train_total:.6f}")
+        logger.info(f"train - total_loss: {train_total:.6f}")
+
+        # test logs
+        test_commit = safe_mean(loss_list_list_test[0])
+        test_latrep = safe_mean(loss_list_list_test[1])
+        test_cbrep = safe_mean(loss_list_list_test[2])
+        test_total = safe_mean(test_loss_list)
+
+        print(f"test - commit_loss: {test_commit:.6f}, "
+              f"test - lat_repel_loss: {test_latrep:.6f}, "
+              f"test - cb_repel_loss: {test_cbrep:.6f}")
+        logger.info(f"test - commit_loss: {test_commit:.6f}, "
+                    f"test - lat_repel_loss: {test_latrep:.6f}, "
+                    f"test - cb_repel_loss: {test_cbrep:.6f}")
+        print(f"test - total_loss: {test_total:.6f}")
+        logger.info(f"test - total_loss: {test_total:.6f}")
 
         model.vq._codebook.latent_size_sum = 0
+
         # cleanup big lists
         loss_list_list_train.clear()
         loss_list_list_test.clear()
@@ -689,24 +776,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         gc.collect()
         torch.cuda.empty_cache()
 
-        # print(next(model.parameters()).device)  # should say cuda:0
-
-        # for name, buf in model.named_buffers():
-        #     print(f"{name}: {buf.shape} {buf.device}")
-        # for name, p in model.named_parameters():
-        #     print(f"{name}: {p.shape} {p.device}")
-
-        # state = copy.deepcopy(model.state_dict())
-        # del model
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # from models import EquivariantThreeHopGINE
-        # # Recreate fresh model and load weights
-        # model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim,
-        #                                 out_feats=args.hidden_dim, args=args)
-        # device = torch.device("cuda")
-        # model.load_state_dict(state)
-        # model.to(device)
-        # optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
+    # 何か score を返したい場合はここで
+    return test_total
 
 
