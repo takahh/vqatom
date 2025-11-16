@@ -494,9 +494,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # Now concat along the atom dimension
         all_attr_tensor = torch.cat(flat_list, dim=0)  # (N, 27)
         # print("all_attr_tensor shape:", all_attr_tensor.shape)
-
-        evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final", all_attr_tensor)
-        print("initial kmeans done....")
+        if epoch == 1:
+            evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final", all_attr_tensor)
+            print("initial kmeans done....")
         model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
