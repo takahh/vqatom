@@ -127,7 +127,8 @@ def collect_global_indices_compact(
     arom_nbrs_batch=None,         # ditto
     fused_ring_id_batch=None,     # ditto
     # Which fields to include in the string key and in what order:
-    include_keys=("Z","charge","hyb","arom","ring","deg","ringSize","aromNbrs","fusedId"),
+    include_keys=("Z","charge","hyb","arom","ring","deg",
+                  "ringSize","aromNbrs","fusedId","pos"),
     debug=False,
     debug_max_print=10,
 ):
