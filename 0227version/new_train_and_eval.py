@@ -152,9 +152,9 @@ def collect_global_indices_compact(
     arom_nbrs_cap=6,
     fused_id_cap=255,
     # If your new features are already packed in attr_batch, give their column indices:
-    ring_size_col=None,
-    arom_nbrs_col=None,
-    fused_id_col=None,
+    ring_size_col=27,
+    arom_nbrs_col=28,
+    fused_id_col=29,
     # Or pass them separately (same batching/shape as attr_batch[...,0]):
     ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
     arom_nbrs_batch=None,         # ditto
