@@ -347,9 +347,9 @@ def collect_global_indices_compact(
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            if debug and i == 0 and m == 0:
-                peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
-                print("[collect][peek] first keys:", peek)
+            # if debug and i == 0 and m == 0:
+            #     peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
+            #     print("[collect][peek] first keys:", peek)
 
             # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
@@ -368,13 +368,13 @@ def collect_global_indices_compact(
             atom_offset += N
             mol_id += 1
 
-    if debug:
-        print(f"[collect] total buckets (after CBDICT filter): {len(masks_dict)}")
+    # if debug:
+    #     print(f"[collect] total buckets (after CBDICT filter): {len(masks_dict)}")
 
     # 全部ログに出すと多いかもなので、必要に応じてコメントアウトしてください
-    for k in masks_dict.keys():
-        msg = f"key {k} -- {len(masks_dict[k])}"
-        print(msg)
+    # for k in masks_dict.keys():
+    #     msg = f"key {k} -- {len(masks_dict[k])}"
+    #     print(msg)
         # logger.info(msg)
 
     return masks_dict, atom_offset, mol_id
@@ -449,14 +449,14 @@ def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mo
 
             # optional sanity check on padding tail
             remaining_features = attr_matrix[num_total_nodes:]
-            if remaining_features.numel() and not torch.all(remaining_features == 0):
-                print("⚠️ WARNING: Non-zero values found in remaining features!")
-                nz = remaining_features[remaining_features != 0]
-            else:
-                print("OK ===========")
-                # print(f"num_total_nodes {num_total_nodes}")
-                # print("Non-zero values:", nz[:20])
-                # print("Indices:", torch.nonzero(remaining_features)[:20])
+            # if remaining_features.numel() and not torch.all(remaining_features == 0):
+            #     # print("⚠️ WARNING: Non-zero values found in remaining features!")
+            #     nz = remaining_features[remaining_features != 0]
+            # else:
+            #     print("OK ===========")
+            #     # print(f"num_total_nodes {num_total_nodes}")
+            #     # print("Non-zero values:", nz[:20])
+            #     # print("Indices:", torch.nonzero(remaining_features)[:20])
 
             attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
             extended_graphs.append(extended_g)
@@ -607,7 +607,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         flat_attr_list = [t for batch in all_attr for t in batch]
         all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
 
-        print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
+        # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
         print("[KMEANS] init_kmeans_final start")
 
         if epoch == 1:
@@ -675,22 +675,22 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                     # ---- loss 安全チェック & ログ用整形 ----
                     if loss is None:
-                        print("[WARN][TRAIN] train_sage returned loss=None, skipping logging for this chunk")
+                        # print("[WARN][TRAIN] train_sage returned loss=None, skipping logging for this chunk")
                         del batched_graph, batched_feats, chunk, attr_chunk
                         gc.collect()
                         torch.cuda.empty_cache()
                         continue
 
-                    if isinstance(loss, torch.Tensor):
-                        print(
-                            "[DEBUG][TRAIN] loss:",
-                            type(loss),
-                            getattr(loss, "shape", None),
-                            getattr(loss, "requires_grad", None),
-                            getattr(loss, "device", None),
-                        )
-                    else:
-                        print("[DEBUG][TRAIN] loss is not a Tensor:", type(loss))
+                    # if isinstance(loss, torch.Tensor):
+                    #     print(
+                    #         "[DEBUG][TRAIN] loss:",
+                    #         type(loss),
+                    #         getattr(loss, "shape", None),
+                    #         getattr(loss, "requires_grad", None),
+                    #         getattr(loss, "device", None),
+                    #     )
+                    # else:
+                    #     print("[DEBUG][TRAIN] loss is not a Tensor:", type(loss))
 
                     # record scalar losses
                     clean_losses = [to_scalar(l) for l in loss_list_train]

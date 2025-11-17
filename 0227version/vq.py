@@ -539,7 +539,7 @@ class ContrastiveLoss(nn.Module):
             z = z.unsqueeze(0)
         # print(f"z {z.shape}")
         if z.shape[0] == 1:
-            print(f"latent count is only 1. Not calculating losses.")
+            # print(f"latent count is only 1. Not calculating losses.")
             return 0, 0, 0, 0, 0
         pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
