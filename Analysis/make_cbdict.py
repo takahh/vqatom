@@ -1,4 +1,5 @@
 import re
+import math
 import sys
 from collections import namedtuple
 
@@ -10,8 +11,10 @@ LINE_RE = re.compile(
     r"(?P<ss>[0-9.]+),\s*sample size\s+(?P<n>[0-9]+),\s*K_e\s+(?P<ke>[0-9]+)"
 )
 
-
 def parse_log(path):
+    """
+    ログファイルから Silhouette エントリを全部拾って返す。
+    """
     entries = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -25,71 +28,55 @@ def parse_log(path):
             entries.append(Entry(key, ss, n, ke))
     return entries
 
-
-def calc_new_ke(
+def propose_ke(
     entries,
-    ss_threshold=0.22,
-    n_min=5000,
-    max_ke=512,
+    ss_threshold=0.25,          # SS がこれ以下なら K_e を増やす対象
+    target_n_per_cluster=30,    # sample_size / K_e ≃ 30 を目指す
 ):
     """
-    全 key について「新 K_e」を計算。
-    ・(SS < threshold) & (N > n_min) → K_e 2倍（ただし max_ke でクリップ）
-    ・それ以外は元の K_e を維持
+    SS が ss_threshold 以下のクラスについて、
+    sample_size / K_e が target_n_per_cluster になるように K_e を「増やす」案を出す。
+
+    戻り値: dict[key] = new_ke
+    （増やさないクラスも元の K_e で含める）
     """
     result = {}
     for e in entries:
-        if e.ss < ss_threshold and e.n > n_min:
-            # 倍増
-            k_new = min(e.k_e * 2, max_ke)
-        else:
-            # 据え置き
-            k_new = e.k_e
+        # デフォルトは元の K_e
+        new_ke = e.k_e
 
-        result[e.key] = {
-            "ss": e.ss,
-            "n": e.n,
-            "k_old": e.k_e,
-            "k_new": k_new,
-            "changed": (k_new != e.k_e),
-        }
+        if e.ss <= ss_threshold:
+            # 目標 K_e = ceil(n / target_n_per_cluster)
+            target_ke = math.ceil(e.n / target_n_per_cluster)
+            # 「増やしたい」だけなので、今より小さければ据え置き
+            if target_ke > e.k_e:
+                new_ke = target_ke
+
+        result[e.key] = new_ke
+
     return result
 
-
-def main(path):
-    entries = parse_log(path)
-    print(f"# parsed entries: {len(entries)}\n")
-
-    result = calc_new_ke(entries)
-
-    print("# === Proposed K_e changes (including unchanged ones) ===")
-    for key, info in sorted(result.items(), key=lambda kv: kv[1]["ss"]):
-        ss = info["ss"]
-        n = info["n"]
-        k_old = info["k_old"]
-        k_new = info["k_new"]
-
-        if info["changed"]:
-            print(
-                f"{key:>20} | SS={ss:.4f}, N={n:7d}, "
-                f"{k_old:4d} → {k_new:4d} (2x)"
-            )
-        else:
-            print(
-                f"{key:>20} | SS={ss:.4f}, N={n:7d}, "
-                f"{k_old:4d} → KEEP"
-            )
-
-    print("\n# === FULL K_e override dict (copy & paste) ===")
-    print("CB_K_E_OVERRIDES = {")
-    for key, info in sorted(result.items()):
-        print(f"    '{key}': {info['k_new']},  # SS={info['ss']:.4f}, N={info['n']}, old={info['k_old']}")
-    print("}")
-    print("\n# === Done ===")
-
-
-if __name__ == '__main__':
+def main():
     if len(sys.argv) < 2:
-        print("Usage: python analyze_silhouette_log_full.py <log_path>")
+        print("Usage: python adjust_ke.py path/to/log.txt", file=sys.stderr)
         sys.exit(1)
-    main(sys.argv[1])
+
+    log_path = sys.argv[1]
+    entries = parse_log(log_path)
+    new_ke_dict = propose_ke(entries, ss_threshold=0.25, target_n_per_cluster=30)
+
+    # そのまま Python の dict としてコピペしやすい形で出力
+    print("CBDICT_KE = {")
+    for e in entries:
+        key = e.key
+        old_ke = e.k_e
+        new_ke = new_ke_dict[key]
+        # コメントで元の値と SS, n も付けておく
+        print(
+            f"    '{key}': {new_ke},  "
+            f"# old K_e={old_ke}, n={e.n}, SS={e.ss:.4f}"
+        )
+    print("}")
+
+if __name__ == "__main__":
+    main()
