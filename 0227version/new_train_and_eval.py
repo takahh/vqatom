@@ -375,7 +375,7 @@ def collect_global_indices_compact(
     for k in masks_dict.keys():
         msg = f"key {k} -- {len(masks_dict[k])}"
         print(msg)
-        logger.info(msg)
+        # logger.info(msg)
 
     return masks_dict, atom_offset, mol_id
 
