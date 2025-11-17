@@ -400,8 +400,8 @@ def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0, logge
             attr_matrix = attr_matrices[j]
 
             # ---- depad ----
-            nonzero_mask = (adj_matrix.abs().sum(dim=1) > 0)
-            num_total_nodes = int(nonzero_mask.sum().item())
+            nonzero_mask      = (attr_matrix.abs().sum(dim=1) > 0)
+            num_total_nodes   = int(nonzero_mask.sum().item())
             filtered_attr     = attr_matrix[nonzero_mask]
             filtered_adj      = adj_matrix[:num_total_nodes, :num_total_nodes]
 
