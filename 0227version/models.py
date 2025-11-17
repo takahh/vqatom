@@ -139,7 +139,17 @@ class AtomEmbedding(nn.Module):
         x26 = self.h_acc_embed(atom_inputs[:, 26].long())  # 2 numbers
 
         # added three flags
-        x27 = self.ringsize_embed(atom_inputs[:, 27].long())  # 2 numbers
+        raw = atom_inputs[:, 27].long()  # raw ringSize = 0,3,4,5,6,7,8
+        mapped = raw.clone()
+        uniq = ['0', '3', '4', '5', '6', '7', '8']
+        uniq_int = [int(x) for x in uniq]
+        uniq_int_sorted = sorted(uniq_int)
+        ring_value_to_index = {v: i for i, v in enumerate(uniq_int_sorted)}
+        for v, idx in ring_value_to_index.items():
+            mapped[raw == v] = idx
+
+        x27 = self.ringsize_embed(mapped)
+        # x27 = self.ringsize_embed(atom_inputs[:, 27].long())  # 2 numbers
         x28 = self.aroma_num_embed(atom_inputs[:, 28].long())  # 2 numbers
         x29 = self.fused_if_embed(atom_inputs[:, 29].long())  # 2 numbers
 
