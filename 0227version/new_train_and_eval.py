@@ -141,7 +141,6 @@ ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
 ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -168,7 +167,10 @@ def collect_global_indices_compact(
 ):
     """
     Returns:
-      masks_dict: { 'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId' : [global_idx, ...], ... }
+      masks_dict: {
+        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos' : [global_idx, ...],
+        ...
+      }
       atom_offset: next start atom id (global)
       mol_id:      number of processed molecules
 
@@ -176,11 +178,15 @@ def collect_global_indices_compact(
       - attr columns assumed base: [Z, charge, hyb, arom, ring] at indices [0,2,3,4,5]
       - Degree computed from adjacency excluding self-loops
       - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
-      - No CB_DICT/CBDICT filtering is applied
+      - ここでは CBDICT に存在する key だけ masks_dict に残す
     """
     from collections import defaultdict
     import numpy as np
     import torch
+    from utils import CBDICT
+
+    # membership を高速にするために set 化
+    CBDICT_KEYS = set(CBDICT.keys())
 
     # Base columns in attr: [Z, charge, hyb, arom, ring]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
@@ -191,16 +197,42 @@ def collect_global_indices_compact(
             return x.detach().to("cpu", non_blocking=True).numpy()
         return x
 
-    def _fetch_side_features(i, M):
-        """Returns (ring_size_np, arom_nbrs_np, fused_id_np) as np.int32 arrays of shape (M, 100), or None."""
-        rs = an = fid = None
-        if ring_size_batch is not None:
-            rs = _to_cpu_np(ring_size_batch[i]).astype(np.int32).reshape(-1, 100)
-        if arom_nbrs_batch is not None:
-            an = _to_cpu_np(arom_nbrs_batch[i]).astype(np.int32).reshape(-1, 100)
-        if fused_ring_id_batch is not None:
-            fid = _to_cpu_np(fused_ring_id_batch[i]).astype(np.int32).reshape(-1, 100)
-        return rs, an, fid
+    def _extract_side_feature(side_batch, i, M):
+        """
+        side_batch: None or
+                    - list/tuple: side_batch[i] -> (M,100) or (M,100,1) or (M*100,)
+                    - np.ndarray / torch.Tensor: side_batch[i] 同様
+        戻り値: np.int32 の (M,100) または None
+        """
+        if side_batch is None:
+            return None
+
+        side_i = side_batch[i]
+        side_np = _to_cpu_np(side_i)
+
+        # いろんな shape をそれっぽく (M,100) に揃える
+        if side_np.ndim == 1:
+            # 長さ M*100 を想定
+            side_np = side_np.reshape(M, 100)
+        elif side_np.ndim == 2:
+            if side_np.shape == (M, 100):
+                pass
+            elif side_np.shape[0] == M and side_np.shape[1] >= 100:
+                side_np = side_np[:, :100]
+            elif side_np.shape[0] == M * 100 and side_np.shape[1] == 1:
+                side_np = side_np.reshape(M, 100)
+            else:
+                side_np = side_np.reshape(M, 100)
+        elif side_np.ndim == 3:
+            # 典型例: (M,100,1)
+            if side_np.shape[0] == M and side_np.shape[1] == 100:
+                side_np = side_np[..., 0]
+            else:
+                side_np = side_np.reshape(M, 100)
+        else:
+            side_np = side_np.reshape(M, 100)
+
+        return side_np.astype(np.int32)
 
     masks_dict = defaultdict(list)
     atom_offset = int(start_atom_id)
@@ -210,11 +242,13 @@ def collect_global_indices_compact(
 
     # ---------- main loop over batch items ----------
     for i in range(B):
-        # Shapes: (M,100,27) / (M,100,100)
+        # Shapes (想定):
+        #   attr_batch[i]: (M*100*30) 相当 → (M,100,30)
+        #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
         attr_mats = attr_batch[i].view(-1, 100, 30)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        attr_np = _to_cpu_np(attr_mats)  # (M,100,27)
+        attr_np = _to_cpu_np(attr_mats)  # (M,100,30)
         adj_np  = _to_cpu_np(adj_mats)   # (M,100,100)
 
         M = attr_np.shape[0]
@@ -231,50 +265,8 @@ def collect_global_indices_compact(
         degrees   = deg_total - diag_nz
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
+
         # ---- ringSize / aromNbrs / fusedId ----
-
-        def _extract_side_feature(side_batch, i, M):
-            """
-            side_batch: None or
-                        - list/tuple: side_batch[i] -> (M,100) or (M,100,1) or (M*100,)
-                        - np.ndarray / torch.Tensor: side_batch[i] 同様
-            戻り値: np.int32 の (M,100) または None
-            """
-            if side_batch is None:
-                return None
-
-            # バッチ i を取り出して NumPy に
-            side_i = side_batch[i]
-            side_np = _to_cpu_np(side_i)
-
-            # いろんな shape をそれっぽく (M,100) に揃える
-            if side_np.ndim == 1:
-                # 長さ M*100 を想定
-                side_np = side_np.reshape(M, 100)
-            elif side_np.ndim == 2:
-                if side_np.shape == (M, 100):
-                    pass
-                elif side_np.shape[0] == M and side_np.shape[1] >= 100:
-                    # 余分なチャネルがあれば先頭100だけ使う
-                    side_np = side_np[:, :100]
-                elif side_np.shape[0] == M * 100 and side_np.shape[1] == 1:
-                    side_np = side_np.reshape(M, 100)
-                else:
-                    # とりあえず reshape で合わせに行く（要調整ポイント）
-                    side_np = side_np.reshape(M, 100)
-            elif side_np.ndim == 3:
-                # 典型例: (M,100,1)
-                if side_np.shape[0] == M and side_np.shape[1] == 100:
-                    side_np = side_np[..., 0]
-                else:
-                    side_np = side_np.reshape(M, 100)
-            else:
-                # 想定外はとりあえず flatten → reshape
-                side_np = side_np.reshape(M, 100)
-
-            return side_np.astype(np.int32)
-
-        # 1) attr 内の列を優先
         if ring_size_col is not None:
             ring_size_np = attr_np[..., ring_size_col].astype(np.int32)
         else:
@@ -303,14 +295,14 @@ def collect_global_indices_compact(
             arom_nbrs_np = np.minimum(arom_nbrs_np, int(arom_nbrs_cap))
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
-        if i == 0:
+
+        if i == 0 and debug:
             print(
                 "DEBUG side features unique:",
                 "ringSize", np.unique(ring_size_np),
                 "aromNbrs", np.unique(arom_nbrs_np),
                 "fusedId", np.unique(fused_id_np),
             )
-
 
         # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
@@ -328,11 +320,11 @@ def collect_global_indices_compact(
             deg    = degrees[m][nm]
 
             # New features
-            rs     = ring_size_np[m][nm]
-            an     = arom_nbrs_np[m][nm]
-            fid    = fused_id_np[m][nm]
+            rs  = ring_size_np[m][nm]
+            an  = arom_nbrs_np[m][nm]
+            fid = fused_id_np[m][nm]
 
-            # Optional: position flag for sp2 aromatic ring carbons with degree==2 (outer rim)
+            # position flag (例: 芳香 sp2, ring=1, deg=2 の C の outer/inner 区別用)
             pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
 
             # Choose which fields to include and stack in that order
@@ -350,13 +342,10 @@ def collect_global_indices_compact(
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
             # Build string keys fast with np.char
-            ks = keys.astype(str)
+            ks = keys.astype(str)       # (N, K) of strings
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
-            from utils import CBDICT
-            if key_strings not in CBDICT.keys():
-                continue
 
             if debug and i == 0 and m == 0:
                 peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
@@ -364,12 +353,15 @@ def collect_global_indices_compact(
 
             # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
-            # Bucket append (Python list-of-lists for minimal overhead)
             buckets = [[] for _ in range(len(uniq_keys))]
             inv_list = inv.tolist()
             for row_idx, bucket_id in enumerate(inv_list):
                 buckets[bucket_id].append(int(global_ids[row_idx]))
+
+            # ★ CBDICT に存在する key だけ masks_dict に追加
             for uk, ids in zip(uniq_keys.tolist(), buckets):
+                if uk not in CBDICT_KEYS:
+                    continue
                 masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
@@ -377,13 +369,15 @@ def collect_global_indices_compact(
             mol_id += 1
 
     if debug:
-        print(f"[collect] total buckets: {len(masks_dict)}")
-    for keys in masks_dict.keys():
-        print(f"key {keys} -- {len(masks_dict[keys])}")
-        logger.info(f"key {keys} -- {len(masks_dict[keys])}")
+        print(f"[collect] total buckets (after CBDICT filter): {len(masks_dict)}")
+
+    # 全部ログに出すと多いかもなので、必要に応じてコメントアウトしてください
+    for k in masks_dict.keys():
+        msg = f"key {k} -- {len(masks_dict[k])}"
+        print(msg)
+        logger.info(msg)
+
     return masks_dict, atom_offset, mol_id
-
-
 
 
 def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0, logger=None):
