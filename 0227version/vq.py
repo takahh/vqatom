@@ -1318,7 +1318,7 @@ class EuclideanCodebook(nn.Module):
                 # feature: List[Tensor[Mi,27]]
                 feat_flat = torch.cat(feature, dim=0)  # [N,27]
                 feat_flat = feat_flat.contiguous().to(flatten.device)
-                assert feat_flat.ndim == 2 and feat_flat.size(1) == 27
+                assert feat_flat.ndim == 2 and feat_flat.size(1) == 30
                 assert feat_flat.size(0) == flatten.size(1)  # must match latents
                 some_feature = feat_flat[loc][:, [0, 2, 3, 4, 5]]
 
