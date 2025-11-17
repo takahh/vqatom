@@ -15,6 +15,8 @@ counts = {}
 from typing import Dict, Tuple
 import math
 
+CORE_ELEMENTS = {"5", "6", "7", "8", "14", "15", "16"}
+
 def build_cb_dict_from_counts(
     counts: Dict[str, int],
     total_k: int = 10000,
@@ -165,13 +167,17 @@ sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
 # for k, v in sorted_items[:20]:
 #     print(k, v)
 
+CORE_ELEMENTS = {"5", "6", "7", "8", "14", "15", "16"}
 
 def is_padding_like(key: str) -> bool:
-    # 完全ゼロキーだけ除外したい場合
-    # return key == "0_0_0_0_0_0_0_0_0_0"
+    """
+    return True → 除外（padding扱い）
+    return False → 使用（core element）
+    """
+    # key = "6_0_3_1_1_2_..." のようなフォーマットを想定
+    first = key.split("_", 1)[0]
+    return first not in CORE_ELEMENTS
 
-    # もし「先頭が0なら全部除外」にしたいならこちら:
-    return key.startswith("0_")
 
 # しきい値を決める
 MIN_COUNT = 30  # ← 好きな値に。2000, 5000 などでもよい
