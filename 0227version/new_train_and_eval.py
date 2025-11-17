@@ -380,7 +380,7 @@ def collect_global_indices_compact(
     return masks_dict, atom_offset, mol_id
 
 
-def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0, logger=None):
+def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
     from collections import defaultdict
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, logger, start_atom_id, start_mol_id)   # ✅ unpack
     # print("masks_dict.keys()")
@@ -545,7 +545,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 break
 
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
-                adj_batch, attr_batch, start_atom_id, start_mol_id, logger
+                adj_batch, attr_batch, logger, start_atom_id, start_mol_id
             )  # 10000 molecules per glist
 
             all_attr.append(attr_matrices)
@@ -646,7 +646,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                 print(f"[TRAIN] batch idx {idx}")
                 glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
-                    adj_batch, attr_batch
+                    adj_batch, attr_batch, logger
                 )
                 chunk_size = conf["chunk_size"]
 
@@ -742,7 +742,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         ):
             print(f"[TEST] batch idx {idx}")
             glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
-                adj_batch, attr_batch
+                adj_batch, attr_batch, logger
             )
             chunk_size = conf["chunk_size"]
 
