@@ -145,6 +145,7 @@ ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
+    logger,
     start_atom_id=0,
     start_mol_id=0,
     degree_cap=None,
@@ -376,15 +377,15 @@ def collect_global_indices_compact(
         print(f"[collect] total buckets: {len(masks_dict)}")
     for keys in masks_dict.keys():
         print(f"key {keys} -- {len(masks_dict[keys])}")
-
+        logger.info(f"key {keys} -- {len(masks_dict[keys])}")
     return masks_dict, atom_offset, mol_id
 
 
 
 
-def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
+def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0, logger=None):
     from collections import defaultdict
-    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, start_atom_id, start_mol_id)   # ✅ unpack
+    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, logger, start_atom_id, start_mol_id)   # ✅ unpack
     # print("masks_dict.keys()")
     # print(masks_dict.keys())
     base_graphs = []
@@ -540,7 +541,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 break
 
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
-                adj_batch, attr_batch, start_atom_id, start_mol_id
+                adj_batch, attr_batch, start_atom_id, start_mol_id, logger
             )  # 10000 molecules per glist
 
             all_attr.append(attr_matrices)
