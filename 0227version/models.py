@@ -105,6 +105,8 @@ class AtomEmbedding(nn.Module):
         import torch
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
+        print("atom_inputs.shape")
+        print(atom_inputs.shape)
 
         x0 = self.element_embed(atom_inputs[:, 0].long())
         x1 = self.degree_embed(atom_inputs[:, 1].long())
