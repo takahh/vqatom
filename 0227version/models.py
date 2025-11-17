@@ -59,103 +59,62 @@ class BondWeightLayer(nn.Module):
 
 
 import torch.nn as nn
-
 class AtomEmbedding(nn.Module):
     def __init__(self):
-        super(AtomEmbedding, self).__init__()
-        self.element_embed = nn.Embedding(num_embeddings=120, embedding_dim=16)   # element
-        self.degree_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)       # degree
-        self.valence_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
-        self.charge_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
-        self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=4)
-        self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
-        self.func_embed_0 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_1 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_2 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_3 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_4 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_5 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_6 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_7 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_8 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_9 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_10 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_11 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_12 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_13 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_14 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_15 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_16 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.func_embed_17 = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.h_don_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
-        self.h_acc_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        super().__init__()
+        # ... 既存の embedding 定義はそのまま ...
 
-        self.ringsize_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
-        self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
-        self.fused_if_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
+        # 今のバッチで観測されている ringSize 値に対応する index
+        # 値:  0,3,4,5,6,7,8  → idx: 0,1,2,3,4,5,6
+        ring_vals = [0, 3, 4, 5, 6, 7, 8]
+        self.register_buffer(
+            "ringsize_known_vals",
+            torch.tensor(ring_vals, dtype=torch.long)
+        )
+        self.register_buffer(
+            "ringsize_indices",
+            torch.arange(len(ring_vals), dtype=torch.long)
+        )
 
     def forward(self, atom_inputs):
-        """
-        atom_inputs: LongTensor of shape [num_atoms, 7]
-        Each column:
-        [element, degree, valence, charge, aromaticity, hybridization, num_hydrogens]
-        """
-        # Get the model's device from any parameter
         import torch
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
-        print("atom_inputs.shape")
-        print(atom_inputs.shape)
 
-        x0 = self.element_embed(atom_inputs[:, 0].long())
-        x1 = self.degree_embed(atom_inputs[:, 1].long())
-        x2 = self.valence_embed(atom_inputs[:, 2].long() + 1)
-        x3 = self.charge_embed(atom_inputs[:, 3].long())
-        x4 = self.aromatic_embed(atom_inputs[:, 4].long())
-        x5 = self.hybrid_embed(atom_inputs[:, 5].long())
-        x6 = self.hydrogen_embed(atom_inputs[:, 6].long())
-        # functional group flags
-        x7 = self.func_embed_0(atom_inputs[:, 7].long())
-        x8 = self.func_embed_1(atom_inputs[:, 8].long())
-        x9 = self.func_embed_2(atom_inputs[:, 9].long())
-        x10 = self.func_embed_3(atom_inputs[:, 10].long())
-        x11 = self.func_embed_4(atom_inputs[:, 11].long())
-        x12 = self.func_embed_5(atom_inputs[:, 12].long())
-        x13 = self.func_embed_6(atom_inputs[:, 13].long())
-        x14 = self.func_embed_7(atom_inputs[:, 14].long())
-        x15 = self.func_embed_8(atom_inputs[:, 15].long())
-        x16 = self.func_embed_9(atom_inputs[:, 16].long())
-        x17 = self.func_embed_10(atom_inputs[:, 17].long())
-        x18 = self.func_embed_11(atom_inputs[:, 18].long())
-        x19 = self.func_embed_12(atom_inputs[:, 19].long())
-        x20 = self.func_embed_13(atom_inputs[:, 20].long())
-        x21 = self.func_embed_14(atom_inputs[:, 21].long())
-        x22 = self.func_embed_15(atom_inputs[:, 22].long())
-        x23 = self.func_embed_16(atom_inputs[:, 23].long())
-        x24 = self.func_embed_17(atom_inputs[:, 24].long())
+        # ... x0〜x26 まではそのまま ...
 
-        x25 = self.h_don_embed(atom_inputs[:, 25].long())  # 2 numbers
-        x26 = self.h_acc_embed(atom_inputs[:, 26].long())  # 2 numbers
+        # ------- ringSize (col 27) -------
+        raw27 = atom_inputs[:, 27].long()
 
-        # added three flags
-        raw = atom_inputs[:, 27].long()  # raw ringSize = 0,3,4,5,6,7,8
-        mapped = raw.clone()
-        uniq = ['0', '3', '4', '5', '6', '7', '8']
-        uniq_int = [int(x) for x in uniq]
-        uniq_int_sorted = sorted(uniq_int)
-        ring_value_to_index = {v: i for i, v in enumerate(uniq_int_sorted)}
-        for v, idx in ring_value_to_index.items():
-            mapped[raw == v] = idx
+        # デフォルト 0 にしておいて、既知の値だけ上書き
+        mapped27 = torch.zeros_like(raw27)
+        for v, idx in zip(self.ringsize_known_vals, self.ringsize_indices):
+            mapped27[raw27 == v] = idx
 
-        x27 = self.ringsize_embed(mapped)
-        # x27 = self.ringsize_embed(atom_inputs[:, 27].long())  # 2 numbers
-        x28 = self.aroma_num_embed(atom_inputs[:, 28].long())  # 2 numbers
-        x29 = self.fused_if_embed(atom_inputs[:, 29].long())  # 2 numbers
+        # 念のため安全側に clamp（未知値が来ても 0〜6 に収める）
+        mapped27 = mapped27.clamp_(0, self.ringsize_embed.num_embeddings - 1)
+        x27 = self.ringsize_embed(mapped27)
 
-        out = torch.cat([x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14,
-                         x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29], dim=-1)  # shape: [num_atoms, total_embedding_dim]
+        # ------- arom_nbrs (col 28) -------
+        raw28 = atom_inputs[:, 28].long()
+        # 0〜4 だけなら、そのままでもいいけど、保険で clamp
+        raw28 = raw28.clamp_(0, self.aroma_num_embed.num_embeddings - 1)
+        x28 = self.aroma_num_embed(raw28)
+
+        # ------- fused_id (col 29) -------
+        raw29 = atom_inputs[:, 29].long()
+        raw29 = raw29.clamp_(0, self.fused_if_embed.num_embeddings - 1)
+        x29 = self.fused_if_embed(raw29)
+
+        out = torch.cat(
+            [x0, x1, x2, x3, x4, x5, x6,
+             x7, x8, x9, x10, x11, x12, x13, x14,
+             x15, x16, x17, x18, x19, x20, x21, x22, x23, x24,
+             x25, x26, x27, x28, x29],
+            dim=-1
+        )
         return out
+
 
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
