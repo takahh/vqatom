@@ -153,7 +153,7 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()
 
         self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(120, args.hidden_dim)  # h0
+        self.linear_0 = nn.Linear(92, args.hidden_dim)  # h0
 
         edge_emb_dim = getattr(args, "edge_emb_dim", 32)
         self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
