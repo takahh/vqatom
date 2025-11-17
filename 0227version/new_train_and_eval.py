@@ -451,10 +451,10 @@ def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0, logge
             remaining_features = attr_matrix[num_total_nodes:]
             if remaining_features.numel() and not torch.all(remaining_features == 0):
                 print("⚠️ WARNING: Non-zero values found in remaining features!")
-            nz = remaining_features[remaining_features != 0]
-            print(f"num_total_nodes {num_total_nodes}")
-            print("Non-zero values:", nz[:20])
-            print("Indices:", torch.nonzero(remaining_features)[:20])
+                nz = remaining_features[remaining_features != 0]
+                print(f"num_total_nodes {num_total_nodes}")
+                print("Non-zero values:", nz[:20])
+                print("Indices:", torch.nonzero(remaining_features)[:20])
 
             attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
             extended_graphs.append(extended_g)
