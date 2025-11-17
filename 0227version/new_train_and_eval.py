@@ -354,6 +354,9 @@ def collect_global_indices_compact(
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
+            from utils import CBDICT
+            if key_strings not in CBDICT.keys():
+                continue
 
             if debug and i == 0 and m == 0:
                 peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
