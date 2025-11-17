@@ -210,7 +210,7 @@ def collect_global_indices_compact(
     # ---------- main loop over batch items ----------
     for i in range(B):
         # Shapes: (M,100,27) / (M,100,100)
-        attr_mats = attr_batch[i].view(-1, 100, 27)
+        attr_mats = attr_batch[i].view(-1, 100, 30)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
         attr_np = _to_cpu_np(attr_mats)  # (M,100,27)
@@ -395,7 +395,7 @@ def convert_to_dgl(adj_batch, attr_batch, start_atom_id=0, start_mol_id=0):
         args = get_args()
         # both branches identical; keep one
         adj_matrices  = adj_batch[i].view(-1, 100, 100)
-        attr_matrices = attr_batch[i].view(-1, 100, 27)
+        attr_matrices = attr_batch[i].view(-1, 100, 30)
 
         for j in range(len(attr_matrices)):
             adj_matrix  = adj_matrices[j]
