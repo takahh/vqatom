@@ -70,26 +70,30 @@ class AtomEmbedding(nn.Module):
         self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
         self.hybrid_embed = nn.Embedding(num_embeddings=6, embedding_dim=4)
         self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
-        self.func_embed_0 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_1 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_2 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_3 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_4 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_5 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_6 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_7 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_8 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_9 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_10 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_11 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_12 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_13 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_14 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_15 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_16 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.func_embed_17 = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.h_don_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
-        self.h_acc_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)
+        self.func_embed_0 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_1 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_2 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_3 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_4 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_5 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_6 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_7 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_8 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_9 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_10 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_11 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_12 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_13 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_14 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_15 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_16 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.func_embed_17 = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.h_don_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
+        self.h_acc_embed = nn.Embedding(num_embeddings=2, embedding_dim=2)
+
+        self.ringsize_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
+        self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)
+        self.fused_if_embed = nn.Embedding(num_embeddings=8, embedding_dim=4)
 
     def forward(self, atom_inputs):
         """
@@ -132,8 +136,13 @@ class AtomEmbedding(nn.Module):
         x25 = self.h_don_embed(atom_inputs[:, 25].long())  # 2 numbers
         x26 = self.h_acc_embed(atom_inputs[:, 26].long())  # 2 numbers
 
+        # added three flags
+        x27 = self.ringsize_embed(atom_inputs[:, 27].long())  # 2 numbers
+        x28 = self.aroma_num_embed(atom_inputs[:, 28].long())  # 2 numbers
+        x29 = self.fused_if_embed(atom_inputs[:, 29].long())  # 2 numbers
+
         out = torch.cat([x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14,
-                         x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26], dim=-1)  # shape: [num_atoms, total_embedding_dim]
+                         x15, x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29], dim=-1)  # shape: [num_atoms, total_embedding_dim]
         return out
 
 class EquivariantThreeHopGINE(nn.Module):
