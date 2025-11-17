@@ -17,7 +17,7 @@ import math
 
 def build_cb_dict_from_counts(
     counts: Dict[str, int],
-    total_k: int = 40000,
+    total_k: int = 10000,
     alpha: float = 0.5,
     min_k: int = 1,
     max_k: int | None = None,
@@ -192,7 +192,15 @@ print(f"CBDICT size: {len(CBDICT)}")
 # 中身をざっと確認
 # for k, v in list(CBDICT.items()):
 #     print(k, v)
+import matplotlib.pyplot as plt
 
+values = list(CBDICT.values())
+
+plt.hist(values, bins=50)
+plt.xlabel("K_e per key")
+plt.ylabel("Frequency")
+plt.title("Distribution of assigned cluster sizes (K_e)")
+plt.show()
 cbdict = build_cb_dict_from_counts(CBDICT)
 
 for key, cnt in cbdict.items():
