@@ -164,7 +164,7 @@ def collect_global_indices_compact(
     include_keys=("Z","charge","hyb","arom","ring","deg",
                   "ringSize","aromNbrs","fusedId","pos"),
     # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1_2" など)
-    target_base_prefix="6_0_3_1_1_2_6_2_0_1",
+    target_base_prefix="6_0_3_1_1",
     debug=True,
     debug_max_print=10,
 ):
