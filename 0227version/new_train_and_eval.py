@@ -161,9 +161,11 @@ def collect_global_indices_compact(
     arom_nbrs_batch=None,         # ditto
     fused_ring_id_batch=None,     # ditto
     # Which fields to include in the string key and in what order:
-    include_keys=("Z", "charge", "hyb", "arom", "ring", "deg",
-                  "ringSize", "aromNbrs", "fusedId", "pos"),
-    debug=True,
+    include_keys=("Z","charge","hyb","arom","ring","deg",
+                  "ringSize","aromNbrs","fusedId","pos"),
+    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1_2" など)
+    target_base_prefix="6_0_3_1_1_2_6_2_0_1",
+    debug=False,
     debug_max_print=10,
 ):
     """
@@ -180,8 +182,11 @@ def collect_global_indices_compact(
       - Degree computed from adjacency excluding self-loops
       - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
       - ここでは CBDICT に存在する key だけ masks_dict に残す
+      - target_base_prefix が指定されていれば、
+        その base キー (Z,charge,hyb,arom,ring,deg) に属する原子について
+        ringSize/aromNbrs/fusedId/deg/pos の分布を debug 出力する
     """
-    from collections import defaultdict
+    from collections import defaultdict, Counter
     import numpy as np
     import torch
     from utils import CBDICT
@@ -192,6 +197,29 @@ def collect_global_indices_compact(
     # Base columns in attr: [Z, charge, hyb, arom, ring]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
+
+    # include_keys 内での各フィールドの位置（key 文字列を分解するときに使う）
+    name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
+    base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg")
+    base_field_indices = [name_to_idx[n] for n in base_field_names]
+
+    ringSize_idx = name_to_idx.get("ringSize", None)
+    aromNbrs_idx = name_to_idx.get("aromNbrs", None)
+    fusedId_idx  = name_to_idx.get("fusedId", None)
+    pos_idx      = name_to_idx.get("pos", None)
+    deg_idx      = name_to_idx.get("deg", None)
+
+    # 特定クラスの分布集計用
+    target_stats = None
+    if target_base_prefix is not None:
+        target_stats = {
+            "count": 0,
+            "ringSize": Counter(),
+            "aromNbrs": Counter(),
+            "fusedId": Counter(),
+            "deg": Counter(),
+            "pos": Counter(),
+        }
 
     def _to_cpu_np(x):
         if isinstance(x, torch.Tensor):
@@ -235,26 +263,6 @@ def collect_global_indices_compact(
 
         return side_np.astype(np.int32)
 
-    def _print_uniques_with_counts(label, arr, max_items=20, prefix=""):
-        """ユニーク値とカウントを見やすく出す簡易ヘルパ。"""
-        vals, counts = np.unique(arr, return_counts=True)
-        n_unique = len(vals)
-        msg_head = f"{prefix}{label}: {n_unique} unique values"
-        print(msg_head)
-        if logger is not None:
-            logger.info(msg_head)
-        # 多すぎると困るので先頭だけ
-        for v, c in list(zip(vals, counts))[:max_items]:
-            msg = f"{prefix}  value={int(v)}  count={int(c)}"
-            print(msg)
-            if logger is not None:
-                logger.info(msg)
-        if n_unique > max_items:
-            msg = f"{prefix}  ... ({n_unique - max_items} more)"
-            print(msg)
-            if logger is not None:
-                logger.info(msg)
-
     masks_dict = defaultdict(list)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
@@ -267,10 +275,10 @@ def collect_global_indices_compact(
         #   attr_batch[i]: (M*100*30) 相当 → (M,100,30)
         #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
         attr_mats = attr_batch[i].view(-1, 100, 30)
-        adj_mats = adj_batch[i].view(-1, 100, 100)
+        adj_mats  = adj_batch[i].view(-1, 100, 100)
 
         attr_np = _to_cpu_np(attr_mats)  # (M,100,30)
-        adj_np = _to_cpu_np(adj_mats)    # (M,100,100)
+        adj_np  = _to_cpu_np(adj_mats)   # (M,100,100)
 
         M = attr_np.shape[0]
 
@@ -282,8 +290,8 @@ def collect_global_indices_compact(
 
         # Degree from adjacency (exclude self-loops)
         deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)   # (M,100)
-        diag_nz = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
-        degrees = deg_total - diag_nz
+        diag_nz   = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
+        degrees   = deg_total - diag_nz
         if degree_cap is not None:
             degrees = np.minimum(degrees, int(degree_cap))
 
@@ -317,12 +325,19 @@ def collect_global_indices_compact(
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
 
-        # --- バッチレベルでの粗いユニーク分布（最初のバッチだけ） ---
         if i == 0 and debug:
-            print("=== [collect_global_indices_compact] batch 0 side-feature summary ===")
-            _print_uniques_with_counts("ringSize (all nodes)", ring_size_np[node_mask], prefix="  ")
-            _print_uniques_with_counts("aromNbrs (all nodes)", arom_nbrs_np[node_mask], prefix="  ")
-            _print_uniques_with_counts("fusedId (all nodes)", fused_id_np[node_mask], prefix="  ")
+            print(
+                "=== [collect_global_indices_compact] batch 0 side-feature summary ===",
+            )
+            print("  ringSize (all nodes):", "unique", len(np.unique(ring_size_np)))
+            for v in np.unique(ring_size_np):
+                print(f"    value={v}  count={int((ring_size_np == v).sum())}")
+            print("  aromNbrs (all nodes):", "unique", len(np.unique(arom_nbrs_np)))
+            for v in np.unique(arom_nbrs_np):
+                print(f"    value={v}  count={int((arom_nbrs_np == v).sum())}")
+            print("  fusedId (all nodes):", "unique", len(np.unique(fused_id_np)))
+            for v in np.unique(fused_id_np):
+                print(f"    value={v}  count={int((fused_id_np == v).sum())}")
 
         # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
@@ -332,55 +347,20 @@ def collect_global_indices_compact(
                 continue
 
             # Extract base cols
-            z = A_sel[m, :, 0][nm]
+            z      = A_sel[m, :, 0][nm]
             charge = A_sel[m, :, 1][nm]
-            hyb = A_sel[m, :, 2][nm]
-            arom = A_sel[m, :, 3][nm]
-            ring = A_sel[m, :, 4][nm]
-            deg = degrees[m][nm]
+            hyb    = A_sel[m, :, 2][nm]
+            arom   = A_sel[m, :, 3][nm]
+            ring   = A_sel[m, :, 4][nm]
+            deg    = degrees[m][nm]
 
             # New features
-            rs = ring_size_np[m][nm]
-            an = arom_nbrs_np[m][nm]
+            rs  = ring_size_np[m][nm]
+            an  = arom_nbrs_np[m][nm]
             fid = fused_id_np[m][nm]
 
             # position flag (例: 芳香 sp2, ring=1, deg=2 の C の outer/inner 区別用)
             pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
-
-            # ---------- デバッグ: 芳香 sp2 C まわりの分布を見る ----------
-            # 先頭バッチかつ、先頭いくつかの分子だけ詳しくみる
-            if debug and i == 0 and m < debug_max_print:
-                mask_arom_sp2_ring = (z == 6) & (hyb == 3) & (arom == 1) & (ring == 1)
-                if mask_arom_sp2_ring.any():
-                    print(f"--- [DEBUG mol {m}] arom/sp2/ring C summary ---")
-                    if logger is not None:
-                        logger.info(f"[DEBUG mol {m}] arom/sp2/ring C summary")
-
-                    _print_uniques_with_counts(
-                        "ringSize (arom/sp2/ring C)",
-                        rs[mask_arom_sp2_ring],
-                        prefix="    "
-                    )
-                    _print_uniques_with_counts(
-                        "aromNbrs (arom/sp2/ring C)",
-                        an[mask_arom_sp2_ring],
-                        prefix="    "
-                    )
-                    _print_uniques_with_counts(
-                        "fusedId (arom/sp2/ring C)",
-                        fid[mask_arom_sp2_ring],
-                        prefix="    "
-                    )
-                    _print_uniques_with_counts(
-                        "deg (arom/sp2/ring C)",
-                        deg[mask_arom_sp2_ring],
-                        prefix="    "
-                    )
-                    _print_uniques_with_counts(
-                        "pos flag (arom/sp2/ring C)",
-                        pos[mask_arom_sp2_ring],
-                        prefix="    "
-                    )
 
             # Choose which fields to include and stack in that order
             fields = {
@@ -396,18 +376,40 @@ def collect_global_indices_compact(
             # Global ids for these atoms
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
-            # Build string keys fast with np.char
+            # Build string keys fast with np.char (full key)
             ks = keys.astype(str)       # (N, K) of strings
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            # 代表的な key も少しだけ覗く（オプション）
-            if debug and i == 0 and m == 0:
-                peek = key_strings[:min(debug_max_print, len(key_strings))].tolist()
-                print(f"[collect][peek] first keys (mol 0): {peek}")
-                if logger is not None:
-                    logger.info(f"[collect][peek] first keys (mol 0): {peek}")
+            # ★ target_base_prefix 用の集計：base キーが一致する原子だけ拾う
+            if target_stats is not None:
+                base_cols = keys[:, base_field_indices]      # (N, len(base_field_indices))
+                bs = base_cols.astype(str)
+                base_key_strings = bs[:, 0]
+                for c in range(1, bs.shape[1]):
+                    base_key_strings = np.char.add(np.char.add(base_key_strings, "_"), bs[:, c])
+
+                mask = (base_key_strings == target_base_prefix)
+                if mask.any():
+                    n_hit = int(mask.sum())
+                    target_stats["count"] += n_hit
+
+                    if ringSize_idx is not None:
+                        for v in keys[mask, ringSize_idx]:
+                            target_stats["ringSize"][int(v)] += 1
+                    if aromNbrs_idx is not None:
+                        for v in keys[mask, aromNbrs_idx]:
+                            target_stats["aromNbrs"][int(v)] += 1
+                    if fusedId_idx is not None:
+                        for v in keys[mask, fusedId_idx]:
+                            target_stats["fusedId"][int(v)] += 1
+                    if deg_idx is not None:
+                        for v in keys[mask, deg_idx]:
+                            target_stats["deg"][int(v)] += 1
+                    if pos_idx is not None:
+                        for v in keys[mask, pos_idx]:
+                            target_stats["pos"][int(v)] += 1
 
             # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
@@ -426,8 +428,25 @@ def collect_global_indices_compact(
             atom_offset += N
             mol_id += 1
 
-    return masks_dict, atom_offset, mol_id
+    # target_base_prefix の集計結果を最後にまとめて出力
+    if target_stats is not None and debug:
+        lines = []
+        lines.append(f"=== [DEBUG target_base_prefix={target_base_prefix}] summary ===")
+        lines.append(f"  total atoms: {target_stats['count']}")
+        for fld in ("ringSize", "aromNbrs", "fusedId", "deg", "pos"):
+            ctr = target_stats[fld]
+            if not ctr:
+                continue
+            lines.append(f"  {fld}: {len(ctr)} unique values")
+            for v, cnt in sorted(ctr.items()):
+                lines.append(f"    value={v}  count={cnt}")
+        text = "\n".join(lines)
+        if logger is not None:
+            logger.info(text)
+        else:
+            print(text)
 
+    return masks_dict, atom_offset, mol_id
 
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
