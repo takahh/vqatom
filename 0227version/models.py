@@ -77,6 +77,13 @@ class AtomEmbedding(nn.Module):
         self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
         self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
 
+        ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
+        self.register_buffer(
+            "element_lut",
+            self._build_element_lut(ELEMENTS)
+        )
+
+        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
         # 0/1 フラグ系は全部 2 クラス想定
         def flag_emb():
             return nn.Embedding(num_embeddings=2, embedding_dim=2)
@@ -125,6 +132,14 @@ class AtomEmbedding(nn.Module):
         # python dict はそのまま属性でOK
         self.ring_value_to_index = mapping
 
+    @staticmethod
+    def _build_element_lut(ELEMENTS):
+        max_z = max(ELEMENTS)
+        lut = torch.zeros(max_z + 1, dtype=torch.long)
+        for i, z in enumerate(ELEMENTS):
+            lut[z] = i
+        return lut
+
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
         """
         atom_inputs: LongTensor [N, 30]
@@ -145,25 +160,15 @@ class AtomEmbedding(nn.Module):
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
 
-        ELEMENTS = [5, 6, 7, 8, 14, 15, 16]  # 登場順
-        ELE2IDX = {atom: i for i, atom in enumerate(ELEMENTS)}
-
-        # Create LUT (mapping atomic number -> embed index)
-        max_z = max(ELE2IDX.keys())
-        lut = torch.zeros(max_z + 1, dtype=torch.long, device=device)  # default = 0 (e.g., B=5 →  EID 0)
-        for z, idx in ELE2IDX.items():
-            lut[z] = idx
-
         # 0: element
         z_raw = atom_inputs[:, 0].long()
+        max_z = self.element_lut.shape[0] - 1
 
-        # Only use z <= max_z; larger Z get mapped to 0 by default
         mask = (z_raw >= 0) & (z_raw <= max_z)
-        z = torch.where(mask, z_raw, torch.zeros_like(z_raw))  # safe fallback
+        z = torch.where(mask, z_raw, torch.zeros_like(z_raw))
 
-        idx0 = lut[z]  # vectorized lookup
+        idx0 = self.element_lut[z]
         idx0 = idx0.clamp(0, self.element_embed.num_embeddings - 1)
-
         x0 = self.element_embed(idx0)
 
         # 1: degree
