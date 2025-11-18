@@ -61,13 +61,15 @@ class BondWeightLayer(nn.Module):
 import torch.nn as nn
 import torch
 import torch.nn as nn
+from utils import CORE_ELEMENTS
 
 class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
 
         # ---- 埋め込み定義 ----
-        self.element_embed  = nn.Embedding(num_embeddings=120, embedding_dim=16)  # 0..119
+        self.element_embed = nn.Embedding(num_embeddings=len(CORE_ELEMENTS), embedding_dim=4)
+        # self.element_embed  = nn.Embedding(num_embeddings=120, embedding_dim=16)  # 0..119
         self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
         self.valence_embed  = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # (valence+1) を 0..6 にクリップ
         self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
@@ -107,6 +109,9 @@ class AtomEmbedding(nn.Module):
         self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
         self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
 
+        # nn for compressing functional flags
+        self.func_reduce = nn.Linear(18 * 2, 4)
+
         # ringSize の元の値 → index の対応（0,3,4,5,6,7,8 → 0..6）
         uniq = ['0', '3', '4', '5', '6', '7', '8']
         uniq_int = sorted(int(x) for x in uniq)  # [0,3,4,5,6,7,8]
@@ -140,8 +145,25 @@ class AtomEmbedding(nn.Module):
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
 
+        ELEMENTS = [5, 6, 7, 8, 14, 15, 16]  # 登場順
+        ELE2IDX = {atom: i for i, atom in enumerate(ELEMENTS)}
+
+        # Create LUT (mapping atomic number -> embed index)
+        max_z = max(ELE2IDX.keys())
+        lut = torch.zeros(max_z + 1, dtype=torch.long, device=device)  # default = 0 (e.g., B=5 →  EID 0)
+        for z, idx in ELE2IDX.items():
+            lut[z] = idx
+
         # 0: element
-        idx0 = atom_inputs[:, 0].long().clamp(0, self.element_embed.num_embeddings - 1)
+        z_raw = atom_inputs[:, 0].long()
+
+        # Only use z <= max_z; larger Z get mapped to 0 by default
+        mask = (z_raw >= 0) & (z_raw <= max_z)
+        z = torch.where(mask, z_raw, torch.zeros_like(z_raw))  # safe fallback
+
+        idx0 = lut[z]  # vectorized lookup
+        idx0 = idx0.clamp(0, self.element_embed.num_embeddings - 1)
+
         x0 = self.element_embed(idx0)
 
         # 1: degree
@@ -193,6 +215,13 @@ class AtomEmbedding(nn.Module):
         x22 = self.func_embed_15(flag_idx(22))
         x23 = self.func_embed_16(flag_idx(23))
         x24 = self.func_embed_17(flag_idx(24))
+        # ---- merge functional flags (x7..x24 = 18 flags * 2 dim = 36 dim) ----
+        flags = torch.cat([
+            x7, x8, x9, x10, x11, x12, x13, x14, x15,
+            x16, x17, x18, x19, x20, x21, x22, x23, x24
+        ], dim=-1)  # shape [N, 36]
+
+        flags4 = self.func_reduce(flags)  # [N, 4]
 
         x25 = self.h_don_embed(flag_idx(25))
         x26 = self.h_acc_embed(flag_idx(26))
@@ -224,8 +253,7 @@ class AtomEmbedding(nn.Module):
         out = torch.cat(
             [
                 x0, x1, x2, x3, x4, x5, x6,
-                x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17, x18, x19,
-                x20, x21, x22, x23, x24,
+                flags4,
                 x25, x26, x27, x28, x29,
             ],
             dim=-1,
@@ -241,7 +269,7 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()
 
         self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(92, args.hidden_dim)  # h0
+        self.linear_0 = nn.Linear(48, args.hidden_dim)  # h0
 
         edge_emb_dim = getattr(args, "edge_emb_dim", 32)
         self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
