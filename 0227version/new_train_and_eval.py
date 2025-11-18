@@ -163,7 +163,7 @@ def collect_global_indices_compact(
     # Which fields to include in the string key and in what order:
     include_keys=("Z","charge","hyb","arom","ring","deg",
                   "ringSize","aromNbrs","fusedId","pos"),
-    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" / "6_0_3_1_1_2" など)
+    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" など; deg は含めない)
     target_base_prefix="6_0_3_1_1",
     debug=True,
     debug_max_print=10,
@@ -183,7 +183,8 @@ def collect_global_indices_compact(
       - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
       - ここでは CBDICT に存在する key だけ masks_dict に残す
       - target_base_prefix が指定されていれば、
-        その base キーに属する原子について
+        その base キー (Z,charge,hyb,arom,ring,deg) のうち
+        「Z,charge,hyb,arom,ring が prefix 一致する原子」について
         ringSize/aromNbrs/fusedId/deg/pos の分布を debug 出力する
     """
     from collections import defaultdict, Counter
@@ -198,28 +199,11 @@ def collect_global_indices_compact(
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
 
-    # include_keys 内での各フィールドの位置
+    # include_keys 内での各フィールドの位置（key 文字列を分解するときに使う）
     name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
+    base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg")
+    base_field_indices = [name_to_idx[n] for n in base_field_names]
 
-    # 「フル base（Z,charge,hyb,arom,ring,deg）」のインデックス
-    base_field_names_full = ("Z", "charge", "hyb", "arom", "ring", "deg")
-
-    # target_base_prefix 用に、prefix の長さに応じて使う base フィールドを決める
-    prefix_field_indices = None
-    if target_base_prefix is not None:
-        prefix_parts = str(target_base_prefix).split("_")
-        # 例:
-        #   target_base_prefix = "6_0_3_1_1"   → len = 5 → Z,charge,hyb,arom,ring
-        #   target_base_prefix = "6_0_3_1_1_2" → len = 6 → Z,charge,hyb,arom,ring,deg
-        if len(prefix_parts) > len(base_field_names_full):
-            raise ValueError(
-                f"target_base_prefix '{target_base_prefix}' has too many fields; "
-                f"max is {len(base_field_names_full)}"
-            )
-        prefix_field_names = base_field_names_full[:len(prefix_parts)]
-        prefix_field_indices = [name_to_idx[n] for n in prefix_field_names]
-
-    # ringSize / aromNbrs / fusedId / pos / deg の列インデックス
     ringSize_idx = name_to_idx.get("ringSize", None)
     aromNbrs_idx = name_to_idx.get("aromNbrs", None)
     fusedId_idx  = name_to_idx.get("fusedId", None)
@@ -258,6 +242,7 @@ def collect_global_indices_compact(
 
         # いろんな shape をそれっぽく (M,100) に揃える
         if side_np.ndim == 1:
+            # 長さ M*100 を想定
             side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 2:
             if side_np.shape == (M, 100):
@@ -269,6 +254,7 @@ def collect_global_indices_compact(
             else:
                 side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 3:
+            # 典型例: (M,100,1)
             if side_np.shape[0] == M and side_np.shape[1] == 100:
                 side_np = side_np[..., 0]
             else:
@@ -395,15 +381,19 @@ def collect_global_indices_compact(
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            # ★ target_base_prefix 用の集計
-            if target_stats is not None and prefix_field_indices is not None:
-                base_cols = keys[:, prefix_field_indices]      # (N, len(prefix_field_indices))
+            # ★ target_base_prefix 用の集計：base キーの prefix が一致する原子だけ拾う
+            if target_stats is not None:
+                base_cols = keys[:, base_field_indices]      # (N, len(base_field_indices))
                 bs = base_cols.astype(str)
                 base_key_strings = bs[:, 0]
                 for c in range(1, bs.shape[1]):
                     base_key_strings = np.char.add(np.char.add(base_key_strings, "_"), bs[:, c])
 
-                mask = (base_key_strings == target_base_prefix)
+                # ここがポイント：prefix マッチにする
+                # 例: base_key_strings = "6_0_3_1_1_2" / "6_0_3_1_1_3"
+                # target_base_prefix = "6_0_3_1_1"
+                mask = np.char.startswith(base_key_strings, target_base_prefix)
+
                 if mask.any():
                     n_hit = int(mask.sum())
                     target_stats["count"] += n_hit
@@ -460,7 +450,6 @@ def collect_global_indices_compact(
             print(text)
 
     return masks_dict, atom_offset, mol_id
-
 
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
