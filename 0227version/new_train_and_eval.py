@@ -163,7 +163,7 @@ def collect_global_indices_compact(
     # Which fields to include in the string key and in what order:
     include_keys=("Z","charge","hyb","arom","ring","deg",
                   "ringSize","aromNbrs","fusedId","pos"),
-    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1_2" など)
+    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" / "6_0_3_1_1_2" など)
     target_base_prefix="6_0_3_1_1",
     debug=True,
     debug_max_print=10,
@@ -183,7 +183,7 @@ def collect_global_indices_compact(
       - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
       - ここでは CBDICT に存在する key だけ masks_dict に残す
       - target_base_prefix が指定されていれば、
-        その base キー (Z,charge,hyb,arom,ring,deg) に属する原子について
+        その base キーに属する原子について
         ringSize/aromNbrs/fusedId/deg/pos の分布を debug 出力する
     """
     from collections import defaultdict, Counter
@@ -198,11 +198,28 @@ def collect_global_indices_compact(
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
 
-    # include_keys 内での各フィールドの位置（key 文字列を分解するときに使う）
+    # include_keys 内での各フィールドの位置
     name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
-    base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg")
-    base_field_indices = [name_to_idx[n] for n in base_field_names]
 
+    # 「フル base（Z,charge,hyb,arom,ring,deg）」のインデックス
+    base_field_names_full = ("Z", "charge", "hyb", "arom", "ring", "deg")
+
+    # target_base_prefix 用に、prefix の長さに応じて使う base フィールドを決める
+    prefix_field_indices = None
+    if target_base_prefix is not None:
+        prefix_parts = str(target_base_prefix).split("_")
+        # 例:
+        #   target_base_prefix = "6_0_3_1_1"   → len = 5 → Z,charge,hyb,arom,ring
+        #   target_base_prefix = "6_0_3_1_1_2" → len = 6 → Z,charge,hyb,arom,ring,deg
+        if len(prefix_parts) > len(base_field_names_full):
+            raise ValueError(
+                f"target_base_prefix '{target_base_prefix}' has too many fields; "
+                f"max is {len(base_field_names_full)}"
+            )
+        prefix_field_names = base_field_names_full[:len(prefix_parts)]
+        prefix_field_indices = [name_to_idx[n] for n in prefix_field_names]
+
+    # ringSize / aromNbrs / fusedId / pos / deg の列インデックス
     ringSize_idx = name_to_idx.get("ringSize", None)
     aromNbrs_idx = name_to_idx.get("aromNbrs", None)
     fusedId_idx  = name_to_idx.get("fusedId", None)
@@ -241,7 +258,6 @@ def collect_global_indices_compact(
 
         # いろんな shape をそれっぽく (M,100) に揃える
         if side_np.ndim == 1:
-            # 長さ M*100 を想定
             side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 2:
             if side_np.shape == (M, 100):
@@ -253,7 +269,6 @@ def collect_global_indices_compact(
             else:
                 side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 3:
-            # 典型例: (M,100,1)
             if side_np.shape[0] == M and side_np.shape[1] == 100:
                 side_np = side_np[..., 0]
             else:
@@ -326,16 +341,14 @@ def collect_global_indices_compact(
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
 
         if i == 0 and debug:
-            print(
-                "=== [collect_global_indices_compact] batch 0 side-feature summary ===",
-            )
-            print("  ringSize (all nodes):", "unique", len(np.unique(ring_size_np)))
+            print("=== [collect_global_indices_compact] batch 0 side-feature summary ===")
+            print("  ringSize (all nodes): unique", len(np.unique(ring_size_np)))
             for v in np.unique(ring_size_np):
                 print(f"    value={v}  count={int((ring_size_np == v).sum())}")
-            print("  aromNbrs (all nodes):", "unique", len(np.unique(arom_nbrs_np)))
+            print("  aromNbrs (all nodes): unique", len(np.unique(arom_nbrs_np)))
             for v in np.unique(arom_nbrs_np):
                 print(f"    value={v}  count={int((arom_nbrs_np == v).sum())}")
-            print("  fusedId (all nodes):", "unique", len(np.unique(fused_id_np)))
+            print("  fusedId (all nodes): unique", len(np.unique(fused_id_np)))
             for v in np.unique(fused_id_np):
                 print(f"    value={v}  count={int((fused_id_np == v).sum())}")
 
@@ -382,9 +395,9 @@ def collect_global_indices_compact(
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            # ★ target_base_prefix 用の集計：base キーが一致する原子だけ拾う
-            if target_stats is not None:
-                base_cols = keys[:, base_field_indices]      # (N, len(base_field_indices))
+            # ★ target_base_prefix 用の集計
+            if target_stats is not None and prefix_field_indices is not None:
+                base_cols = keys[:, prefix_field_indices]      # (N, len(prefix_field_indices))
                 bs = base_cols.astype(str)
                 base_key_strings = bs[:, 0]
                 for c in range(1, bs.shape[1]):
@@ -447,90 +460,6 @@ def collect_global_indices_compact(
             print(text)
 
     return masks_dict, atom_offset, mol_id
-
-
-def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
-    from collections import defaultdict
-    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, logger, start_atom_id, start_mol_id)   # ✅ unpack
-    # print("masks_dict.keys()")
-    # print(masks_dict.keys())
-    base_graphs = []
-    extended_graphs = []
-    attr_matrices_all = []
-
-    for i in range(len(adj_batch)):
-        args = get_args()
-        # both branches identical; keep one
-        adj_matrices  = adj_batch[i].view(-1, 100, 100)
-        attr_matrices = attr_batch[i].view(-1, 100, 30)
-
-        for j in range(len(attr_matrices)):
-            adj_matrix  = adj_matrices[j]
-            attr_matrix = attr_matrices[j]
-
-            # ---- depad ----
-            nonzero_mask      = (attr_matrix.abs().sum(dim=1) > 0)
-            num_total_nodes   = int(nonzero_mask.sum().item())
-            filtered_attr     = attr_matrix[nonzero_mask]
-            filtered_adj      = adj_matrix[:num_total_nodes, :num_total_nodes]
-
-            # ---- base graph (make it bidirected before khop) ----
-            src, dst = filtered_adj.nonzero(as_tuple=True)
-            # keep both directions to ensure khop works symmetrically
-            # (if filtered_adj is symmetric, this already includes both directions)
-            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-            # ensure simple & bidirected
-            base_g = dgl.to_simple(dgl.to_bidirected(base_g))
-            base_g.ndata["feat"] = filtered_attr
-            base_g.edata["weight"] = filtered_adj[base_g.edges()[0], base_g.edges()[1]].float()
-            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
-            base_g = dgl.add_self_loop(base_g)
-            base_graphs.append(base_g)
-
-            # ---- k-hop ----
-            adj_2hop = dgl.khop_adj(base_g, 2)  # [N,N], 0/1
-            adj_3hop = dgl.khop_adj(base_g, 3)
-
-            # ---- combine ----
-            full_adj = filtered_adj.clone()
-            full_adj += (adj_2hop * 0.5)
-            full_adj += (adj_3hop * 0.3)
-            torch.diagonal(full_adj).fill_(1.0)
-
-            # ---- extended graph should come from full_adj ----
-            sf, df = full_adj.nonzero(as_tuple=True)                 # ✅ use full_adj
-            extended_g = dgl.graph((sf, df), num_nodes=num_total_nodes)
-            e_src, e_dst = extended_g.edges()
-            extended_g.edata["weight"] = full_adj[e_src, e_dst].float()  # ✅ use full_adj
-
-            # edge types: classify by source matrices
-            one_hop   = (filtered_adj[e_src, e_dst] > 0)
-            two_hop   = (adj_2hop[e_src, e_dst] > 0) & ~one_hop
-            three_hop = (adj_3hop[e_src, e_dst] > 0) & ~(one_hop | two_hop)
-            edge_types = torch.zeros_like(e_src, dtype=torch.int)
-            edge_types[one_hop]   = 1
-            edge_types[two_hop]   = 2
-            edge_types[three_hop] = 3
-            extended_g.edata["edge_type"] = edge_types
-
-            extended_g.ndata["feat"] = filtered_attr
-            extended_g = dgl.add_self_loop(extended_g)
-
-            # optional sanity check on padding tail
-            remaining_features = attr_matrix[num_total_nodes:]
-            # if remaining_features.numel() and not torch.all(remaining_features == 0):
-            #     # print("⚠️ WARNING: Non-zero values found in remaining features!")
-            #     nz = remaining_features[remaining_features != 0]
-            # else:
-            #     print("OK ===========")
-            #     # print(f"num_total_nodes {num_total_nodes}")
-            #     # print("Non-zero values:", nz[:20])
-            #     # print("Indices:", torch.nonzero(remaining_features)[:20])
-
-            attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
-            extended_graphs.append(extended_g)
-
-    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
 
 
 from torch.utils.data import Dataset
