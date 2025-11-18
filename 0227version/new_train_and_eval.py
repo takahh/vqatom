@@ -163,7 +163,7 @@ def collect_global_indices_compact(
     # Which fields to include in the string key and in what order:
     include_keys=("Z", "charge", "hyb", "arom", "ring", "deg",
                   "ringSize", "aromNbrs", "fusedId", "pos"),
-    debug=False,
+    debug=True,
     debug_max_print=10,
 ):
     """
