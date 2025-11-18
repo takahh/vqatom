@@ -142,6 +142,7 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
+
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -156,13 +157,17 @@ def collect_global_indices_compact(
     ring_size_col=27,
     arom_nbrs_col=28,
     fused_id_col=29,
+    # 官能基ベースのフラグ (one-hot / multi-hot) が attr に入っている範囲
+    # 例: attr[..., 29:39] に 10 個 (0..9) の官能基フラグがある想定
+    func_base_start_col=29,
+    n_func_base_flags=10,
     # Or pass them separately (same batching/shape as attr_batch[...,0]):
     ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
     arom_nbrs_batch=None,         # ditto
     fused_ring_id_batch=None,     # ditto
     # Which fields to include in the string key and in what order:
     include_keys=("Z","charge","hyb","arom","ring","deg",
-                  "ringSize","aromNbrs","fusedId","pos"),
+                  "ringSize","aromNbrs","fusedId","pos","func"),
     # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" など; deg は含めない)
     target_base_prefix="6_0_3_1_1",
     debug=True,
@@ -171,7 +176,7 @@ def collect_global_indices_compact(
     """
     Returns:
       masks_dict: {
-        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos' : [global_idx, ...],
+        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos_func' : [global_idx, ...],
         ...
       }
       atom_offset: next start atom id (global)
@@ -181,6 +186,8 @@ def collect_global_indices_compact(
       - attr columns assumed base: [Z, charge, hyb, arom, ring] at indices [0,2,3,4,5]
       - Degree computed from adjacency excluding self-loops
       - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
+      - func_base_start_col .. func_base_start_col + n_func_base_flags:
+          官能基ベースのフラグ (10個) を想定し、argmax で func_id (0..9) にまとめて key に入れる
       - ここでは CBDICT に存在する key だけ masks_dict に残す
       - target_base_prefix が指定されていれば、
         その base キー (Z,charge,hyb,arom,ring,deg) のうち
@@ -209,6 +216,7 @@ def collect_global_indices_compact(
     fusedId_idx  = name_to_idx.get("fusedId", None)
     pos_idx      = name_to_idx.get("pos", None)
     deg_idx      = name_to_idx.get("deg", None)
+    func_idx     = name_to_idx.get("func", None)  # 今は debug では使っていないが一応取っておく
 
     # 特定クラスの分布集計用
     target_stats = None
@@ -273,12 +281,13 @@ def collect_global_indices_compact(
     # ---------- main loop over batch items ----------
     for i in range(B):
         # Shapes (想定):
-        #   attr_batch[i]: (M*100*30) 相当 → (M,100,30)
+        #   attr_batch[i]: (M*100*D) 相当 → (M,100,D)
         #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
-        attr_mats = attr_batch[i].view(-1, 100, 30)
+        D = attr_batch[i].shape[-1]
+        attr_mats = attr_batch[i].view(-1, 100, D)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
-        attr_np = _to_cpu_np(attr_mats)  # (M,100,30)
+        attr_np = _to_cpu_np(attr_mats)  # (M,100,D)
         adj_np  = _to_cpu_np(adj_mats)   # (M,100,100)
 
         M = attr_np.shape[0]
@@ -318,6 +327,20 @@ def collect_global_indices_compact(
             if fused_id_np is None:
                 fused_id_np = np.zeros((M, 100), np.int32)
 
+        # ---- functional base flags → func_id (0..n_func_base_flags-1) ----
+        if func_base_start_col is not None and n_func_base_flags is not None:
+            if attr_np.shape[2] < func_base_start_col + n_func_base_flags:
+                raise ValueError(
+                    f"attr_np last dim {attr_np.shape[2]} is too small for "
+                    f"func_base_start_col={func_base_start_col}, n_func_base_flags={n_func_base_flags}"
+                )
+            func_flags_np = attr_np[..., func_base_start_col:func_base_start_col + n_func_base_flags]
+            # フラグは 0/1 想定だが、一応 argmax で 0..(n_func_base_flags-1) にまとめる
+            func_flags_np = func_flags_np.astype(np.float32)
+            func_id_np = np.argmax(func_flags_np, axis=2).astype(np.int32)  # (M,100)
+        else:
+            func_id_np = np.zeros((M, 100), np.int32)
+
         # Caps
         if ring_size_cap is not None:
             ring_size_np = np.minimum(ring_size_np, int(ring_size_cap))
@@ -337,6 +360,9 @@ def collect_global_indices_compact(
             print("  fusedId (all nodes): unique", len(np.unique(fused_id_np)))
             for v in np.unique(fused_id_np):
                 print(f"    value={v}  count={int((fused_id_np == v).sum())}")
+            print("  func_id (all nodes): unique", len(np.unique(func_id_np)))
+            for v in np.unique(func_id_np):
+                print(f"    value={v}  count={int((func_id_np == v).sum())}")
 
         # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
@@ -358,13 +384,16 @@ def collect_global_indices_compact(
             an  = arom_nbrs_np[m][nm]
             fid = fused_id_np[m][nm]
 
+            # 官能基カテゴリ (0..n_func_base_flags-1)
+            func = func_id_np[m][nm]
+
             # position flag (例: 芳香 sp2, ring=1, deg=2 の C の outer/inner 区別用)
             pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
 
             # Choose which fields to include and stack in that order
             fields = {
                 "Z": z, "charge": charge, "hyb": hyb, "arom": arom, "ring": ring, "deg": deg,
-                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos
+                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos, "func": func
             }
             cols_to_stack = [fields[name] for name in include_keys]
             keys = np.stack(cols_to_stack, axis=1).astype(np.int32)   # (N, K)
@@ -389,9 +418,7 @@ def collect_global_indices_compact(
                 for c in range(1, bs.shape[1]):
                     base_key_strings = np.char.add(np.char.add(base_key_strings, "_"), bs[:, c])
 
-                # ここがポイント：prefix マッチにする
-                # 例: base_key_strings = "6_0_3_1_1_2" / "6_0_3_1_1_3"
-                # target_base_prefix = "6_0_3_1_1"
+                # prefix マッチ
                 mask = np.char.startswith(base_key_strings, target_base_prefix)
 
                 if mask.any():

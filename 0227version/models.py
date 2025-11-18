@@ -68,7 +68,7 @@ class AtomEmbedding(nn.Module):
         super(AtomEmbedding, self).__init__()
 
         # ---- 埋め込み定義 ----
-        self.element_embed = nn.Embedding(num_embeddings=len(CORE_ELEMENTS), embedding_dim=4)
+        # self.element_embed = nn.Embedding(num_embeddings=len(CORE_ELEMENTS), embedding_dim=4)
         # self.element_embed  = nn.Embedding(num_embeddings=120, embedding_dim=16)  # 0..119
         self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
         self.valence_embed  = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # (valence+1) を 0..6 にクリップ
@@ -76,7 +76,6 @@ class AtomEmbedding(nn.Module):
         self.aromatic_embed = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # 0/1
         self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
         self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
-
         ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
         self.register_buffer(
             "element_lut",
@@ -84,6 +83,7 @@ class AtomEmbedding(nn.Module):
         )
 
         self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
+        # 28 so far
         # 0/1 フラグ系は全部 2 クラス想定
         def flag_emb():
             return nn.Embedding(num_embeddings=2, embedding_dim=2)
@@ -106,7 +106,7 @@ class AtomEmbedding(nn.Module):
         self.func_embed_15 = flag_emb()
         self.func_embed_16 = flag_emb()
         self.func_embed_17 = flag_emb()
-
+        # + 18*2 = 28 + 36 = 64
         self.h_don_embed   = flag_emb()
         self.h_acc_embed   = flag_emb()
 
