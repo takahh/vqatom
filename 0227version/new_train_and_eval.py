@@ -165,7 +165,7 @@ def collect_global_indices_compact(
                   "ringSize","aromNbrs","fusedId","pos"),
     # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1_2" など)
     target_base_prefix="6_0_3_1_1_2_6_2_0_1",
-    debug=False,
+    debug=True,
     debug_max_print=10,
 ):
     """
