@@ -284,8 +284,6 @@ def collect_global_indices_compact(
         #   attr_batch[i]: (M*100*D) 相当 → (M,100,D)
         #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
         D = attr_batch[i].shape[-1]
-        print("D")
-        print(D)
         attr_mats = attr_batch[i].view(-1, 100, D)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
@@ -452,8 +450,8 @@ def collect_global_indices_compact(
 
             # ★ CBDICT に存在する key だけ masks_dict に追加
             for uk, ids in zip(uniq_keys.tolist(), buckets):
-                if uk not in CBDICT_KEYS:
-                    continue
+                # if uk not in CBDICT_KEYS:
+                #     continue
                 masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
