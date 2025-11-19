@@ -284,6 +284,8 @@ def collect_global_indices_compact(
         #   attr_batch[i]: (M*100*D) 相当 → (M,100,D)
         #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
         D = attr_batch[i].shape[-1]
+        print("D")
+        print(D)
         attr_mats = attr_batch[i].view(-1, 100, D)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
 
