@@ -459,6 +459,8 @@ def collect_global_indices_compact(
             # advance offsets per molecule
             atom_offset += N
             mol_id += 1
+    for key, val in masks_dict.items():
+        print(f"key {key}, val {len(val)}")
 
     # target_base_prefix の集計結果を最後にまとめて出力
     if target_stats is not None and debug:
