@@ -159,8 +159,8 @@ def collect_global_indices_compact(
     fused_id_col=29,
     # 官能基ベースのフラグ (one-hot / multi-hot) が attr に入っている範囲
     # 例: attr[..., 29:39] に 10 個 (0..9) の官能基フラグがある想定
-    func_base_start_col=29,
-    n_func_base_flags=10,
+    func_base_start_col=8,
+    n_func_base_flags=18,
     # Or pass them separately (same batching/shape as attr_batch[...,0]):
     ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
     arom_nbrs_batch=None,         # ditto
@@ -583,6 +583,7 @@ def print_memory_usage(tag=""):
     allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # MB
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
+
 def run_inductive(conf, model, optimizer, accumulation_steps, logger):
     import gc, itertools, torch, os, copy
     from collections import Counter, defaultdict
