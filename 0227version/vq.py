@@ -1323,8 +1323,10 @@ class EuclideanCodebook(nn.Module):
                 some_feature = feat_flat[loc][:, [0, 2, 3, 4, 5]]
 
             if masked_latents.numel() == 0:
+                print("if masked_latents.numel() == 0:")
                 continue
             if key not in CBDICT.keys():
+                print("if key not in CBDICT.keys():")
                 continue
             code = self.embed[str(key)]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
