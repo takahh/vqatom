@@ -383,6 +383,7 @@ class EquivariantThreeHopGINE(nn.Module):
 
         h_vq = self.pre_vq_ln(h_out)
         quantize_output = self.vq(h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode, features)
+        #  total_loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
         # if logger is not None:
         #     logger.info(f"weighted avg : commit {commit_loss}, lat_repel {repel_loss}, co_repel {cb_repel_loss}")
