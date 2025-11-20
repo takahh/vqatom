@@ -8,6 +8,7 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
+
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
                chunk_size=None, attr=None):
     import torch
