@@ -71,7 +71,7 @@ class AtomEmbedding(nn.Module):
         # self.element_embed = nn.Embedding(num_embeddings=len(CORE_ELEMENTS), embedding_dim=4)
         # self.element_embed  = nn.Embedding(num_embeddings=120, embedding_dim=16)  # 0..119
         self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
-        self.valence_embed  = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # (valence+1) を 0..6 にクリップ
+        self.ring_embed  = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # (valence+1) を 0..6 にクリップ
         self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
         self.aromatic_embed = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # 0/1
         self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
@@ -142,20 +142,33 @@ class AtomEmbedding(nn.Module):
 
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
         """
+        atom.GetAtomicNum(),                 # 0: Z
+        atom.GetDegree(),                    # 1: degree
+        atom.GetFormalCharge(),              # 2: charge
+        int(atom.GetHybridization()),        # 3: hyb (enum int)
+        int(atom.GetIsAromatic()),           # 4: arom flag
+        int(atom.IsInRing()),                # 5: ring flag  ???
+        hcount,                              # 6: total Hs (explicit+implicit)
+        *func_flags[idx],                    # 7-24 官能基フラグ
+        *hbond_flags[idx],                   # 25-26 H-bond Donor/Acceptor
+        ring_size[idx],                      # 27 ringSize
+        arom_nbrs[idx],                      # 28 aromNbrs
+        fused_id[idx],                       # 29 fusedId
+
         atom_inputs: LongTensor [N, 30]
-        0: element
-        1: degree
-        2: valence
-        3: charge
-        4: aromatic
-        5: hybrid
-        6: num_hydrogens
-        7-24: functional flags
-        25: H-donor flag
-        26: H-acceptor flag
-        27: ringSize (raw: 0,3,4,5,6,7,8,...)
-        28: #aromatic neighbors
-        29: fused ring id (0..7 期待)
+        0: element  0
+        1: degree   1
+        2: valence  ????  ring 5
+        3: charge   2
+        4: aromatic   4
+        5: hybrid     3
+        6: num_hydrogens    6
+        7-24: functional flags  7-24
+        25: H-donor flag    25
+        26: H-acceptor flag   26
+        27: ringSize (raw: 0,3,4,5,6,7,8,...)   27
+        28: #aromatic neighbors  28
+        29: fused ring id (0..7 期待)  29
         """
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
@@ -176,12 +189,12 @@ class AtomEmbedding(nn.Module):
         x1 = self.degree_embed(idx1)
 
         # 2: valence → +1 してから clamp
-        val_raw = atom_inputs[:, 2].long() + 1
-        val_idx = val_raw.clamp(0, self.valence_embed.num_embeddings - 1)
-        x2 = self.valence_embed(val_idx)
+        val_raw = atom_inputs[:, 5].long() + 1
+        val_idx = val_raw.clamp(0, self.ring_embed.num_embeddings - 1)
+        x2 = self.ring_embed(val_idx)
 
         # 3: charge
-        chg_raw = atom_inputs[:, 3].long()
+        chg_raw = atom_inputs[:, 2].long()
         # もし負が紛れていても0に吸収
         chg_idx = chg_raw.clamp(0, self.charge_embed.num_embeddings - 1)
         x3 = self.charge_embed(chg_idx)
@@ -191,7 +204,7 @@ class AtomEmbedding(nn.Module):
         x4 = self.aromatic_embed(arom_idx)
 
         # 5: hybrid
-        hyb_idx = atom_inputs[:, 5].long().clamp(0, self.hybrid_embed.num_embeddings - 1)
+        hyb_idx = atom_inputs[:, 3].long().clamp(0, self.hybrid_embed.num_embeddings - 1)
         x5 = self.hybrid_embed(hyb_idx)
 
         # 6: #hydrogens
