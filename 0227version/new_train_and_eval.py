@@ -228,7 +228,18 @@ def collect_global_indices_compact(
 
     # membership を高速にするために set 化
     CBDICT_KEYS = set(CBDICT.keys())
-
+    """    atom.GetAtomicNum(),                 # 1: Z 
+        atom.GetDegree(),                    # 1: degree
+        atom.GetFormalCharge(),              # 1: charge
+        int(atom.GetHybridization()),        # 1: hyb (enum int)
+        int(atom.GetIsAromatic()),           # 1: arom flag
+        int(atom.IsInRing()),                # 1: ring flag
+        hcount,                              # 1: total Hs (explicit+implicit)
+        *func_flags[idx],                    # 18: 官能基フラグ
+        *hbond_flags[idx],                   # 1: H-bond Donor/Acceptor
+        ring_size[idx],                      # 1: ringSize
+        arom_nbrs[idx],                      # 1: aromNbrs
+        fused_id[idx],                       # 1: fusedId     """
     # Base columns in attr: [Z, charge, hyb, arom, ring]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]
@@ -483,8 +494,8 @@ def collect_global_indices_compact(
 
             # ★ CBDICT に存在する key だけ masks_dict に追加
             for uk, ids in zip(uniq_keys.tolist(), buckets):
-                if uk not in CBDICT_KEYS:
-                    continue
+                # if uk not in CBDICT_KEYS:
+                #     continue
                 masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
