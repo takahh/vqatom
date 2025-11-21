@@ -1321,9 +1321,9 @@ class EuclideanCodebook(nn.Module):
                 if idx.numel() == 0:
                     print(f"[init] key={key}: empty idx")
                     continue
-                # if key not in CBDICT.keys():
-                #     print(f"[init] key {key} not in CBDICT.keys()")
-                #     continue
+                if key not in CBDICT.keys():
+                    print(f"[init] key {key} not in CBDICT.keys()")
+                    continue
 
                 # 全体からダイレクトに抽出
                 masked_latents = flatten[0][idx]  # [Ni, D]
@@ -1413,9 +1413,9 @@ class EuclideanCodebook(nn.Module):
             if masked_latents.numel() == 0:
                 print(f"[train] key={key}: masked_latents.numel() == 0")
                 continue
-            # if key not in CBDICT.keys():
-            #     print(f"[train] key {key} not in CBDICT.keys()")
-            #     continue
+            if key not in CBDICT.keys():
+                print(f"[train] key {key} not in CBDICT.keys()")
+                continue
 
             code = self.embed[str(key)]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
