@@ -155,6 +155,32 @@ def collect_global_indices_compact(
     arom_nbrs_cap=6,
     fused_id_cap=255,
     # If your new features are already packed in attr_batch, give their column indices:
+    # COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM =
+    # 0 element
+    # 1 degree  not used
+    # 2 charge
+    # 3 hyb
+    # 4 arom
+    # 5 ring
+    # 6 hnum
+    # 7-25 func base
+    # 26-27 h donor/accp
+    # 28 ring size
+    # 29 aroma num
+    # 30 fused ID
+
+        # atom.GetAtomicNum(),                 # 0: Z
+        # atom.GetDegree(),                    # 1: degree
+        # atom.GetFormalCharge(),              # 2: charge
+        # int(atom.GetHybridization()),        # 3: hyb (enum int)
+        # int(atom.GetIsAromatic()),           # 4: arom flag
+        # int(atom.IsInRing()),                # 5: ring flag
+        # hcount,                              # 6: total Hs (explicit+implicit)
+        # *func_flags[idx],                    # 官能基フラグ
+        # *hbond_flags[idx],                   # H-bond Donor/Acceptor
+        # ring_size[idx],                      # ringSize
+        # arom_nbrs[idx],                      # aromNbrs
+        # fused_id[idx],                       # fusedId
     ring_size_col=27,
     arom_nbrs_col=28,
     fused_id_col=29,
@@ -444,6 +470,9 @@ def collect_global_indices_compact(
                     if pos_idx is not None:
                         for v in keys[mask, pos_idx]:
                             target_stats["pos"][int(v)] += 1
+                    if hnum_idx is not None:
+                        for v in keys[mask, hnum_idx]:
+                            target_stats["hnum"][int(v)] += 1
 
             # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
@@ -469,7 +498,7 @@ def collect_global_indices_compact(
         lines = []
         lines.append(f"=== [DEBUG target_base_prefix={target_base_prefix}] summary ===")
         lines.append(f"  total atoms: {target_stats['count']}")
-        for fld in ("ringSize", "aromNbrs", "fusedId", "deg", "pos"):
+        for fld in ("ringSize", "aromNbrs", "fusedId", "deg", "pos", "hnum"):
             ctr = target_stats[fld]
             if not ctr:
                 continue
