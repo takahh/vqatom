@@ -454,8 +454,8 @@ def collect_global_indices_compact(
 
             # ★ CBDICT に存在する key だけ masks_dict に追加
             for uk, ids in zip(uniq_keys.tolist(), buckets):
-                # if uk not in CBDICT_KEYS:
-                #     continue
+                if uk not in CBDICT_KEYS:
+                    continue
                 masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
