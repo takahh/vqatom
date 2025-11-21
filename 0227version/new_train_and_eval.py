@@ -168,7 +168,7 @@ def collect_global_indices_compact(
     fused_ring_id_batch=None,     # ditto
     # Which fields to include in the string key and in what order:
     include_keys=("Z","charge","hyb","arom","ring","deg",
-                  "ringSize","aromNbrs","fusedId","pos","func"),
+                  "ringSize","aromNbrs","fusedId","pos","func","hnum"),
     # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" など; deg は含めない)
     target_base_prefix="6_0_3_1_1",
     debug=True,
@@ -204,12 +204,12 @@ def collect_global_indices_compact(
     CBDICT_KEYS = set(CBDICT.keys())
 
     # Base columns in attr: [Z, charge, hyb, arom, ring]
-    COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING = 0, 2, 3, 4, 5
-    BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING]
+    COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
+    BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]
 
     # include_keys 内での各フィールドの位置（key 文字列を分解するときに使う）
     name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
-    base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg")
+    base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg", "hnum")
     base_field_indices = [name_to_idx[n] for n in base_field_names]
 
     ringSize_idx = name_to_idx.get("ringSize", None)
@@ -218,6 +218,7 @@ def collect_global_indices_compact(
     pos_idx      = name_to_idx.get("pos", None)
     deg_idx      = name_to_idx.get("deg", None)
     func_idx     = name_to_idx.get("func", None)  # 今は debug では使っていないが一応取っておく
+    hnum_idx      = name_to_idx.get("hnum", None)
 
     # 特定クラスの分布集計用
     target_stats = None
@@ -229,6 +230,7 @@ def collect_global_indices_compact(
             "fusedId": Counter(),
             "deg": Counter(),
             "pos": Counter(),
+            "hnum": Counter(),
         }
 
     def _to_cpu_np(x):
@@ -378,6 +380,7 @@ def collect_global_indices_compact(
             hyb    = A_sel[m, :, 2][nm]
             arom   = A_sel[m, :, 3][nm]
             ring   = A_sel[m, :, 4][nm]
+            hnum   = A_sel[m, :, 5][nm]
             deg    = degrees[m][nm]
 
             # New features
@@ -394,7 +397,7 @@ def collect_global_indices_compact(
             # Choose which fields to include and stack in that order
             fields = {
                 "Z": z, "charge": charge, "hyb": hyb, "arom": arom, "ring": ring, "deg": deg,
-                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos, "func": func
+                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos, "func": func, "hnum": hnum
             }
             cols_to_stack = [fields[name] for name in include_keys]
             keys = np.stack(cols_to_stack, axis=1).astype(np.int32)   # (N, K)
