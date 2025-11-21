@@ -419,7 +419,7 @@ def collect_global_indices_compact(
             ring   = A_sel[m, :, 4][nm]
             hnum   = A_sel[m, :, 5][nm]
             deg    = degrees[m][nm]
-
+            print(f"hnum {hnum}")
             # New features
             rs  = ring_size_np[m][nm]
             an  = arom_nbrs_np[m][nm]
@@ -494,8 +494,8 @@ def collect_global_indices_compact(
 
             # ★ CBDICT に存在する key だけ masks_dict に追加
             for uk, ids in zip(uniq_keys.tolist(), buckets):
-                if uk not in CBDICT_KEYS:
-                    continue
+                # if uk not in CBDICT_KEYS:
+                #     continue
                 masks_dict[uk].extend(ids)
 
             # advance offsets per molecule
