@@ -16,6 +16,7 @@ NonHom_data = ["pokec", "penn94"]
 BGNN_data = ["house_class", "vk_class"]
 CORE_ELEMENTS = {"5", "6", "7", "8", "14", "15", "16"}
 
+
 CBDICT = {
     '6_0_3_1_1_2_6_2_1_1_10_1': 735,
     '6_0_3_1_1_2_6_2_2_1_10_1': 701,
