@@ -143,7 +143,6 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -155,39 +154,25 @@ def collect_global_indices_compact(
     arom_nbrs_cap=6,
     fused_id_cap=255,
     # If your new features are already packed in attr_batch, give their column indices:
-    # COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM =
-    # 0 element
-    # 1 degree  not used
-    # 2 charge
-    # 3 hyb
-    # 4 arom
-    # 5 ring
-    # 6 hnum
-    # 7-25 func base
-    # 26-27 h donor/accp
+    # 0  Z (atomic number)
+    # 1  degree  (not used; we recompute from adj)
+    # 2  charge
+    # 3  hyb
+    # 4  arom
+    # 5  ring
+    # 6  hnum
+    # 7–25  func base flags (19 dims)
+    # 26–27 h-bond donor / acceptor flags (2 dims)  ← not used in key for now
     # 28 ring size
-    # 29 aroma num
-    # 30 fused ID
-
-        # atom.GetAtomicNum(),                 # 0: Z
-        # atom.GetDegree(),                    # 1: degree
-        # atom.GetFormalCharge(),              # 2: charge
-        # int(atom.GetHybridization()),        # 3: hyb (enum int)
-        # int(atom.GetIsAromatic()),           # 4: arom flag
-        # int(atom.IsInRing()),                # 5: ring flag
-        # hcount,                              # 6: total Hs (explicit+implicit)
-        # *func_flags[idx],                    # 官能基フラグ
-        # *hbond_flags[idx],                   # H-bond Donor/Acceptor
-        # ring_size[idx],                      # ringSize
-        # arom_nbrs[idx],                      # aromNbrs
-        # fused_id[idx],                       # fusedId
-    ring_size_col=27,
-    arom_nbrs_col=28,
-    fused_id_col=29,
+    # 29 aromatic neighbor count (aromNbrs)
+    # 30 fused ring ID (fusedId)
+    ring_size_col=28,
+    arom_nbrs_col=29,
+    fused_id_col=30,
     # 官能基ベースのフラグ (one-hot / multi-hot) が attr に入っている範囲
-    # 例: attr[..., 29:39] に 10 個 (0..9) の官能基フラグがある想定
-    func_base_start_col=8,
-    n_func_base_flags=18,
+    # 例: attr[..., 7:26] に 19 個 (0..18) の官能基フラグがある想定
+    func_base_start_col=7,
+    n_func_base_flags=19,
     # Or pass them separately (same batching/shape as attr_batch[...,0]):
     ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
     arom_nbrs_batch=None,         # ditto
@@ -203,23 +188,33 @@ def collect_global_indices_compact(
     """
     Returns:
       masks_dict: {
-        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos_func' : [global_idx, ...],
+        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos_func_hnum' : [global_idx, ...],
         ...
       }
       atom_offset: next start atom id (global)
       mol_id:      number of processed molecules
 
     Notes:
-      - attr columns assumed base: [Z, charge, hyb, arom, ring] at indices [0,2,3,4,5]
+      - attr columns assumed base:
+          Z      at 0
+          charge at 2
+          hyb    at 3
+          arom   at 4
+          ring   at 5
+          hnum   at 6
+        (degree at 1 is ignored; we recompute from adjacency)
       - Degree computed from adjacency excluding self-loops
-      - ringSize/aromNbrs/fusedId can come from attr columns or side-channel tensors
+      - ringSize/aromNbrs/fusedId come from attr columns [28,29,30] by default
+        or from side-channel tensors if *_col is None.
       - func_base_start_col .. func_base_start_col + n_func_base_flags:
-          官能基ベースのフラグ (10個) を想定し、argmax で func_id (0..9) にまとめて key に入れる
+          官能基ベースのフラグ (19個) を想定し、argmax で func_id (0..18) にまとめて key に入れる
+      - H-bond donor/acceptor flags (cols 26–27) are currently ignored by this function
+        so the number of discrete classes / CBDICT keys does not change.
       - ここでは CBDICT に存在する key だけ masks_dict に残す
       - target_base_prefix が指定されていれば、
-        その base キー (Z,charge,hyb,arom,ring,deg) のうち
+        その base キー (Z,charge,hyb,arom,ring,deg,hnum) のうち
         「Z,charge,hyb,arom,ring が prefix 一致する原子」について
-        ringSize/aromNbrs/fusedId/deg/pos の分布を debug 出力する
+        ringSize/aromNbrs/fusedId/deg/pos/hnum の分布を debug 出力する
     """
     from collections import defaultdict, Counter
     import numpy as np
@@ -228,19 +223,20 @@ def collect_global_indices_compact(
 
     # membership を高速にするために set 化
     CBDICT_KEYS = set(CBDICT.keys())
-    """    atom.GetAtomicNum(),                 # 1: Z 
-        atom.GetDegree(),                    # 1: degree
-        atom.GetFormalCharge(),              # 1: charge
-        int(atom.GetHybridization()),        # 1: hyb (enum int)
-        int(atom.GetIsAromatic()),           # 1: arom flag
-        int(atom.IsInRing()),                # 1: ring flag
-        hcount,                              # 1: total Hs (explicit+implicit)
-        *func_flags[idx],                    # 18: 官能基フラグ
-        *hbond_flags[idx],                   # 1: H-bond Donor/Acceptor
-        ring_size[idx],                      # 1: ringSize
-        arom_nbrs[idx],                      # 1: aromNbrs
-        fused_id[idx],                       # 1: fusedId     """
-    # Base columns in attr: [Z, charge, hyb, arom, ring]
+    """    atom.GetAtomicNum(),                 # 0: Z 
+        atom.GetDegree(),                    # 1: degree (not used here)
+        atom.GetFormalCharge(),              # 2: charge
+        int(atom.GetHybridization()),        # 3: hyb (enum int)
+        int(atom.GetIsAromatic()),           # 4: arom flag
+        int(atom.IsInRing()),                # 5: ring flag
+        hcount,                              # 6: total Hs (explicit+implicit)
+        *func_flags[idx],                    # 7–25: 官能基フラグ (19 dims)
+        *hbond_flags[idx],                   # 26–27: H-bond Donor/Acceptor (2 dims)
+        ring_size[idx],                      # 28: ringSize
+        arom_nbrs[idx],                      # 29: aromNbrs
+        fused_id[idx],                       # 30: fusedId     """
+
+    # Base columns in attr: [Z, charge, hyb, arom, ring, hnum]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
     BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]
 
@@ -255,7 +251,7 @@ def collect_global_indices_compact(
     pos_idx      = name_to_idx.get("pos", None)
     deg_idx      = name_to_idx.get("deg", None)
     func_idx     = name_to_idx.get("func", None)  # 今は debug では使っていないが一応取っておく
-    hnum_idx      = name_to_idx.get("hnum", None)
+    hnum_idx     = name_to_idx.get("hnum", None)
 
     # 特定クラスの分布集計用
     target_stats = None
@@ -312,6 +308,7 @@ def collect_global_indices_compact(
 
         return side_np.astype(np.int32)
 
+    from collections import defaultdict
     masks_dict = defaultdict(list)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
@@ -332,8 +329,8 @@ def collect_global_indices_compact(
 
         M = attr_np.shape[0]
 
-        # Base attributes (Z, charge, hyb, arom, ring)
-        A_sel = attr_np[..., BASE_COLS].astype(np.int32)         # (M,100,5)
+        # Base attributes (Z, charge, hyb, arom, ring, hnum)
+        A_sel = attr_np[..., BASE_COLS].astype(np.int32)         # (M,100,6)
 
         # Valid (unpadded) node mask
         node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M,100) bool
@@ -500,6 +497,7 @@ def collect_global_indices_compact(
             # advance offsets per molecule
             atom_offset += N
             mol_id += 1
+
     for key, val in masks_dict.items():
         logger.info(f"key {key}, val {len(val)}")
 
@@ -522,6 +520,7 @@ def collect_global_indices_compact(
             print(text)
 
     return masks_dict, atom_offset, mol_id
+
 
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):

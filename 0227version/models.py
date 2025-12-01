@@ -67,27 +67,26 @@ class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
 
-        # ---- 埋め込み定義 ----
-        # self.element_embed = nn.Embedding(num_embeddings=len(CORE_ELEMENTS), embedding_dim=4)
-        # self.element_embed  = nn.Embedding(num_embeddings=120, embedding_dim=16)  # 0..119
+        # ---- 埋め込み定義（離散 0-29 部分）----
         self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
-        self.ring_embed  = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # (valence+1) を 0..6 にクリップ
+        self.ring_embed     = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # ring flag+1 など
         self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
         self.aromatic_embed = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # 0/1
         self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
         self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
+
         ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
         self.register_buffer(
             "element_lut",
             self._build_element_lut(ELEMENTS)
         )
-
         self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
-        # 28 so far
+
         # 0/1 フラグ系は全部 2 クラス想定
         def flag_emb():
             return nn.Embedding(num_embeddings=2, embedding_dim=2)
 
+        # 官能基フラグ 18 個 (7-24)
         self.func_embed_0  = flag_emb()
         self.func_embed_1  = flag_emb()
         self.func_embed_2  = flag_emb()
@@ -106,31 +105,39 @@ class AtomEmbedding(nn.Module):
         self.func_embed_15 = flag_emb()
         self.func_embed_16 = flag_emb()
         self.func_embed_17 = flag_emb()
-        # + 18*2 = 28 + 36 = 64
+
+        # H-bond Donor / Acceptor (25, 26)
         self.h_don_embed   = flag_emb()
         self.h_acc_embed   = flag_emb()
 
-        # ring size / aromatic neighbors / fused-id
-        # 7番目のユニーク値: ['0', '3', '4', '5', '6', '7', '8'] → 7種類
-        self.ringsize_embed = nn.Embedding(num_embeddings=7, embedding_dim=4)
+        # ring size / aromatic neighbors / fused-id (27, 28, 29)
+        # ringSize のユニーク値: ['0', '3', '4', '5', '6', '7', '8'] → 7種類
+        self.ringsize_embed  = nn.Embedding(num_embeddings=7, embedding_dim=4)
         self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
         self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
 
-        # nn for compressing functional flags
+        # 官能基フラグ 18 個 (各 2 次元) → 36 次元を 4 次元に圧縮
         self.func_reduce = nn.Linear(18 * 2, 4)
 
         # ringSize の元の値 → index の対応（0,3,4,5,6,7,8 → 0..6）
         uniq = ['0', '3', '4', '5', '6', '7', '8']
         uniq_int = sorted(int(x) for x in uniq)  # [0,3,4,5,6,7,8]
-        # dict を buffer として保持（学習対象じゃないので buffer がちょうどよい）
         mapping = {v: i for i, v in enumerate(uniq_int)}
-        # PyTorch の中で扱いやすいように tensor でも持っておく
         self.register_buffer(
             "ring_values_tensor",
             torch.tensor(uniq_int, dtype=torch.long)
         )
-        # python dict はそのまま属性でOK
         self.ring_value_to_index = mapping
+
+        # ---- bond_env_raw (30-77, 48 dims) 用の射影 ----
+        # 48 次元 → 16 次元に圧縮して concat
+        self.bond_env_proj = nn.Linear(48, 16)
+
+        # このクラスの最終出力次元:
+        #   離散部: 7*4 + 4 + 2*2 + 3*4 = 48
+        #   bond_env_proj: 16
+        #   合計 = 64
+        self.out_dim = 48 + 16
 
     @staticmethod
     def _build_element_lut(ELEMENTS):
@@ -142,44 +149,31 @@ class AtomEmbedding(nn.Module):
 
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
         """
-        atom.GetAtomicNum(),                 # 0: Z
-        atom.GetDegree(),                    # 1: degree
-        atom.GetFormalCharge(),              # 2: charge
-        int(atom.GetHybridization()),        # 3: hyb (enum int)
-        int(atom.GetIsAromatic()),           # 4: arom flag
-        int(atom.IsInRing()),                # 5: ring flag  ???
-        hcount,                              # 6: total Hs (explicit+implicit)
-        *func_flags[idx],                    # 7-24 官能基フラグ
-        *hbond_flags[idx],                   # 25-26 H-bond Donor/Acceptor
-        ring_size[idx],                      # 27 ringSize
-        arom_nbrs[idx],                      # 28 aromNbrs
-        fused_id[idx],                       # 29 fusedId
+        atom_inputs: Tensor [N, 78] を想定
 
-        atom_inputs: LongTensor [N, 30]
-        0: element  0
-        1: degree   1
-        2: valence  ????  ring 5
-        3: charge   2
-        4: aromatic   4
-        5: hybrid     3
-        6: num_hydrogens    6
-        7-24: functional flags  7-24
-        25: H-donor flag    25
-        26: H-acceptor flag   26
-        27: ringSize (raw: 0,3,4,5,6,7,8,...)   27
-        28: #aromatic neighbors  28
-        29: fused ring id (0..7 期待)  29
+        0 : Z
+        1 : degree
+        2 : charge
+        3 : hyb
+        4 : arom
+        5 : ring
+        6 : hcount
+        7-24  : func_flags (18)
+        25    : H-donor flag
+        26    : H-acceptor flag
+        27    : ringSize (0,3,4,5,6,7,8,...)
+        28    : #aromatic neighbors
+        29    : fused ring id (0..7)
+        30-77 : bond_env_raw (48)  ← sum+max bond features
         """
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
 
-        # 0: element
+        # 0: element (Z)
         z_raw = atom_inputs[:, 0].long()
         max_z = self.element_lut.shape[0] - 1
-
         mask = (z_raw >= 0) & (z_raw <= max_z)
         z = torch.where(mask, z_raw, torch.zeros_like(z_raw))
-
         idx0 = self.element_lut[z]
         idx0 = idx0.clamp(0, self.element_embed.num_embeddings - 1)
         x0 = self.element_embed(idx0)
@@ -188,18 +182,17 @@ class AtomEmbedding(nn.Module):
         idx1 = atom_inputs[:, 1].long().clamp(0, self.degree_embed.num_embeddings - 1)
         x1 = self.degree_embed(idx1)
 
-        # 2: valence → +1 してから clamp
+        # 2: ring_embed 用スカラー（ここでは ring flag + 1）
         val_raw = atom_inputs[:, 5].long() + 1
         val_idx = val_raw.clamp(0, self.ring_embed.num_embeddings - 1)
         x2 = self.ring_embed(val_idx)
 
         # 3: charge
         chg_raw = atom_inputs[:, 2].long()
-        # もし負が紛れていても0に吸収
         chg_idx = chg_raw.clamp(0, self.charge_embed.num_embeddings - 1)
         x3 = self.charge_embed(chg_idx)
 
-        # 4: aromatic (0/1を想定)
+        # 4: aromatic (0/1)
         arom_idx = atom_inputs[:, 4].long().clamp(0, self.aromatic_embed.num_embeddings - 1)
         x4 = self.aromatic_embed(arom_idx)
 
@@ -215,6 +208,7 @@ class AtomEmbedding(nn.Module):
         def flag_idx(col: int) -> torch.Tensor:
             return atom_inputs[:, col].long().clamp(0, 1)
 
+        # 7–24: 18 functional flags
         x7  = self.func_embed_0(flag_idx(7))
         x8  = self.func_embed_1(flag_idx(8))
         x9  = self.func_embed_2(flag_idx(9))
@@ -233,46 +227,49 @@ class AtomEmbedding(nn.Module):
         x22 = self.func_embed_15(flag_idx(22))
         x23 = self.func_embed_16(flag_idx(23))
         x24 = self.func_embed_17(flag_idx(24))
-        # ---- merge functional flags (x7..x24 = 18 flags * 2 dim = 36 dim) ----
-        flags = torch.cat([
-            x7, x8, x9, x10, x11, x12, x13, x14, x15,
-            x16, x17, x18, x19, x20, x21, x22, x23, x24
-        ], dim=-1)  # shape [N, 36]
 
+        # merge functional flags: 18 flags * 2 dim = 36 dim → 4 dim
+        flags = torch.cat(
+            [x7, x8, x9, x10, x11, x12, x13, x14, x15,
+             x16, x17, x18, x19, x20, x21, x22, x23, x24],
+            dim=-1
+        )  # [N, 36]
         flags4 = self.func_reduce(flags)  # [N, 4]
 
+        # 25, 26: H-bond donor / acceptor
         x25 = self.h_don_embed(flag_idx(25))
         x26 = self.h_acc_embed(flag_idx(26))
 
-        # ---- 27: ringSize (0,3,4,5,6,7,8 → 0..6に写像) ----
+        # 27: ringSize (0,3,4,5,6,7,8 → 0..6 に写像)
         raw27 = atom_inputs[:, 27].long()
-
-        # まず全部「その他カテゴリ」に初期化（最後の index に吸収）
         mapped27 = torch.full_like(raw27, fill_value=self.ringsize_embed.num_embeddings - 1)
-
-        # 既知の値だけ上書き
         for v, idx in self.ring_value_to_index.items():
             mapped27[raw27 == v] = idx
-
-        # 念のため clamp（理論上はもう 0..6 のはずだが）
         mapped27 = mapped27.clamp(0, self.ringsize_embed.num_embeddings - 1)
         x27 = self.ringsize_embed(mapped27)
 
-        # ---- 28: #aromatic neighbors 0..4 想定 ----
+        # 28: #aromatic neighbors
         raw28 = atom_inputs[:, 28].long()
         idx28 = raw28.clamp(0, self.aroma_num_embed.num_embeddings - 1)
         x28 = self.aroma_num_embed(idx28)
 
-        # ---- 29: fused ring id 0..7 想定 ----
+        # 29: fused ring id
         raw29 = atom_inputs[:, 29].long()
         idx29 = raw29.clamp(0, self.fused_if_embed.num_embeddings - 1)
         x29 = self.fused_if_embed(idx29)
 
+        # 30-77: bond_env_raw (48 dims, float)
+        bond_env = atom_inputs[:, 30:].to(torch.float32)  # [N, 48]
+        bond_env_emb = self.bond_env_proj(bond_env)       # [N, 16]
+
+        # 離散部分の埋め込み (48 dims) ＋ bond_env_emb (16 dims) = 64 dims
         out = torch.cat(
             [
-                x0, x1, x2, x3, x4, x5, x6,
-                flags4,
-                x25, x26, x27, x28, x29,
+                x0, x1, x2, x3, x4, x5, x6,   # 7*4 = 28
+                flags4,                       # 4
+                x25, x26,                     # 2+2 = 4
+                x27, x28, x29,                # 3*4 = 12
+                bond_env_emb,                 # 16
             ],
             dim=-1,
         )
@@ -287,7 +284,7 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()
 
         self.feat_embed = AtomEmbedding()
-        self.linear_0 = nn.Linear(48, args.hidden_dim)  # h0
+        self.linear_0 = nn.Linear(64, args.hidden_dim)  # h0
 
         edge_emb_dim = getattr(args, "edge_emb_dim", 32)
         self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
