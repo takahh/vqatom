@@ -1782,3 +1782,4 @@ def feature_prop(feats, g, k):
         feats = feats * norm
 
     return feats
+
