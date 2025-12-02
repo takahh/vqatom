@@ -183,7 +183,7 @@ def collect_global_indices_compact(
     # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" など; deg は含めない)
     target_base_prefix="6_0_3_1_1",
     debug=True,
-    debug_max_print=10,
+    debug_max_print=1000,
 ):
     """
     Returns:
