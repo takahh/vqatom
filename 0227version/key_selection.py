@@ -119,8 +119,8 @@ def plot_histogram_loglog(class_dict, prefix=None, bins=200):
     # ---- plot ----
     plt.figure(figsize=(7,5))
     plt.hist(counts, bins=bins, edgecolor="black")
-    plt.xscale("log")
-    # plt.yscale("log")
+    # plt.xscale("log")
+    plt.yscale("log")
 
     plt.title("Histogram of class counts (log–log)")
     plt.xlabel("Class count (log scale)")
