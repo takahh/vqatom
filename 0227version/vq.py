@@ -1314,7 +1314,7 @@ class EuclideanCodebook(nn.Module):
             # flatten は [1, N, D] (N = 全体) を想定
             self.init_embed_(flatten, mask_dict)
             print("init_embed is done")
-
+            print(mask_dict.keys())
             for key in mask_dict.keys():
                 idx = mask_dict[key]  # global indices
 
