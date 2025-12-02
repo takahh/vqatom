@@ -64,8 +64,9 @@ with open("./key_raw_data") as f:
 
 
 for k, v in key_dict.items():
-    if int(v) > 30:
-        print(f"{k}: {v},")
+    # if int(v) > 30:
+    #     print(f"{k}: {v},")
+    print(f"{k}: {v},")
 
 # summarize_split_by_prefix(key_dict, prefix="6_0_3_1_1_3_6")
 import matplotlib.pyplot as plt
