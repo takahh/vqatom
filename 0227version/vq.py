@@ -1392,7 +1392,7 @@ class EuclideanCodebook(nn.Module):
         # feature: List[Tensor[Mi, 30]] を想定
         feat_flat = torch.cat(feature, dim=0)  # [N, 30]
         feat_flat = feat_flat.contiguous().to(flatten.device)
-        assert feat_flat.ndim == 2 and feat_flat.size(1) == 30
+        assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
         assert feat_flat.size(0) == flatten.size(1)  # must match latents
 
         for key in mask_dict.keys():
