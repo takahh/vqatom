@@ -161,18 +161,19 @@ def collect_global_indices_compact(
     # 4  arom
     # 5  ring
     # 6  hnum
-    # 7–25  func base flags (19 dims)
-    # 26–27 h-bond donor / acceptor flags (2 dims)  ← not used in key for now
-    # 28 ring size
-    # 29 aromatic neighbor count (aromNbrs)
-    # 30 fused ring ID (fusedId)
-    ring_size_col=28,
-    arom_nbrs_col=29,
-    fused_id_col=30,
+    # 7–24  func base flags (18 dims)
+    # 25–26 h-bond donor / acceptor flags (2 dims)  ← NOT used in key (keep CBDICT compatible)
+    # 27 ring size
+    # 28 aromatic neighbor count (aromNbrs)
+    # 29 fused ring ID (fusedId)
+    # 30–77 bond_env_raw (48 dims) ← ignored here (key is 100% discrete, same as before)
+    ring_size_col=27,
+    arom_nbrs_col=28,
+    fused_id_col=29,
     # 官能基ベースのフラグ (one-hot / multi-hot) が attr に入っている範囲
-    # 例: attr[..., 7:26] に 19 個 (0..18) の官能基フラグがある想定
+    # 例: attr[..., 7:25] に 18 個 (0..17) の官能基フラグがある想定
     func_base_start_col=7,
-    n_func_base_flags=19,
+    n_func_base_flags=18,
     # Or pass them separately (same batching/shape as attr_batch[...,0]):
     ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
     arom_nbrs_batch=None,         # ditto
@@ -195,20 +196,26 @@ def collect_global_indices_compact(
       mol_id:      number of processed molecules
 
     Notes:
-      - attr columns assumed base:
-          Z      at 0
-          charge at 2
-          hyb    at 3
-          arom   at 4
-          ring   at 5
-          hnum   at 6
-        (degree at 1 is ignored; we recompute from adjacency)
+      - attr columns assumed base (first 30 dims):
+          0: Z
+          1: degree (ignored; recomputed from adjacency)
+          2: charge
+          3: hyb
+          4: arom
+          5: ring
+          6: hnum
+          7–24: func base flags (18 dims)
+          25–26: H-bond donor/acceptor (ignored in key)
+          27: ringSize
+          28: aromNbrs
+          29: fusedId
+        (30–77: bond_env_raw 48 dims; ignored here for CBDICT compatibility)
       - Degree computed from adjacency excluding self-loops
-      - ringSize/aromNbrs/fusedId come from attr columns [28,29,30] by default
+      - ringSize/aromNbrs/fusedId come from attr columns [27,28,29] by default
         or from side-channel tensors if *_col is None.
       - func_base_start_col .. func_base_start_col + n_func_base_flags:
-          官能基ベースのフラグ (19個) を想定し、argmax で func_id (0..18) にまとめて key に入れる
-      - H-bond donor/acceptor flags (cols 26–27) are currently ignored by this function
+          官能基ベースのフラグ (18個) を想定し、argmax で func_id (0..17) にまとめて key に入れる
+      - H-bond donor/acceptor flags (cols 25–26) are currently ignored by this function
         so the number of discrete classes / CBDICT keys does not change.
       - ここでは CBDICT に存在する key だけ masks_dict に残す
       - target_base_prefix が指定されていれば、
@@ -230,11 +237,12 @@ def collect_global_indices_compact(
         int(atom.GetIsAromatic()),           # 4: arom flag
         int(atom.IsInRing()),                # 5: ring flag
         hcount,                              # 6: total Hs (explicit+implicit)
-        *func_flags[idx],                    # 7–25: 官能基フラグ (19 dims)
-        *hbond_flags[idx],                   # 26–27: H-bond Donor/Acceptor (2 dims)
-        ring_size[idx],                      # 28: ringSize
-        arom_nbrs[idx],                      # 29: aromNbrs
-        fused_id[idx],                       # 30: fusedId     """
+        *func_flags[idx],                    # 7–24: 官能基フラグ (18 dims)
+        *hbond_flags[idx],                   # 25–26: H-bond Donor/Acceptor (2 dims)
+        ring_size[idx],                      # 27: ringSize
+        arom_nbrs[idx],                      # 28: aromNbrs
+        fused_id[idx],                       # 29: fusedId     
+        30–77: bond_env_raw (48 dims)       """
 
     # Base columns in attr: [Z, charge, hyb, arom, ring, hnum]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
@@ -250,7 +258,7 @@ def collect_global_indices_compact(
     fusedId_idx  = name_to_idx.get("fusedId", None)
     pos_idx      = name_to_idx.get("pos", None)
     deg_idx      = name_to_idx.get("deg", None)
-    func_idx     = name_to_idx.get("func", None)  # 今は debug では使っていないが一応取っておく
+    func_idx     = name_to_idx.get("func", None)
     hnum_idx     = name_to_idx.get("hnum", None)
 
     # 特定クラスの分布集計用
@@ -500,6 +508,7 @@ def collect_global_indices_compact(
 
     for key, val in masks_dict.items():
         logger.info(f"key {key}, val {len(val)}")
+    logger.info(f"[collect_global_indices_compact] total keys in masks_dict: {len(masks_dict)}")
 
     # target_base_prefix の集計結果を最後にまとめて出力
     if target_stats is not None and debug:
@@ -520,7 +529,6 @@ def collect_global_indices_compact(
             print(text)
 
     return masks_dict, atom_offset, mol_id
-
 
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
