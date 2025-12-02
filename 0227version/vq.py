@@ -1358,9 +1358,7 @@ class EuclideanCodebook(nn.Module):
                 try:
                     from sklearn.utils import resample
                     n = min(self.samples_latent_in_kmeans, masked_latents.shape[0])
-                    print("before n > 1")
                     if n > 1:
-                        print("after n > 1")
                         xs, ys = resample(
                             masked_latents.cpu().numpy(),
                             idx_code.cpu().numpy(),
