@@ -1,64 +1,71 @@
 import re
-from dataclasses import dataclass
-from typing import List
+import pandas as pd
+with open("ss_log") as f:
+    contents = f.read()
+LOG_TEXT = contents
 
-@dataclass
-class Entry:
-    key: str
-    ss: float
-    n: int
-    k_e: int
+lines = [ln.strip() for ln in LOG_TEXT.splitlines() if ln.strip()]
 
-# 「数字と _」が続く key（11個でも12個でもOK）にマッチ
-LINE_RE = re.compile(
+# 先頭の "value=0  count=..." を拾う
+first = lines[0]
+m0 = re.match(r"value=(\d+)\s+count=(\d+)", first)
+if m0:
+    global_value0 = int(m0.group(1))
+    global_count0 = int(m0.group(2))
+    print("global value=0 count:", global_value0, global_count0)
+    data_lines = lines[1:]
+else:
+    global_value0 = None
+    global_count0 = None
+    data_lines = lines
+
+pattern = re.compile(
     r"Silhouette Score \(subsample\):\s+"
-    r"(?P<key>[0-9_\-]+)\s+"
-    r"(?P<ss>[0-9.]+),\s*sample size\s+(?P<n>[0-9]+),\s*K_e\s+(?P<ke>[0-9]+)"
+    r"(?P<prefix>[0-9_-]+)\s+"
+    r"(?P<score>[0-9.]+), sample size "
+    r"(?P<n>\d+), K_e (?P<ke>\d+)"
 )
 
-def parse_log(path: str) -> List[Entry]:
-    entries: List[Entry] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            m = LINE_RE.search(line)
-            if not m:
-                continue
-            key = m.group("key")
-            ss = float(m.group("ss"))
-            n = int(m.group("n"))
-            ke = int(m.group("ke"))
-            entries.append(Entry(key, ss, n, ke))
-    return entries
+records = []
+for ln in data_lines:
+    m = pattern.search(ln)
+    if not m:
+        continue
+    prefix = m.group("prefix")
+    score = float(m.group("score"))
+    n = int(m.group("n"))
+    ke = int(m.group("ke"))
+    n_per_ke = float(n / ke)
+    records.append(dict(prefix=prefix, score=score, n=n, ke=ke, n_per_ke=n_per_ke))
 
-if __name__ == "__main__":
-    entries = parse_log("ss_log.txt")
+df = pd.DataFrame(records)
+print(df.head())
+print("rows:", len(df))
+degenerate = df[(df["score"] == 0.0) & (df["ke"] <= 1)]
+print("degenerate rows:", len(degenerate))
+print(degenerate.head())
 
-    print(f"Total entries: {len(entries)}")
+MIN_N = 200   # 好きな値に
+small_n = df[df["n"] < MIN_N]
+print("small n:", len(small_n))
 
-    # 1) SS>0, K_e>1, n>=1000 に絞る
-    valid = [e for e in entries if e.ss > 0.0 and e.k_e > 1 and e.n >= 1000]
-    print(f"Valid entries (ss>0, K_e>1, n>=1000): {len(valid)}")
+MIN_N = 500   # subsample がこれ以上
+MIN_KE = 3    # 3クラス以上に分かれている
+good_mask = (df["n"] >= MIN_N) & (df["ke"] >= MIN_KE)
 
-    if valid:
-        avg_ss = sum(e.ss for e in valid) / len(valid)
-        min_ss = min(e.ss for e in valid)
-        max_ss = max(e.ss for e in valid)
-        print(f"SS stats: avg={avg_ss:.4f}, min={min_ss:.4f}, max={max_ss:.4f}")
+df_good = df[good_mask].copy()
+print("good candidates:", len(df_good))
 
-        # 2) SS の低い順トップ30
-        print("\n=== Lowest SS (top 30, n>=1000, K_e>1) ===")
-        for e in sorted(valid, key=lambda x: x.ss)[:30]:
-            print(f"{e.ss:.4f}\tn={e.n:6d}\tK_e={e.k_e:4d}\t{e.key}")
+# スコア順に眺める
+print(df_good.sort_values("score", ascending=False).head(30))
+# スコア順に眺める
+print(df_good.sort_values("score", ascending=True).head(30))
 
-        # 3) SS の高い順トップ30
-        print("\n=== Highest SS (top 30, n>=1000, K_e>1) ===")
-        for e in sorted(valid, key=lambda x: x.ss, reverse=True)[:30]:
-            print(f"{e.ss:.4f}\tn={e.n:6d}\tK_e={e.k_e:4d}\t{e.key}")
+# 「これ以上なら prefix として採用しようかな」という目安
+CUTOFF_STRICT = 0.35
+CUTOFF_LOOSE  = 0.25
 
-    # 4) K_e=1 のものをざっと確認
-    ke1 = [e for e in entries if e.k_e == 1]
-    print(f"\nEntries with K_e=1: {len(ke1)}")
-    if ke1:
-        print("Example (first 20):")
-        for e in ke1[:20]:
-            print(f"{e.ss:.4f}\tn={e.n:6d}\tK_e={e.k_e:4d}\t{e.key}")
+df_strict = df_good[df_good["score"] >= CUTOFF_STRICT]
+df_loose = df_good[df_good["score"] >= CUTOFF_LOOSE]
+
+print("strict:", len(df_strict), "loose:", len(df_loose))
