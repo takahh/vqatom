@@ -1,3 +1,8 @@
+import re
+import numbers
+import matplotlib.pyplot as plt
+import numpy as np
+
 def summarize_split_by_prefix(class_dict, prefix="6_0_3_1_1_3_6"):
     """
     class_dict: { key(str): indices(Tensor / list[int] / count(int)) }
@@ -5,9 +10,6 @@ def summarize_split_by_prefix(class_dict, prefix="6_0_3_1_1_3_6"):
     prefix に一致するキーを全部拾って、
     「prefix の後ろがどう分かれていて、各サブクラスに何個あるか」を表示する。
     """
-    import re
-    import numbers
-
     result = {}
     total = 0
 
@@ -21,10 +23,8 @@ def summarize_split_by_prefix(class_dict, prefix="6_0_3_1_1_3_6"):
 
         # === 個数 n の取り方 ===
         if isinstance(idx, numbers.Integral):
-            # すでに「個数」として入っている場合（今回これ）
             n = int(idx)
         else:
-            # list / tuple / Tensor など
             try:
                 n = len(idx)
             except TypeError:
@@ -56,32 +56,45 @@ def summarize_split_by_prefix(class_dict, prefix="6_0_3_1_1_3_6"):
         else:
             print(f"{prefix} : {n}")
 
-key_dict = {}
-with open("./key_raw_data") as f:
-    for lines in f:
-        ele = lines.split()
-        key_dict[ele[3]] = int(ele[5])
 
+def parse_key_counts_from_log(path):
+    """
+    ログファイルから
+    'Silhouette Score (subsample): <KEY> <score>, sample size N, K_e 1'
+    の行だけを拾って {key: N} の dict を返す。
+    同じ key が複数行ある場合は sample size を合計する。
+    """
+    key_dict = {}
 
-for k, v in key_dict.items():
-    # if int(v) > 30:
-    #     print(f"{k}: {v},")
-    print(f"{k}: {v},")
+    # 例:
+    # Dec02 03-56-46: Silhouette Score (subsample): 6_0_4_0_1_3_7_2_2_0_9_0 0.0000, sample size 22, K_e 1
+    pattern = re.compile(
+        r"Silhouette Score \(subsample\):\s+(\S+).*?sample size\s+(\d+)",
+        re.ASCII,
+    )
 
-# summarize_split_by_prefix(key_dict, prefix="6_0_3_1_1_3_6")
-import matplotlib.pyplot as plt
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            m = pattern.search(line)
+            if not m:
+                # "Save failed for key ..." みたいな行はスキップ
+                continue
 
-import matplotlib.pyplot as plt
-import numpy as np
+            key = m.group(1)
+            count = int(m.group(2))
+
+            # 同じ key が複数回出たら合算しておく
+            key_dict[key] = key_dict.get(key, 0) + count
+
+    return key_dict
+
 
 def plot_histogram_loglog(class_dict, prefix=None, bins=200):
     """
     Plot a log–log histogram of class counts.
     If prefix is given, only plot keys matching that prefix.
     """
-    import re
-    import numbers
-
     counts = []
 
     if prefix is not None:
@@ -117,10 +130,10 @@ def plot_histogram_loglog(class_dict, prefix=None, bins=200):
 
     counts = np.array(counts)
 
-    # ---- plot ----
-    plt.figure(figsize=(7,5))
+    # ---- plot (log–log) ----
+    plt.figure(figsize=(7, 5))
     plt.hist(counts, bins=bins, edgecolor="black")
-    # plt.xscale("log")
+    plt.xscale("log")
     plt.yscale("log")
 
     plt.title("Histogram of class counts (log–log)")
@@ -131,5 +144,16 @@ def plot_histogram_loglog(class_dict, prefix=None, bins=200):
     plt.show()
 
 
-plot_histogram_loglog(key_dict)
+# ========= 実行部分 =========
+# ログファイルから key_dict を作る
+key_dict = parse_key_counts_from_log("./key_raw_data")
 
+# 中身をざっと確認したければ
+for k, v in key_dict.items():
+    print(f"{k}: {v},")
+
+# 任意の prefix でサマリ
+# summarize_split_by_prefix(key_dict, prefix="6_0_3_1_1_3_6")
+
+# ロングテール込みの log–log ヒストグラム
+plot_histogram_loglog(key_dict)
