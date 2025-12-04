@@ -807,6 +807,10 @@ from einops import rearrange
 # from your_config_module import get_args
 # from your_cb_dict import CBDICT
 
+import re
+import torch
+import torch.nn as nn
+from einops import rearrange
 
 class EuclideanCodebook(nn.Module):
     def __init__(
@@ -839,7 +843,7 @@ class EuclideanCodebook(nn.Module):
         self.train_or_infer = args.train_or_infer
         self.use_checkpoint = args.use_checkpoint
 
-        self.cb_dict = CBDICT  # {element: K_e}
+        self.cb_dict = CBDICT  # {element_key(str or int): K_e}
 
         assert not (
             use_ddp and num_codebooks > 1 and kmeans_init
@@ -856,31 +860,64 @@ class EuclideanCodebook(nn.Module):
         # kmeans 済みかどうか
         self.register_buffer("initted", torch.tensor([not kmeans_init], dtype=torch.bool))
 
-        # --- 重要: ここで cluster_size/embed_avg を必ず float32 で作る ---
+        # --- cluster_size / embed_avg (float32 固定) ---
         for elem in self.cb_dict.keys():
             K_e = int(self.cb_dict[elem])
+            elem_str = str(elem)
             self.register_buffer(
-                f"cluster_size_{elem}",
+                f"cluster_size_{elem_str}",
                 torch.zeros(K_e, dtype=torch.float32),
             )
             self.register_buffer(
-                f"embed_avg_{elem}",
+                f"embed_avg_{elem_str}",
                 torch.zeros(K_e, dim, dtype=torch.float32),
             )
 
         self.learnable_codebook = learnable_codebook
 
-        # element ごとのコードブック本体
+        # element ごとのコードブック本体（ParameterDict のキーは「安全キー」に変換）
         self.embed = nn.ParameterDict()
+        self.key_to_safe = {}  # original_key(str) -> safe_key(str)
+        self.safe_to_key = {}  # safe_key(str) -> original_key(str)
+
         for key in self.cb_dict.keys():
+            orig = str(key)
             K_e = int(self.cb_dict[key])
-            D = dim
-            init = torch.randn(K_e, D) * 0.01  # 初期値は後で KMeans で上書き
-            self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
+            safe = self._get_or_create_safe_key(orig, K_e, dim, device="cpu")
 
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
         self.quantize_dict = {}
+
+    # ------------------------------------------------------------------
+    # key まわりのユーティリティ
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _safe_key(k: str) -> str:
+        """ParameterDict 用の安全なキーに変換（属性名として有効な文字列）。"""
+        s = re.sub(r"[^0-9A-Za-z_]", "_", k)
+        if not s or not (s[0].isalpha() or s[0] == "_"):
+            s = "k_" + s
+        return s
+
+    def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None) -> str:
+        """
+        original key (skey) から safe_key を取得。
+        必要なら Parameter を作成（K_e, D, device が与えられている場合）。
+        """
+        skey = str(skey)
+        if skey in self.key_to_safe:
+            safe = self.key_to_safe[skey]
+        else:
+            safe = self._safe_key(skey)
+            self.key_to_safe[skey] = safe
+            self.safe_to_key[safe] = skey
+
+        if safe not in self.embed and K_e is not None and D is not None and device is not None:
+            init = torch.randn(K_e, D, device=device) * 0.01
+            self.embed[safe] = nn.Parameter(init, requires_grad=True)
+
+        return safe
 
     # ------------------------------------------------------------------
     # ユーティリティ / 初期化系
@@ -1014,15 +1051,16 @@ class EuclideanCodebook(nn.Module):
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
             # embed
-            if skey not in self.embed or self.embed[skey].shape != (K_req, D):
-                self.embed[skey] = nn.Parameter(
+            safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
+            if self.embed[safe].shape != (K_req, D):
+                self.embed[safe] = nn.Parameter(
                     means_kd.detach().to(device=device, dtype=means_kd.dtype),
                     requires_grad=True,
                 )
             else:
-                self.embed[skey].data.copy_(means_kd)
+                self.embed[safe].data.copy_(means_kd)
 
-            # cluster_size / embed_avg を必ず float32 で再構築
+            # cluster_size / embed_avg を必ず float32 で再構築（バッファ名は元キー）
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
 
@@ -1062,10 +1100,8 @@ class EuclideanCodebook(nn.Module):
             norm[k_str] = v
         return norm
 
-    # ほかの _as_index_tensor / _global_to_local_indices / _cdist_argmin_chunked が必要ならそのまま残してOK
-
     # ------------------------------------------------------------------
-    # Forward: ここで EMA update を dtype 安全に書き直し
+    # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
@@ -1110,8 +1146,14 @@ class EuclideanCodebook(nn.Module):
                     continue
 
                 skey = str(key)
-                code = self.embed[skey]
-                code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
+                safe = self._get_or_create_safe_key(
+                    skey,
+                    K_e=int(self.cb_dict.get(skey, self.codebook_size)),
+                    D=D,
+                    device=flatten.device,
+                )
+                code_param = self.embed[safe]
+                code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
                 with torch.no_grad():
                     dist = torch.cdist(masked_latents, code, p=2).pow(2)
@@ -1176,7 +1218,11 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             skey = str(key)
-            code_param = self.embed[skey]
+
+            # safe key を通して ParameterDict にアクセス
+            K_e_default = int(self.cb_dict.get(skey, self.codebook_size))
+            safe = self._get_or_create_safe_key(skey, K_e_default, D, device=flatten.device)
+            code_param = self.embed[safe]
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
             with torch.no_grad():
@@ -1227,7 +1273,11 @@ class EuclideanCodebook(nn.Module):
                     idx_code_long = idx_code.to(device=device, dtype=torch.long)
 
                     batch_counts = torch.zeros_like(cs, dtype=torch.float32)
-                    batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
+                    batch_counts.index_add_(
+                        0,
+                        idx_code_long,
+                        torch.ones_like(idx_code_long, dtype=torch.float32),
+                    )
 
                     batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
                     batch_embed_sum.index_add_(
@@ -1239,7 +1289,6 @@ class EuclideanCodebook(nn.Module):
                     decay = self.decay
                     one_m = 1.0 - decay
 
-                    # ここが元のエラー箇所：cs が Long だと壊れるので float32 に統一済み
                     cs.mul_(decay).add_(batch_counts * one_m)
                     ea.mul_(decay).add_(batch_embed_sum * one_m)
 
