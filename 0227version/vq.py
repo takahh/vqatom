@@ -1464,9 +1464,19 @@ class EuclideanCodebook(nn.Module):
                     eps = getattr(self, "eps", 1e-6)
                     decay = float(self.decay)
 
-                    # EMA 更新
-                    ea.mul_(decay)
-                    cs.mul_(decay)
+                    # # EMA 更新
+                    # ea.mul_(decay)
+                    # cs.mul_(decay)
+                    # before:
+                    # cs.mul_(decay)
+                    # cs.add_((1 - decay) * incr)
+
+                    # after:
+                    with torch.cuda.amp.autocast(enabled=False):
+                        cs_fp32 = cs.to(torch.float32)  # clone not needed; to() returns a new tensor
+                        cs_fp32.mul_(float(decay))
+                        cs_fp32.add_((1.0 - float(decay)) * incr.to(torch.float32))
+                        cs.copy_(cs_fp32)  # preserve the original tensor object if it's a buffer
 
                     one = torch.ones_like(idx_code, dtype=cs.dtype)
                     cs.index_add_(0, idx_code, one * (1.0 - decay))
