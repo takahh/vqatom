@@ -1336,7 +1336,7 @@ class EuclideanCodebook(nn.Module):
 
                 code = self.embed[str(key)]
                 code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
-
+                import torch
                 # 最近傍コード割り当て
                 with torch.no_grad():
                     dist = torch.cdist(masked_latents, code, p=2).pow(2)
