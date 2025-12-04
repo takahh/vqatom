@@ -795,68 +795,98 @@ class ContrastiveLoss(nn.Module):
 
 import torch.nn.functional as F
 
+import torch
+import torch.nn as nn
+from einops import rearrange
+
+# 必要なら
+# from utils import CORE_ELEMENTS
+# from your_kmeans_module import kmeans
+# from your_sampling_module import batched_sample_vectors, sample_vectors_distributed
+# from your_distributed_module import distributed, noop
+# from your_config_module import get_args
+# from your_cb_dict import CBDICT
+
 
 class EuclideanCodebook(nn.Module):
     def __init__(
-            self,
-            dim,
-            codebook_size,
-            num_codebooks=1,
-            kmeans_init=True,
-            kmeans_iters=100,
-            sync_kmeans=True,
-            decay=0.1,
-            eps=1e-5,
-            threshold_ema_dead_code=2,
-            use_ddp=False,
-            learnable_codebook=False,
-            sample_codebook_temp=0
+        self,
+        dim,
+        codebook_size,
+        num_codebooks=1,
+        kmeans_init=True,
+        kmeans_iters=100,
+        sync_kmeans=True,
+        decay=0.1,
+        eps=1e-5,
+        threshold_ema_dead_code=2,
+        use_ddp=False,
+        learnable_codebook=False,
+        sample_codebook_temp=0,
     ):
         super().__init__()
-        self.decay = decay
-        init_fn = uniform_init if not kmeans_init else torch.zeros
-        embed = init_fn(num_codebooks, codebook_size, dim)
+
+        self.decay = float(decay)
         self.codebook_size = codebook_size
         self.num_codebooks = num_codebooks
+        self.eps = eps
+        self.threshold_ema_dead_code = threshold_ema_dead_code
+        self.sample_codebook_temp = sample_codebook_temp
+
         args = get_args()
         self.samples_latent_in_kmeans = args.samples_latent_in_kmeans
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.train_or_infer = args.train_or_infer
-        # if args.train_or_infer == "infer":
-        #     self.kmeans_iters = 200
-        # else:
-        #     self.kmeans_iters = 30
-        self.eps = eps
-        self.threshold_ema_dead_code = threshold_ema_dead_code
-        self.sample_codebook_temp = sample_codebook_temp
         self.use_checkpoint = args.use_checkpoint
-        self.cb_dict = CBDICT
-        # key 1, code torch.Size([47, 16]), embed_k torch.Size([19, 16])
+
+        self.cb_dict = CBDICT  # {element: K_e}
+
         assert not (
-                    use_ddp and num_codebooks > 1 and kmeans_init), 'kmeans init is not compatible with multiple codebooks in distributed environment for now'
-        self.sample_fn = sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
-        self.kmeans_all_reduce_fn = distributed.all_reduce if use_ddp and sync_kmeans else noop
+            use_ddp and num_codebooks > 1 and kmeans_init
+        ), "kmeans init is not compatible with multiple codebooks in distributed environment for now"
+
+        self.sample_fn = (
+            sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
+        )
+        self.kmeans_all_reduce_fn = (
+            distributed.all_reduce if use_ddp and sync_kmeans else noop
+        )
         self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
-        self.register_buffer('initted', torch.Tensor([not kmeans_init]))
+
+        # kmeans 済みかどうか
+        self.register_buffer("initted", torch.tensor([not kmeans_init], dtype=torch.bool))
+
+        # --- 重要: ここで cluster_size/embed_avg を必ず float32 で作る ---
         for elem in self.cb_dict.keys():
-            self.register_buffer(f"cluster_size_{elem}", torch.zeros(self.cb_dict[elem]))
-            self.register_buffer(f"embed_avg_{elem}", torch.zeros(self.cb_dict[elem], dim))
+            K_e = int(self.cb_dict[elem])
+            self.register_buffer(
+                f"cluster_size_{elem}",
+                torch.zeros(K_e, dtype=torch.float32),
+            )
+            self.register_buffer(
+                f"embed_avg_{elem}",
+                torch.zeros(K_e, dim, dtype=torch.float32),
+            )
+
         self.learnable_codebook = learnable_codebook
+
+        # element ごとのコードブック本体
         self.embed = nn.ParameterDict()
-        # self.embed_avg = nn.ParameterDict()
         for key in self.cb_dict.keys():
-            # Make a fresh tensor copy per element
-            K_e = self.cb_dict[key]  # e.g. 4360 for carbon
+            K_e = int(self.cb_dict[key])
             D = dim
-            init = torch.randn(K_e, D) * 0.01  # initial latents does not matter cause overwritten in init_emb
+            init = torch.randn(K_e, D) * 0.01  # 初期値は後で KMeans で上書き
             self.embed[str(key)] = nn.Parameter(init, requires_grad=True)
-            # self.embed_avg[str(key)] = nn.Parameter(embed.clone().detach(), requires_grad=True)
+
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
         self.quantize_dict = {}
 
+    # ------------------------------------------------------------------
+    # ユーティリティ / 初期化系
+    # ------------------------------------------------------------------
     def reset_kmeans(self):
-        self.initted.data.copy_(torch.Tensor([False]))
+        self.initted.data.fill_(False)
 
     def copy_codebook_(self, embed: torch.Tensor, init: torch.Tensor, fill="data", data=None):
         """
@@ -865,41 +895,34 @@ class EuclideanCodebook(nn.Module):
         fill : "data" | "repeat" | "randn"
         data : [N, D] latents to sample from if fill=="data"
         """
-        # --- align orientation so last dim is D ---
         def to_KD(t, D_expected):
-            # try [K, D] first
             if t.shape[-1] == D_expected:
                 return t  # [K_used, D]
-            # else try transpose from [D, K_used]
             if t.shape[0] == D_expected:
-                return t.t().contiguous()  # -> [K_used, D]
+                return t.t().contiguous()
             raise ValueError(f"init shape {tuple(t.shape)} not compatible with D={D_expected}")
 
-        # make embed [K, D] view
-        if embed.shape[-1] < embed.shape[0]:  # heuristics: typical is [K, D]
+        if embed.shape[-1] < embed.shape[0]:  # [K, D] とみなす
             K, D = embed.shape
             initKD = to_KD(init, D)
             K_used = initKD.shape[0]
-            # copy overlap
             n = min(K, K_used)
             embed[:n].copy_(initKD[:n])
 
-            # fill remaining codes
             if K > n:
                 if fill == "data" and data is not None and data.numel() > 0:
                     idx = torch.randint(0, data.size(0), (K - n,), device=embed.device)
                     embed[n:K].copy_(data[idx])
                 elif fill == "repeat" and n > 0:
                     reps = (K - n + n - 1) // n
-                    embed[n:K].copy_(initKD[:n].repeat((reps, 1))[:K - n])
+                    embed[n:K].copy_(initKD[:n].repeat((reps, 1))[: K - n])
                 elif fill == "randn":
                     embed[n:K].normal_(0, 1e-3)
                 else:
-                    embed[n:K].copy_(embed[:1])  # fallback
-        else:
-            # codebook is [D, K]; do the same with transposes
+                    embed[n:K].copy_(embed[:1])
+        else:  # [D, K]
             D, K = embed.shape
-            initKD = to_KD(init, D)  # [K_used, D]
+            initKD = to_KD(init, D)
             initDK = initKD.t().contiguous()  # [D, K_used]
             n = min(K, initDK.shape[1])
             embed[:, :n].copy_(initDK[:, :n])
@@ -913,18 +936,13 @@ class EuclideanCodebook(nn.Module):
     def init_embed_(self, data, mask_dict=None, use_cosine_sim: bool = False):
         """
         Initialize per-element codebooks using absolute K from self.cb_dict.
-        - self.cb_dict[skey] is absolute K_req (int).
-        - We DO NOT cap the final codebook size: embed and cluster_size buffers
-          are created with shape (K_req, D) and (K_req,), even if K_req > N_i.
-        - K-Means is executed with K_run = min(K_req, N_i) and then padded.
+        data: [1, N, D]
         """
         assert mask_dict is not None, "mask_dict is required"
         print("++++++++++++++++ RUNNING init_embed (ABS K, NO FINAL CAP) +++++++++++++")
 
         device = data.device
         D = data.shape[-1]
-
-        from utils import CORE_ELEMENTS  # e.g. {"6","7","8",...} as strings
 
         def get_idx(md, k):
             return md.get(k, md.get(str(k), md.get(str(k))))
@@ -933,361 +951,137 @@ class EuclideanCodebook(nn.Module):
             v = d.get(k, d.get(str(k), d.get(str(k))))
             if v is None:
                 return None
-            try:
-                return int(v)
-            except Exception:
-                raise ValueError(f"cb_dict[{k}] must be an integer (got {type(v)}: {v})")
+            return int(v)
 
-        # simple padding helper: pad to K_req with zero-count, small-noise means
-        def _pad_to_K(means_1kd, counts_1k, K_req: str, data_stats=None):
-            """
-            means_1kd: [1, K_run, D]
-            counts_1k: [1, K_run]
-            returns means_pad [K_req, D], counts_pad [K_req]
-            """
+        def _stats(x_nd):
+            if x_nd.numel() == 0:
+                return None
+            mu = x_nd.mean(dim=0)
+            with torch.no_grad():
+                dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
+                sigma = torch.quantile(dev, 0.5)
+            return mu, sigma
+
+        def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
             H, K_run, Dd = means_1kd.shape
             assert H == 1 and Dd == D
-            means_kd = means_1kd[0]  # [K_run, D]
-            counts_k = counts_1k[0]  # [K_run]
+            means_kd = means_1kd[0]
+            counts_k = counts_1k[0]
 
             if K_req <= K_run:
                 return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
 
-            # allocate output
             K_pad = K_req - K_run
             out_means = torch.empty((K_req, D), device=means_kd.device, dtype=means_kd.dtype)
             out_counts = torch.zeros((K_req,), device=counts_k.device, dtype=counts_k.dtype)
 
-            # copy existing
             out_means[:K_run].copy_(means_kd)
             out_counts[:K_run].copy_(counts_k)
 
-            # init extra slots: small noise around data mean (or zeros as fallback)
             if data_stats is not None:
-                mu, sigma = data_stats  # [D], scalar
-                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
+                mu, sigma = data_stats
+                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (
+                    0.01 * sigma + 1e-6
+                )
                 out_means[K_run:] = mu + noise
             else:
                 out_means[K_run:] = 0
 
-            # counts remain zero for padded slots
             return out_means, out_counts
-
-        # precompute global stats per element batch (for better pad init)
-        def _stats(x_nd):
-            # x_nd: [N_i, D]
-            if x_nd.numel() == 0:
-                return None
-            mu = x_nd.mean(dim=0)
-            # robust scalar scale for noise: median absolute deviation proxy
-            with torch.no_grad():
-                dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
-                sigma = torch.quantile(dev, 0.5)  # median L2 radius
-            return mu, sigma
 
         for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
             skey = str(raw_key)
-            # if skey not in self.cb_dict.keys():
-            #     continue
-
             idx = get_idx(mask_dict, skey)
             if idx is None:
-                # print(f"[init_embed_] skip Z={skey}: no indices in mask_dict")
                 continue
-
             masked = data[0][idx]  # (N_i, D)
             N_i = masked.shape[0]
             if N_i == 0:
-                # print(f"[init_embed_] skip Z={skey}: N_i=0")
                 continue
 
-            # ---- absolute K requested (you can set bigger values for 6/7/8 in cb_dict) ----
             K_req = get_absK(self.cb_dict, skey)
             if K_req is None or K_req <= 0:
-                # print(f"[init_embed_] warn Z={skey}: invalid K in cb_dict -> default to 1")
                 K_req = 1
 
-            # K-Means can only produce up to N_i distinct centers; run with K_run
             K_run = min(K_req, N_i)
 
-            # run kmeans (on CUDA); returns [1,K_run,D], [1,K_run]
             means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
                 masked.unsqueeze(0).to(device),
                 num_clusters=K_run,
                 use_cosine_sim=use_cosine_sim,
             )
 
-            # compact if you have dead centers (optional, keeps K_run ≤ produced)
-            # If your compact_clusters always pads to max of its input, you can skip it here.
-            # Otherwise, do:
-            # means_1kd, counts_1k, used_mask = compact_clusters(means_1kd, counts_1k, pad_to_max=True)
-
-            # pad up to K_req (NO CAP on final size)
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-            # allocate/resize destination params & buffers to EXACTLY K_req
+            # embed
             if skey not in self.embed or self.embed[skey].shape != (K_req, D):
-                self.embed[skey] = torch.nn.Parameter(
+                self.embed[skey] = nn.Parameter(
                     means_kd.detach().to(device=device, dtype=means_kd.dtype),
-                    requires_grad=True
+                    requires_grad=True,
                 )
             else:
                 self.embed[skey].data.copy_(means_kd)
 
-            buf_name = f"cluster_size_{skey}"
-            if not hasattr(self, buf_name) or getattr(self, buf_name).shape[0] != K_req:
-                self.register_buffer(buf_name, counts_k.detach().to(device=device))
-            else:
-                getattr(self, buf_name).data.copy_(counts_k)
+            # cluster_size / embed_avg を必ず float32 で再構築
+            buf_name_cs = f"cluster_size_{skey}"
+            buf_name_ea = f"embed_avg_{skey}"
+
+            cs = torch.zeros(K_req, device=device, dtype=torch.float32)
+            ea = means_kd.detach().to(device=device, dtype=torch.float32) * counts_k.view(-1, 1)
+
+            if hasattr(self, buf_name_cs):
+                delattr(self, buf_name_cs)
+            if hasattr(self, buf_name_ea):
+                delattr(self, buf_name_ea)
+
+            self.register_buffer(buf_name_cs, cs)
+            self.register_buffer(buf_name_ea, ea)
 
             nz = int((counts_k > 0).sum().item())
-            # print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+            print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
-    def replace(self, batch_samples, batch_mask):
-        self.initted.data.copy_(torch.Tensor([True]))
-        for ind, (samples, mask) in enumerate(zip(batch_samples.unbind(dim=0), batch_mask.unbind(dim=0))):
-            if not torch.any(mask):
-                continue
-            sampled = self.sample_fn(rearrange(samples, '... -> 1 ...'), mask.sum().item())
-            self.embed.data[ind][mask] = rearrange(sampled, '1 ... -> ...')
-
-    def expire_codes_(self, batch_samples):
-        if self.threshold_ema_dead_code == 0:
-            return
-        expired_codes = self.cluster_size < self.threshold_ema_dead_code
-        if not torch.any(expired_codes):
-            return
-        batch_samples = rearrange(batch_samples, 'h ... d -> h (...) d')
-        self.replace(batch_samples, batch_mask=expired_codes)
-
-    import torch
-
-    @torch.inference_mode()
-    def silhouette_score_torch(self,
-                               X: torch.Tensor,
-                               labels: torch.Tensor,
-                               row_block: int = 8192,
-                               device: str | torch.device | None = None) -> float:
-        """
-        Silhouette score on GPU if available, otherwise CPU.
-        - X: [N, D] (any device / dtype)
-        - labels: [N] (ints; any device / dtype)
-        - row_block: chunk size for memory control
-        - device: force 'cuda'/'cpu' or torch.device; default: auto
-        """
-        # Accept modules with .embed/.weight
-        if isinstance(X, torch.nn.Module):
-            X = getattr(X, "embed", getattr(X, "weight", None))
-            if X is None:
-                raise TypeError("X is a module without .embed/.weight tensor.")
-
-        # Choose device
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Prepare tensors
-        X = X.detach().to(device=device, dtype=torch.float32, non_blocking=True)
-        labels = labels.detach().to(device=device, dtype=torch.long, non_blocking=True)
-        X = X.squeeze()
-        labels = labels.squeeze()
-
-        N = X.shape[0]
-        if N <= 1:
-            return 0.0
-
-        # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
-        uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
-        K = uniq.numel()
-        if K <= 1:
-            return 0.0
-
-        counts = torch.bincount(inv, minlength=K).to(device)  # >0 by construction
-        counts_f = counts.float()
-
-        sil_sum = 0.0
-        processed = 0
-
-        for start in range(0, N, row_block):
-            end = min(start + row_block, N)
-            B = end - start
-
-            Xb = X[start:end]  # [B, D]
-
-            # Pairwise distances for the block
-            d_block = torch.cdist(Xb, X, p=2)  # [B, N]
-
-            # Sum distances to each active cluster
-            inv_index = inv.view(1, N).expand(B, N)  # [B, N]
-            sums_per_cluster = torch.zeros(B, K, device=device, dtype=d_block.dtype)
-            sums_per_cluster.scatter_add_(1, inv_index, d_block)  # [B, K]
-
-            # Mean distance to each cluster
-            means_per_cluster = sums_per_cluster / counts_f.view(1, K)  # [B, K]
-
-            # a(i): mean intra-cluster (exclude self)
-            k_block = inv[start:end]  # [B]
-            a_counts = counts[k_block] - 1
-            a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)  # [B]
-
-            scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
-            mask_gt1 = a_counts > 0
-            if mask_gt1.any():
-                # scale = n / (n - 1) to remove self-distance (0) from the mean
-                n = counts[k_block][mask_gt1].float()
-                scale[mask_gt1] = n / (n - 1.0)
-            a_i = a_mean * scale  # [B]; 0 where cluster size == 1
-
-            # b(i): min mean distance to any other cluster
-            means_per_cluster.scatter_(1, k_block[:, None], float('inf'))
-            b_i, _ = means_per_cluster.min(dim=1)  # [B]
-
-            denom = torch.maximum(a_i, b_i)
-            sil_block = (b_i - a_i) / denom
-            sil_block = torch.nan_to_num(sil_block, nan=0.0, posinf=0.0, neginf=0.0)
-
-            sil_sum += sil_block.sum().item()
-            processed += B
-
-            del Xb, d_block, sums_per_cluster, means_per_cluster, a_mean, a_i, b_i, sil_block
-
-        return float(sil_sum / max(processed, 1))
-
+    # ------------------------------------------------------------------
+    # 補助関数群（normalize mask, index 変換など）
+    # ------------------------------------------------------------------
     def _normalize_mask_dict(self, mask_dict, device=None):
-        import torch, numpy as np
+        import numpy as np
+
         if mask_dict is None:
             return None
         norm = {}
         for k, v in mask_dict.items():
-            # unify key types
             k_int = int(k) if isinstance(k, str) and k.isdigit() else k
             k_str = str(k_int)
-            # convert value to tensor
+
             if isinstance(v, (list, tuple, np.ndarray)):
                 v = torch.as_tensor(v, dtype=torch.long, device=device)
             elif isinstance(v, torch.Tensor) and v.dtype == torch.bool:
                 v = torch.nonzero(v.flatten(), as_tuple=False).flatten().long().to(device)
+
             norm[k_int] = v
             norm[k_str] = v
         return norm
 
-    def _as_index_tensor(self, x, N=None, device=None):
-        """
-        Convert x -> LongTensor[NumIdx] of indices (not boolean).
-        - list/tuple/np.ndarray/np.int64 → tensor.long()
-        - bool tensor → nonzero indices
-        - long/int tensor → .long()
-        - None → None
-        If N is provided and x is a bool tensor of length N, convert to indices.
-        """
-        import torch
-        import numpy as np
+    # ほかの _as_index_tensor / _global_to_local_indices / _cdist_argmin_chunked が必要ならそのまま残してOK
 
-        if x is None:
-            return None
-
-        if isinstance(x, torch.Tensor):
-            t = x.to(device)
-            if t.dtype == torch.bool:
-                if N is None:
-                    N = t.numel()
-                idx = torch.nonzero(t.view(-1), as_tuple=False).flatten()
-                return idx.long()
-            return t.long()
-
-        if isinstance(x, (list, tuple)):
-            if len(x) == 0:
-                return torch.empty(0, dtype=torch.long, device=device)
-            # allow nested np.int64, etc.
-            return torch.as_tensor([int(i) for i in x], dtype=torch.long, device=device)
-
-        if isinstance(x, np.ndarray):  # type: ignore[name-defined]
-            if x.dtype == np.bool_:  # boolean mask
-                x = torch.as_tensor(x, device=device)
-                idx = torch.nonzero(x.view(-1), as_tuple=False).flatten()
-                return idx.long()
-            return torch.as_tensor(x, dtype=torch.long, device=device)
-
-        # single scalar index
-        return torch.as_tensor([int(x)], dtype=torch.long, device=device)
-
-    def _global_to_local_indices(self, global_idx, global_start, local_size):
-        """
-        Given global indices and the current chunk window [global_start, global_start+local_size),
-        return local indices within [0, local_size).
-        """
-        import torch
-        lo = global_start
-        hi = global_start + local_size
-        in_window = (global_idx >= lo) & (global_idx < hi)
-        if not torch.any(in_window):
-            return global_idx.new_empty((0,), dtype=torch.long)
-        return (global_idx[in_window] - lo).long()
-
-    def _cdist_argmin_chunked(self, queries, codebook, chunk_size=1024, p=2, use_half=False):
-        """
-        メモリ節約版 cdist:
-          queries:  (N, D)
-          codebook: (K, D)
-        戻り値:
-          idx: (N,)  各クエリの最も近いコードブックインデックス
-        """
-        device = queries.device
-        dtype = queries.dtype
-
-        N = queries.size(0)
-        K = codebook.size(0)
-
-        idx_all = torch.empty(N, device=device, dtype=torch.long)
-
-        # 半精度でさらにメモリ削減（任意）
-        if use_half:
-            codebook_half = codebook.to(torch.float16)
-        else:
-            codebook_half = codebook
-
-        for start in range(0, N, chunk_size):
-            end = min(start + chunk_size, N)
-            q = queries[start:end]  # (chunk, D)
-
-            if use_half:
-                q_half = q.to(torch.float16)
-                dist = torch.cdist(q_half, codebook_half, p=p)  # (chunk, K)
-                # argmin だけ使うので dtype は half のままでOK
-            else:
-                dist = torch.cdist(q, codebook, p=p)
-
-            dist = dist.pow(2)
-            _, idx_chunk = dist.min(dim=-1)  # (chunk,)
-
-            idx_all[start:end] = idx_chunk
-
-            del dist, idx_chunk
-            # empty_cache はオプション（多用しすぎると逆に遅くなることもある）
-            # torch.cuda.empty_cache()
-
-        return idx_all
-
+    # ------------------------------------------------------------------
+    # Forward: ここで EMA update を dtype 安全に書き直し
+    # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
-        """Forward pass with per-element quantization and EMA update."""
-
-        # --------------------------------------------------------------
-        # 0. オフセット初期化
-        # --------------------------------------------------------------
+        """
+        Forward pass with per-element quantization and EMA update.
+        """
+        # latent オフセット
         if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
 
-        # チャンク処理の先頭でリセット
         if mode != "init_kmeans_final" and chunk_i is not None and chunk_i == 0:
             self.latent_size_sum = 0
-
-        # test / eval のときは毎回リセット
         if mode in ("test", "eval"):
             self.latent_size_sum = 0
 
-        # --------------------------------------------------------------
-        # 1. prepare input
-        # --------------------------------------------------------------
+        # ----- 入力整形 -----
         x = x.float()
         if x.ndim < 4:
             x = rearrange(x, " ... -> 1 ...")  # (1, B, D)
@@ -1297,50 +1091,38 @@ class EuclideanCodebook(nn.Module):
         global_start = self.latent_size_sum
         global_end = global_start + B
 
-        # clear per-call buffers
         self.quantize_dict = {}
         self.embed_ind_dict = {}
+        mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
 
-        mask_dict = self._normalize_mask_dict(mask_dict)
-
-        # --------------------------------------------------------------
-        # 2. K-Means 初期化フェーズだけの処理
-        # --------------------------------------------------------------
+        # ----- KMeans init フェーズ -----
         if mode == "init_kmeans_final":
-            # flatten は [1, N, D] (N = 全体) を想定
             self.init_embed_(flatten, mask_dict)
             print("init_embed is done")
             print(mask_dict.keys())
 
             for key in mask_dict.keys():
-                idx = mask_dict[key]  # global indices
-
+                idx = mask_dict[key]
                 if idx.numel() == 0:
-                    print(f"[init] key={key}: empty idx")
                     continue
-
-                # 全体からダイレクトに抽出
-                masked_latents = flatten[0][idx]  # [Ni, D]
+                masked_latents = flatten[0][idx]
                 if masked_latents.numel() == 0:
-                    print(f"[init] key={key}: masked_latents empty (BUG)")
                     continue
 
-                # feature は Tensor[N, 78] を想定（後でサブセット使用）
-                some_feature = feature[idx][:, [0, 2, 3, 4, 5]]
-
-                code = self.embed[str(key)]
+                skey = str(key)
+                code = self.embed[skey]
                 code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
 
                 with torch.no_grad():
                     dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                    idx_code = dist.argmin(dim=-1)  # [Ni]
+                    idx_code = dist.argmin(dim=-1)
                     del dist
-                quantize = code.index_select(0, idx_code)  # [Ni, D]
+                quantize = code.index_select(0, idx_code)
 
-                self.quantize_dict[str(key)] = quantize
-                self.embed_ind_dict[str(key)] = idx_code.to(torch.int32)
+                self.quantize_dict[skey] = quantize
+                self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-                # Silhouette 計算・保存
+                # Silhouette (省略可)
                 try:
                     from sklearn.utils import resample
 
@@ -1370,104 +1152,99 @@ class EuclideanCodebook(nn.Module):
                     if logger:
                         logger.warning(f"Silhouette failed for {key}: {e}")
 
-            # init フェーズはここで終了
             return 0
 
-        # --------------------------------------------------------------
-        # 3. train / test / eval フェーズ
-        # --------------------------------------------------------------
-        # feature: List[Tensor[Mi, 78]] を想定
+        # ----- train / test / eval フェーズ -----
         feat_flat = torch.cat(feature, dim=0)  # [N, 78]
         feat_flat = feat_flat.contiguous().to(flatten.device)
         assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
-        assert feat_flat.size(0) == flatten.size(1)  # must match latents
+        assert feat_flat.size(0) == flatten.size(1)
 
         if not hasattr(self, "cb_dict"):
             self.cb_dict = {}
 
         for key in mask_dict.keys():
             idx_global = mask_dict[key]  # [Ni_global]
-
-            # このチャンクがカバーするグローバル範囲だけ抜き出す
             gmask = (idx_global >= global_start) & (idx_global < global_end)
             if not gmask.any():
-                # この key はこのチャンクには存在しない
                 continue
 
-            idx_local = idx_global[gmask] - global_start  # 0..B-1
+            idx_local = idx_global[gmask] - global_start
             masked_latents = flatten[0][idx_local]  # [Ni, D]
 
-            # feature チェック（今は一部だけ抽出）
-            some_feature = feat_flat[idx_local][:, [0, 2, 3, 4, 5]]
-
             if masked_latents.numel() == 0:
-                print(f"[train] key={key}: masked_latents.numel() == 0")
                 continue
 
             skey = str(key)
-            code = self.embed[skey]
-            code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
+            code_param = self.embed[skey]
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
-            # 最近傍コード割り当て
             with torch.no_grad():
                 dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                idx_code = dist.argmin(dim=-1)  # [Ni]
+                idx_code = dist.argmin(dim=-1)
                 del dist
-            quantize = code.index_select(0, idx_code)  # [Ni, D]
+            quantize = code.index_select(0, idx_code)
 
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-            # ----------------------------------------------------------
-            # EMA codebook update (hard-EMA)
-            # ----------------------------------------------------------
+            # ----- EMA update: dtype-safe & float32 固定 -----
             if self.training and epoch is not None and epoch < 30:
-                code_param = self.embed[skey]  # [K_e, D] or [1, K_e, D]
                 if code_param.ndim == 3:
                     K_e, D_e = code_param.shape[1], code_param.shape[2]
                 else:
                     K_e, D_e = code_param.shape
                 device = code_param.device
-
                 self.cb_dict[skey] = int(K_e)
 
-                # cluster_size_{key} がなければ作る
-                if not hasattr(self, f"cluster_size_{skey}"):
-                    self.register_buffer(
-                        f"cluster_size_{skey}",
-                        torch.zeros(K_e, device=device, dtype=torch.float32),
-                    )
+                buf_name_cs = f"cluster_size_{skey}"
+                buf_name_ea = f"embed_avg_{skey}"
 
-                # embed_avg_{key} がなければ作る
-                if not hasattr(self, f"embed_avg_{skey}"):
-                    self.register_buffer(
-                        f"embed_avg_{skey}",
-                        torch.zeros(K_e, D_e, device=device, dtype=torch.float32),
-                    )
+                # 既存 buffer を取得 or 新規作成（必ず float32）
+                if hasattr(self, buf_name_cs):
+                    cs = getattr(self, buf_name_cs)
+                    if cs.dtype != torch.float32 or cs.shape[0] != K_e:
+                        cs = cs.float()
+                        if cs.shape[0] != K_e:
+                            cs = torch.zeros(K_e, device=device, dtype=torch.float32)
+                        setattr(self, buf_name_cs, cs)
+                else:
+                    cs = torch.zeros(K_e, device=device, dtype=torch.float32)
+                    self.register_buffer(buf_name_cs, cs)
+
+                if hasattr(self, buf_name_ea):
+                    ea = getattr(self, buf_name_ea)
+                    if ea.dtype != torch.float32 or ea.shape != (K_e, D_e):
+                        ea = ea.float()
+                        if ea.shape != (K_e, D_e):
+                            ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
+                        setattr(self, buf_name_ea, ea)
+                else:
+                    ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
+                    self.register_buffer(buf_name_ea, ea)
 
                 with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{skey}")  # [K_e, D]
-                    cs = getattr(self, f"cluster_size_{skey}")  # [K_e]
-                    eps = getattr(self, "eps", 1e-6)
-                    decay = float(self.decay)
+                    idx_code_long = idx_code.to(device=device, dtype=torch.long)
 
-                    # --- バッチごとのカウントと埋め込み合計を計算 ---
-                    ones = torch.ones_like(idx_code, dtype=cs.dtype, device=device)
-                    batch_counts = torch.zeros_like(cs)
-                    batch_counts.index_add_(0, idx_code, ones)
+                    batch_counts = torch.zeros_like(cs, dtype=torch.float32)
+                    batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
 
-                    batch_embed_sum = torch.zeros_like(ea)
+                    batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
                     batch_embed_sum.index_add_(
-                        0, idx_code, masked_latents.to(ea.dtype)
+                        0,
+                        idx_code_long,
+                        masked_latents.to(device=device, dtype=torch.float32),
                     )
 
-                    # --- EMA 更新 ---
-                    cs.mul_(decay).add_(batch_counts * (1.0 - decay))
-                    ea.mul_(decay).add_(batch_embed_sum * (1.0 - decay))
+                    decay = self.decay
+                    one_m = 1.0 - decay
 
-                    # 正規化してコードブックを更新
-                    denom = cs.unsqueeze(-1) + eps
-                    means = ea / denom  # [K_e, D]
+                    # ここが元のエラー箇所：cs が Long だと壊れるので float32 に統一済み
+                    cs.mul_(decay).add_(batch_counts * one_m)
+                    ea.mul_(decay).add_(batch_embed_sum * one_m)
+
+                    denom = cs.unsqueeze(-1) + self.eps
+                    means = ea / denom  # [K_e, D_e]
 
                     if code_param.ndim == 3:
                         code_param.data.copy_(means.unsqueeze(0))
@@ -1476,12 +1253,9 @@ class EuclideanCodebook(nn.Module):
 
             del masked_latents, code, idx_code, quantize
 
-        # --------------------------------------------------------------
-        # 4. build full quantized tensor aligned to minibatch
-        # --------------------------------------------------------------
+        # ----- ミニバッチ全体の quantize を組み立て -----
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
-        # 各 key ごとにこのチャンク内の index を埋める
         for key, idx_global in mask_dict.items():
             skey = str(key)
             if skey not in self.quantize_dict:
@@ -1492,17 +1266,12 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             idx_in_chunk = idx_global[gmask]
-            idx_local = (idx_in_chunk - global_start).to(
-                device=quantize_full.device, dtype=torch.long
-            )
-            qk = self.quantize_dict[skey].to(
-                device=quantize_full.device, dtype=quantize_full.dtype
-            )
+            idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
+            qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
 
             if idx_local.numel() > 0:
                 quantize_full.index_copy_(0, idx_local, qk)
 
-        # 未使用位置は元の latent をそのまま残す
         all_local = torch.cat(
             [
                 (idx[(idx >= global_start) & (idx < global_end)] - global_start)
@@ -1523,13 +1292,9 @@ class EuclideanCodebook(nn.Module):
         if unused.any():
             quantize_full[unused] = flatten[0][unused]
 
-        # --------------------------------------------------------------
-        # 5. Straight-Through estimator & bookkeeping
-        # --------------------------------------------------------------
         quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
         quantize_st = quantize_st.unsqueeze(0)  # (1, B, D)
 
-        # この forward で処理した分だけオフセットを進める
         if mode not in ("test", "eval") and chunk_i is not None:
             self.latent_size_sum += B
 
