@@ -1427,17 +1427,44 @@ class EuclideanCodebook(nn.Module):
 
             self.quantize_dict[str(key)] = quantize
             self.embed_ind_dict[str(key)] = idx_code.to(torch.int32)
-
             # ----------------------------------------------------------
             # EMA codebook update (hard-EMA)
             # ----------------------------------------------------------
             if self.training and epoch is not None and epoch < 30:
+                import torch
+
+                # --- ここで「新しい key なら register する」 ---
+                skey = str(key)
+
+                # まず embed から形とデバイスを取る
+                code_param = self.embed[skey]          # [K_e, D]
+                K_e, D = code_param.shape
+                device = code_param.device
+
+                if skey not in self.cb_dict:
+                    self.cb_dict[skey] = int(K_e)
+
+                # cluster_size_{key} がなければ作る
+                if not hasattr(self, f"cluster_size_{skey}"):
+                    self.register_buffer(
+                        f"cluster_size_{skey}",
+                        torch.zeros(K_e, device=device, dtype=torch.float32)
+                    )
+
+                # embed_avg_{key} がなければ作る
+                if not hasattr(self, f"embed_avg_{skey}"):
+                    self.register_buffer(
+                        f"embed_avg_{skey}",
+                        torch.zeros(K_e, D, device=device, dtype=torch.float32)
+                    )
+
                 with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{key}")  # [K_e, D]
-                    cs = getattr(self, f"cluster_size_{key}")  # [K_e]
+                    ea = getattr(self, f"embed_avg_{skey}")      # [K_e, D]
+                    cs = getattr(self, f"cluster_size_{skey}")   # [K_e]
                     eps = getattr(self, "eps", 1e-6)
                     decay = float(self.decay)
 
+                    # EMA 更新
                     ea.mul_(decay)
                     cs.mul_(decay)
 
@@ -1447,10 +1474,11 @@ class EuclideanCodebook(nn.Module):
 
                     means = ea / (cs.unsqueeze(-1) + eps)
 
-                    code_param = self.embed[str(key)]
-                    code_param.data.copy_(
-                        means.unsqueeze(0) if code_param.ndim == 3 else means
-                    )
+                    # パラメータを EMA の平均で上書き
+                    if code_param.ndim == 3:
+                        code_param.data.copy_(means.unsqueeze(0))
+                    else:
+                        code_param.data.copy_(means)
 
             del masked_latents, code, idx_code, quantize
 
