@@ -1386,7 +1386,7 @@ class EuclideanCodebook(nn.Module):
         # --------------------------------------------------------------
         # 3. train / test / eval フェーズ
         # --------------------------------------------------------------
-
+        import torch
         # feature: List[Tensor[Mi, 30]] を想定
         feat_flat = torch.cat(feature, dim=0)  # [N, 30]
         feat_flat = feat_flat.contiguous().to(flatten.device)
