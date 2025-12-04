@@ -969,6 +969,94 @@ class EuclideanCodebook(nn.Module):
                 else:
                     embed[:, n:K].copy_(embed[:, :1])
 
+    def silhouette_score_torch(X: torch.Tensor,
+                               labels: torch.Tensor,
+                               row_block: int = 8192,
+                               device: str | torch.device | None = None) -> float:
+        """
+        Silhouette score on GPU if available, otherwise CPU.
+        - X: [N, D] (any device / dtype)
+        - labels: [N] (ints; any device / dtype)
+        - row_block: chunk size for memory control
+        - device: force 'cuda'/'cpu' or torch.device; default: auto
+        """
+        # Accept modules with .embed/.weight
+        if isinstance(X, torch.nn.Module):
+            X = getattr(X, "embed", getattr(X, "weight", None))
+            if X is None:
+                raise TypeError("X is a module without .embed/.weight tensor.")
+
+        # Choose device
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # Prepare tensors
+        X = X.detach().to(device=device, dtype=torch.float32, non_blocking=True)
+        labels = labels.detach().to(device=device, dtype=torch.long, non_blocking=True)
+        X = X.squeeze()
+        labels = labels.squeeze()
+
+        N = X.shape[0]
+        if N <= 1:
+            return 0.0
+
+        # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
+        uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
+        K = uniq.numel()
+        if K <= 1:
+            return 0.0
+
+        counts = torch.bincount(inv, minlength=K).to(device)  # >0 by construction
+        counts_f = counts.float()
+
+        sil_sum = 0.0
+        processed = 0
+
+        for start in range(0, N, row_block):
+            end = min(start + row_block, N)
+            B = end - start
+
+            Xb = X[start:end]  # [B, D]
+
+            # Pairwise distances for the block
+            d_block = torch.cdist(Xb, X, p=2)  # [B, N]
+
+            # Sum distances to each active cluster
+            inv_index = inv.view(1, N).expand(B, N)  # [B, N]
+            sums_per_cluster = torch.zeros(B, K, device=device, dtype=d_block.dtype)
+            sums_per_cluster.scatter_add_(1, inv_index, d_block)  # [B, K]
+
+            # Mean distance to each cluster
+            means_per_cluster = sums_per_cluster / counts_f.view(1, K)  # [B, K]
+
+            # a(i): mean intra-cluster (exclude self)
+            k_block = inv[start:end]  # [B]
+            a_counts = counts[k_block] - 1
+            a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)  # [B]
+
+            scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
+            mask_gt1 = a_counts > 0
+            if mask_gt1.any():
+                # scale = n / (n - 1) to remove self-distance (0) from the mean
+                n = counts[k_block][mask_gt1].float()
+                scale[mask_gt1] = n / (n - 1.0)
+            a_i = a_mean * scale  # [B]; 0 where cluster size == 1
+
+            # b(i): min mean distance to any other cluster
+            means_per_cluster.scatter_(1, k_block[:, None], float('inf'))
+            b_i, _ = means_per_cluster.min(dim=1)  # [B]
+
+            denom = torch.maximum(a_i, b_i)
+            sil_block = (b_i - a_i) / denom
+            sil_block = torch.nan_to_num(sil_block, nan=0.0, posinf=0.0, neginf=0.0)
+
+            sil_sum += sil_block.sum().item()
+            processed += B
+
+            del Xb, d_block, sums_per_cluster, means_per_cluster, a_mean, a_i, b_i, sil_block
+
+        return float(sil_sum / max(processed, 1))
+
     @torch.jit.ignore
     def init_embed_(self, data, mask_dict=None, use_cosine_sim: bool = False):
         """
@@ -1470,94 +1558,6 @@ class VectorQuantize(nn.Module):
             return codebook
 
         return rearrange(codebook, '1 ... -> ...')
-
-    def silhouette_score_torch(X: torch.Tensor,
-                               labels: torch.Tensor,
-                               row_block: int = 8192,
-                               device: str | torch.device | None = None) -> float:
-        """
-        Silhouette score on GPU if available, otherwise CPU.
-        - X: [N, D] (any device / dtype)
-        - labels: [N] (ints; any device / dtype)
-        - row_block: chunk size for memory control
-        - device: force 'cuda'/'cpu' or torch.device; default: auto
-        """
-        # Accept modules with .embed/.weight
-        if isinstance(X, torch.nn.Module):
-            X = getattr(X, "embed", getattr(X, "weight", None))
-            if X is None:
-                raise TypeError("X is a module without .embed/.weight tensor.")
-
-        # Choose device
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-
-        # Prepare tensors
-        X = X.detach().to(device=device, dtype=torch.float32, non_blocking=True)
-        labels = labels.detach().to(device=device, dtype=torch.long, non_blocking=True)
-        X = X.squeeze()
-        labels = labels.squeeze()
-
-        N = X.shape[0]
-        if N <= 1:
-            return 0.0
-
-        # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
-        uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
-        K = uniq.numel()
-        if K <= 1:
-            return 0.0
-
-        counts = torch.bincount(inv, minlength=K).to(device)  # >0 by construction
-        counts_f = counts.float()
-
-        sil_sum = 0.0
-        processed = 0
-
-        for start in range(0, N, row_block):
-            end = min(start + row_block, N)
-            B = end - start
-
-            Xb = X[start:end]  # [B, D]
-
-            # Pairwise distances for the block
-            d_block = torch.cdist(Xb, X, p=2)  # [B, N]
-
-            # Sum distances to each active cluster
-            inv_index = inv.view(1, N).expand(B, N)  # [B, N]
-            sums_per_cluster = torch.zeros(B, K, device=device, dtype=d_block.dtype)
-            sums_per_cluster.scatter_add_(1, inv_index, d_block)  # [B, K]
-
-            # Mean distance to each cluster
-            means_per_cluster = sums_per_cluster / counts_f.view(1, K)  # [B, K]
-
-            # a(i): mean intra-cluster (exclude self)
-            k_block = inv[start:end]  # [B]
-            a_counts = counts[k_block] - 1
-            a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)  # [B]
-
-            scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
-            mask_gt1 = a_counts > 0
-            if mask_gt1.any():
-                # scale = n / (n - 1) to remove self-distance (0) from the mean
-                n = counts[k_block][mask_gt1].float()
-                scale[mask_gt1] = n / (n - 1.0)
-            a_i = a_mean * scale  # [B]; 0 where cluster size == 1
-
-            # b(i): min mean distance to any other cluster
-            means_per_cluster.scatter_(1, k_block[:, None], float('inf'))
-            b_i, _ = means_per_cluster.min(dim=1)  # [B]
-
-            denom = torch.maximum(a_i, b_i)
-            sil_block = (b_i - a_i) / denom
-            sil_block = torch.nan_to_num(sil_block, nan=0.0, posinf=0.0, neginf=0.0)
-
-            sil_sum += sil_block.sum().item()
-            processed += B
-
-            del Xb, d_block, sums_per_cluster, means_per_cluster, a_mean, a_i, b_i, sil_block
-
-        return float(sil_sum / max(processed, 1))
 
     def get_codes_from_indices(self, indices):
         indices = indices.long()
