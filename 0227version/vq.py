@@ -1348,12 +1348,12 @@ class EuclideanCodebook(nn.Module):
                 self.embed_ind_dict[str(key)] = idx_code.to(torch.int32)
 
                 # Silhouette 計算・保存
-                try:
-                    torch.save(code.detach().cpu(), f"./naked_embed_{epoch}_{key}.pt")
-                    torch.save(flatten.detach().cpu(), f"./naked_latent_{epoch}_{key}.pt")
-                except Exception as e:
-                    if logger:
-                        logger.warning(f"Save failed for key {key}: {e}")
+                # try:
+                #     torch.save(code.detach().cpu(), f"./naked_embed_{epoch}_{key}.pt")
+                #     torch.save(flatten.detach().cpu(), f"./naked_latent_{epoch}_{key}.pt")
+                # except Exception as e:
+                #     if logger:
+                #         logger.warning(f"Save failed for key {key}: {e}")
 
                 try:
                     from sklearn.utils import resample
