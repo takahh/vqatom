@@ -1267,7 +1267,7 @@ class EuclideanCodebook(nn.Module):
 
         return idx_all
 
-    @torch.amp.autocast('cuda', enabled=False)
+    @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """Forward pass with per-element quantization and EMA update."""
 
@@ -1285,16 +1285,12 @@ class EuclideanCodebook(nn.Module):
         if mode in ("test", "eval"):
             self.latent_size_sum = 0
 
-        # この forward 呼び出しでのグローバル範囲
-        # （再構築時も同じ範囲を使う）
-        # 後ろで必要になるので、先に控えておく
-        # x から B が決まってから global_end を決める
         # --------------------------------------------------------------
         # 1. prepare input
         # --------------------------------------------------------------
         x = x.float()
         if x.ndim < 4:
-            x = rearrange(x, '... -> 1 ...')  # (1, B, D)
+            x = rearrange(x, " ... -> 1 ...")  # (1, B, D)
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
         B, D = flatten.shape[1], flatten.shape[2]
 
@@ -1315,15 +1311,13 @@ class EuclideanCodebook(nn.Module):
             self.init_embed_(flatten, mask_dict)
             print("init_embed is done")
             print(mask_dict.keys())
+
             for key in mask_dict.keys():
                 idx = mask_dict[key]  # global indices
 
                 if idx.numel() == 0:
                     print(f"[init] key={key}: empty idx")
                     continue
-                # if key not in CBDICT.keys():
-                #     print(f"[init] key {key} not in CBDICT.keys()")
-                #     continue
 
                 # 全体からダイレクトに抽出
                 masked_latents = flatten[0][idx]  # [Ni, D]
@@ -1331,13 +1325,12 @@ class EuclideanCodebook(nn.Module):
                     print(f"[init] key={key}: masked_latents empty (BUG)")
                     continue
 
-                # feature は Tensor[N, 30] を想定
+                # feature は Tensor[N, 78] を想定（後でサブセット使用）
                 some_feature = feature[idx][:, [0, 2, 3, 4, 5]]
 
                 code = self.embed[str(key)]
                 code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
-                import torch
-                # 最近傍コード割り当て
+
                 with torch.no_grad():
                     dist = torch.cdist(masked_latents, code, p=2).pow(2)
                     idx_code = dist.argmin(dim=-1)  # [Ni]
@@ -1348,15 +1341,9 @@ class EuclideanCodebook(nn.Module):
                 self.embed_ind_dict[str(key)] = idx_code.to(torch.int32)
 
                 # Silhouette 計算・保存
-                # try:
-                #     torch.save(code.detach().cpu(), f"./naked_embed_{epoch}_{key}.pt")
-                #     torch.save(flatten.detach().cpu(), f"./naked_latent_{epoch}_{key}.pt")
-                # except Exception as e:
-                #     if logger:
-                #         logger.warning(f"Save failed for key {key}: {e}")
-
                 try:
                     from sklearn.utils import resample
+
                     n = min(self.samples_latent_in_kmeans, masked_latents.shape[0])
                     if n > 1:
                         xs, ys = resample(
@@ -1366,10 +1353,13 @@ class EuclideanCodebook(nn.Module):
                             random_state=42,
                         )
                         sil = self.silhouette_score_torch(
-                            torch.from_numpy(xs).float(), torch.from_numpy(ys).long()
+                            torch.from_numpy(xs).float(),
+                            torch.from_numpy(ys).long(),
                         )
-                        msg = (f"Silhouette Score (subsample): {key} {sil:.4f}, "
-                               f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}")
+                        msg = (
+                            f"Silhouette Score (subsample): {key} {sil:.4f}, "
+                            f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}"
+                        )
                         print(msg)
                         if logger:
                             logger.info(msg)
@@ -1386,12 +1376,14 @@ class EuclideanCodebook(nn.Module):
         # --------------------------------------------------------------
         # 3. train / test / eval フェーズ
         # --------------------------------------------------------------
-        import torch
-        # feature: List[Tensor[Mi, 30]] を想定
-        feat_flat = torch.cat(feature, dim=0)  # [N, 30]
+        # feature: List[Tensor[Mi, 78]] を想定
+        feat_flat = torch.cat(feature, dim=0)  # [N, 78]
         feat_flat = feat_flat.contiguous().to(flatten.device)
         assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
         assert feat_flat.size(0) == flatten.size(1)  # must match latents
+
+        if not hasattr(self, "cb_dict"):
+            self.cb_dict = {}
 
         for key in mask_dict.keys():
             idx_global = mask_dict[key]  # [Ni_global]
@@ -1405,17 +1397,15 @@ class EuclideanCodebook(nn.Module):
             idx_local = idx_global[gmask] - global_start  # 0..B-1
             masked_latents = flatten[0][idx_local]  # [Ni, D]
 
-            # feature チェック
+            # feature チェック（今は一部だけ抽出）
             some_feature = feat_flat[idx_local][:, [0, 2, 3, 4, 5]]
 
             if masked_latents.numel() == 0:
                 print(f"[train] key={key}: masked_latents.numel() == 0")
                 continue
-            # if key not in CBDICT.keys():
-            #     print(f"[train] key {key} not in CBDICT.keys()")
-            #     continue
 
-            code = self.embed[str(key)]
+            skey = str(key)
+            code = self.embed[skey]
             code = code.squeeze(0) if code.ndim == 3 else code  # [K_e, D]
 
             # 最近傍コード割り当て
@@ -1425,66 +1415,60 @@ class EuclideanCodebook(nn.Module):
                 del dist
             quantize = code.index_select(0, idx_code)  # [Ni, D]
 
-            self.quantize_dict[str(key)] = quantize
-            self.embed_ind_dict[str(key)] = idx_code.to(torch.int32)
+            self.quantize_dict[skey] = quantize
+            self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+
             # ----------------------------------------------------------
             # EMA codebook update (hard-EMA)
             # ----------------------------------------------------------
             if self.training and epoch is not None and epoch < 30:
-                import torch
-
-                # --- ここで「新しい key なら register する」 ---
-                skey = str(key)
-
-                # まず embed から形とデバイスを取る
-                code_param = self.embed[skey]          # [K_e, D]
-                K_e, D = code_param.shape
+                code_param = self.embed[skey]  # [K_e, D] or [1, K_e, D]
+                if code_param.ndim == 3:
+                    K_e, D_e = code_param.shape[1], code_param.shape[2]
+                else:
+                    K_e, D_e = code_param.shape
                 device = code_param.device
 
-                if skey not in self.cb_dict:
-                    self.cb_dict[skey] = int(K_e)
+                self.cb_dict[skey] = int(K_e)
 
                 # cluster_size_{key} がなければ作る
                 if not hasattr(self, f"cluster_size_{skey}"):
                     self.register_buffer(
                         f"cluster_size_{skey}",
-                        torch.zeros(K_e, device=device, dtype=torch.float32)
+                        torch.zeros(K_e, device=device, dtype=torch.float32),
                     )
 
                 # embed_avg_{key} がなければ作る
                 if not hasattr(self, f"embed_avg_{skey}"):
                     self.register_buffer(
                         f"embed_avg_{skey}",
-                        torch.zeros(K_e, D, device=device, dtype=torch.float32)
+                        torch.zeros(K_e, D_e, device=device, dtype=torch.float32),
                     )
 
                 with torch.no_grad():
-                    ea = getattr(self, f"embed_avg_{skey}")      # [K_e, D]
-                    cs = getattr(self, f"cluster_size_{skey}")   # [K_e]
+                    ea = getattr(self, f"embed_avg_{skey}")  # [K_e, D]
+                    cs = getattr(self, f"cluster_size_{skey}")  # [K_e]
                     eps = getattr(self, "eps", 1e-6)
                     decay = float(self.decay)
 
-                    # # EMA 更新
-                    # ea.mul_(decay)
-                    # cs.mul_(decay)
-                    # before:
-                    # cs.mul_(decay)
-                    # cs.add_((1 - decay) * incr)
+                    # --- バッチごとのカウントと埋め込み合計を計算 ---
+                    ones = torch.ones_like(idx_code, dtype=cs.dtype, device=device)
+                    batch_counts = torch.zeros_like(cs)
+                    batch_counts.index_add_(0, idx_code, ones)
 
-                    # after:
-                    with torch.cuda.amp.autocast(enabled=False):
-                        cs_fp32 = cs.to(torch.float32)  # clone not needed; to() returns a new tensor
-                        cs_fp32.mul_(float(decay))
-                        cs_fp32.add_((1.0 - float(decay)) * incr.to(torch.float32))
-                        cs.copy_(cs_fp32)  # preserve the original tensor object if it's a buffer
+                    batch_embed_sum = torch.zeros_like(ea)
+                    batch_embed_sum.index_add_(
+                        0, idx_code, masked_latents.to(ea.dtype)
+                    )
 
-                    one = torch.ones_like(idx_code, dtype=cs.dtype)
-                    cs.index_add_(0, idx_code, one * (1.0 - decay))
-                    ea.index_add_(0, idx_code, masked_latents.to(ea.dtype) * (1.0 - decay))
+                    # --- EMA 更新 ---
+                    cs.mul_(decay).add_(batch_counts * (1.0 - decay))
+                    ea.mul_(decay).add_(batch_embed_sum * (1.0 - decay))
 
-                    means = ea / (cs.unsqueeze(-1) + eps)
+                    # 正規化してコードブックを更新
+                    denom = cs.unsqueeze(-1) + eps
+                    means = ea / denom  # [K_e, D]
 
-                    # パラメータを EMA の平均で上書き
                     if code_param.ndim == 3:
                         code_param.data.copy_(means.unsqueeze(0))
                     else:
@@ -1508,20 +1492,26 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             idx_in_chunk = idx_global[gmask]
-            idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device,
-                                                         dtype=torch.long)
-            qk = self.quantize_dict[skey].to(device=quantize_full.device,
-                                             dtype=quantize_full.dtype)
+            idx_local = (idx_in_chunk - global_start).to(
+                device=quantize_full.device, dtype=torch.long
+            )
+            qk = self.quantize_dict[skey].to(
+                device=quantize_full.device, dtype=quantize_full.dtype
+            )
 
             if idx_local.numel() > 0:
                 quantize_full.index_copy_(0, idx_local, qk)
 
         # 未使用位置は元の latent をそのまま残す
-        all_local = torch.cat([
-            (idx[(idx >= global_start) & (idx < global_end)] - global_start)
-            for idx in mask_dict.values()
-            if idx.numel() > 0
-        ], dim=0)
+        all_local = torch.cat(
+            [
+                (idx[(idx >= global_start) & (idx < global_end)] - global_start)
+                for idx in mask_dict.values()
+                if idx.numel() > 0
+            ],
+            dim=0,
+        )
+
         if all_local.numel() > 0:
             used = torch.unique(all_local)
         else:
