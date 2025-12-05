@@ -1904,29 +1904,25 @@ def timetz(*args):
     tz = pytz.timezone("US/Pacific")
     return datetime.now(tz).timetuple()
 
-
 def get_logger(filename, console_log=False, log_level=logging.INFO):
-    tz = pytz.timezone("US/Pacific")
-    log_time = datetime.now(tz).strftime("%b%d_%H_%M_%S")
-    logger = logging.getLogger(__name__)
-    logger.propagate = False  # avoid duplicate logging
+    logger = logging.getLogger(f"logger_{filename}")  # unique per file
+    logger.propagate = False
     logger.setLevel(log_level)
 
-    # Clean logger first to avoid duplicated handlers
-    for hdlr in logger.handlers[:]:
-        logger.removeHandler(hdlr)
+    # Add handlers only once
+    if not logger.handlers:
+        file_handler = logging.FileHandler(filename, mode="a")
+        formatter = logging.Formatter("%(asctime)s: %(message)s", datefmt="%b%d %H-%M-%S")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
 
-    file_handler = logging.FileHandler(filename)
-    formatter = logging.Formatter("%(asctime)s: %(message)s", datefmt="%b%d %H-%M-%S")
-    formatter.converter = timetz
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+        if console_log:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
 
-    if console_log:
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
     return logger
+
 
 
 def idx_split(idx, ratio, seed=0, train_or_infer=None):
