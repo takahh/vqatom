@@ -762,22 +762,22 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
         print("[KMEANS] init_kmeans_final start")
 
-        if epoch == 1:
-            # first_batch_feat は CPU に戻してあるので GPU へ
-            first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
-            evaluate(
-                model,
-                all_latents_tensor.to(device),
-                first_batch_feat_dev,
-                epoch,
-                all_masks_dict,
-                logger,
-                None,
-                None,
-                "init_kmeans_final",
-                all_attr_tensor.to(device),
-            )
-            print("[KMEANS] initial kmeans done.")
+        # if epoch == 1:
+        # first_batch_feat は CPU に戻してあるので GPU へ
+        first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
+        evaluate(
+            model,
+            all_latents_tensor.to(device),
+            first_batch_feat_dev,
+            epoch,
+            all_masks_dict,
+            logger,
+            None,
+            None,
+            "init_kmeans_final",
+            all_attr_tensor.to(device),
+        )
+        print("[KMEANS] initial kmeans done.")
         model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
