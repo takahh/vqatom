@@ -969,38 +969,75 @@ class EuclideanCodebook(nn.Module):
                 else:
                     embed[:, n:K].copy_(embed[:, :1])
 
-    def silhouette_score_torch(X: torch.Tensor,
-                               labels: torch.Tensor,
-                               row_block: int = 8192,
-                               device: str | torch.device | None = None) -> float:
+
+    @staticmethod
+    def silhouette_score_torch(
+        X,
+        labels,
+        row_block: int = 8192,
+        device: str | torch.device | None = None,
+    ) -> float:
         """
-        Silhouette score on GPU if available, otherwise CPU.
-        - X: [N, D] (any device / dtype)
-        - labels: [N] (ints; any device / dtype)
-        - row_block: chunk size for memory control
-        - device: force 'cuda'/'cpu' or torch.device; default: auto
+        Compute Silhouette score in (mini)blocks, on GPU if available.
+
+        Parameters
+        ----------
+        X : Tensor or nn.Module or nn.ParameterDict
+            - Tensor: shape [N, D]
+            - nn.Module: must have `.weight` or `.embed` tensor
+            - nn.ParameterDict: values are [K, D] parameters → concatenated to [N, D]
+        labels : Tensor
+            Cluster labels of shape [N] (int).
+        row_block : int
+            Block size along N for pairwise distance computation.
+        device : str or torch.device or None
+            Target device. If None: "cuda" if available else "cpu".
         """
-        # Accept modules with .embed/.weight
-        if isinstance(X, torch.nn.Module):
-            X = getattr(X, "embed", getattr(X, "weight", None))
-            if X is None:
+
+        # ---- 0. 正しいテンソル X を取り出す ------------------------------------
+        # ParameterDict (or類似) の場合：中身を縦に concat
+        if isinstance(X, nn.ParameterDict):
+            # 各 value が [K, D] を想定
+            X = torch.cat([p.view(p.shape[0], -1) for p in X.values()], dim=0)  # [N, D]
+
+        # nn.Module の場合：.embed または .weight を拾う
+        elif isinstance(X, nn.Module):
+            weight = getattr(X, "weight", None)
+            embed = getattr(X, "embed", None)
+            if embed is not None:
+                X = embed
+            elif weight is not None:
+                X = weight
+            else:
                 raise TypeError("X is a module without .embed/.weight tensor.")
 
-        # Choose device
+        # ここまで来たら X は Tensor のはず
+        if not torch.is_tensor(X):
+            raise TypeError(
+                f"X must be a Tensor or Module/ParameterDict of Tensors, but got {type(X)}"
+            )
+
+        # ---- 1. デバイス決定 & 型整形 -----------------------------------------
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Prepare tensors
+        # X: float32, labels: long に統一
         X = X.detach().to(device=device, dtype=torch.float32, non_blocking=True)
         labels = labels.detach().to(device=device, dtype=torch.long, non_blocking=True)
+
+        # 余計な次元を削る (e.g. [N, D, 1] → [N, D])
         X = X.squeeze()
         labels = labels.squeeze()
+
+        # N チェック
+        if X.ndim == 1:
+            X = X.unsqueeze(1)  # [N] → [N, 1]
 
         N = X.shape[0]
         if N <= 1:
             return 0.0
 
-        # Map labels -> compact 0..K-1 (this automatically ignores any vacant codebook IDs)
+        # ---- 2. ラベルを 0..K-1 にリマップ（空クラスタがあっても無視される） ----
         uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
         K = uniq.numel()
         if K <= 1:
@@ -1009,6 +1046,7 @@ class EuclideanCodebook(nn.Module):
         counts = torch.bincount(inv, minlength=K).to(device)  # >0 by construction
         counts_f = counts.float()
 
+        # ---- 3. ブロック毎に Silhouette を計算 --------------------------------
         sil_sum = 0.0
         processed = 0
 
@@ -1016,43 +1054,52 @@ class EuclideanCodebook(nn.Module):
             end = min(start + row_block, N)
             B = end - start
 
+            # このブロックのサンプル
             Xb = X[start:end]  # [B, D]
 
-            # Pairwise distances for the block
-            d_block = torch.cdist(Xb, X, p=2)  # [B, N]
+            # [B, N] の距離行列
+            d_block = torch.cdist(Xb, X, p=2)  # Euclid
 
-            # Sum distances to each active cluster
+            # クラスタごとの距離総和を計算
             inv_index = inv.view(1, N).expand(B, N)  # [B, N]
             sums_per_cluster = torch.zeros(B, K, device=device, dtype=d_block.dtype)
             sums_per_cluster.scatter_add_(1, inv_index, d_block)  # [B, K]
 
-            # Mean distance to each cluster
+            # クラスタごとの平均距離
             means_per_cluster = sums_per_cluster / counts_f.view(1, K)  # [B, K]
 
-            # a(i): mean intra-cluster (exclude self)
+            # ----- a(i): 同じクラスタ内の平均距離（自分自身を除外） -------------
             k_block = inv[start:end]  # [B]
-            a_counts = counts[k_block] - 1
+            a_counts = counts[k_block] - 1  # 自分自身を除いた個数
+
+            # とりあえず "含自分" の平均距離
             a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)  # [B]
 
+            # クラスタサイズが 1 の場合は 0、>1 の場合だけ補正係数を載せる
             scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
             mask_gt1 = a_counts > 0
             if mask_gt1.any():
-                # scale = n / (n - 1) to remove self-distance (0) from the mean
+                # n / (n - 1) で「自分自身 (距離0) を除いた平均」に補正
                 n = counts[k_block][mask_gt1].float()
                 scale[mask_gt1] = n / (n - 1.0)
-            a_i = a_mean * scale  # [B]; 0 where cluster size == 1
+            a_i = a_mean * scale  # [B]; クラスタサイズ 1 のものは 0 のまま
 
-            # b(i): min mean distance to any other cluster
-            means_per_cluster.scatter_(1, k_block[:, None], float('inf'))
+            # ----- b(i): 他クラスタの平均距離の最小値 ---------------------------
+            # 自分のクラスタの列は無限大にして除外
+            means_per_cluster.scatter_(1, k_block[:, None], float("inf"))
             b_i, _ = means_per_cluster.min(dim=1)  # [B]
 
+            # ----- Silhouette: (b - a) / max(a, b) -------------------------------
             denom = torch.maximum(a_i, b_i)
             sil_block = (b_i - a_i) / denom
-            sil_block = torch.nan_to_num(sil_block, nan=0.0, posinf=0.0, neginf=0.0)
+            sil_block = torch.nan_to_num(
+                sil_block, nan=0.0, posinf=0.0, neginf=0.0
+            )
 
             sil_sum += sil_block.sum().item()
             processed += B
 
+            # メモリ解放
             del Xb, d_block, sums_per_cluster, means_per_cluster, a_mean, a_i, b_i, sil_block
 
         return float(sil_sum / max(processed, 1))
