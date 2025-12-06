@@ -2104,24 +2104,22 @@ class VectorQuantize(nn.Module):
         delta_mid = 0.03  # weight for lat_repel_loss
         delta_cb = 0.00015  # weight for cb_repel_loss
 
-        warmup = 5
-        import math
-        # alpha is 1.0 at epoch == warmup, then decays to ~0
-        alpha = math.exp(-max(0, epoch - warmup) / 80.0)
+        warmup = 2
+        T = 10  # ramp length
 
         if epoch < warmup:
-            # Phase 1: no repel yet, just recon + commit
-            total_loss = beta_commit * commit_loss
+            w_lat_repel = 0.0
+            w_cb_repel = 0.0
         else:
-            # Phase 2: gradually turn on repel as (1 - alpha) grows from 0 to 1
-            w_lat_repel = delta_mid * (1.0 - alpha)
-            w_cb_repel = delta_cb * (1.0 - alpha)
+            t = min(1.0, (epoch - warmup) / T)  # goes 0 → 1 over T epochs
+            w_lat_repel = delta_mid * t
+            w_cb_repel = delta_cb * t
 
-            total_loss = (
-                     beta_commit * commit_loss
-                    + w_lat_repel * repel_loss
-                    + w_cb_repel * cb_repel_loss
-            )
+        total_loss = (
+                beta_commit * commit_loss
+                + w_lat_repel * repel_loss
+                + w_cb_repel * cb_repel_loss
+        )
 
         # loss = (alpha * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
         # else:
