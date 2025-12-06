@@ -8,14 +8,14 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
-
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
                chunk_size=None, attr=None):
     import torch
+    from contextlib import nullcontext
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Ensure model & data on device
+    # Move once outside in your main code if possible, but keep for now:
     model = model.to(device)
     model.train()
 
@@ -24,64 +24,54 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
         g.ndata['feat'] = g.ndata['feat'].to(device)
     feats = feats.to(device)
 
-    # Mixed precision scaler (new API)
-    scaler = torch.amp.GradScaler("cuda", init_scale=1e2) if device.type == "cuda" else None
-    optimizer.zero_grad(set_to_none=True)
-
-    # Forward pass (autocast only on CUDA)
     if device.type == "cuda":
         ctx = torch.amp.autocast("cuda")
+        scaler = torch.amp.GradScaler("cuda", init_scale=1e2)
     else:
-        # no-op context manager
-        from contextlib import nullcontext
         ctx = nullcontext()
+        scaler = None
+
+    optimizer.zero_grad(set_to_none=True)
 
     with ctx:
-        # model(g, feats, chunk_i, mask_dict, logger, epoch,
-        #       batched_graph_base=None, mode=None, attr_list=None)
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
         loss, cb, loss_list3 = outputs
 
-    # ---- loss の健全性チェック ----
+    # ---- sanity checks ----
     if not isinstance(loss, torch.Tensor):
-        # float や numpy などなら Tensor にしておく（requires_grad=False）
-        loss = torch.tensor(float(loss), device=device)
-        if logger:
-            logger.warning(
-                f"[train_sage] loss is not a Tensor from model; "
-                f"got {type(loss)}. Converted to Tensor, no backward."
-            )
-        # backward しないで、そのまま返す
-        return loss.detach(), [float(l) for l in loss_list3]
+        # this is a bug in the model: it should always return a Tensor
+        raise RuntimeError(
+            f"[train_sage] model returned non-Tensor loss: {type(loss)}. "
+            "Do not use .item() / float() for the training loss."
+        )
 
     if not loss.requires_grad:
-        # モデル内部で .detach() / .item() されたか、loss=0.0 Tensor を作っている可能性あり
-        if logger:
-            logger.warning(
-                f"[train_sage] loss.requires_grad=False; "
-                f"shape={getattr(loss, 'shape', None)}, "
-                f"device={loss.device}. Skipping backward for this chunk."
-            )
-        # backward は飛ばして、loss をそのまま返す
-        return loss.detach(), [float(l) for l in loss_list3]
+        # also a bug: someone detached or built the loss from floats
+        raise RuntimeError(
+            f"[train_sage] loss.requires_grad=False (shape={loss.shape}, "
+            f"device={loss.device}). "
+            "Likely .detach() or .item() used on loss inside the model."
+        )
 
-    # ---- ここまで来たら loss は勾配を持つので backward OK ----
-    if device.type == "cuda" and scaler is not None:
+    # ---- backward & step ----
+    if scaler is not None:
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
     else:
-        # CPU or no AMP
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
     optimizer.zero_grad(set_to_none=True)
 
-    # ログ用に detach したものを返す
-    return loss.detach(), [float(l) for l in loss_list3]
+    # return detached values for logging outside
+    loss_scalar = float(loss.detach().cpu())
+    loss_list_out = [float(l.detach().cpu()) for l in loss_list3]
+
+    return loss_scalar, loss_list_out
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None, attr_list=None):
