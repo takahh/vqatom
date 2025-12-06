@@ -2007,8 +2007,11 @@ class VectorQuantize(nn.Module):
             # logger.info(f"{key} : commit {commit_part}, lat_repel {repel_value}, cb_repel {cb_repel_value}")
 
         if total_latent == 0:
-            zero = encoder_outputs.new_zeros(())
+            # Empty chunk: no atoms matched any mask. Return a zero loss that
+            # still has a grad graph, so train_sage doesn't freak out.
+            zero = encoder_outputs.sum() * 0.0
             return zero, zero, zero, zero
+
 
         # ==============================
         # commitment loss 平均の計算
