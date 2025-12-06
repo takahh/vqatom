@@ -8,6 +8,7 @@ from collections import Counter
 
 DATAPATH = "../data/both_mono"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
+
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
                chunk_size=None, attr=None):
     import torch
@@ -15,13 +16,12 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Move once outside in your main code if possible, but keep for now:
     model = model.to(device)
     model.train()
 
     g = g.to(device)
-    if 'feat' in g.ndata:
-        g.ndata['feat'] = g.ndata['feat'].to(device)
+    if "feat" in g.ndata:
+        g.ndata["feat"] = g.ndata["feat"].to(device)
     feats = feats.to(device)
 
     if device.type == "cuda":
@@ -37,16 +37,14 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
         loss, cb, loss_list3 = outputs
 
-    # ---- sanity checks ----
+    # ---- sanity checks on loss ----
     if not isinstance(loss, torch.Tensor):
-        # this is a bug in the model: it should always return a Tensor
         raise RuntimeError(
             f"[train_sage] model returned non-Tensor loss: {type(loss)}. "
             "Do not use .item() / float() for the training loss."
         )
 
     if not loss.requires_grad:
-        # also a bug: someone detached or built the loss from floats
         raise RuntimeError(
             f"[train_sage] loss.requires_grad=False (shape={loss.shape}, "
             f"device={loss.device}). "
@@ -67,9 +65,16 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
 
     optimizer.zero_grad(set_to_none=True)
 
-    # return detached values for logging outside
+    # ---- convert outputs for logging ----
     loss_scalar = float(loss.detach().cpu())
-    loss_list_out = [float(l.detach().cpu()) for l in loss_list3]
+
+    loss_list_out = []
+    for l in loss_list3:
+        # handle both Tensor and float / numpy
+        if isinstance(l, torch.Tensor):
+            loss_list_out.append(float(l.detach().cpu()))
+        else:
+            loss_list_out.append(float(l))
 
     return loss_scalar, loss_list_out
 
