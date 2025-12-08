@@ -11,7 +11,8 @@ LINE_RE = re.compile(
     r"(?P<ss>[0-9.]+),\s*sample size\s+(?P<n>[0-9]+),\s*K_e\s+(?P<ke>[0-9]+)"
 )
 
-def parse_log(path):
+
+def parse_log(path: str):
     """
     ログファイルから Silhouette エントリを全部拾って返す。
     """
@@ -21,40 +22,65 @@ def parse_log(path):
             m = LINE_RE.search(line)
             if not m:
                 continue
-            key = m.group("key")
-            ss = float(m.group("ss"))
-            n = int(m.group("n"))
-            ke = int(m.group("ke"))
-            entries.append(Entry(key, ss, n, ke))
+            entries.append(
+                Entry(
+                    key=m.group("key"),
+                    ss=float(m.group("ss")),
+                    n=int(m.group("n")),
+                    k_e=int(m.group("ke")),
+                )
+            )
     return entries
+
+
+def recommend_ke(n: int, base: float = 10.0, k_max: int = 200) -> int:
+    """
+    N を入力として K_e を出す式に基づく推奨値。
+
+        K_e ≒ sqrt(N / base)
+
+    - 小さいクラスでは 1 にクリップ
+    - 大きすぎるクラスでは k_max にクリップ
+    """
+    if n <= 0:
+        return 1
+
+    ke = round(math.sqrt(n / base))
+    ke = max(1, ke)
+    ke = min(k_max, ke)
+    return ke
+
 
 def propose_ke(
     entries,
-    ss_threshold=0.25,          # SS がこれ以下なら K_e を増やす対象
-    target_n_per_cluster=30,    # sample_size / K_e ≃ 30 を目指す
+    ss_threshold: float = 0.25,  # SS がこれ以下なら K_e を見直す
+    base: float = 10.0,          # recommend_ke の分母
+    k_max: int = 200,            # K_e の上限
 ):
     """
     SS が ss_threshold 以下のクラスについて、
-    sample_size / K_e が target_n_per_cluster になるように K_e を「増やす」案を出す。
+    N に基づく推奨 K_e（recommend_ke）まで「増やす」案を出す。
 
     戻り値: dict[key] = new_ke
     （増やさないクラスも元の K_e で含める）
     """
     result = {}
+
     for e in entries:
         # デフォルトは元の K_e
         new_ke = e.k_e
 
-        if e.ss <= ss_threshold:
-            # 目標 K_e = ceil(n / target_n_per_cluster)
-            target_ke = math.ceil(e.n / target_n_per_cluster)
-            # 「増やしたい」だけなので、今より小さければ据え置き
-            if target_ke > e.k_e:
-                new_ke = target_ke
+        # N から計算した目標 K_e
+        target_ke = recommend_ke(e.n, base=base, k_max=k_max)
+
+        # 「増やす」方向だけにする
+        if e.ss <= ss_threshold and target_ke > e.k_e:
+            new_ke = target_ke
 
         result[e.key] = new_ke
 
     return result
+
 
 def main():
     if len(sys.argv) < 2:
@@ -63,20 +89,27 @@ def main():
 
     log_path = sys.argv[1]
     entries = parse_log(log_path)
-    new_ke_dict = propose_ke(entries, ss_threshold=0.25, target_n_per_cluster=30)
+
+    out_path = sys.argv[2]
+    new_ke_dict = propose_ke(
+        entries,
+        ss_threshold=0.25,
+        base=10.0,
+        k_max=200,
+    )
 
     # そのまま Python の dict としてコピペしやすい形で出力
-    print("CBDICT_KE = {")
-    for e in entries:
-        key = e.key
-        old_ke = e.k_e
-        new_ke = new_ke_dict[key]
-        # コメントで元の値と SS, n も付けておく
-        print(
-            f"    '{key}': {new_ke},  "
-            f"# old K_e={old_ke}, n={e.n}, SS={e.ss:.4f}"
-        )
-    print("}")
+    with open(out_path, "w+", encoding="utf-8") as f:
+        f.writelines("CBDICT_KE = {")
+        for e in entries:
+            key = e.key
+            old_ke = e.k_e
+            new_ke = new_ke_dict[key]
+            # コメントで元の値と SS, n も付けておく
+            f.writelines(f"    '{key}': {new_ke},  "
+                f"# old K_e={old_ke}, n={e.n}, SS={e.ss:.4f}\n")
+        f.writelines("}")
+
 
 if __name__ == "__main__":
     main()
