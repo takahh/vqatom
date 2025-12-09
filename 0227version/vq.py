@@ -1242,41 +1242,63 @@ class EuclideanCodebook(nn.Module):
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """
         Forward pass with per-element quantization and EMA update.
+
+        - `mask_dict` contains **global** atom indices (from collect_global_indices_compact).
+        - This module maintains a running global offset `self.latent_size_sum` so that
+          each chunk sees the correct [global_start, global_end) window.
         """
-        # latent オフセット
+
+        # --------------------------------------------------------------
+        # 0. グローバル latent オフセット管理
+        # --------------------------------------------------------------
         if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
 
-        if mode != "init_kmeans_final" and chunk_i is not None and chunk_i == 0:
-            self.latent_size_sum = 0
-        if mode in ("test", "eval"):
+        # チャンク 0 でリセット（train/test/eval 共通）
+        if chunk_i is not None and chunk_i == 0:
             self.latent_size_sum = 0
 
-        # ----- 入力整形 -----
+        # --------------------------------------------------------------
+        # 1. 入力整形
+        # --------------------------------------------------------------
         x = x.float()
         if x.ndim < 4:
-            x = rearrange(x, " ... -> 1 ...")  # (1, B, D)
+            # 期待形状: (1, B, D)
+            x = rearrange(x, "... -> 1 ...")
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
         B, D = flatten.shape[1], flatten.shape[2]
 
+        # このチャンクが担当するグローバル範囲
         global_start = self.latent_size_sum
         global_end = global_start + B
 
         self.quantize_dict = {}
         self.embed_ind_dict = {}
+
+        # mask_dict を LongTensor のグローバル index に正規化
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
 
-        # ----- KMeans init フェーズ -----
+        # --------------------------------------------------------------
+        # 2. K-Means init フェーズ
+        #    （全データを一度に渡す or チャンクごとに渡す両方に対応）
+        # --------------------------------------------------------------
         if mode == "init_kmeans_final":
-            self.init_embed_(flatten, mask_dict)
-            print("init_embed is done")
-            print(mask_dict.keys())
+            if mask_dict is None:
+                return 0
 
-            for key in mask_dict.keys():
-                idx = mask_dict[key]
-                if idx.numel() == 0:
+            for key, idx_global in mask_dict.items():
+                if idx_global.numel() == 0:
                     continue
-                masked_latents = flatten[0][idx]
+
+                # このチャンクに属する index だけ残す
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not gmask.any():
+                    continue
+
+                idx_local = (idx_global[gmask] - global_start).to(
+                    device=flatten.device, dtype=torch.long
+                )
+                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
                 if masked_latents.numel() == 0:
                     continue
 
@@ -1299,7 +1321,7 @@ class EuclideanCodebook(nn.Module):
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-                # Silhouette (省略可)
+                # Silhouette (任意)
                 try:
                     from sklearn.utils import resample
 
@@ -1329,9 +1351,14 @@ class EuclideanCodebook(nn.Module):
                     if logger:
                         logger.warning(f"Silhouette failed for {key}: {e}")
 
+            # init フェーズでもオフセットを進めておくと、チャンク分割でも整合が取れる
+            self.latent_size_sum = global_end
+            torch.cuda.empty_cache()
             return 0
 
-        # ----- train / test / eval フェーズ -----
+        # --------------------------------------------------------------
+        # 3. train / test / eval フェーズ
+        # --------------------------------------------------------------
         feat_flat = torch.cat(feature, dim=0)  # [N, 78]
         feat_flat = feat_flat.contiguous().to(flatten.device)
         assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
@@ -1340,15 +1367,22 @@ class EuclideanCodebook(nn.Module):
         if not hasattr(self, "cb_dict"):
             self.cb_dict = {}
 
-        for key in mask_dict.keys():
-            idx_global = mask_dict[key]  # [Ni_global]
+        # --------------------------------------------------------------
+        # 3-1. 各キーごとに最近傍コード探索 + EMA 更新
+        # --------------------------------------------------------------
+        for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
+            if idx_global.numel() == 0:
+                continue
+
+            # このチャンクに属するグローバル index を抽出
             gmask = (idx_global >= global_start) & (idx_global < global_end)
             if not gmask.any():
                 continue
 
-            idx_local = idx_global[gmask] - global_start
-            masked_latents = flatten[0][idx_local]  # [Ni, D]
-
+            idx_local = (idx_global[gmask] - global_start).to(
+                device=flatten.device, dtype=torch.long
+            )
+            masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
             if masked_latents.numel() == 0:
                 continue
 
@@ -1360,6 +1394,7 @@ class EuclideanCodebook(nn.Module):
             code_param = self.embed[safe]
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
+            # 最近傍コード
             with torch.no_grad():
                 dist = torch.cdist(masked_latents, code, p=2).pow(2)
                 idx_code = dist.argmin(dim=-1)
@@ -1369,7 +1404,7 @@ class EuclideanCodebook(nn.Module):
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-            # ----- EMA update: dtype-safe & float32 固定 -----
+            # ----- EMA update (train かつ早期エポックのみ) -----
             if self.training and epoch is not None and epoch < 30:
                 if code_param.ndim == 3:
                     K_e, D_e = code_param.shape[1], code_param.shape[2]
@@ -1381,7 +1416,7 @@ class EuclideanCodebook(nn.Module):
                 buf_name_cs = f"cluster_size_{skey}"
                 buf_name_ea = f"embed_avg_{skey}"
 
-                # 既存 buffer を取得 or 新規作成（必ず float32）
+                # cluster_size buffer
                 if hasattr(self, buf_name_cs):
                     cs = getattr(self, buf_name_cs)
                     if cs.dtype != torch.float32 or cs.shape[0] != K_e:
@@ -1393,6 +1428,7 @@ class EuclideanCodebook(nn.Module):
                     cs = torch.zeros(K_e, device=device, dtype=torch.float32)
                     self.register_buffer(buf_name_cs, cs)
 
+                # embed_avg buffer
                 if hasattr(self, buf_name_ea):
                     ea = getattr(self, buf_name_ea)
                     if ea.dtype != torch.float32 or ea.shape != (K_e, D_e):
@@ -1437,36 +1473,46 @@ class EuclideanCodebook(nn.Module):
 
             del masked_latents, code, idx_code, quantize
 
-        # ----- ミニバッチ全体の quantize を組み立て -----
+        # --------------------------------------------------------------
+        # 3-2. ミニバッチ全体の quantize を組み立て
+        # --------------------------------------------------------------
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
-        for key, idx_global in mask_dict.items():
-            skey = str(key)
-            if skey not in self.quantize_dict:
-                continue
+        # 各キーごとに quantize を敷き詰める
+        if mask_dict is not None:
+            for key, idx_global in mask_dict.items():
+                skey = str(key)
+                if skey not in self.quantize_dict:
+                    continue
 
-            gmask = (idx_global >= global_start) & (idx_global < global_end)
-            if not gmask.any():
-                continue
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not gmask.any():
+                    continue
 
-            idx_in_chunk = idx_global[gmask]
-            idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
-            qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
+                idx_in_chunk = idx_global[gmask]
+                idx_local = (idx_in_chunk - global_start).to(
+                    device=quantize_full.device, dtype=torch.long
+                )
+                qk = self.quantize_dict[skey].to(
+                    device=quantize_full.device, dtype=quantize_full.dtype
+                )
 
-            if idx_local.numel() > 0:
-                quantize_full.index_copy_(0, idx_local, qk)
+                if idx_local.numel() > 0:
+                    quantize_full.index_copy_(0, idx_local, qk)
 
-        all_local = torch.cat(
-            [
-                (idx[(idx >= global_start) & (idx < global_end)] - global_start)
-                for idx in mask_dict.values()
-                if idx.numel() > 0
-            ],
-            dim=0,
-        )
+        # どのキーにも属さなかった latent には元の値を入れる
+        all_local = []
+        if mask_dict is not None:
+            for idx in mask_dict.values():
+                if idx.numel() == 0:
+                    continue
+                in_chunk = idx[(idx >= global_start) & (idx < global_end)]
+                if in_chunk.numel() > 0:
+                    all_local.append(in_chunk - global_start)
 
-        if all_local.numel() > 0:
-            used = torch.unique(all_local)
+        if len(all_local) > 0:
+            all_local_cat = torch.cat(all_local, dim=0)
+            used = torch.unique(all_local_cat)
         else:
             used = torch.tensor([], dtype=torch.long, device=flatten.device)
 
@@ -1476,11 +1522,15 @@ class EuclideanCodebook(nn.Module):
         if unused.any():
             quantize_full[unused] = flatten[0][unused]
 
+        # straight-through
         quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
         quantize_st = quantize_st.unsqueeze(0)  # (1, B, D)
 
-        if mode not in ("test", "eval") and chunk_i is not None:
-            self.latent_size_sum += B
+        # --------------------------------------------------------------
+        # 3-3. グローバルオフセットを進める
+        # --------------------------------------------------------------
+        if chunk_i is not None:
+            self.latent_size_sum = global_end
 
         torch.cuda.empty_cache()
         return quantize_st, self.embed_ind_dict, self.embed
