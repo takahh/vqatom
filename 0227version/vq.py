@@ -2065,6 +2065,16 @@ class VectorQuantize(nn.Module):
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
         commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(x, mask_dict, self._codebook.embed, logger, chunk_i)
+
+        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(...)
+
+        if logger and chunk_i == 0:
+            logger.info(
+                f"[VQ_DEBUG] commit_loss.requires_grad={commit_loss.requires_grad}, "
+                f"codebook_loss.requires_grad={codebook_loss.requires_grad}, "
+                f"repel_loss.requires_grad={repel_loss.requires_grad}"
+            )
+
         # ---------------------------------------------
         # only repel losses at the first several steps
         # ---------------------------------------------
