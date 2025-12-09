@@ -98,6 +98,13 @@ def main():
         k_max=200,
     )
 
+    # --- 重複 key 対策: 最後に出たエントリを採用 ---
+    entry_by_key = {}
+    for e in entries:
+        entry_by_key[e.key] = e
+    entries = list(entry_by_key.values())
+    # ----------------------------------------------
+
     # そのまま Python の dict としてコピペしやすい形で出力
     with open(out_path, "w+", encoding="utf-8") as f:
         f.writelines("CBDICT_KE = {")
