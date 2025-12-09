@@ -1960,6 +1960,13 @@ class VectorQuantize(nn.Module):
                 # このチャンクに該当サンプルなし
                 continue
 
+            # DEBUG: first couple of hits
+            if total_latent == 0 and logger is not None:
+                logger.info(
+                    f"[commitment_loss DEBUG] first hit: key={kstr}, Ni={Ni}, "
+                    f"chunk_start={chunk_start}, chunk_end={chunk_end}"
+                )
+
             # --- コードブック取り出し＆形状正規化 ---
             cb_t = self._unwrap_codebook_entry(cb)  # nn.Parameter / tensor 両対応で tensor を返す想定
             cb_t = self._squeeze_01(cb_t)  # [1,K,D] → [K,D] にするユーティリティ
