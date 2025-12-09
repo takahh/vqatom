@@ -394,7 +394,7 @@ class EquivariantThreeHopGINE(nn.Module):
         h_vq = self.pre_vq_ln(h_out)
         quantize_output = self.vq(h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode)
         (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
-        return loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+        return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
 
 
 class Model(nn.Module):
