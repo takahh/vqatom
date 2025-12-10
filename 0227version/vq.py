@@ -2010,7 +2010,7 @@ class VectorQuantize(nn.Module):
             raw = None if mask_dict is None else mask_dict.get(kstr, None)
             if raw is None:
                 continue  # このキーに該当するデータ無し
-
+            print(f"B {B}, raw {raw}")
             # bool-mask / list / tensor → 1D LongTensor
             idx_global = self._as_index_tensor(raw, None, device)
 
