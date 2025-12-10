@@ -2005,12 +2005,28 @@ class VectorQuantize(nn.Module):
         # -------------------------------------------------
         for key, cb in items:
             kstr = "all" if key is None else str(key)
-            print(f"kstr {kstr}")
             # --- mask/indices を取得 ---
-            raw = None if mask_dict is None else mask_dict.get(kstr, None)
+            raw = None
+            if mask_dict is not None:
+                # まずそのままのキーで試す
+                if kstr in mask_dict:
+                    raw = mask_dict[kstr]
+                    used_key = kstr
+                else:
+                    # 先頭 "k_" を剥がしたキーも試す
+                    if kstr.startswith("k_"):
+                        alt = kstr[2:]
+                        if alt in mask_dict:
+                            raw = mask_dict[alt]
+                            used_key = alt
+                    # 必要ならさらに他の別名もここに追加できる
+
             if raw is None:
-                continue  # このキーに該当するデータ無し
-            print(f"B {B}, raw {raw}")
+                # このコードブックキーに対応するマスクが無いのでスキップ
+                if logger is not None:
+                    logger.debug(f"[VQ_SKIP] no mask for codebook key='{kstr}'")
+                continue
+
             # bool-mask / list / tensor → 1D LongTensor
             idx_global = self._as_index_tensor(raw, None, device)
 
