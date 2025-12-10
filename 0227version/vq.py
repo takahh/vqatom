@@ -2060,6 +2060,7 @@ class VectorQuantize(nn.Module):
             # Empty chunk: no atoms matched any mask. Return a zero loss that
             # still has a grad graph, so train_sage doesn't freak out.
             zero = encoder_outputs.sum() * 0.0
+            print("lat zero !!!!!!!!!!!!!!!!")
             return zero, zero, zero, zero
 
 
