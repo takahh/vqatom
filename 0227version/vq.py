@@ -1916,8 +1916,8 @@ class VectorQuantize(nn.Module):
             encoder_outputs,  # [B, D] … 現在の“チャンク”だけ
             mask_dict,  # dict[str|int -> 1D indices or bool-mask]
             codebook,  # dict-like per element or single tensor/param
-            logger,
-            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
+            logger=None,
+            chunk_start=None,  # グローバル先頭位置（未使用なら None）
             beta=0.25,
             temperature=None,  # 未使用ならそのまま（EMA は別処理）
             use_cosine=False,
@@ -2067,13 +2067,14 @@ class VectorQuantize(nn.Module):
             codebk_num = codebk_num + codebk_part * Ni
 
             # ---------------------------------------------
-            # repel loss
+            # repel loss（contrastive）
             # ---------------------------------------------
             if isinstance(codebook, (dict, nn.ParameterDict)) and kstr in codebook:
                 cb_for_contrast = codebook[kstr]
             else:
                 cb_for_contrast = cb
 
+            # compute_contrastive_loss は元の実装を利用
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, key)
             repel_value = ret[0]
             cb_repel_value = ret[3]
@@ -2104,67 +2105,95 @@ class VectorQuantize(nn.Module):
         if total_cb_count > 0:
             cb_repel_loss = cb_repel_num / total_cb_count
         else:
-            # 一応ガード（通常ここには来ないはず）
-            cb_repel_loss = cb_repel_num * 0.0
+            cb_repel_loss = cb_repel_num * 0.0  # ガード
+
+        if logger is not None:
+            logger.info(
+                f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
+                f"total_latent={int(total_latent)}, "
+                f"commit_loss={commit_loss.item():.6f}"
+            )
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
-    #              data, features, mask_dict, logger, chunk_i, epoch, mode
     def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
+        """
+        Forward pass with per-element quantization and commitment / repel losses.
+        """
+        import torch
+        from einops import rearrange
+
+        # -----------------------------
+        # 0. 入力整形
+        # -----------------------------
         only_one = x.ndim == 2
         x = x.to("cuda")
+
         if only_one:
-            x = rearrange(x, 'b d -> b 1 d')
-        shape, device, heads, is_multiheaded, codebook_size = (
-            x.shape, x.device, self.heads, self.heads > 1, self.codebook_size)
+            x = rearrange(x, 'b d -> b 1 d')  # (B, D) → (B, 1, D)
+
+        shape, device, heads = x.shape, x.device, self.heads
+        is_multiheaded = heads > 1
         need_transpose = not self.channel_last and not self.accept_image_fmap
+
         if self.accept_image_fmap:
+            # (B, C, H, W) → (B, H*W, C)
             x = rearrange(x, 'b c h w -> b (h w) c')
+
         if need_transpose:
+            # (B, D, N) → (B, N, D)
             x = rearrange(x, 'b d n -> b n d')
+
         if is_multiheaded:
+            # (B, N, H*D) → (H, B, N, D)
             x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
+
+        # mask_dict が None でも .items() できるように
+        if mask_dict is None:
+            mask_dict = {}
+
         # -------------------------------------------
-        # _codebook (run kmeans, sil score, and EMA)
+        # 1. _codebook (k-means init / EMA / etc.)
         # -------------------------------------------
         if mode == "init_kmeans_final":
+            # ここでは quantization だけ走らせる想定
             self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
             return 0
+
+        # 通常モード：quantize
+        quantize_dict, embed_ind_dict, embed = self._codebook(
+            x, feature, mask_dict, logger, chunk_i, epoch, mode
+        )
+
+        # -------------------------------
+        # 2. commitment / contrastive loss
+        # -------------------------------
+        # x は今 (B, N, D) または (H, B, N, D)。ここでは「全部まとめて B*N とみなす」簡易版。
+        x_flat = x
+        if x_flat.ndim == 4:  # (H, B, N, D)
+            x_flat = rearrange(x_flat, 'h b n d -> (h b n) d')
+        elif x_flat.ndim == 3:  # (B, N, D)
+            x_flat = rearrange(x_flat, 'b n d -> (b n) d')
         else:
-            quantize_dict, embed_ind_dict, embed = self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
-        # # -------------------------------
-        # # repel loss calculation
-        # # -------------------------------
-        # ret = self.orthogonal_loss_fn(mask_dict, embed_ind_dict, self._codebook.embed, init_feat, x, quantize_dict, logger, epoch, chunk_i)
-        #
-        # # Be permissive about key names
-        # mid_repel_loss = ret.get("mid_repel_loss") or ret.get("repel_loss") or 0.0
-        # cb_repel_loss = ret.get("cb_repel_loss") or 0.0
-        # sil = ret.get("sil", [])
-        # contrib = ret.get("contrib", None)
+            x_flat = x_flat.reshape(-1, x_flat.shape[-1])
 
-        # -------------------------------
-        # commit loss calculation
-        # -------------------------------
-        # encoder_outputs, mask_dict, codebook
-        for k, v in mask_dict.items():
-            print(f"{k} - {v}")
-            break
-        commit_loss, codebook_loss, repel_loss, cb_repel_loss =  self.commitment_loss(x, mask_dict, self._codebook.embed, logger, chunk_i)
+        # chunk_start はまだちゃんとしたグローバル index を渡せていないので None にしておく
+        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
+            x_flat, mask_dict, self._codebook.embed, logger, chunk_start=None
+        )
 
-        if logger and chunk_i == 0:
+        if logger is not None and chunk_i == 0:
             logger.info(
                 f"[VQ_DEBUG] commit_loss.requires_grad={commit_loss.requires_grad}, "
                 f"codebook_loss.requires_grad={codebook_loss.requires_grad}, "
-                f"repel_loss.requires_grad={repel_loss.requires_grad}"
+                f"repel_loss.requires_grad={repel_loss.requires_grad}, "
+                f"cb_repel_loss.requires_grad={cb_repel_loss.requires_grad}"
             )
 
         # ---------------------------------------------
-        # only repel losses at the first several steps
+        # 3. scalar 化ユーティリティ
         # ---------------------------------------------
         def _as_scalar_tensor(val, ref_tensor):
-            import torch
-
             def zlike():
                 # keeps graph if ref requires grad
                 return ref_tensor.sum() * 0.0
@@ -2189,14 +2218,16 @@ class VectorQuantize(nn.Module):
 
             return zlike()
 
-        ref = x if torch.is_tensor(x) else next(self.parameters()).detach().new_tensor(0.)
+        ref = x_flat if torch.is_tensor(x_flat) else next(self.parameters()).detach().new_tensor(0.)
 
         repel_loss = _as_scalar_tensor(repel_loss, ref)
         cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
         commit_loss = _as_scalar_tensor(commit_loss, ref)
         codebook_loss = _as_scalar_tensor(codebook_loss, ref)
-        # Example: warmup 5 epochs, then gentle exponential decay
-        # repel_loss = repel_loss * alpha
+
+        # ---------------------------------------------
+        # 4. loss スケジュール
+        # ---------------------------------------------
         beta_commit = 2.0  # commitment
         delta_mid = 0.03  # weight for lat_repel_loss
         delta_cb = 0.00015  # weight for cb_repel_loss
@@ -2218,16 +2249,5 @@ class VectorQuantize(nn.Module):
                 + w_cb_repel * cb_repel_loss
         )
 
-        # loss = (alpha * repel_loss) + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)
-        # else:
-        #     # half-life ~ 50 epochs
-        #     repel_loss = alpha * repel_loss
-        #     loss = (delta_mid * repel_loss) + (delta_cb * cb_repel_loss) \
-        #            + (beta_commit * commit_loss) + (gamma_cb * codebook_loss)            #
-            # commit_loss 0.0
-            # cb_loss 0.0
-            # sil_loss []
-            # repel_loss 0.24993233382701874
-            # cb_repel_loss 0.995575487613678
-            # loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss
+        # 戻り値の形は既存コードと互換にしておく
         return (total_loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
