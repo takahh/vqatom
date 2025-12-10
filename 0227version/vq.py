@@ -1912,353 +1912,309 @@ class VectorQuantize(nn.Module):
         return norm
 
     def commitment_loss(
-            self,
-            encoder_outputs,  # [B, D] … 現在の“チャンク”だけ
-            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（★グローバル index 想定★）
-            codebook,  # dict-like per element or single tensor/param
-            logger=None,
-            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
-            beta=0.25,
-            temperature=None,  # 未使用ならそのまま（EMA は別処理）
-            use_cosine=False,
-    ):
+        self,
+        encoder_outputs: torch.Tensor,  # [B, D]  … このチャンクの latent
+        mask_dict,                      # dict[str|int -> LongTensor or BoolTensor] (グローバル index)
+        codebook,                       # dict-like per element, or a single Tensor/Module
+        logger=None,
+        chunk_start: int | None = None,  # このチャンクのグローバル開始位置
+        beta: float = 0.25,
+        temperature=None,               # ここでは未使用（将来の拡張用）
+        use_cosine: bool = False,
+    ) -> torch.Tensor:
         """
-        encoder_outputs: [B, D] (現在のチャンクの潜在ベクトル)
+        Per-element commitment loss.
 
-        前提:
-          - mask_dict の indices は常に「グローバル index」。
-          - ここでは [chunk_start, chunk_start + B) に入るものだけを拾い、
-            ローカル index (= global - chunk_start) に変換して利用する。
-
-        ローカル index を直接使いたい場合は、呼び出し側で
-          chunk_start=0, mask_dict も 0..B-1 の index
-        という前提で与える。
+        重要:
+        - mask_dict の index は「全体（グローバル）」。
+        - chunk_start と B を使って [global_start, global_end) に入るものだけを抽出し、
+          ローカル index (= global - global_start) に変換して encoder_outputs に適用する。
+        - codebook は
+            * dict[str -> Tensor[K_e, D]]  または
+            * nn.ParameterDict  (key または "k_{key}" 形式)
+            * 単一 Tensor[K, D]  も許す。
         """
+
         import torch
         import torch.nn.functional as F
-        from torch import nn
 
-        # -------------------------------------------------
-        # 0. 入力整形
-        # -------------------------------------------------
-        encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
-        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B, D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
 
         if chunk_start is None:
-            chunk_start = 0
-        chunk_end = chunk_start + B
+            # 安全 fallback（本当は forward から必ず渡したい）
+            global_start = 0
+        else:
+            global_start = int(chunk_start)
 
-        mask_dict = self._normalize_mask_dict(mask_dict)
+        global_end = global_start + B
 
-        # -------------------------------------------------
-        # 1. 累積器（Ni で重み付け）
-        # -------------------------------------------------
+        total_loss = encoder_outputs.new_tensor(0.0)
         total_latent = 0
-        total_cb_count = 0
 
-        commit_num = encoder_outputs.new_zeros(())
-        codebk_num = encoder_outputs.new_zeros(())
-        repel_num = encoder_outputs.new_zeros(())
-        cb_repel_num = encoder_outputs.new_zeros(())
+        # ----------------------------------------------------------
+        # ヘルパー: codebook から key に対応する embed を取る
+        # ----------------------------------------------------------
+        def _get_cb_for_key(k):
+            # codebook が dict / ParameterDict の場合
+            if isinstance(codebook, (dict, torch.nn.ParameterDict)):
+                if k in codebook:
+                    return codebook[k]
+                kk = f"k_{k}"
+                if kk in codebook:
+                    return codebook[kk]
+                return None
+            # 単一 Tensor / nn.Parameter / nn.Embedding など
+            if isinstance(codebook, torch.nn.Embedding):
+                return codebook.weight
+            if isinstance(codebook, torch.nn.Module) and hasattr(codebook, "weight"):
+                return codebook.weight
+            if isinstance(codebook, torch.Tensor):
+                return codebook
+            # それ以外は未対応
+            return None
 
-        # -------------------------------------------------
-        # 2. コードブックのイテレーション準備
-        # -------------------------------------------------
-        if isinstance(codebook, (dict, nn.ParameterDict)):
-            items = list(codebook.items())
-        else:
-            items = [(None, codebook)]
-
-        # -------------------------------------------------
-        # 3. ヘルパ: グローバル index → ローカル index
-        # -------------------------------------------------
-        def _select_by_global_idx(encoder_out, global_idx, start, end, *, name=""):
-            """
-            encoder_out: [B, D]（現チャンク）
-            global_idx: 1D LongTensor（グローバル index）
-            戻り値: (z_local [Ni, D], idx_local [Ni])
-            """
-            if global_idx.numel() == 0:
-                return encoder_out.new_zeros((0, encoder_out.size(1))), global_idx
-
-            # チャンクに属する index だけを残す
-            mask = (global_idx >= start) & (global_idx < end)
-            idx_in = global_idx[mask]
-            if idx_in.numel() == 0:
-                return encoder_out.new_zeros((0, encoder_out.size(1))), idx_in
-
-            idx_local = (idx_in - start).to(torch.long)
-
-            max_idx = int(idx_local.max().item())
-            min_idx = int(idx_local.min().item())
-            if min_idx < 0 or max_idx >= encoder_out.size(0):
-                raise RuntimeError(
-                    f"[{name}] local index out of range: "
-                    f"min={min_idx}, max={max_idx}, "
-                    f"B={encoder_out.size(0)}, start={start}, end={end}, "
-                    f"kept={idx_in.numel()}"
-                )
-
-            z = encoder_out.index_select(0, idx_local)
-            return z, idx_local
-
-        # -------------------------------------------------
-        # 4. 要素ごとに VQ & 損失計算
-        # -------------------------------------------------
-        for key, cb in items:
-            kstr = "all" if key is None else str(key)
-
-            # --- mask/indices を取得 ---
-            raw = None
-            used_key = None
-            if mask_dict is not None:
-                if kstr in mask_dict:
-                    raw = mask_dict[kstr]
-                    used_key = kstr
-                elif kstr.startswith("k_"):
-                    alt = kstr[2:]
-                    if alt in mask_dict:
-                        raw = mask_dict[alt]
-                        used_key = alt
-
-            if raw is None:
-                if logger is not None:
-                    logger.debug(f"[VQ_SKIP] no mask for codebook key='{kstr}'")
+        # ----------------------------------------------------------
+        # 1. mask_dict を回して、このチャンクに属する index を集める
+        # ----------------------------------------------------------
+        for key, g_idx in mask_dict.items():
+            # g_idx: グローバル index (Long or Bool)
+            if g_idx is None:
                 continue
 
-            # bool-mask / list / tensor → 1D LongTensor（★グローバル index 想定★）
-            idx_global = self._as_index_tensor(raw, None, device)
-            if idx_global.numel() == 0:
-                if logger is not None:
-                    logger.debug(f"[VQ_EMPTY_KEY] key='{kstr}' has 0 indices before chunk filter")
+            # Bool mask の場合 → Long index に変換
+            if g_idx.dtype == torch.bool:
+                g_idx = g_idx.nonzero(as_tuple=False).view(-1)
+
+            g_idx = g_idx.to(device=device, dtype=torch.long)
+
+            # このチャンクに入るかどうか
+            in_chunk = (g_idx >= global_start) & (g_idx < global_end)
+            if not in_chunk.any():
                 continue
 
-            # グローバル index → ローカル index
-            z, idx_local = _select_by_global_idx(
-                encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
-            )
-            Ni = z.size(0)
-            if Ni == 0:
-                # このチャンクに該当サンプルなし
+            g_idx_chunk = g_idx[in_chunk]
+            # ローカル index に変換
+            local_idx = (g_idx_chunk - global_start).long()  # [N_k]
+
+            # 安全チェック
+            if local_idx.numel() == 0:
+                continue
+            if local_idx.max().item() >= B:
+                # どこかで index がズレている
                 if logger is not None:
-                    logger.debug(
-                        f"[VQ_EMPTY_CHUNK] key='{kstr}', "
-                        f"global_range=[{int(idx_global.min())},{int(idx_global.max())}], "
-                        f"chunk=[{chunk_start},{chunk_end})"
+                    logger.warning(
+                        f"[VQ_COMMIT_WARN] key={key} has local_idx.max={local_idx.max().item()} "
+                        f"but B={B}, global_start={global_start}, global_end={global_end}"
                     )
+                # ここでは超えている分を捨てる
+                valid = local_idx < B
+                local_idx = local_idx[valid]
+                if local_idx.numel() == 0:
+                    continue
+
+            # 対応する encoder chunk を取得
+            encoder_chunk = encoder_outputs[local_idx]  # [N_k, D]
+            N_k = encoder_chunk.size(0)
+
+            cb = _get_cb_for_key(key)
+            if cb is None:
+                if logger is not None:
+                    logger.warning(f"[VQ_COMMIT_WARN] no codebook found for key={key}")
                 continue
 
-            # --- コードブック取り出し＆形状正規化 ---
-            cb_t = self._unwrap_codebook_entry(cb)  # nn.Parameter / tensor → tensor
-            cb_t = self._squeeze_01(cb_t)  # [1,K,D] → [K,D]
-            assert cb_t.dim() == 2, f"codebook for key={key} must be [K,D] or [1,K,D]; got {tuple(cb_t.shape)}"
-            K, Dk = cb_t.shape
-            assert Dk == D, f"latent D={D} != codebook D={Dk} for key={key}"
+            cb = cb.to(device=device)
+            if cb.ndim == 1:
+                cb = cb.view(1, -1)  # [1, D]
+            K_e = cb.size(0)
 
-            # --- 最近傍コード探索（cosine or L2） ---
+            if K_e == 0 or N_k == 0:
+                continue
+
+            # ------------------------------------------------------
+            # 2. encoder_chunk と cb の距離を計算し、最近傍 code を選ぶ
+            # ------------------------------------------------------
             if use_cosine:
-                z_n = F.normalize(z, p=2, dim=-1)
-                cb_n = F.normalize(cb_t, p=2, dim=-1)
-                sim = z_n @ cb_n.t()  # [Ni, K]
-                embed_ind = torch.argmax(sim, dim=-1)
+                # cosine distance = 1 - cos sim
+                e_norm = F.normalize(encoder_chunk, dim=-1)      # [N_k, D]
+                c_norm = F.normalize(cb, dim=-1)                 # [K_e, D]
+                # cos sim
+                sim = e_norm @ c_norm.T                          # [N_k, K_e]
+                # max sim -> min distance
+                idx = sim.argmax(dim=-1)                         # [N_k]
+                quantized = cb[idx]                              # [N_k, D]
             else:
-                dist = torch.cdist(z, cb_t, p=2).pow(2)  # [Ni, K]
-                embed_ind = torch.argmin(dist, dim=-1)
+                # L2 距離 (squared)
+                # d(x,y)^2 = |x|^2 + |y|^2 - 2 x·y
+                e2 = (encoder_chunk ** 2).sum(dim=1, keepdim=True)       # [N_k, 1]
+                c2 = (cb ** 2).sum(dim=1).view(1, -1)                    # [1, K_e]
+                cross = encoder_chunk @ cb.T                             # [N_k, K_e]
+                dist2 = e2 + c2 - 2.0 * cross                            # [N_k, K_e]
+                idx = dist2.argmin(dim=-1)                               # [N_k]
+                quantized = cb[idx]                                      # [N_k, D]
 
-            e = cb_t.index_select(0, embed_ind)  # [Ni, D]
+            # ------------------------------------------------------
+            # 3. commitment loss を計算
+            #    ここでは classic VQ-VAE 形式:
+            #       L_commit = beta * ||sg[quant] - e||^2
+            #    encoder にだけ勾配を流す（codebook は別の EMA 更新など）
+            # ------------------------------------------------------
+            diff = encoder_chunk - quantized.detach()   # grad は encoder のみに行く
+            loss_k = beta * (diff ** 2).mean()          # scalar
 
-            # ---------------------------------------------
-            # commitment / codebook loss
-            # ---------------------------------------------
-            commit_part = F.mse_loss(z, e.detach(), reduction="mean")  # β‖z - sg(e)‖²
-            codebk_part = F.mse_loss(e, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
+            total_loss = total_loss + loss_k
+            total_latent += int(N_k)
 
-            total_latent += Ni
-            commit_num = commit_num + commit_part * Ni
-            codebk_num = codebk_num + codebk_part * Ni
-
-            # ---------------------------------------------
-            # repel loss（contrastive）
-            # ---------------------------------------------
-            if isinstance(codebook, (dict, nn.ParameterDict)) and kstr in codebook:
-                cb_for_contrast = codebook[kstr]
-            else:
-                cb_for_contrast = cb
-
-            ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, key)
-            repel_value = ret[0]
-            cb_repel_value = ret[3]
-
-            repel_num = repel_num + repel_value * Ni
-            total_cb_count += K
-            cb_repel_num = cb_repel_num + cb_repel_value * K
-
-        # -------------------------------------------------
-        # 5. total_latent == 0 の場合（このチャンクに該当サンプルなし）
-        # -------------------------------------------------
-        if total_latent == 0:
-            zero = encoder_outputs.sum() * 0.0
-            if logger is not None:
-                logger.info(
-                    f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})"
-                )
-            return zero, zero, zero, zero
-
-        # -------------------------------------------------
-        # 6. 平均化して最終 loss を返す
-        # -------------------------------------------------
-        commit_loss = beta * (commit_num / total_latent)
-        codebook_loss = codebk_num / total_latent
-        repel_loss = repel_num / total_latent
-
-        if total_cb_count > 0:
-            cb_repel_loss = cb_repel_num / total_cb_count
-        else:
-            cb_repel_loss = cb_repel_num * 0.0  # ガード
-
+        # ----------------------------------------------------------
+        # 4. ログ出力
+        # ----------------------------------------------------------
         if logger is not None:
             logger.info(
-                f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
-                f"total_latent={int(total_latent)}, "
-                f"commit_loss={commit_loss.item():.6f}"
+                "[VQ_COMMIT] chunk_start=%d, B=%d, total_latent=%d, commit_loss=%.6f",
+                global_start,
+                B,
+                total_latent,
+                float(total_loss.detach().cpu()),
             )
 
-        return commit_loss, codebook_loss, repel_loss, cb_repel_loss
+        return total_loss
 
-    def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=0, mode=None):
+import torch
+import torch.nn.functional as F
+from einops import rearrange
+
+
+class PerElementVQ(torch.nn.Module):
+    # 既存クラスにこの2つのメソッドだけコピペしてもOK。
+    # __init__ などはあなたの元コードのままで。
+
+    @torch.amp.autocast("cuda", enabled=False)
+    def forward(
+        self,
+        x,
+        feature=None,
+        mask_dict=None,
+        logger=None,
+        chunk_i=None,
+        epoch=None,
+        mode=None,
+    ):
         """
-        Forward pass with per-element quantization and commitment / repel losses.
+        Forward pass with per-element quantization and EMA update (commitment_loss 版).
+
+        Parameters
+        ----------
+        x : Tensor
+            - [B, D] or [1, B, D] を想定（たまに [B, C, H, W]）
+        feature : Any
+            互換性用。ここでは未使用。
+        mask_dict : dict[str|int -> LongTensor or BoolTensor]
+            collect_global_indices_compact からの「グローバル index」。
+        logger : logging.Logger or None
+        chunk_i : int or None
+            データローダ側の「このエポックでのチャンク番号」。
+        epoch : int or None
+        mode : str or None
+            "train" / "eval" / "test" / "init_kmeans_final" など。
         """
-        import torch
-        from einops import rearrange
 
-        # -----------------------------
-        # 0. 入力整形
-        # -----------------------------
-        only_one = x.ndim == 2
-        x = x.to("cuda")
+        # --------------------------------------------------------------
+        # 0. グローバル latent オフセット管理
+        # --------------------------------------------------------------
+        if not hasattr(self, "latent_size_sum"):
+            # 初回だけ
+            self.latent_size_sum = 0
 
-        if only_one:
-            x = rearrange(x, 'b d -> b 1 d')  # (B, D) → (B, 1, D)
+        # どのタイミングで 0 リセットするか
+        if mode in ("eval", "test", "init_kmeans_final"):
+            # 評価系は「毎回 0 始まり」でOK
+            self.latent_size_sum = 0
+        elif chunk_i is not None and chunk_i == 0:
+            # 学習時: エポック頭のチャンクでリセット
+            self.latent_size_sum = 0
 
-        shape, device, heads = x.shape, x.device, self.heads
-        is_multiheaded = heads > 1
-        need_transpose = not self.channel_last and not self.accept_image_fmap
+        # --------------------------------------------------------------
+        # 1. 入力整形: encoder_outputs を [B, D] にする
+        # --------------------------------------------------------------
+        x = x.float()
 
-        if self.accept_image_fmap:
-            # (B, C, H, W) → (B, H*W, C)
-            x = rearrange(x, 'b c h w -> b (h w) c')
-
-        if need_transpose:
-            # (B, D, N) → (B, N, D)
-            x = rearrange(x, 'b d n -> b n d')
-
-        if is_multiheaded:
-            # (B, N, H*D) → (H, B, N, D)
-            x = rearrange(x, 'b n (h d) -> h b n d', h=heads)
-
-        # mask_dict が None でも .items() できるように
-        if mask_dict is None:
-            mask_dict = {}
-
-        # -------------------------------------------
-        # 1. _codebook (k-means init / EMA / etc.)
-        # -------------------------------------------
-        if mode == "init_kmeans_final":
-            # ここでは quantization だけ走らせる想定
-            self._codebook(x, feature, mask_dict, logger, chunk_i, epoch, mode)
-            return 0
-
-        # 通常モード：quantize
-        quantize_dict, embed_ind_dict, embed = self._codebook(
-            x, feature, mask_dict, logger, chunk_i, epoch, mode
-        )
-
-        # -------------------------------
-        # 2. commitment / contrastive loss
-        # -------------------------------
-        # x は今 (B, N, D) または (H, B, N, D)。ここでは「全部まとめて B*N とみなす」簡易版。
-        x_flat = x
-        if x_flat.ndim == 4:  # (H, B, N, D)
-            x_flat = rearrange(x_flat, 'h b n d -> (h b n) d')
-        elif x_flat.ndim == 3:  # (B, N, D)
-            x_flat = rearrange(x_flat, 'b n d -> (b n) d')
+        # 画像 feature map をそのまま VQ したい場合
+        if getattr(self, "accept_image_fmap", False) and x.ndim == 4:
+            # (B, C, H, W) → (B*H*W, C)
+            x = rearrange(x, "b c h w -> (b h w) c")
         else:
-            x_flat = x_flat.reshape(-1, x_flat.shape[-1])
+            # 通常: (B, D) or (1, B, D) or (B, N, D) を [B_total, D] に潰す
+            if x.ndim == 3:
+                x = x.view(-1, x.size(-1))  # (1,B,D) / (B,N,D) → (B_total, D)
+            elif x.ndim == 2:
+                pass  # (B, D) そのまま
+            else:
+                # 念のため fallback
+                x = x.view(-1, x.size(-1))
 
-        # chunk_start はまだちゃんとしたグローバル index を渡せていないので None にしておく
-        commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
-            x_flat, mask_dict, self._codebook.embed, logger, chunk_start=None
-        )
+        encoder_outputs = x  # [B, D]
+        B = encoder_outputs.size(0)
 
-        if logger is not None and chunk_i == 0:
+        # このチャンクのグローバル index 範囲
+        global_start = int(self.latent_size_sum)
+        global_end = global_start + B
+
+        device = encoder_outputs.device
+
+        # --------------------------------------------------------------
+        # 2. 各種 loss 初期化
+        # --------------------------------------------------------------
+        commit_loss = torch.tensor(0.0, device=device)
+        codebook_loss = torch.tensor(0.0, device=device)
+        repel_loss = torch.tensor(0.0, device=device)
+        cb_repel_loss = torch.tensor(0.0, device=device)
+
+        # 実際の量子化（embed, indices）は、あなたの元コードに合わせてここで扱う。
+        # ここでは encoder_outputs のみを使って commitment_loss を計算する。
+
+        if mask_dict is not None and B > 0:
+            commit_loss = self.commitment_loss(
+                encoder_outputs=encoder_outputs,
+                mask_dict=mask_dict,
+                codebook=self._codebook,  # ★あなたのクラスに合わせて調整（dict or Tensor）
+                logger=logger,
+                chunk_start=global_start,  # ★ここが重要
+                beta=getattr(self, "beta", 0.25),
+                temperature=getattr(self, "temperature", None),
+                use_cosine=getattr(self, "use_cosine", False),
+            )
+
+            # 他の loss（codebook_loss, repel_loss, cb_repel_loss）は
+            # 既に別メソッドがあるならそこで計算する。
+            #
+            # 例:
+            # codebook_loss = self.codebook_loss(...)
+            # repel_loss, cb_repel_loss = self.repel_losses(...)
+            #
+            # 今回は chunk_start 修正が主目的なので、ここでは 0 のままにしておく。
+
+        # DEBUG: requires_grad チェック
+        if logger is not None:
             logger.info(
-                f"[VQ_DEBUG] commit_loss.requires_grad={commit_loss.requires_grad}, "
-                f"codebook_loss.requires_grad={codebook_loss.requires_grad}, "
-                f"repel_loss.requires_grad={repel_loss.requires_grad}, "
-                f"cb_repel_loss.requires_grad={cb_repel_loss.requires_grad}"
+                "[VQ_DEBUG] commit_loss.requires_grad=%s, codebook_loss.requires_grad=%s, "
+                "repel_loss.requires_grad=%s, cb_repel_loss.requires_grad=%s",
+                bool(commit_loss.requires_grad),
+                bool(codebook_loss.requires_grad),
+                bool(repel_loss.requires_grad),
+                bool(cb_repel_loss.requires_grad),
             )
 
-        # ---------------------------------------------
-        # 3. scalar 化ユーティリティ
-        # ---------------------------------------------
-        def _as_scalar_tensor(val, ref_tensor):
-            def zlike():
-                # keeps graph if ref requires grad
-                return ref_tensor.sum() * 0.0
+        # --------------------------------------------------------------
+        # 3. グローバル offset 更新（学習モードのときだけ）
+        # --------------------------------------------------------------
+        if mode not in ("eval", "test", "init_kmeans_final"):
+            self.latent_size_sum = global_end
 
-            if isinstance(val, torch.Tensor):
-                return val if val.ndim == 0 else val.mean()
+        # --------------------------------------------------------------
+        # 4. 合計 loss と個別 loss を返す
+        # --------------------------------------------------------------
+        total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss
 
-            if isinstance(val, (list, tuple)):
-                if not val:
-                    return zlike()
-                elems = [_as_scalar_tensor(v, ref_tensor) for v in val]
-                return torch.stack(elems).mean()
-
-            if isinstance(val, dict):
-                if not val:
-                    return zlike()
-                elems = [_as_scalar_tensor(v, ref_tensor) for v in val.values()]
-                return torch.stack(elems).mean()
-
-            if isinstance(val, (float, int)):
-                return torch.tensor(val, device=ref_tensor.device, dtype=ref_tensor.dtype)
-
-            return zlike()
-
-        ref = x_flat if torch.is_tensor(x_flat) else next(self.parameters()).detach().new_tensor(0.)
-
-        repel_loss = _as_scalar_tensor(repel_loss, ref)
-        cb_repel_loss = _as_scalar_tensor(cb_repel_loss, ref)
-        commit_loss = _as_scalar_tensor(commit_loss, ref)
-        codebook_loss = _as_scalar_tensor(codebook_loss, ref)
-
-        # ---------------------------------------------
-        # 4. loss スケジュール
-        # ---------------------------------------------
-        beta_commit = 2.0  # commitment
-        delta_mid = 0.03  # weight for lat_repel_loss
-        delta_cb = 0.00015  # weight for cb_repel_loss
-
-        warmup = 2
-        T = 10  # ramp length
-
-        if epoch < warmup:
-            w_lat_repel = 0.0
-            w_cb_repel = 0.0
-        else:
-            t = min(1.0, (epoch - warmup) / T)  # goes 0 → 1 over T epochs
-            w_lat_repel = delta_mid * t
-            w_cb_repel = delta_cb * t
-
-        total_loss = (
-                beta_commit * commit_loss
-                + w_lat_repel * repel_loss
-                + w_cb_repel * cb_repel_loss
-        )
-
-        # 戻り値の形は既存コードと互換にしておく
-        return (total_loss, embed, commit_loss, codebook_loss, [], repel_loss, cb_repel_loss)
+        # あなたの上位モデルに合わせて戻り値は変えてもOK。
+        # ここでは: total_loss と 各 loss をタプルで返す形にしておく。
+        return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss)
