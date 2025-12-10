@@ -1914,10 +1914,10 @@ class VectorQuantize(nn.Module):
     def commitment_loss(
             self,
             encoder_outputs,  # [B, D] … 現在の“チャンク”だけ
-            mask_dict,  # dict[str|int -> 1D indices or bool-mask]
+            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（★グローバル index 想定★）
             codebook,  # dict-like per element or single tensor/param
             logger=None,
-            chunk_start=None,  # グローバル先頭位置（未使用なら None）
+            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
             beta=0.25,
             temperature=None,  # 未使用ならそのまま（EMA は別処理）
             use_cosine=False,
@@ -1925,10 +1925,14 @@ class VectorQuantize(nn.Module):
         """
         encoder_outputs: [B, D] (現在のチャンクの潜在ベクトル)
 
-        mask_dict の indices は本来「グローバル index」を想定しているが、
-        0〜B-1 の範囲に収まっている場合は「ローカル index」とみなしてそのまま使う。
-        それ以外の場合はグローバル index とみなし、チャンク境界
-        [chunk_start, chunk_start + B) でフィルタしてからローカル index に変換する。
+        前提:
+          - mask_dict の indices は常に「グローバル index」。
+          - ここでは [chunk_start, chunk_start + B) に入るものだけを拾い、
+            ローカル index (= global - chunk_start) に変換して利用する。
+
+        ローカル index を直接使いたい場合は、呼び出し側で
+          chunk_start=0, mask_dict も 0..B-1 の index
+        という前提で与える。
         """
         import torch
         import torch.nn.functional as F
@@ -2005,52 +2009,45 @@ class VectorQuantize(nn.Module):
         # -------------------------------------------------
         for key, cb in items:
             kstr = "all" if key is None else str(key)
+
             # --- mask/indices を取得 ---
             raw = None
+            used_key = None
             if mask_dict is not None:
-                # まずそのままのキーで試す
                 if kstr in mask_dict:
                     raw = mask_dict[kstr]
                     used_key = kstr
-                else:
-                    # 先頭 "k_" を剥がしたキーも試す
-                    if kstr.startswith("k_"):
-                        alt = kstr[2:]
-                        if alt in mask_dict:
-                            raw = mask_dict[alt]
-                            used_key = alt
-                    # 必要ならさらに他の別名もここに追加できる
+                elif kstr.startswith("k_"):
+                    alt = kstr[2:]
+                    if alt in mask_dict:
+                        raw = mask_dict[alt]
+                        used_key = alt
 
             if raw is None:
-                # このコードブックキーに対応するマスクが無いのでスキップ
                 if logger is not None:
                     logger.debug(f"[VQ_SKIP] no mask for codebook key='{kstr}'")
                 continue
 
-            # bool-mask / list / tensor → 1D LongTensor
+            # bool-mask / list / tensor → 1D LongTensor（★グローバル index 想定★）
             idx_global = self._as_index_tensor(raw, None, device)
-
             if idx_global.numel() == 0:
+                if logger is not None:
+                    logger.debug(f"[VQ_EMPTY_KEY] key='{kstr}' has 0 indices before chunk filter")
                 continue
 
-            # ---------------------------------------------
-            # インデックス座標系の自動判定
-            #   - 0 <= idx < B なら「ローカル index」とみなす
-            #   - それ以外は「グローバル index」として chunk_start..end でフィルタ
-            # ---------------------------------------------
-            if idx_global.min() >= 0 and idx_global.max() < B:
-                # ローカル index とみなす
-                idx_local = idx_global.to(torch.long)
-                z = encoder_outputs.index_select(0, idx_local)
-            else:
-                # グローバル index とみなす
-                z, idx_local = _select_by_global_idx(
-                    encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
-                )
-
+            # グローバル index → ローカル index
+            z, idx_local = _select_by_global_idx(
+                encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
+            )
             Ni = z.size(0)
             if Ni == 0:
                 # このチャンクに該当サンプルなし
+                if logger is not None:
+                    logger.debug(
+                        f"[VQ_EMPTY_CHUNK] key='{kstr}', "
+                        f"global_range=[{int(idx_global.min())},{int(idx_global.max())}], "
+                        f"chunk=[{chunk_start},{chunk_end})"
+                    )
                 continue
 
             # --- コードブック取り出し＆形状正規化 ---
@@ -2090,7 +2087,6 @@ class VectorQuantize(nn.Module):
             else:
                 cb_for_contrast = cb
 
-            # compute_contrastive_loss は元の実装を利用
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, key)
             repel_value = ret[0]
             cb_repel_value = ret[3]
@@ -2103,7 +2099,6 @@ class VectorQuantize(nn.Module):
         # 5. total_latent == 0 の場合（このチャンクに該当サンプルなし）
         # -------------------------------------------------
         if total_latent == 0:
-            # 勾配付きのゼロを返す（グラフは encoder_outputs から来る）
             zero = encoder_outputs.sum() * 0.0
             if logger is not None:
                 logger.info(
