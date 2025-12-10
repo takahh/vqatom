@@ -1911,113 +1911,140 @@ class VectorQuantize(nn.Module):
                     pass
         return norm
 
-    # x.squeeze(), mask_dict, self._codebook.embed
     def commitment_loss(
             self,
-            encoder_outputs,  # [B, D]  … 現在の“チャンク”だけ
-            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバルindex想定）
+            encoder_outputs,  # [B, D] … 現在の“チャンク”だけ
+            mask_dict,  # dict[str|int -> 1D indices or bool-mask]
             codebook,  # dict-like per element or single tensor/param
             logger,
             chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
             beta=0.25,
-            temperature=None,  # 未使用ならそのまま（EMAは別処理）
+            temperature=None,  # 未使用ならそのまま（EMA は別処理）
             use_cosine=False,
     ):
         """
-        重要: mask_dict の indices は「グローバル index」を想定。
-             本関数内でチャンク境界 [chunk_start, chunk_start+B) に入るものだけを残し、
-             ローカル index (= global - chunk_start) に変換してから使用する。
+        encoder_outputs: [B, D] (現在のチャンクの潜在ベクトル)
+
+        mask_dict の indices は本来「グローバル index」を想定しているが、
+        0〜B-1 の範囲に収まっている場合は「ローカル index」とみなしてそのまま使う。
+        それ以外の場合はグローバル index とみなし、チャンク境界
+        [chunk_start, chunk_start + B) でフィルタしてからローカル index に変換する。
         """
-        total_cb_count = 0
+        import torch
+        import torch.nn.functional as F
+        from torch import nn
+
+        # -------------------------------------------------
+        # 0. 入力整形
+        # -------------------------------------------------
         encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
-        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B,D], got {tuple(encoder_outputs.shape)}"
+        assert encoder_outputs.dim() == 2, f"encoder_outputs must be [B, D], got {tuple(encoder_outputs.shape)}"
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
-        # print(f"B = {B}, D = {D}")
 
-        # chunk_start が未指定なら 0（= 既にローカル index を渡しているケースに対応）
         if chunk_start is None:
             chunk_start = 0
         chunk_end = chunk_start + B
 
         mask_dict = self._normalize_mask_dict(mask_dict)
 
-        # 累積器（平均の二重計算を避けるため、Ni 加重和で持つ）
+        # -------------------------------------------------
+        # 1. 累積器（Ni で重み付け）
+        # -------------------------------------------------
         total_latent = 0
+        total_cb_count = 0
+
         commit_num = encoder_outputs.new_zeros(())
         codebk_num = encoder_outputs.new_zeros(())
         repel_num = encoder_outputs.new_zeros(())
         cb_repel_num = encoder_outputs.new_zeros(())
 
-        # イテレーション準備（要素別コードブック or 共有コードブック）
+        # -------------------------------------------------
+        # 2. コードブックのイテレーション準備
+        # -------------------------------------------------
         if isinstance(codebook, (dict, nn.ParameterDict)):
             items = list(codebook.items())
         else:
             items = [(None, codebook)]
 
-        # --- ヘルパ: グローバル index → （このチャンク内の）ローカル index へ ---
-        def _select_by_global_idx(encoder_outputs, global_idx, start, end, *, name=""):
+        # -------------------------------------------------
+        # 3. ヘルパ: グローバル index → ローカル index
+        # -------------------------------------------------
+        def _select_by_global_idx(encoder_out, global_idx, start, end, *, name=""):
             """
-            encoder_outputs: [B, D]（現チャンク）
+            encoder_out: [B, D]（現チャンク）
             global_idx: 1D LongTensor（グローバル index）
             戻り値: (z_local [Ni, D], idx_local [Ni])
             """
             if global_idx.numel() == 0:
-                return encoder_outputs.new_zeros((0, encoder_outputs.size(1))), global_idx
+                return encoder_out.new_zeros((0, encoder_out.size(1))), global_idx
 
             # チャンクに属する index だけを残す
             mask = (global_idx >= start) & (global_idx < end)
             idx_in = global_idx[mask]
             if idx_in.numel() == 0:
-                return encoder_outputs.new_zeros((0, encoder_outputs.size(1))), idx_in
+                return encoder_out.new_zeros((0, encoder_out.size(1))), idx_in
 
             idx_local = (idx_in - start).to(torch.long)
 
-            # device-side assert を防ぐため手前チェック
             max_idx = int(idx_local.max().item())
             min_idx = int(idx_local.min().item())
-            if min_idx < 0 or max_idx >= encoder_outputs.size(0):
+            if min_idx < 0 or max_idx >= encoder_out.size(0):
                 raise RuntimeError(
-                    f"[{name}] local index out of range: min={min_idx}, max={max_idx}, "
-                    f"B={encoder_outputs.size(0)}, start={start}, end={end}, "
+                    f"[{name}] local index out of range: "
+                    f"min={min_idx}, max={max_idx}, "
+                    f"B={encoder_out.size(0)}, start={start}, end={end}, "
                     f"kept={idx_in.numel()}"
                 )
-            z = encoder_outputs.index_select(0, idx_local)
+
+            z = encoder_out.index_select(0, idx_local)
             return z, idx_local
 
+        # -------------------------------------------------
+        # 4. 要素ごとに VQ & 損失計算
+        # -------------------------------------------------
         for key, cb in items:
-            # from utils import CORE_ELEMENTS
-            # if str(key) not in CORE_ELEMENTS:
-            #     continue
             kstr = "all" if key is None else str(key)
 
-            # --- mask/indices を取得し index tensor に統一（まずはグローバルとして整形） ---
+            # --- mask/indices を取得 ---
             raw = None if mask_dict is None else mask_dict.get(kstr, None)
             if raw is None:
-                # このキーに該当するデータが無い場合はスキップ
+                continue  # このキーに該当するデータ無し
+
+            # bool-mask / list / tensor → 1D LongTensor
+            idx_global = self._as_index_tensor(raw, None, device)
+
+            if idx_global.numel() == 0:
                 continue
 
-            # bool-mask / list / tensor を 1D LongTensor へ（グローバル想定）
-            # 既存のユーティリティを利用。total_length は不要、ここでは型変換のみ。
-            idx_global = self._as_index_tensor(raw, None, device)  # 注意: 第二引数は使わない実装にしておく
+            # ---------------------------------------------
+            # インデックス座標系の自動判定
+            #   - 0 <= idx < B なら「ローカル index」とみなす
+            #   - それ以外は「グローバル index」として chunk_start..end でフィルタ
+            # ---------------------------------------------
+            if idx_global.min() >= 0 and idx_global.max() < B:
+                # ローカル index とみなす
+                idx_local = idx_global.to(torch.long)
+                z = encoder_outputs.index_select(0, idx_local)
+            else:
+                # グローバル index とみなす
+                z, idx_local = _select_by_global_idx(
+                    encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
+                )
 
-            # --- グローバル → ローカル（このチャンクに入るものだけ抽出） ---
-            z, idx_local = _select_by_global_idx(
-                encoder_outputs, idx_global, chunk_start, chunk_end, name=f"key={kstr}"
-            )
             Ni = z.size(0)
             if Ni == 0:
                 # このチャンクに該当サンプルなし
                 continue
 
             # --- コードブック取り出し＆形状正規化 ---
-            cb_t = self._unwrap_codebook_entry(cb)  # nn.Parameter / tensor 両対応で tensor を返す想定
-            cb_t = self._squeeze_01(cb_t)  # [1,K,D] → [K,D] にするユーティリティ
+            cb_t = self._unwrap_codebook_entry(cb)  # nn.Parameter / tensor → tensor
+            cb_t = self._squeeze_01(cb_t)  # [1,K,D] → [K,D]
             assert cb_t.dim() == 2, f"codebook for key={key} must be [K,D] or [1,K,D]; got {tuple(cb_t.shape)}"
             K, Dk = cb_t.shape
             assert Dk == D, f"latent D={D} != codebook D={Dk} for key={key}"
 
-            # --- 最近傍コード探索（cosine か L2） ---
+            # --- 最近傍コード探索（cosine or L2） ---
             if use_cosine:
                 z_n = F.normalize(z, p=2, dim=-1)
                 cb_n = F.normalize(cb_t, p=2, dim=-1)
@@ -2029,51 +2056,56 @@ class VectorQuantize(nn.Module):
 
             e = cb_t.index_select(0, embed_ind)  # [Ni, D]
 
-            # ==============================
-            # commitment loss 計算　＋重み付け
-            # ==============================
-            # --- VQ-VAE 損失（EMA 更新は別で）---
+            # ---------------------------------------------
+            # commitment / codebook loss
+            # ---------------------------------------------
             commit_part = F.mse_loss(z, e.detach(), reduction="mean")  # β‖z - sg(e)‖²
             codebk_part = F.mse_loss(e, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
 
-            # Ni で重み付け
             total_latent += Ni
             commit_num = commit_num + commit_part * Ni
             codebk_num = codebk_num + codebk_part * Ni
 
-            # ==============================
-            # repel loss 計算　＋重み付け
-            # ==============================
-            ret = self.compute_contrastive_loss(z, 0, logger, codebook[str(key)], key)
+            # ---------------------------------------------
+            # repel loss
+            # ---------------------------------------------
+            if isinstance(codebook, (dict, nn.ParameterDict)) and kstr in codebook:
+                cb_for_contrast = codebook[kstr]
+            else:
+                cb_for_contrast = cb
+
+            ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, key)
             repel_value = ret[0]
             cb_repel_value = ret[3]
-            # print(f"{key} : commit {commit_part:.5f}, repel {repel_value:.5f}, cb_repel {cb_repel_value:.5f}")
+
             repel_num = repel_num + repel_value * Ni
             total_cb_count += K
             cb_repel_num = cb_repel_num + cb_repel_value * K
-            # ==============================
-            # 記録
-            # ==============================
-            # logger.info(f"{key} : commit {commit_part}, lat_repel {repel_value}, cb_repel {cb_repel_value}")
 
+        # -------------------------------------------------
+        # 5. total_latent == 0 の場合（このチャンクに該当サンプルなし）
+        # -------------------------------------------------
         if total_latent == 0:
-            # Empty chunk: no atoms matched any mask. Return a zero loss that
-            # still has a grad graph, so train_sage doesn't freak out.
+            # 勾配付きのゼロを返す（グラフは encoder_outputs から来る）
             zero = encoder_outputs.sum() * 0.0
-            print("lat zero !!!!!!!!!!!!!!!!")
+            if logger is not None:
+                logger.info(
+                    f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})"
+                )
             return zero, zero, zero, zero
 
-
-        # ==============================
-        # commitment loss 平均の計算
-        # ==============================
+        # -------------------------------------------------
+        # 6. 平均化して最終 loss を返す
+        # -------------------------------------------------
         commit_loss = beta * (commit_num / total_latent)
-        codebook_loss = (codebk_num / total_latent)
-        # ==============================
-        # repel loss 平均の計算
-        # ==============================
+        codebook_loss = codebk_num / total_latent
         repel_loss = repel_num / total_latent
-        cb_repel_loss = (cb_repel_num / total_cb_count)
+
+        if total_cb_count > 0:
+            cb_repel_loss = cb_repel_num / total_cb_count
+        else:
+            # 一応ガード（通常ここには来ないはず）
+            cb_repel_loss = cb_repel_num * 0.0
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
