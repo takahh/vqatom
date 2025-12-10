@@ -2005,7 +2005,7 @@ class VectorQuantize(nn.Module):
         # -------------------------------------------------
         for key, cb in items:
             kstr = "all" if key is None else str(key)
-
+            print(f"kstr {kstr}")
             # --- mask/indices を取得 ---
             raw = None if mask_dict is None else mask_dict.get(kstr, None)
             if raw is None:
