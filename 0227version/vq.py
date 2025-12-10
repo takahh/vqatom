@@ -2147,7 +2147,6 @@ class VectorQuantize(nn.Module):
         # commit loss calculation
         # -------------------------------
         # encoder_outputs, mask_dict, codebook
-        print(mask_dict.shape)
         for k, v in mask_dict.items():
             print(f"{k} - {v}")
             break
