@@ -2392,6 +2392,53 @@ class VectorQuantize(nn.Module):
                 _safe_requires_grad(repel_loss),
                 _safe_requires_grad(cb_repel_loss),
             )
+        import torch
+
+        def _to_loss_tensor(x, device=None, dtype=None):
+            """
+            commit_loss / codebook_loss / repel_loss / cb_repel_loss など、
+            Tensor / (Tensorを含む tuple/list) / float / int / None を
+            安全に 0次元 Tensor に変換する。
+            """
+            # 既に Tensor の場合
+            if isinstance(x, torch.Tensor):
+                if device is not None or dtype is not None:
+                    return x.to(device=device if device is not None else x.device,
+                                dtype=dtype if dtype is not None else x.dtype)
+                return x
+
+            # tuple/list の場合 → 中から Tensor or scalar を拾う
+            if isinstance(x, (tuple, list)):
+                for item in x:
+                    if isinstance(item, torch.Tensor):
+                        return _to_loss_tensor(item, device=device, dtype=dtype)
+                for item in x:
+                    if isinstance(item, (float, int)):
+                        return torch.tensor(float(item), device=device, dtype=dtype)
+                # 何もなければ 0.0
+                return torch.tensor(0.0, device=device, dtype=dtype)
+
+            # 単なるスカラー
+            if isinstance(x, (float, int)):
+                return torch.tensor(float(x), device=device, dtype=dtype)
+
+            # None → 0.0
+            if x is None:
+                return torch.tensor(0.0, device=device, dtype=dtype)
+
+            # 想定外
+            raise TypeError(f"_to_loss_tensor: unsupported loss type {type(x)}")
+
+        device = None
+        dtype = None
+        if isinstance(x, torch.Tensor):
+            device = x.device
+            dtype = x.dtype
+
+        commit_loss = _to_loss_tensor(commit_loss, device=device, dtype=dtype)
+        codebook_loss = _to_loss_tensor(codebook_loss, device=device, dtype=dtype)
+        repel_loss = _to_loss_tensor(repel_loss, device=device, dtype=dtype)
+        cb_repel_loss = _to_loss_tensor(cb_repel_loss, device=device, dtype=dtype)
 
         # --------------------------------------------------------------
         # 3. グローバル offset 更新（学習モードのときだけ）
