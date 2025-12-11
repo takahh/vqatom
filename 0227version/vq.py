@@ -2361,7 +2361,7 @@ class VectorQuantize(nn.Module):
         # ここでは encoder_outputs のみを使って commitment_loss を計算する。
 
         if mask_dict is not None and B > 0:
-            commit_loss = self.commitment_loss(
+            commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
                 codebook=self._codebook,  # ★あなたのクラスに合わせて調整（dict or Tensor）
