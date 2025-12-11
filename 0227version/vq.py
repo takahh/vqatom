@@ -1993,7 +1993,6 @@ class VectorQuantize(nn.Module):
                 logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
             return torch.tensor(0.0, device=device, requires_grad=True)
 
-        # ---- 2. key ごとのコードブック取得ヘルパ ----
         def _get_codebook_for_key(key, *, device, dtype):
             """
             `codebook` / `self._codebook` が以下のいずれでも動くように統一:
@@ -2003,27 +2002,37 @@ class VectorQuantize(nn.Module):
               - dict[str -> nn.ParameterDict]（多段）
             戻り値は必ず [K, D] の Tensor。
             """
+            import torch
+            import torch.nn as nn
+
             cb_src = codebook if codebook is not None else getattr(self, "_codebook", None)
             if cb_src is None:
-                raise RuntimeError("Codebook is not initialized (both `codebook` arg and `self._codebook` are None).")
+                raise RuntimeError("Codebook is not initialized (both `codebook` and `self._codebook` are None).")
 
-            # dict / ModuleDict / ParameterDict 系
+            # ---------- dict / ModuleDict / ParameterDict 系 ----------
             if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
-                # まず key 直指定
+                # 1) key 直指定
                 if key in cb_src:
-                    return self._cb_to_tensor(cb_src[key], device=device, dtype=dtype)
+                    t = self._cb_to_tensor(cb_src[key])
+                else:
+                    # 2) "k_..." 形式の key をざっくり上位キーにマッピング
+                    t = None
+                    if isinstance(key, str) and key.startswith("k_"):
+                        head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
+                        if head in cb_src:
+                            t = self._cb_to_tensor(cb_src[head])
 
-                # 「k_...」形式の key から上位キーを推定するパス
-                if isinstance(key, str) and key.startswith("k_"):
-                    head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
-                    if head in cb_src:
-                        return self._cb_to_tensor(cb_src[head], device=device, dtype=dtype)
+                    # 3) それでも無ければ「全部まとめて」連結して使う
+                    if t is None:
+                        t = self._cb_to_tensor(cb_src)
 
-                # それでも無ければ「全部まとめて」連結して使う
-                return self._cb_to_tensor(cb_src, device=device, dtype=dtype)
+            else:
+                # ---------- 単一 Tensor / Parameter / Embedding 等 ----------
+                t = self._cb_to_tensor(cb_src)
 
-            # 単一 Tensor / Parameter / Embedding 等
-            return self._cb_to_tensor(cb_src, device=device, dtype=dtype)
+            # 念のため device/dtype をそろえる
+            t = t.to(device=device, dtype=dtype)
+            return t
 
         # ---- 3. main loop ----
         total_sq = torch.tensor(0.0, device=device)
