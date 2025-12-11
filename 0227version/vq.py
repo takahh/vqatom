@@ -604,98 +604,139 @@ class ContrastiveLoss(nn.Module):
                 eps=1e-8,
         ):
             """
-            z: [B, D], requires_grad=True
-            low/high/center: no-grad tensors on the same device as z (OK)
+            中距離のペアだけを bell-shaped に重み付けして「近づきすぎ/遠すぎ」を抑制する repel loss。
+            メモリ節約のため、各ブロック内で常に「上三角部分」だけを使う。
+
+            Parameters
+            ----------
+            z : Tensor [B, D]
+                encoder latent。self.training のときは requires_grad=True を想定。
+            low, high, center : float or Tensor
+                repel をかけたい距離帯の下限・上限・中心。
+            sigma : float or Tensor
+                bell curve の幅（あとで band から再計算するのでここは初期値程度）。
+            sharp : float
+                距離帯ゲート（シグモイド）のシャープさ。
+            row_block, col_block : int
+                ブロックサイズ。0 または B 以上なら「ノーチャンク」で全体を1ブロック扱い。
+            detach_weight : bool
+                距離帯ゲートの重み w を detach するかどうか。
+            use_checkpoint : bool
+                torch.utils.checkpoint を使ってメモリ節約するか。
+            stream_backward : bool
+                いまのところ未実装。checkpoint と同時には使えない。
+            eps : float
+                数値安定化用の ε。
             """
             import torch
             import torch.utils.checkpoint as cp
 
-            # --- Safety: mutually exclusive modes ---
+            # checkpoint と streaming backward は排他
             assert not (use_checkpoint and stream_backward), \
                 "checkpoint と streaming backward は同時に使えません。"
 
-            # --- quick diagnostic sampling ---
-            with torch.no_grad():
-                idx = torch.randperm(z.shape[0], device=z.device)[:4096]
-                d = torch.cdist(z[idx], z[idx], p=2)
-                mask = (d > low) & (d < high)
-                if mask.any():
-                    d_in = d[mask]
-                    m = float(d_in.mean())
-                    c = float(center)
-                    s = float(sigma)
-                    rel = float(((d_in - c).abs().mean() / max(1e-8, (high - low))))
-                    # print(f"[repel diag] in-window pairs={mask.sum().item()} "
-                    #       f"mean(d)={m:.4f} center={c:.4f} "
-                    #       f"mean|d-center|={float((d_in - c).abs().mean()):.4f} "
-                    #       f"rel_to_band={rel:.3f}")
-            if self.training:
-                assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
             B, D = z.shape
             device, dtype = z.device, z.dtype
 
-            # --- parameters ---
-            band = (high - low).abs()
-            sigma = torch.clamp(0.20 * band, min=1e-4)
-            sharp = 10  # not 20 to start
+            # training 中は z に grad が付いていることを確認
+            if self.training:
+                assert z.requires_grad, "z.requires_grad=False（上流で detach されている可能性）"
 
-            # --- threshold tensors ---
-            low = torch.as_tensor(low, device=device, dtype=dtype)
-            high = torch.as_tensor(high, device=device, dtype=dtype)
-            center = torch.as_tensor(center, device=device, dtype=dtype)
+            # -------------------------------
+            # 0. 診断用の簡易サンプリング（no_grad）
+            # -------------------------------
+            with torch.no_grad():
+                if B > 1:
+                    idx = torch.randperm(B, device=device)[: min(B, 4096)]
+                    d_diag = torch.cdist(z[idx], z[idx], p=2)
+                    mask_band = (d_diag > low) & (d_diag < high)
+                    if mask_band.any():
+                        d_in = d_diag[mask_band]
+                        # 必要なら print でログを見る
+                        # m = float(d_in.mean())
+                        # c = float(center)
+                        # s = float(sigma)
+                        # rel = float(((d_in - c).abs().mean() / max(1e-8, (high - low))))
+                        # print(...)
 
-            # --- block counting for normalization ---
+            # -------------------------------
+            # 1. パラメータを Tensor 化
+            # -------------------------------
+            # band の幅から sigma を再定義（20% 幅）
+            band = float(abs(high - low))
+            sigma_val = max(1e-4, 0.20 * band)
+            sharp_val = float(sharp) if sharp is not None else 10.0
+
+            low_t = torch.as_tensor(low, device=device, dtype=dtype)
+            high_t = torch.as_tensor(high, device=device, dtype=dtype)
+            center_t = torch.as_tensor(center, device=device, dtype=dtype)
+            sigma_t = torch.as_tensor(sigma_val, device=device, dtype=dtype)
+
+            # -------------------------------
+            # 2. ブロック分割の準備
+            # -------------------------------
             def count_blocks(B, rb, cb):
-                cnt, i = 0, 0
+                cnt = 0
+                i = 0
                 while i < B:
-                    j = i + rb
+                    j = i
                     while j < B:
                         cnt += 1
                         j += cb
                     i += rb
                 return max(cnt, 1)
 
-            row_block = max(1, min(row_block, B))
-            col_block = max(1, min(col_block, B))
+            # 0 or 大きすぎる場合は「ノーチャンク」
+            if row_block <= 0 or row_block > B:
+                row_block = B
+            if col_block <= 0 or col_block > B:
+                col_block = B
 
             n_blocks_total = count_blocks(B, row_block, col_block)
 
-            # --- inner block loss ---
-            def block_loss(
-                    zi, zj,
-                    low_t, high_t, center_t,
-                    sigma, sharp, eps, detach_weight, diagonal=True,
-                    gamma: float = 1.0,
-            ):
+            # -------------------------------
+            # 3. 各ブロックの損失（常に上三角のみ）
+            # -------------------------------
+            def block_loss(zi, zj, low_t, high_t, center_t, sigma_t):
+                """
+                zi: [bi, D], zj: [bj, D]
+                このブロック内の全ペア距離から「上三角部分だけ」を使って bell-shaped loss を計算。
+                """
                 import torch
 
                 if zi.numel() == 0 or zj.numel() == 0:
                     return zi.sum() * 0 + zj.sum() * 0
 
-                # fp32 for stability
-                zi32, zj32 = zi.float(), zj.float()
-                low32 = torch.as_tensor(low_t, device=zi.device, dtype=torch.float32)
-                high32 = torch.as_tensor(high_t, device=zi.device, dtype=torch.float32)
-                center32 = torch.as_tensor(center_t, device=zi.device, dtype=torch.float32)
-                sigma32 = torch.clamp(torch.as_tensor(sigma, device=zi.device, dtype=torch.float32), min=1e-6)
+                # float32 で距離計算（勾配はちゃんと残る）
+                zi32 = zi.float()
+                zj32 = zj.float()
 
-                d = torch.cdist(zi32, zj32, p=2)  # [bi, bj]
+                low32 = low_t.float()
+                high32 = high_t.float()
+                center32 = center_t.float()
+                sigma32 = torch.clamp(sigma_t.float(), min=1e-6)
+
+                # [bi, bj]
+                d = torch.cdist(zi32, zj32, p=2)
+
+                # メモリ節約のため、常に「上三角だけ」使用
                 mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
-                d = d[mask]  # keep i<j only
+                d = d[mask]  # [M]
 
-                # gating window
-                x1 = (sharp * (d - low32)).clamp(-40.0, 40.0)
-                x2 = (sharp * (high32 - d)).clamp(-40.0, 40.0)
+                if d.numel() == 0:
+                    return zi.sum() * 0 + zj.sum() * 0
+
+                # 距離帯ゲート w (low～high の間だけ有効)
+                x1 = (sharp_val * (d - low32)).clamp(-40.0, 40.0)
+                x2 = (sharp_val * (high32 - d)).clamp(-40.0, 40.0)
                 w = torch.sigmoid(x1) * torch.sigmoid(x2)
                 if detach_weight:
                     w = w.detach()
 
-                # bell curve weighting
+                # 中心 center まわりの bell curve
                 exp_arg = -((d - center32) ** 2) / (2.0 * sigma32 * sigma32)
                 exp_arg = exp_arg.clamp(min=-60.0, max=0.0)
                 bell = torch.exp(exp_arg)
-                if gamma != 1.0:
-                    bell = bell ** gamma
 
                 num = (w * bell).sum()
                 den = w.sum().clamp_min(eps)
@@ -703,36 +744,45 @@ class ContrastiveLoss(nn.Module):
                 out = num / den
                 out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # gradient safety
-                if self.training:
-                    if not out.requires_grad:
-                        out = out + 0.0 * (zi.sum() + zj.sum())
-                    else:
-                        pass
+                # 念のため：training なのに grad が付いていなければ zi,zj にくっつける
+                if self.training and not out.requires_grad:
+                    out = out + 0.0 * (zi.sum() + zj.sum())
 
                 return out
-            # print("--- 0 ---")
-            i = 0
+
+            # checkpoint 用に「必ず使われる」ラッパーを定義しておく
+            def block_loss_ckpt(zi, zj, low_t, high_t, center_t, sigma_t):
+                return block_loss(zi, zj, low_t, high_t, center_t, sigma_t)
+
+            # -------------------------------
+            # 4. 全ブロックを走査して合計
+            # -------------------------------
             total = z.new_zeros(())
+            i = 0
             while i < B:
                 bi = min(row_block, B - i)
-                zi = z[i:i + bi]
+                zi = z[i:i + bi]  # [bi, D]
 
-                j = i  # include diagonal blocks
+                j = i
                 while j < B:
                     bj = min(col_block, B - j)
-                    zj = z[j:j + bj]
-                    diagonal = (i == j)  # inside block, keep only i<j if diagonal
-                    lb = cp.checkpoint(block_loss, zi, zj, low, high, center, sigma, sharp, eps, detach_weight,
-                                        diagonal=diagonal,use_reentrant=False)
-                    # lb = block_loss(zi, zj, ..., diagonal=diagonal)
+                    zj = z[j:j + bj]  # [bj, D]
+
+                    if use_checkpoint:
+                        # checkpoint にはテンソルだけ渡す
+                        lb = cp.checkpoint(
+                            block_loss_ckpt,
+                            zi, zj, low_t, high_t, center_t, sigma_t,
+                            use_reentrant=False,
+                        )
+                    else:
+                        lb = block_loss(zi, zj, low_t, high_t, center_t, sigma_t)
+
                     total = total + lb
                     j += col_block
                 i += row_block
 
             out = total / n_blocks_total
-
-            # print("--- 1 ---")
             return out
 
         # ---- 3) コードブック反発（チャンク & no-backward）----
@@ -2219,7 +2269,7 @@ class VectorQuantize(nn.Module):
             # 返り値: (repel_loss, ..., ..., cb_repel_loss, ...)
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
             repel_val     = ret[0]
-            cb_repel_val  = ret[3]
+            cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
             repel_num    = repel_num + repel_val * N_i
             total_cb_count += K_e
