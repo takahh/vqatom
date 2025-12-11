@@ -1656,27 +1656,43 @@ class VectorQuantize(nn.Module):
 
         return rearrange(codebook, '1 ... -> ...')
 
-    # vq.py どこか（例: class の先頭付近）に追加
-    def _cb_to_tensor(cb, *, device, dtype):
+    def _cb_to_tensor(self, cb):
         """
-        Accepts: torch.Tensor, nn.Parameter, nn.ParameterDict, nn.Module with .weight/.embed,
-                 dict[str, Tensor|Parameter|ParameterDict]
-        Returns: torch.Tensor on `device` and `dtype`.
-        Concats sub-tensors along dim=0 when needed.
+        いろんな形の codebook を [K, D] Tensor に正規化するヘルパー。
+        対応:
+          - Tensor [K, D]
+          - nn.Parameter
+          - nn.Embedding
+          - dict[str -> Tensor / Parameter / Embedding]
+          - nn.ParameterDict（値が [K_e, D]）など
         """
         import torch
         import torch.nn as nn
 
+        # 1) すでに Tensor ならそのまま
         if isinstance(cb, torch.Tensor):
-            return cb.to(device=device, dtype=dtype)
+            return cb
+
+        # 2) Parameter 系
         if isinstance(cb, nn.Parameter):
-            return cb.data.to(device=device, dtype=dtype)
-        if isinstance(cb, nn.ParameterDict):
-            # 安定した順序で結合（キーでソート）
-            parts = [p.data.to(device=device, dtype=dtype) for k, p in sorted(cb.items(), key=lambda kv: kv[0])]
-            if len(parts) == 0:
-                return torch.empty(0, dtype=dtype, device=device)
-            return torch.cat(parts, dim=0)
+            return cb.data
+
+        # 3) Embedding 系
+        if isinstance(cb, nn.Embedding):
+            return cb.weight
+
+        # 4) ParameterDict / ModuleDict / 普通の dict は value を全部 concat
+        if isinstance(cb, (dict, nn.ParameterDict, nn.ModuleDict)):
+            tensors = []
+            for v in cb.values():
+                t = self._cb_to_tensor(v)  # 再帰的に展開
+                tensors.append(t)
+            if not tensors:
+                raise ValueError("_cb_to_tensor: empty dict / ParameterDict")
+            return torch.cat(tensors, dim=0)  # [sum K_e, D]
+
+        # raise TypeError(f"_cb_to_tensor: unsupported type {type(cb)}")
+
         # Module で weight/embed を持つもの（Embedding 等）
         if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
             return cb.weight.to(device=device, dtype=dtype)
