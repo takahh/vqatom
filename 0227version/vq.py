@@ -1667,6 +1667,8 @@ class VectorQuantize(nn.Module):
               * .weight を持つ場合 → それを使う
               * .embed を持つ場合 → embed.weight か embed 自体を使う
               * .codebook / .codes / .embedding を持つ場合 → それを使う
+              * 上記が無くても、named_parameters / named_buffers から
+                最初の 2 次元テンソル ([K, D]) を拾う
           - nn.ParameterDict（[K_i, D] を縦に concat）
           - dict[key -> (上記のいずれか)]（縦に concat）
         """
@@ -1681,30 +1683,44 @@ class VectorQuantize(nn.Module):
 
         # -------- 2. nn.Module (EuclideanCodebook を含む) --------
         if isinstance(cb, nn.Module):
-            # (a) nn.Embedding や "普通の" linear など: .weight 優先
+            # (a) .weight を持つモジュール（Embedding, Linear など）
             if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
                 return cb.weight
 
-            # (b) EuclideanCodebook など: .embed を見に行く
+            # (b) EuclideanCodebook などで .embed を使っている場合
             if hasattr(cb, "embed"):
                 e = cb.embed
-                # 典型的には nn.Embedding
                 if isinstance(e, nn.Embedding):
                     return e.weight
-                # あるいは Tensor/Parameter そのもの
                 if isinstance(e, (torch.Tensor, nn.Parameter)):
                     return e
 
-            # (c) fallback: .codebook / .codes / .embedding みたいな名前を探す
+            # (c) その他ありがちな名前をチェック
             for attr in ("codebook", "codes", "embedding"):
                 if hasattr(cb, attr):
                     t = getattr(cb, attr)
                     if isinstance(t, (torch.Tensor, nn.Parameter)):
                         return t
 
-            # ここまでで見つからない nn.Module は想定外
-            raise TypeError(f"_cb_to_tensor: unsupported nn.Module type {type(cb)} "
-                            f"(no usable weight/embed/codebook/codes/embedding)")
+            # (d) 最後のフォールバック:
+            #     モジュール内の parameter / buffer から
+            #     「次元数が 2 のテンソル」を探して最初のものを使う
+            #     (recurse=True なので embed.weight のような下位モジュールも拾える)
+            for name, p in cb.named_parameters(recurse=True):
+                if isinstance(p, torch.Tensor) and p.ndim == 2:
+                    # print(f"[DEBUG] using parameter {name} from {type(cb)} as codebook")  # 必要ならログ
+                    return p
+
+            for name, b in cb.named_buffers(recurse=True):
+                if isinstance(b, torch.Tensor) and b.ndim == 2:
+                    # print(f"[DEBUG] using buffer {name} from {type(cb)} as codebook")
+                    return b
+
+            # ここまで来ると、2D テンソルが一つも見つからない本当にイレギュラーなケース
+            raise TypeError(
+                f"_cb_to_tensor: unsupported nn.Module type {type(cb)} "
+                f"(no usable weight/embed/codebook/codes/embedding or 2D param/buffer)"
+            )
 
         # -------- 3. nn.ParameterDict: values を全部縦に concat --------
         if isinstance(cb, nn.ParameterDict):
@@ -1727,7 +1743,7 @@ class VectorQuantize(nn.Module):
             tensors = []
             for k in sorted(cb.keys()):
                 v = cb[k]
-                t = self._cb_to_tensor(v)  # 再帰的に処理
+                t = self._cb_to_tensor(v)  # 再帰
                 tensors.append(t)
             if not tensors:
                 raise ValueError("_cb_to_tensor: empty dict")
