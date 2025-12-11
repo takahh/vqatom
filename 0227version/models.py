@@ -62,65 +62,170 @@ import torch
 def _zeros_like(x, device=None, dtype=None):
     return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
 
+import torch
+
 def _normalize_quantize_output(qo, device=None, dtype=None):
     """
     Normalize various quantizer outputs to a 7-tuple:
     (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
+
     Accepts:
       - length-7 tuple/list in the expected order
       - dict-like with keys ('loss'|'total_loss','embed','commit_loss','codebook_loss','silhouette_loss','repel_loss','cb_repel_loss')
-      - length-2 tuple/list like (embed, loss) or (loss, embed)
+      - length-2 tuple/list like
+          (embed, loss) / (loss, embed)
+          (loss, (commit, cb, repel, cb_repel))   ← vq.forward の現在の形式
       - object with attributes .loss, .embed, etc.
+      - a single Tensor (loss のみ)
     """
-    # 1) dict-like
+
+    # ----------------- helpers -----------------
+    def _zero_scalar():
+        dev = device if device is not None else (
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        dt = dtype if dtype is not None else torch.float32
+        return torch.zeros((), device=dev, dtype=dt)
+
+    def _to_loss(x):
+        if x is None:
+            return _zero_scalar()
+        if not torch.is_tensor(x):
+            x = torch.tensor(x, device=device)
+        if device is not None:
+            x = x.to(device)
+        if dtype is not None:
+            x = x.to(dtype)
+        if x.ndim > 0:
+            x = x.mean()
+        return x
+
+    def _to_embed(x):
+        dev = device if device is not None else (
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        dt = dtype if dtype is not None else torch.float32
+        if x is None:
+            return torch.empty(0, device=dev, dtype=dt)
+        if not torch.is_tensor(x):
+            x = torch.tensor(x, device=dev, dtype=dt)
+        else:
+            x = x.to(dev).to(dt)
+        return x
+
+    # ----------------- Tensor only (loss) -----------------
+    if torch.is_tensor(qo):
+        loss = _to_loss(qo)
+        embed = _to_embed(None)
+        z = _zero_scalar()
+        return loss, embed, z, z, z, z, z
+
+    # ----------------- dict-like -----------------
     if isinstance(qo, dict):
         embed = qo.get("embed", None)
         loss  = qo.get("total_loss", None)
         if loss is None:
             loss = qo.get("loss", None)
-        commit = qo.get("commit_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
-        cb     = qo.get("codebook_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
-        sil    = qo.get("silhouette_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
-        repel  = qo.get("repel_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
-        cb_rep = qo.get("cb_repel_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
-        if embed is None or loss is None:
-            raise RuntimeError("quantizer output dict must contain at least 'embed' and 'loss'/'total_loss'")
+        if loss is None:
+            raise RuntimeError("quantizer output dict must contain 'loss' or 'total_loss'")
+
+        loss   = _to_loss(loss)
+        embed  = _to_embed(embed)
+        commit = _to_loss(qo.get("commit_loss", None))
+        cb     = _to_loss(qo.get("codebook_loss", None))
+        sil    = _to_loss(qo.get("silhouette_loss", None))
+        repel  = _to_loss(qo.get("repel_loss", None))
+        cb_rep = _to_loss(qo.get("cb_repel_loss", None))
         return (loss, embed, commit, cb, sil, repel, cb_rep)
 
-    # 2) has attributes
-    if hasattr(qo, "embed") and hasattr(qo, "loss"):
-        embed = qo.embed
-        loss  = qo.loss
-        commit = getattr(qo, "commit_loss", _zeros_like(embed, device, dtype))
-        cb     = getattr(qo, "codebook_loss", _zeros_like(embed, device, dtype))
-        sil    = getattr(qo, "silhouette_loss", _zeros_like(embed, device, dtype))
-        repel  = getattr(qo, "repel_loss", _zeros_like(embed, device, dtype))
-        cb_rep = getattr(qo, "cb_repel_loss", _zeros_like(embed, device, dtype))
+    # ----------------- has attributes -----------------
+    if hasattr(qo, "loss") and hasattr(qo, "embed"):
+        embed  = _to_embed(qo.embed)
+        loss   = _to_loss(qo.loss)
+        commit = _to_loss(getattr(qo, "commit_loss", None))
+        cb     = _to_loss(getattr(qo, "codebook_loss", None))
+        sil    = _to_loss(getattr(qo, "silhouette_loss", None))
+        repel  = _to_loss(getattr(qo, "repel_loss", None))
+        cb_rep = _to_loss(getattr(qo, "cb_repel_loss", None))
         return (loss, embed, commit, cb, sil, repel, cb_rep)
 
-    # 3) tuple/list
+    # ----------------- tuple / list -----------------
     if isinstance(qo, (list, tuple)):
-        if len(qo) == 7:
-            return tuple(qo)
-        if len(qo) == 2:
+        n = len(qo)
+
+        # 7-tuple in expected order
+        if n == 7:
+            loss, embed, commit, cb, sil, repel, cb_rep = qo
+            loss   = _to_loss(loss)
+            embed  = _to_embed(embed)
+            commit = _to_loss(commit)
+            cb     = _to_loss(cb)
+            sil    = _to_loss(sil)
+            repel  = _to_loss(repel)
+            cb_rep = _to_loss(cb_rep)
+            return (loss, embed, commit, cb, sil, repel, cb_rep)
+
+        if n == 2:
             a, b = qo
-            # 判定: embed は通常 (N,D) or (B,N,D) tensor / loss は 0-dim or 1-dim scalar tensor/float
+
+            # ---- (loss, (commit, cb, repel, cb_repel)) 形式（vq.forward の現仕様）----
+            if ( (torch.is_tensor(a) or isinstance(a, (float, int)))
+                 and isinstance(b, (list, tuple)) and len(b) == 4 ):
+                commit_raw, cb_raw, repel_raw, cb_rep_raw = b
+
+                loss   = _to_loss(a)
+                commit = _to_loss(commit_raw)
+                cb     = _to_loss(cb_raw)
+                repel  = _to_loss(repel_raw)
+                cb_rep = _to_loss(cb_rep_raw)
+                sil    = _to_loss(None)     # いまは 0 扱い
+
+                embed = _to_embed(None)     # embed は無いので空テンソル
+                return (loss, embed, commit, cb, sil, repel, cb_rep)
+
+            # 逆順 ( (commit, cb, repel, cb_repel), loss ) も一応サポート
+            if ( isinstance(a, (list, tuple)) and len(a) == 4
+                 and (torch.is_tensor(b) or isinstance(b, (float, int))) ):
+                commit_raw, cb_raw, repel_raw, cb_rep_raw = a
+
+                loss   = _to_loss(b)
+                commit = _to_loss(commit_raw)
+                cb     = _to_loss(cb_raw)
+                repel  = _to_loss(repel_raw)
+                cb_rep = _to_loss(cb_rep_raw)
+                sil    = _to_loss(None)
+
+                embed = _to_embed(None)
+                return (loss, embed, commit, cb, sil, repel, cb_rep)
+
+            # ---- (loss, None) → loss だけ返ってきたケース ----
+            if ( (torch.is_tensor(a) or isinstance(a, (float, int))) and b is None ):
+                loss = _to_loss(a)
+                embed = _to_embed(None)
+                z = _zero_scalar()
+                return (loss, embed, z, z, z, z, z)
+
+            # ---- 従来の (embed, loss) / (loss, embed) 判定 ----
             a_is_embed = torch.is_tensor(a) and a.ndim >= 2
             b_is_embed = torch.is_tensor(b) and b.ndim >= 2
+
             if a_is_embed and not b_is_embed:
-                embed, loss = a, b
+                embed, loss_raw = a, b
             elif b_is_embed and not a_is_embed:
-                embed, loss = b, a
+                embed, loss_raw = b, a
             else:
-                # 苦し紛れ: 形状で決められないケース → a を loss, b を embed と仮定し、逆も試す
-                if torch.is_tensor(a) and a.ndim == 0 and torch.is_tensor(b) and b.ndim >= 2:
-                    loss, embed = a, b
-                else:
-                    # 最後のフォールバック
-                    raise RuntimeError(f"Ambiguous 2-tuple from quantizer: cannot determine (embed, loss) from shapes {getattr(a,'shape',None)} and {getattr(b,'shape',None)}")
-            z = _zeros_like(embed, device, dtype)
+                # それでも判定できない →エラー
+                raise RuntimeError(
+                    f"Ambiguous 2-tuple from quantizer: cannot determine "
+                    f"(embed, loss) from shapes {getattr(a,'shape',None)} and {getattr(b,'shape',None)}"
+                )
+
+            loss = _to_loss(loss_raw)
+            embed = _to_embed(embed)
+            z = _zero_scalar()
             return (loss, embed, z, z, z, z, z)
 
+    # ----------------- fallback -----------------
     raise RuntimeError(f"Unsupported quantizer output type: {type(qo)}")
 
 import torch.nn as nn
@@ -455,30 +560,52 @@ class EquivariantThreeHopGINE(nn.Module):
         # K-means 用のループ時は VQ を通さずにそのまま返す
         if mode == "init_kmeans_loop":
             return h_out
-
-        # ----- VQ 部分 -----
+        #
+        # # ----- VQ 部分 -----
+        # h_vq = self.pre_vq_ln(h_out)
+        #
+        # # 生の出力（tuple / dict / オブジェクトなど何でも）
+        # quantize_output = self.vq(
+        #     h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
+        # )
+        #
+        # # ここで一気に正規化して 7 タプルにそろえる
+        # (loss,
+        #  embed,
+        #  commit_loss,
+        #  cb_loss,
+        #  sil_loss,
+        #  repel_loss,
+        #  cb_repel_loss) = _normalize_quantize_output(
+        #     quantize_output,
+        #     device=h_vq.device,
+        #     dtype=h_vq.dtype,
+        # )
         h_vq = self.pre_vq_ln(h_out)
 
-        # 生の出力（tuple / dict / オブジェクトなど何でも）
         quantize_output = self.vq(
-            h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
+            h_vq,
+            attr_list,
+            mask_dict,
+            logger,
+            chunk_i,
+            epoch,
+            mode,
         )
 
-        # ここで一気に正規化して 7 タプルにそろえる
-        (loss,
-         embed,
-         commit_loss,
-         cb_loss,
-         sil_loss,
-         repel_loss,
-         cb_repel_loss) = _normalize_quantize_output(
+        # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
+        loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
             quantize_output,
-            device=h_vq.device,
-            dtype=h_vq.dtype,
+            device=h_vq.device if torch.is_tensor(h_vq) else None,
+            dtype=getattr(h_vq, "dtype", None),
         )
+
+        # embed は今回は h_vq をそのまま使う（まだ本当の量子化はしていないバージョン）
+        embed = h_vq
 
         # モデルが返すのは (total_loss, embed, loss_list)
-        return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
+        # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
+        return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
 
 
 class Model(nn.Module):
