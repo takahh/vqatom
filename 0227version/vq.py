@@ -2348,7 +2348,7 @@ class VectorQuantize(nn.Module):
         global_end = global_start + B
 
         device = encoder_outputs.device
-
+        import torch
         # --------------------------------------------------------------
         # 2. 各種 loss 初期化
         # --------------------------------------------------------------
