@@ -1956,7 +1956,7 @@ class VectorQuantize(nn.Module):
             logger,
             chunk_start=None,
             beta=0.25,
-            temperature=None,
+            temperature=None,  # 未使用
             use_cosine=False,
     ):
         """
@@ -1967,6 +1967,7 @@ class VectorQuantize(nn.Module):
         - codebook        :
             * Tensor [K, D]              … 全 key で共通
             * dict / nn.ParameterDict    … key ごとに [K_e, D]
+            * None                       … self._codebook を使う
         - chunk_start     : このチャンクの global start index
         - beta            : commitment loss の係数
         - use_cosine      : True のときは cosine 距離で最も近いコードを選ぶ
@@ -1981,17 +1982,6 @@ class VectorQuantize(nn.Module):
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
         dtype = encoder_outputs.dtype
-        # ---- codebook を一度テンソル化（[K, D]）して使い回す -----------------------
-        try:
-            if codebook is None:
-                # 通常は self._codebook を使う想定
-                cb_tensor = self._get_codebook_for_key(self, key=None, device=device, dtype=dtype)  # 単一コードブック
-            else:
-                cb_tensor = self._cb_to_tensor(codebook, device=device, dtype=dtype)
-        except TypeError:
-            # codebook が上位辞書で、key ごとに取り出す設計なら key ごとに取り出す
-            # 後段で k ごとに呼ぶ前提の既存設計を尊重するなら、ここでは遅延取得:
-            cb_tensor = None
 
         if chunk_start is None:
             chunk_start = 0
@@ -2003,50 +1993,41 @@ class VectorQuantize(nn.Module):
                 logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
             return torch.tensor(0.0, device=device, requires_grad=True)
 
-        # 既存の _get_codebook_for_key を置き換え／強化
-        def _get_codebook_for_key(self, key, *, device, dtype):
+        # ---- 2. key ごとのコードブック取得ヘルパ ----
+        def _get_codebook_for_key(key, *, device, dtype):
             """
-            `self._codebook` が以下のいずれでも動くように統一:
+            `codebook` / `self._codebook` が以下のいずれでも動くように統一:
               - 単一 Tensor / Parameter / Embedding
               - dict[str -> Tensor/Parameter]
               - nn.ParameterDict (サブコードブック束ね)
               - dict[str -> nn.ParameterDict]（多段）
             戻り値は必ず [K, D] の Tensor。
             """
-            import torch
-            import torch.nn as nn
+            cb_src = codebook if codebook is not None else getattr(self, "_codebook", None)
+            if cb_src is None:
+                raise RuntimeError("Codebook is not initialized (both `codebook` arg and `self._codebook` are None).")
 
-            cb = getattr(self, "_codebook", None)
-            if cb is None:
-                raise RuntimeError("Codebook `_codebook` is not initialized.")
+            # dict / ModuleDict / ParameterDict 系
+            if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
+                # まず key 直指定
+                if key in cb_src:
+                    return self._cb_to_tensor(cb_src[key], device=device, dtype=dtype)
 
-            # 直接キーで取れるならまずそれを試す
-            if isinstance(cb, (dict, nn.ModuleDict, nn.ParameterDict)) and key in cb:
-                return self._cb_to_tensor(cb[key], device=device, dtype=dtype)
+                # 「k_...」形式の key から上位キーを推定するパス
+                if isinstance(key, str) and key.startswith("k_"):
+                    head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
+                    if head in cb_src:
+                        return self._cb_to_tensor(cb_src[head], device=device, dtype=dtype)
 
-            # 「k_...」形式の key を分解して上位キー/下位キーに分かれている可能性にも対処
-            if isinstance(cb, (dict, nn.ModuleDict)):
-                # 例: self._codebook['6_0_3_1_1'] が ParameterDict を返す、など
-                head = key.split("_")[1] if key.startswith("k_") else None
-                if head and head in cb:
-                    return self._cb_to_tensor(cb[head], device=device, dtype=dtype)
+                # それでも無ければ「全部まとめて」連結して使う
+                return self._cb_to_tensor(cb_src, device=device, dtype=dtype)
 
-                # 直接は無いが dict 全体がサブ辞書集合なら全部 concat
-                return self._cb_to_tensor(cb, device=device, dtype=dtype)
-
-            if isinstance(cb, (nn.ParameterDict,)):
-                # ParameterDict 全体を連結
-                return self._cb_to_tensor(cb, device=device, dtype=dtype)
-
-            # 単一テンソル/パラメータ/Embedding 等
-            return self._cb_to_tensor(cb, device=device, dtype=dtype)
+            # 単一 Tensor / Parameter / Embedding 等
+            return self._cb_to_tensor(cb_src, device=device, dtype=dtype)
 
         # ---- 3. main loop ----
         total_sq = torch.tensor(0.0, device=device)
         total_count = 0
-        if logger is not None and cb_tensor is not None:
-            logger.info(
-                f"[VQ_CODEBOOK] cb_shape={tuple(cb_tensor.shape)} dtype={cb_tensor.dtype} device={cb_tensor.device}")
 
         for k, g_idx in mask_dict.items():
             # -------------------------------
@@ -2057,7 +2038,6 @@ class VectorQuantize(nn.Module):
                     continue
                 g_idx = torch.as_tensor(g_idx, device=device)
             elif not isinstance(g_idx, torch.Tensor):
-                # numpy なども as_tensor に通す
                 try:
                     g_idx = torch.as_tensor(g_idx, device=device)
                 except Exception as e:
@@ -2065,7 +2045,6 @@ class VectorQuantize(nn.Module):
             else:
                 g_idx = g_idx.to(device)
 
-            # 空ならスキップ
             if g_idx.numel() == 0:
                 continue
 
@@ -2073,12 +2052,9 @@ class VectorQuantize(nn.Module):
             # 3-2) bool mask → index に変換
             # -------------------------------
             if g_idx.dtype == torch.bool:
-                # g_idx は「グローバル index に対する bool mask」とみなす
                 g_idx = torch.nonzero(g_idx, as_tuple=False).view(-1)
 
-            # ここまでで g_idx は 1D LongTensor (グローバル index) のはず
             g_idx = g_idx.long()
-
             if g_idx.numel() == 0:
                 continue
 
@@ -2089,31 +2065,30 @@ class VectorQuantize(nn.Module):
             if not torch.any(in_chunk):
                 continue
 
-            local_idx = (g_idx[in_chunk] - chunk_start).long()  # ローカル index に変換
+            local_idx = (g_idx[in_chunk] - chunk_start).long()
             if local_idx.numel() == 0:
                 continue
 
             # 対象 latent: z ∈ R^{n_i × D}
             z = encoder_outputs[local_idx]  # [n_i, D]
             n_i = z.shape[0]
+            if n_i == 0:
+                continue
 
             # -------------------------------
             # 3-4) この key 用コードブック取得 [K_e, D]
             # -------------------------------
-            cb = _get_codebook_for_key(self, k, k, device, dtype)
+            cb = _get_codebook_for_key(k, device=device, dtype=dtype)  # ★ ここが正しい呼び方
 
             # -------------------------------
             # 3-5) 最近傍コードを選択（use_cosine で距離の定義を切り替え）
             # -------------------------------
             if use_cosine:
-                # cosine 類似度 → 1 - cos を距離として最近傍を選択
                 z_norm = F.normalize(z, dim=-1)
                 cb_norm = F.normalize(cb, dim=-1)
                 sim = torch.matmul(z_norm, cb_norm.t())  # [n_i, K_e]
-                nn_idx = torch.argmax(sim, dim=-1)  # 類似度最大 = 距離最小
+                nn_idx = torch.argmax(sim, dim=-1)
             else:
-                # squared Euclidean 距離
-                # dist^2 = ||z||^2 + ||e||^2 - 2 z·e
                 z2 = (z ** 2).sum(dim=-1, keepdim=True)  # [n_i, 1]
                 e2 = (cb ** 2).sum(dim=-1).unsqueeze(0)  # [1, K_e]
                 dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [n_i, K_e]
@@ -2125,14 +2100,13 @@ class VectorQuantize(nn.Module):
             # 3-6) commitment loss (z 側のみ勾配を流す)
             #        β * E[ || z - sg(e) ||^2 ]
             # -------------------------------
-            diff2 = (z - e_star.detach()) ** 2  # [n_i, D]
+            diff2 = (z - e_star.detach()) ** 2
             diff2 = diff2.sum(dim=-1)  # [n_i]
             total_sq = total_sq + diff2.sum()
             total_count += diff2.numel()
 
         # ---- 4. 集計 ----
         if total_count == 0:
-            # このチャンクに該当する latent がなかった
             if logger is not None:
                 logger.info(f"[VQ_COMMIT] total_latent=0 in chunk [{chunk_start},{chunk_end})")
             return torch.tensor(0.0, device=device, requires_grad=True)
