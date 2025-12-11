@@ -1950,14 +1950,14 @@ class VectorQuantize(nn.Module):
 
     def commitment_loss(
             self,
-            encoder_outputs,  # [B, D]  … 現在の“チャンク”だけ
-            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバル index 想定）
-            codebook,  # dict-like per element or single tensor/param
-            logger=None,
-            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
-            beta: float = 0.25,
-            temperature=None,  # いまは未使用（将来 soft assignment 用）
-            use_cosine: bool = False,
+            encoder_outputs,  # [B, D]
+            mask_dict,
+            codebook,  # dict-like / ParameterDict / Tensor / Embedding / etc.
+            logger,
+            chunk_start=None,
+            beta=0.25,
+            temperature=None,
+            use_cosine=False,
     ):
         """
         Per-element commitment loss.
@@ -1980,6 +1980,18 @@ class VectorQuantize(nn.Module):
         encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
+        dtype = encoder_outputs.dtype
+        # ---- codebook を一度テンソル化（[K, D]）して使い回す -----------------------
+        try:
+            if codebook is None:
+                # 通常は self._codebook を使う想定
+                cb_tensor = self._get_codebook_for_key(self, key=None, device=device, dtype=dtype)  # 単一コードブック
+            else:
+                cb_tensor = self._cb_to_tensor(codebook, device=device, dtype=dtype)
+        except TypeError:
+            # codebook が上位辞書で、key ごとに取り出す設計なら key ごとに取り出す
+            # 後段で k ごとに呼ぶ前提の既存設計を尊重するなら、ここでは遅延取得:
+            cb_tensor = None
 
         if chunk_start is None:
             chunk_start = 0
