@@ -57,6 +57,71 @@ class BondWeightLayer(nn.Module):
         edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
         return edge_weight
 
+import torch
+
+def _zeros_like(x, device=None, dtype=None):
+    return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
+
+def _normalize_quantize_output(qo, device=None, dtype=None):
+    """
+    Normalize various quantizer outputs to a 7-tuple:
+    (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
+    Accepts:
+      - length-7 tuple/list in the expected order
+      - dict-like with keys ('loss'|'total_loss','embed','commit_loss','codebook_loss','silhouette_loss','repel_loss','cb_repel_loss')
+      - length-2 tuple/list like (embed, loss) or (loss, embed)
+      - object with attributes .loss, .embed, etc.
+    """
+    # 1) dict-like
+    if isinstance(qo, dict):
+        embed = qo.get("embed", None)
+        loss  = qo.get("total_loss", None)
+        if loss is None:
+            loss = qo.get("loss", None)
+        commit = qo.get("commit_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
+        cb     = qo.get("codebook_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
+        sil    = qo.get("silhouette_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
+        repel  = qo.get("repel_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
+        cb_rep = qo.get("cb_repel_loss", _zeros_like(embed, device, dtype) if embed is not None else torch.tensor(0.0, device=device, dtype=dtype))
+        if embed is None or loss is None:
+            raise RuntimeError("quantizer output dict must contain at least 'embed' and 'loss'/'total_loss'")
+        return (loss, embed, commit, cb, sil, repel, cb_rep)
+
+    # 2) has attributes
+    if hasattr(qo, "embed") and hasattr(qo, "loss"):
+        embed = qo.embed
+        loss  = qo.loss
+        commit = getattr(qo, "commit_loss", _zeros_like(embed, device, dtype))
+        cb     = getattr(qo, "codebook_loss", _zeros_like(embed, device, dtype))
+        sil    = getattr(qo, "silhouette_loss", _zeros_like(embed, device, dtype))
+        repel  = getattr(qo, "repel_loss", _zeros_like(embed, device, dtype))
+        cb_rep = getattr(qo, "cb_repel_loss", _zeros_like(embed, device, dtype))
+        return (loss, embed, commit, cb, sil, repel, cb_rep)
+
+    # 3) tuple/list
+    if isinstance(qo, (list, tuple)):
+        if len(qo) == 7:
+            return tuple(qo)
+        if len(qo) == 2:
+            a, b = qo
+            # 判定: embed は通常 (N,D) or (B,N,D) tensor / loss は 0-dim or 1-dim scalar tensor/float
+            a_is_embed = torch.is_tensor(a) and a.ndim >= 2
+            b_is_embed = torch.is_tensor(b) and b.ndim >= 2
+            if a_is_embed and not b_is_embed:
+                embed, loss = a, b
+            elif b_is_embed and not a_is_embed:
+                embed, loss = b, a
+            else:
+                # 苦し紛れ: 形状で決められないケース → a を loss, b を embed と仮定し、逆も試す
+                if torch.is_tensor(a) and a.ndim == 0 and torch.is_tensor(b) and b.ndim >= 2:
+                    loss, embed = a, b
+                else:
+                    # 最後のフォールバック
+                    raise RuntimeError(f"Ambiguous 2-tuple from quantizer: cannot determine (embed, loss) from shapes {getattr(a,'shape',None)} and {getattr(b,'shape',None)}")
+            z = _zeros_like(embed, device, dtype)
+            return (loss, embed, z, z, z, z, z)
+
+    raise RuntimeError(f"Unsupported quantizer output type: {type(qo)}")
 
 import torch.nn as nn
 import torch
@@ -378,7 +443,6 @@ class EquivariantThreeHopGINE(nn.Module):
         # Hop 2
         h2 = self.gine2(h1, edge_index, edge_attr)
         h2 = self.ln2(h2 * self.res2 + h1)
-
         # Hop 3
         h3 = self.gine3(h2, edge_index, edge_attr)
         h3 = self.ln3(h3 * self.res3 + h2)
@@ -388,12 +452,32 @@ class EquivariantThreeHopGINE(nn.Module):
         h_mid = self.mix(h_cat)
         h_out = self.out_proj(h_mid)
 
+        # K-means 用のループ時は VQ を通さずにそのまま返す
         if mode == "init_kmeans_loop":
             return h_out
 
+        # ----- VQ 部分 -----
         h_vq = self.pre_vq_ln(h_out)
-        quantize_output = self.vq(h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode)
-        (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss) = quantize_output
+
+        # 生の出力（tuple / dict / オブジェクトなど何でも）
+        quantize_output = self.vq(
+            h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
+        )
+
+        # ここで一気に正規化して 7 タプルにそろえる
+        (loss,
+         embed,
+         commit_loss,
+         cb_loss,
+         sil_loss,
+         repel_loss,
+         cb_repel_loss) = _normalize_quantize_output(
+            quantize_output,
+            device=h_vq.device,
+            dtype=h_vq.dtype,
+        )
+
+        # モデルが返すのは (total_loss, embed, loss_list)
         return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
 
 
