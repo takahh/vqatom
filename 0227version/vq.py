@@ -1912,172 +1912,167 @@ class VectorQuantize(nn.Module):
         return norm
 
     def commitment_loss(
-        self,
-        encoder_outputs: torch.Tensor,  # [B, D]  … このチャンクの latent
-        mask_dict,                      # dict[str|int -> LongTensor or BoolTensor] (グローバル index)
-        codebook,                       # dict-like per element, or a single Tensor/Module
-        logger=None,
-        chunk_start: int | None = None,  # このチャンクのグローバル開始位置
-        beta: float = 0.25,
-        temperature=None,               # ここでは未使用（将来の拡張用）
-        use_cosine: bool = False,
-    ) -> torch.Tensor:
+            self,
+            encoder_outputs,  # [B, D]  … 現在の“チャンク”だけ
+            mask_dict,  # dict[str|int -> 1D indices or bool-mask]（グローバル index 想定）
+            codebook,  # dict-like per element or single tensor/param
+            logger=None,
+            chunk_start=None,  # このチャンクのグローバル先頭位置（例: self.latent_size_sum）
+            beta: float = 0.25,
+            temperature=None,  # いまは未使用（将来 soft assignment 用）
+            use_cosine: bool = False,
+    ):
         """
         Per-element commitment loss.
 
-        重要:
-        - mask_dict の index は「全体（グローバル）」。
-        - chunk_start と B を使って [global_start, global_end) に入るものだけを抽出し、
-          ローカル index (= global - global_start) に変換して encoder_outputs に適用する。
-        - codebook は
-            * dict[str -> Tensor[K_e, D]]  または
-            * nn.ParameterDict  (key または "k_{key}" 形式)
-            * 単一 Tensor[K, D]  も許す。
+        - encoder_outputs : [B, D] （このチャンクに含まれる latent）
+        - mask_dict       : { key -> グローバル index or bool mask }
+        - codebook        :
+            * Tensor [K, D]              … 全 key で共通
+            * dict / nn.ParameterDict    … key ごとに [K_e, D]
+        - chunk_start     : このチャンクの global start index
+        - beta            : commitment loss の係数
+        - use_cosine      : True のときは cosine 距離で最も近いコードを選ぶ
         """
 
         import torch
+        import torch.nn as nn
         import torch.nn.functional as F
 
+        # ---- 0. encoder_outputs 形状そろえ ----
+        encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
 
         if chunk_start is None:
-            # 安全 fallback（本当は forward から必ず渡したい）
-            global_start = 0
-        else:
-            global_start = int(chunk_start)
+            chunk_start = 0
+        chunk_end = chunk_start + B
 
-        global_end = global_start + B
+        # ---- 1. mask_dict が空なら 0 を返す ----
+        if mask_dict is None or len(mask_dict) == 0:
+            if logger is not None:
+                logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
+            return torch.tensor(0.0, device=device, requires_grad=True)
 
-        total_loss = encoder_outputs.new_tensor(0.0)
-        total_latent = 0
+        # ---- 2. codebook 取得用のヘルパ ----
+        def _get_codebook_for_key(k):
+            """key に対応するコードブック行列 [K_e, D] を取得"""
+            cb = codebook
+            # dict / ParameterDict の場合は key で選択
+            if isinstance(codebook, (dict, nn.ParameterDict)):
+                if k not in codebook:
+                    raise KeyError(f"codebook has no entry for key={k!r}")
+                cb = codebook[k]
 
-        # ----------------------------------------------------------
-        # ヘルパー: codebook から key に対応する embed を取る
-        # ----------------------------------------------------------
-        def _get_cb_for_key(k):
-            # codebook が dict / ParameterDict の場合
-            if isinstance(codebook, (dict, torch.nn.ParameterDict)):
-                if k in codebook:
-                    return codebook[k]
-                kk = f"k_{k}"
-                if kk in codebook:
-                    return codebook[kk]
-                return None
-            # 単一 Tensor / nn.Parameter / nn.Embedding など
-            if isinstance(codebook, torch.nn.Embedding):
-                return codebook.weight
-            if isinstance(codebook, torch.nn.Module) and hasattr(codebook, "weight"):
-                return codebook.weight
-            if isinstance(codebook, torch.Tensor):
-                return codebook
-            # それ以外は未対応
-            return None
+            # Module などの場合 weight/embed を取り出す
+            if isinstance(cb, nn.Module):
+                if hasattr(cb, "weight"):
+                    cb = cb.weight
+                elif hasattr(cb, "embed"):
+                    cb = cb.embed
+                else:
+                    raise TypeError(f"Unsupported codebook module type for key={k!r}: {type(cb)}")
 
-        # ----------------------------------------------------------
-        # 1. mask_dict を回して、このチャンクに属する index を集める
-        # ----------------------------------------------------------
-        for key, g_idx in mask_dict.items():
-            # g_idx: グローバル index (Long or Bool)
-            if g_idx is None:
+            cb = torch.as_tensor(cb, device=device, dtype=encoder_outputs.dtype)
+            cb = cb.view(cb.shape[0], -1)  # [K_e, D]
+            return cb
+
+        # ---- 3. main loop ----
+        total_sq = torch.tensor(0.0, device=device)
+        total_count = 0
+
+        for k, g_idx in mask_dict.items():
+            # -------------------------------
+            # 3-1) list / numpy / tensor を全部 Tensor に正規化
+            # -------------------------------
+            if isinstance(g_idx, (list, tuple)):
+                if len(g_idx) == 0:
+                    continue
+                g_idx = torch.as_tensor(g_idx, device=device)
+            elif not isinstance(g_idx, torch.Tensor):
+                # numpy なども as_tensor に通す
+                try:
+                    g_idx = torch.as_tensor(g_idx, device=device)
+                except Exception as e:
+                    raise TypeError(f"mask_dict[{k}] has unsupported type {type(g_idx)}") from e
+            else:
+                g_idx = g_idx.to(device)
+
+            # 空ならスキップ
+            if g_idx.numel() == 0:
                 continue
 
-            # Bool mask の場合 → Long index に変換
+            # -------------------------------
+            # 3-2) bool mask → index に変換
+            # -------------------------------
             if g_idx.dtype == torch.bool:
-                g_idx = g_idx.nonzero(as_tuple=False).view(-1)
+                # g_idx は「グローバル index に対する bool mask」とみなす
+                g_idx = torch.nonzero(g_idx, as_tuple=False).view(-1)
 
-            g_idx = g_idx.to(device=device, dtype=torch.long)
+            # ここまでで g_idx は 1D LongTensor (グローバル index) のはず
+            g_idx = g_idx.long()
 
-            # このチャンクに入るかどうか
-            in_chunk = (g_idx >= global_start) & (g_idx < global_end)
-            if not in_chunk.any():
+            if g_idx.numel() == 0:
                 continue
 
-            g_idx_chunk = g_idx[in_chunk]
-            # ローカル index に変換
-            local_idx = (g_idx_chunk - global_start).long()  # [N_k]
+            # -------------------------------
+            # 3-3) このチャンク [chunk_start, chunk_end) に属する index だけ抜き出し
+            # -------------------------------
+            in_chunk = (g_idx >= chunk_start) & (g_idx < chunk_end)
+            if not torch.any(in_chunk):
+                continue
 
-            # 安全チェック
+            local_idx = (g_idx[in_chunk] - chunk_start).long()  # ローカル index に変換
             if local_idx.numel() == 0:
                 continue
-            if local_idx.max().item() >= B:
-                # どこかで index がズレている
-                if logger is not None:
-                    logger.warning(
-                        f"[VQ_COMMIT_WARN] key={key} has local_idx.max={local_idx.max().item()} "
-                        f"but B={B}, global_start={global_start}, global_end={global_end}"
-                    )
-                # ここでは超えている分を捨てる
-                valid = local_idx < B
-                local_idx = local_idx[valid]
-                if local_idx.numel() == 0:
-                    continue
 
-            # 対応する encoder chunk を取得
-            encoder_chunk = encoder_outputs[local_idx]  # [N_k, D]
-            N_k = encoder_chunk.size(0)
+            # 対象 latent: z ∈ R^{n_i × D}
+            z = encoder_outputs[local_idx]  # [n_i, D]
+            n_i = z.shape[0]
 
-            cb = _get_cb_for_key(key)
-            if cb is None:
-                if logger is not None:
-                    logger.warning(f"[VQ_COMMIT_WARN] no codebook found for key={key}")
-                continue
+            # -------------------------------
+            # 3-4) この key 用コードブック取得 [K_e, D]
+            # -------------------------------
+            cb = _get_codebook_for_key(k)
 
-            cb = cb.to(device=device)
-            if cb.ndim == 1:
-                cb = cb.view(1, -1)  # [1, D]
-            K_e = cb.size(0)
-
-            if K_e == 0 or N_k == 0:
-                continue
-
-            # ------------------------------------------------------
-            # 2. encoder_chunk と cb の距離を計算し、最近傍 code を選ぶ
-            # ------------------------------------------------------
+            # -------------------------------
+            # 3-5) 最近傍コードを選択（use_cosine で距離の定義を切り替え）
+            # -------------------------------
             if use_cosine:
-                # cosine distance = 1 - cos sim
-                e_norm = F.normalize(encoder_chunk, dim=-1)      # [N_k, D]
-                c_norm = F.normalize(cb, dim=-1)                 # [K_e, D]
-                # cos sim
-                sim = e_norm @ c_norm.T                          # [N_k, K_e]
-                # max sim -> min distance
-                idx = sim.argmax(dim=-1)                         # [N_k]
-                quantized = cb[idx]                              # [N_k, D]
+                # cosine 類似度 → 1 - cos を距離として最近傍を選択
+                z_norm = F.normalize(z, dim=-1)
+                cb_norm = F.normalize(cb, dim=-1)
+                sim = torch.matmul(z_norm, cb_norm.t())  # [n_i, K_e]
+                nn_idx = torch.argmax(sim, dim=-1)  # 類似度最大 = 距離最小
             else:
-                # L2 距離 (squared)
-                # d(x,y)^2 = |x|^2 + |y|^2 - 2 x·y
-                e2 = (encoder_chunk ** 2).sum(dim=1, keepdim=True)       # [N_k, 1]
-                c2 = (cb ** 2).sum(dim=1).view(1, -1)                    # [1, K_e]
-                cross = encoder_chunk @ cb.T                             # [N_k, K_e]
-                dist2 = e2 + c2 - 2.0 * cross                            # [N_k, K_e]
-                idx = dist2.argmin(dim=-1)                               # [N_k]
-                quantized = cb[idx]                                      # [N_k, D]
+                # squared Euclidean 距離
+                # dist^2 = ||z||^2 + ||e||^2 - 2 z·e
+                z2 = (z ** 2).sum(dim=-1, keepdim=True)  # [n_i, 1]
+                e2 = (cb ** 2).sum(dim=-1).unsqueeze(0)  # [1, K_e]
+                dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [n_i, K_e]
+                nn_idx = torch.argmin(dist2, dim=-1)
 
-            # ------------------------------------------------------
-            # 3. commitment loss を計算
-            #    ここでは classic VQ-VAE 形式:
-            #       L_commit = beta * ||sg[quant] - e||^2
-            #    encoder にだけ勾配を流す（codebook は別の EMA 更新など）
-            # ------------------------------------------------------
-            diff = encoder_chunk - quantized.detach()   # grad は encoder のみに行く
-            loss_k = beta * (diff ** 2).mean()          # scalar
+            e_star = cb[nn_idx]  # [n_i, D]
 
-            total_loss = total_loss + loss_k
-            total_latent += int(N_k)
+            # -------------------------------
+            # 3-6) commitment loss (z 側のみ勾配を流す)
+            #        β * E[ || z - sg(e) ||^2 ]
+            # -------------------------------
+            diff2 = (z - e_star.detach()) ** 2  # [n_i, D]
+            diff2 = diff2.sum(dim=-1)  # [n_i]
+            total_sq = total_sq + diff2.sum()
+            total_count += diff2.numel()
 
-        # ----------------------------------------------------------
-        # 4. ログ出力
-        # ----------------------------------------------------------
-        if logger is not None:
-            logger.info(
-                "[VQ_COMMIT] chunk_start=%d, B=%d, total_latent=%d, commit_loss=%.6f",
-                global_start,
-                B,
-                total_latent,
-                float(total_loss.detach().cpu()),
-            )
+        # ---- 4. 集計 ----
+        if total_count == 0:
+            # このチャンクに該当する latent がなかった
+            if logger is not None:
+                logger.info(f"[VQ_COMMIT] total_latent=0 in chunk [{chunk_start},{chunk_end})")
+            return torch.tensor(0.0, device=device, requires_grad=True)
 
-        return total_loss
+        loss = total_sq / float(total_count)
+        loss = beta * loss
+        return loss
 
     import torch
     import torch.nn.functional as F
