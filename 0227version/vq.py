@@ -1691,23 +1691,23 @@ class VectorQuantize(nn.Module):
                 raise ValueError("_cb_to_tensor: empty dict / ParameterDict")
             return torch.cat(tensors, dim=0)  # [sum K_e, D]
 
-        # raise TypeError(f"_cb_to_tensor: unsupported type {type(cb)}")
+        raise TypeError(f"_cb_to_tensor: unsupported type {type(cb)}")
+        #
+        # # Module で weight/embed を持つもの（Embedding 等）
+        # if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
+        #     return cb.weight.to(device=device, dtype=dtype)
+        # if hasattr(cb, "embed") and isinstance(cb.embed, torch.Tensor):
+        #     return cb.embed.to(device=device, dtype=dtype)
+        # # 通常の辞書: サブコードブックを連結
+        # if isinstance(cb, dict):
+        #     parts = []
+        #     for k in sorted(cb.keys()):
+        #         parts.append(_cb_to_tensor(cb[k], device=device, dtype=dtype))
+        #     if not parts:
+        #         return torch.empty(0, dtype=dtype, device=device)
+        #     return torch.cat(parts, dim=0)
 
-        # Module で weight/embed を持つもの（Embedding 等）
-        if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
-            return cb.weight.to(device=device, dtype=dtype)
-        if hasattr(cb, "embed") and isinstance(cb.embed, torch.Tensor):
-            return cb.embed.to(device=device, dtype=dtype)
-        # 通常の辞書: サブコードブックを連結
-        if isinstance(cb, dict):
-            parts = []
-            for k in sorted(cb.keys()):
-                parts.append(_cb_to_tensor(cb[k], device=device, dtype=dtype))
-            if not parts:
-                return torch.empty(0, dtype=dtype, device=device)
-            return torch.cat(parts, dim=0)
-
-        raise TypeError(f"Unsupported codebook type for conversion: {type(cb)}")
+        # raise TypeError(f"Unsupported codebook type for conversion: {type(cb)}")
 
     def get_codes_from_indices(self, indices):
         indices = indices.long()
