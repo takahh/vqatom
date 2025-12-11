@@ -2044,6 +2044,9 @@ class VectorQuantize(nn.Module):
         # ---- 3. main loop ----
         total_sq = torch.tensor(0.0, device=device)
         total_count = 0
+        if logger is not None and cb_tensor is not None:
+            logger.info(
+                f"[VQ_CODEBOOK] cb_shape={tuple(cb_tensor.shape)} dtype={cb_tensor.dtype} device={cb_tensor.device}")
 
         for k, g_idx in mask_dict.items():
             # -------------------------------
