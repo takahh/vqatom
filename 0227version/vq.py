@@ -1658,56 +1658,83 @@ class VectorQuantize(nn.Module):
 
     def _cb_to_tensor(self, cb):
         """
-        いろんな形の codebook を [K, D] Tensor に正規化するヘルパー。
-        対応:
-          - Tensor [K, D]
+        Normalize various "codebook" containers to a [K, D] Tensor.
+
+        対応する型:
+          - torch.Tensor
           - nn.Parameter
-          - nn.Embedding
-          - dict[str -> Tensor / Parameter / Embedding]
-          - nn.ParameterDict（値が [K_e, D]）など
+          - nn.Module (EuclideanCodebook 含む)
+              * .weight を持つ場合 → それを使う
+              * .embed を持つ場合 → embed.weight か embed 自体を使う
+              * .codebook / .codes / .embedding を持つ場合 → それを使う
+          - nn.ParameterDict（[K_i, D] を縦に concat）
+          - dict[key -> (上記のいずれか)]（縦に concat）
         """
         import torch
         import torch.nn as nn
 
-        # 1) すでに Tensor ならそのまま
+        # -------- 1. すでに Tensor/Parameter の場合 --------
         if isinstance(cb, torch.Tensor):
             return cb
-
-        # 2) Parameter 系
         if isinstance(cb, nn.Parameter):
-            return cb.data
+            return cb
 
-        # 3) Embedding 系
-        if isinstance(cb, nn.Embedding):
-            return cb.weight
+        # -------- 2. nn.Module (EuclideanCodebook を含む) --------
+        if isinstance(cb, nn.Module):
+            # (a) nn.Embedding や "普通の" linear など: .weight 優先
+            if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
+                return cb.weight
 
-        # 4) ParameterDict / ModuleDict / 普通の dict は value を全部 concat
-        if isinstance(cb, (dict, nn.ParameterDict, nn.ModuleDict)):
+            # (b) EuclideanCodebook など: .embed を見に行く
+            if hasattr(cb, "embed"):
+                e = cb.embed
+                # 典型的には nn.Embedding
+                if isinstance(e, nn.Embedding):
+                    return e.weight
+                # あるいは Tensor/Parameter そのもの
+                if isinstance(e, (torch.Tensor, nn.Parameter)):
+                    return e
+
+            # (c) fallback: .codebook / .codes / .embedding みたいな名前を探す
+            for attr in ("codebook", "codes", "embedding"):
+                if hasattr(cb, attr):
+                    t = getattr(cb, attr)
+                    if isinstance(t, (torch.Tensor, nn.Parameter)):
+                        return t
+
+            # ここまでで見つからない nn.Module は想定外
+            raise TypeError(f"_cb_to_tensor: unsupported nn.Module type {type(cb)} "
+                            f"(no usable weight/embed/codebook/codes/embedding)")
+
+        # -------- 3. nn.ParameterDict: values を全部縦に concat --------
+        if isinstance(cb, nn.ParameterDict):
             tensors = []
-            for v in cb.values():
-                t = self._cb_to_tensor(v)  # 再帰的に展開
+            for k in sorted(cb.keys()):
+                v = cb[k]
+                if isinstance(v, (torch.Tensor, nn.Parameter)):
+                    tensors.append(v)
+                else:
+                    raise TypeError(
+                        f"_cb_to_tensor: unsupported leaf type {type(v)} "
+                        f"in ParameterDict for key {k!r}"
+                    )
+            if not tensors:
+                raise ValueError("_cb_to_tensor: empty ParameterDict")
+            return torch.cat(tensors, dim=0)
+
+        # -------- 4. dict: value ごとに再帰的にテンソル化して concat --------
+        if isinstance(cb, dict):
+            tensors = []
+            for k in sorted(cb.keys()):
+                v = cb[k]
+                t = self._cb_to_tensor(v)  # 再帰的に処理
                 tensors.append(t)
             if not tensors:
-                raise ValueError("_cb_to_tensor: empty dict / ParameterDict")
-            return torch.cat(tensors, dim=0)  # [sum K_e, D]
+                raise ValueError("_cb_to_tensor: empty dict")
+            return torch.cat(tensors, dim=0)
 
+        # -------- 5. それ以外はサポート外 --------
         raise TypeError(f"_cb_to_tensor: unsupported type {type(cb)}")
-        #
-        # # Module で weight/embed を持つもの（Embedding 等）
-        # if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
-        #     return cb.weight.to(device=device, dtype=dtype)
-        # if hasattr(cb, "embed") and isinstance(cb.embed, torch.Tensor):
-        #     return cb.embed.to(device=device, dtype=dtype)
-        # # 通常の辞書: サブコードブックを連結
-        # if isinstance(cb, dict):
-        #     parts = []
-        #     for k in sorted(cb.keys()):
-        #         parts.append(_cb_to_tensor(cb[k], device=device, dtype=dtype))
-        #     if not parts:
-        #         return torch.empty(0, dtype=dtype, device=device)
-        #     return torch.cat(parts, dim=0)
-
-        # raise TypeError(f"Unsupported codebook type for conversion: {type(cb)}")
 
     def get_codes_from_indices(self, indices):
         indices = indices.long()
