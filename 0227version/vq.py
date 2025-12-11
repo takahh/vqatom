@@ -2004,7 +2004,7 @@ class VectorQuantize(nn.Module):
             return torch.tensor(0.0, device=device, requires_grad=True)
 
         # 既存の _get_codebook_for_key を置き換え／強化
-        def _get_codebook_for_key(key, *, device, dtype):
+        def _get_codebook_for_key(self, key, *, device, dtype):
             """
             `self._codebook` が以下のいずれでも動くように統一:
               - 単一 Tensor / Parameter / Embedding
@@ -2100,7 +2100,7 @@ class VectorQuantize(nn.Module):
             # -------------------------------
             # 3-4) この key 用コードブック取得 [K_e, D]
             # -------------------------------
-            cb = _get_codebook_for_key(k, k, device, dtype)
+            cb = _get_codebook_for_key(self, k, k, device, dtype)
 
             # -------------------------------
             # 3-5) 最近傍コードを選択（use_cosine で距離の定義を切り替え）
