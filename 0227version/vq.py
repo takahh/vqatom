@@ -1893,30 +1893,30 @@ class VectorQuantize(nn.Module):
             "contrib": contributed_keys,  # for debugging
         }
 
-    # def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
-    #     # embed_ind_dict.to("cuda")
-    #     codebook.to("cuda")
-    #     init_feat.to("cuda")
-    #     latents.to("cuda")
-    #     quantized_dict.to("cuda")
-    #     latent_len_sum = 0
-    #     two_repel_loss_weighted_sum = 0
-    #     cb_loss_weighted_sum = 0
-    #     for key in embed_ind_dict.keys():
-    #         import torch
-    #         latents_for_sil = torch.squeeze(latents)
-    #         latents_size = latents_for_sil.shape[0]
-    #         latent_len_sum += latents_size
-    #         # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-    #         two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
-    #             self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
-    #
-    #         two_repel_loss_weighted_sum += latents_size * two_repel_loss
-    #         cb_loss_weighted_sum += latents_size * cb_loss
-    #     two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
-    #     cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
-    #
-    #     return (two_repel_loss_avg, cb_loss_avg)
+    def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
+        # embed_ind_dict.to("cuda")
+        codebook.to("cuda")
+        init_feat.to("cuda")
+        latents.to("cuda")
+        quantized_dict.to("cuda")
+        latent_len_sum = 0
+        two_repel_loss_weighted_sum = 0
+        cb_loss_weighted_sum = 0
+        for key in embed_ind_dict.keys():
+            import torch
+            latents_for_sil = torch.squeeze(latents)
+            latents_size = latents_for_sil.shape[0]
+            latent_len_sum += latents_size
+            # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
+            two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
+                self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
+
+            two_repel_loss_weighted_sum += latents_size * two_repel_loss
+            cb_loss_weighted_sum += latents_size * cb_loss
+        two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
+        cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
+
+        return (two_repel_loss_avg, cb_loss_avg)
 
     import torch
     import torch.nn.functional as F
@@ -2006,20 +2006,22 @@ class VectorQuantize(nn.Module):
                 except Exception:
                     pass
         return norm
-
     def commitment_loss(
             self,
             encoder_outputs,  # [B, D]
             mask_dict,
-            codebook,  # dict-like / ParameterDict / Tensor / Embedding / etc.
-            logger,
+            codebook,        # dict-like / ParameterDict / Tensor / Embedding / etc.
+            logger=None,
             chunk_start=None,
             beta=0.25,
             temperature=None,  # 未使用
             use_cosine=False,
     ):
         """
-        Per-element commitment loss.
+        Per-element commitment + codebook + repel losses.
+
+        戻り値:
+            commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
         - encoder_outputs : [B, D] （このチャンクに含まれる latent）
         - mask_dict       : { key -> グローバル index or bool mask }
@@ -2031,7 +2033,6 @@ class VectorQuantize(nn.Module):
         - beta            : commitment loss の係数
         - use_cosine      : True のときは cosine 距離で最も近いコードを選ぶ
         """
-
         import torch
         import torch.nn as nn
         import torch.nn.functional as F
@@ -2046,11 +2047,12 @@ class VectorQuantize(nn.Module):
             chunk_start = 0
         chunk_end = chunk_start + B
 
-        # ---- 1. mask_dict が空なら 0 を返す ----
+        # ---- 1. mask_dict が空なら全部 0 (勾配付き) を返す ----
         if mask_dict is None or len(mask_dict) == 0:
+            zero = encoder_outputs.sum() * 0.0  # graph に繋がった 0
             if logger is not None:
                 logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
-            return torch.tensor(0.0, device=device, requires_grad=True)
+            return zero, zero, zero, zero
 
         def _get_codebook_for_key(key, *, device, dtype):
             """
@@ -2061,29 +2063,30 @@ class VectorQuantize(nn.Module):
               - dict[str -> nn.ParameterDict]（多段）
             戻り値は必ず [K, D] の Tensor。
             """
-            import torch
-            import torch.nn as nn
-
             cb_src = codebook if codebook is not None else getattr(self, "_codebook", None)
             if cb_src is None:
                 raise RuntimeError("Codebook is not initialized (both `codebook` and `self._codebook` are None).")
 
+            import torch
+            import torch.nn as nn
+
             # ---------- dict / ModuleDict / ParameterDict 系 ----------
             if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
-                # 1) key 直指定
+                t = None
+
+                # 1) 完全一致
                 if key in cb_src:
                     t = self._cb_to_tensor(cb_src[key])
-                else:
-                    # 2) "k_..." 形式の key をざっくり上位キーにマッピング
-                    t = None
-                    if isinstance(key, str) and key.startswith("k_"):
-                        head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
-                        if head in cb_src:
-                            t = self._cb_to_tensor(cb_src[head])
 
-                    # 3) それでも無ければ「全部まとめて」連結して使う
-                    if t is None:
-                        t = self._cb_to_tensor(cb_src)
+                # 2) "k_..." をざっくり上位キーにマッピング
+                if t is None and isinstance(key, str) and key.startswith("k_"):
+                    head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
+                    if head in cb_src:
+                        t = self._cb_to_tensor(cb_src[head])
+
+                # 3) それでも無ければ「全部まとめて」連結して使う
+                if t is None:
+                    t = self._cb_to_tensor(cb_src)
 
             else:
                 # ---------- 単一 Tensor / Parameter / Embedding 等 ----------
@@ -2093,13 +2096,19 @@ class VectorQuantize(nn.Module):
             t = t.to(device=device, dtype=dtype)
             return t
 
-        # ---- 3. main loop ----
-        total_sq = torch.tensor(0.0, device=device)
-        total_count = 0
+        # ---- 2. 累積器: Ni, K_e で重み付け平均する ----
+        total_latent = 0
+        total_cb_count = 0
 
+        commit_num   = encoder_outputs.new_zeros(())
+        codebk_num   = encoder_outputs.new_zeros(())
+        repel_num    = encoder_outputs.new_zeros(())
+        cb_repel_num = encoder_outputs.new_zeros(())
+
+        # ---- 3. main loop over mask_dict keys ----
         for k, g_idx in mask_dict.items():
             # -------------------------------
-            # 3-1) list / numpy / tensor を全部 Tensor に正規化
+            # 3-1) list / numpy / tensor → Tensor に正規化
             # -------------------------------
             if isinstance(g_idx, (list, tuple)):
                 if len(g_idx) == 0:
@@ -2137,51 +2146,90 @@ class VectorQuantize(nn.Module):
             if local_idx.numel() == 0:
                 continue
 
-            # 対象 latent: z ∈ R^{n_i × D}
-            z = encoder_outputs[local_idx]  # [n_i, D]
-            n_i = z.shape[0]
-            if n_i == 0:
+            # 対象 latent: z ∈ R^{N_i × D}
+            z = encoder_outputs[local_idx]  # [N_i, D]
+            N_i = z.shape[0]
+            if N_i == 0:
                 continue
 
             # -------------------------------
             # 3-4) この key 用コードブック取得 [K_e, D]
             # -------------------------------
-            cb = _get_codebook_for_key(k, device=device, dtype=dtype)  # ★ ここが正しい呼び方
+            cb = _get_codebook_for_key(k, device=device, dtype=dtype)  # [K_e, D]
+            K_e, Dk = cb.shape
+            assert Dk == D, f"latent D={D} != codebook D={Dk} for key={k}"
 
             # -------------------------------
             # 3-5) 最近傍コードを選択（use_cosine で距離の定義を切り替え）
             # -------------------------------
             if use_cosine:
-                z_norm = F.normalize(z, dim=-1)
+                z_norm  = F.normalize(z, dim=-1)
                 cb_norm = F.normalize(cb, dim=-1)
-                sim = torch.matmul(z_norm, cb_norm.t())  # [n_i, K_e]
+                sim = torch.matmul(z_norm, cb_norm.t())  # [N_i, K_e]
                 nn_idx = torch.argmax(sim, dim=-1)
             else:
-                z2 = (z ** 2).sum(dim=-1, keepdim=True)  # [n_i, 1]
-                e2 = (cb ** 2).sum(dim=-1).unsqueeze(0)  # [1, K_e]
-                dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [n_i, K_e]
+                # L2 距離の 2 乗
+                z2   = (z ** 2).sum(dim=-1, keepdim=True)    # [N_i, 1]
+                e2   = (cb ** 2).sum(dim=-1).unsqueeze(0)    # [1, K_e]
+                dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [N_i, K_e]
                 nn_idx = torch.argmin(dist2, dim=-1)
 
-            e_star = cb[nn_idx]  # [n_i, D]
+            e_star = cb[nn_idx]  # [N_i, D]
 
             # -------------------------------
-            # 3-6) commitment loss (z 側のみ勾配を流す)
-            #        β * E[ || z - sg(e) ||^2 ]
+            # 3-6) commitment / codebook loss
             # -------------------------------
-            diff2 = (z - e_star.detach()) ** 2
-            diff2 = diff2.sum(dim=-1)  # [n_i]
-            total_sq = total_sq + diff2.sum()
-            total_count += diff2.numel()
+            commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")  # β‖z - sg(e)‖²
+            codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
+
+            total_latent += N_i
+            commit_num   = commit_num + commit_part * N_i
+            codebk_num   = codebk_num + codebk_part * N_i
+
+            # -------------------------------
+            # 3-7) repel loss (contrastive)
+            # -------------------------------
+            # 旧版と同様に cb 自体を使っても良いし、codebook[k] があればそれを使う
+            if isinstance(codebook, (dict, nn.ParameterDict)) and k in codebook:
+                cb_for_contrast = codebook[k]
+            else:
+                cb_for_contrast = cb  # Tensor でも compute_contrastive_loss が対応していれば OK
+
+            # compute_contrastive_loss は旧実装と同じインターフェースを仮定
+            # 返り値: (repel_loss, ..., ..., cb_repel_loss, ...)
+            ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
+            repel_val     = ret[0]
+            cb_repel_val  = ret[3]
+
+            repel_num    = repel_num + repel_val * N_i
+            total_cb_count += K_e
+            cb_repel_num = cb_repel_num + cb_repel_val * K_e
 
         # ---- 4. 集計 ----
-        if total_count == 0:
+        if total_latent == 0:
+            # このチャンクに該当サンプルなし → 全て 0 だが encoder_outputs に繋げる
+            zero = encoder_outputs.sum() * 0.0
             if logger is not None:
-                logger.info(f"[VQ_COMMIT] total_latent=0 in chunk [{chunk_start},{chunk_end})")
-            return torch.tensor(0.0, device=device, requires_grad=True)
+                logger.info(f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})")
+            return zero, zero, zero, zero
 
-        loss = total_sq / float(total_count)
-        loss = beta * loss
-        return loss
+        commit_loss   = beta * (commit_num / float(total_latent))
+        codebook_loss = codebk_num / float(total_latent)
+        repel_loss    = repel_num / float(total_latent)
+
+        if total_cb_count > 0:
+            cb_repel_loss = cb_repel_num / float(total_cb_count)
+        else:
+            cb_repel_loss = cb_repel_num * 0.0  # guard
+
+        if logger is not None:
+            logger.info(
+                f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
+                f"total_latent={int(total_latent)}, "
+                f"commit_loss={commit_loss.item():.6f}"
+            )
+
+        return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
     import torch
     import torch.nn.functional as F
