@@ -1656,6 +1656,43 @@ class VectorQuantize(nn.Module):
 
         return rearrange(codebook, '1 ... -> ...')
 
+    # vq.py どこか（例: class の先頭付近）に追加
+    def _cb_to_tensor(cb, *, device, dtype):
+        """
+        Accepts: torch.Tensor, nn.Parameter, nn.ParameterDict, nn.Module with .weight/.embed,
+                 dict[str, Tensor|Parameter|ParameterDict]
+        Returns: torch.Tensor on `device` and `dtype`.
+        Concats sub-tensors along dim=0 when needed.
+        """
+        import torch
+        import torch.nn as nn
+
+        if isinstance(cb, torch.Tensor):
+            return cb.to(device=device, dtype=dtype)
+        if isinstance(cb, nn.Parameter):
+            return cb.data.to(device=device, dtype=dtype)
+        if isinstance(cb, nn.ParameterDict):
+            # 安定した順序で結合（キーでソート）
+            parts = [p.data.to(device=device, dtype=dtype) for k, p in sorted(cb.items(), key=lambda kv: kv[0])]
+            if len(parts) == 0:
+                return torch.empty(0, dtype=dtype, device=device)
+            return torch.cat(parts, dim=0)
+        # Module で weight/embed を持つもの（Embedding 等）
+        if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
+            return cb.weight.to(device=device, dtype=dtype)
+        if hasattr(cb, "embed") and isinstance(cb.embed, torch.Tensor):
+            return cb.embed.to(device=device, dtype=dtype)
+        # 通常の辞書: サブコードブックを連結
+        if isinstance(cb, dict):
+            parts = []
+            for k in sorted(cb.keys()):
+                parts.append(_cb_to_tensor(cb[k], device=device, dtype=dtype))
+            if not parts:
+                return torch.empty(0, dtype=dtype, device=device)
+            return torch.cat(parts, dim=0)
+
+        raise TypeError(f"Unsupported codebook type for conversion: {type(cb)}")
+
     def get_codes_from_indices(self, indices):
         indices = indices.long()
         codebook = self.codebook
@@ -1954,28 +1991,43 @@ class VectorQuantize(nn.Module):
                 logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
             return torch.tensor(0.0, device=device, requires_grad=True)
 
-        # ---- 2. codebook 取得用のヘルパ ----
-        def _get_codebook_for_key(k):
-            """key に対応するコードブック行列 [K_e, D] を取得"""
-            cb = codebook
-            # dict / ParameterDict の場合は key で選択
-            if isinstance(codebook, (dict, nn.ParameterDict)):
-                if k not in codebook:
-                    raise KeyError(f"codebook has no entry for key={k!r}")
-                cb = codebook[k]
+        # 既存の _get_codebook_for_key を置き換え／強化
+        def _get_codebook_for_key(self, key, *, device, dtype):
+            """
+            `self._codebook` が以下のいずれでも動くように統一:
+              - 単一 Tensor / Parameter / Embedding
+              - dict[str -> Tensor/Parameter]
+              - nn.ParameterDict (サブコードブック束ね)
+              - dict[str -> nn.ParameterDict]（多段）
+            戻り値は必ず [K, D] の Tensor。
+            """
+            import torch
+            import torch.nn as nn
 
-            # Module などの場合 weight/embed を取り出す
-            if isinstance(cb, nn.Module):
-                if hasattr(cb, "weight"):
-                    cb = cb.weight
-                elif hasattr(cb, "embed"):
-                    cb = cb.embed
-                else:
-                    raise TypeError(f"Unsupported codebook module type for key={k!r}: {type(cb)}")
+            cb = getattr(self, "_codebook", None)
+            if cb is None:
+                raise RuntimeError("Codebook `_codebook` is not initialized.")
 
-            cb = torch.as_tensor(cb, device=device, dtype=encoder_outputs.dtype)
-            cb = cb.view(cb.shape[0], -1)  # [K_e, D]
-            return cb
+            # 直接キーで取れるならまずそれを試す
+            if isinstance(cb, (dict, nn.ModuleDict, nn.ParameterDict)) and key in cb:
+                return self._cb_to_tensor(cb[key], device=device, dtype=dtype)
+
+            # 「k_...」形式の key を分解して上位キー/下位キーに分かれている可能性にも対処
+            if isinstance(cb, (dict, nn.ModuleDict)):
+                # 例: self._codebook['6_0_3_1_1'] が ParameterDict を返す、など
+                head = key.split("_")[1] if key.startswith("k_") else None
+                if head and head in cb:
+                    return self._cb_to_tensor(cb[head], device=device, dtype=dtype)
+
+                # 直接は無いが dict 全体がサブ辞書集合なら全部 concat
+                return self._cb_to_tensor(cb, device=device, dtype=dtype)
+
+            if isinstance(cb, (nn.ParameterDict,)):
+                # ParameterDict 全体を連結
+                return self._cb_to_tensor(cb, device=device, dtype=dtype)
+
+            # 単一テンソル/パラメータ/Embedding 等
+            return self._cb_to_tensor(cb, device=device, dtype=dtype)
 
         # ---- 3. main loop ----
         total_sq = torch.tensor(0.0, device=device)
