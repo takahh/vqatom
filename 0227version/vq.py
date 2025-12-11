@@ -2255,7 +2255,6 @@ class VectorQuantize(nn.Module):
     import torch.nn.functional as F
     from einops import rearrange
 
-
     @torch.amp.autocast("cuda", enabled=False)
     def forward(
         self,
@@ -2285,6 +2284,27 @@ class VectorQuantize(nn.Module):
         mode : str or None
             "train" / "eval" / "test" / "init_kmeans_final" など。
         """
+
+        def _safe_requires_grad(x):
+            """
+            x が Tensor / (Tensor を含む tuple/list) / その他 いずれでも
+            安全に requires_grad を bool で返す。
+            """
+            import torch
+
+            # そのまま Tensor の場合
+            if isinstance(x, torch.Tensor):
+                return bool(x.requires_grad)
+
+            # tuple/list の場合は中から Tensor を探す
+            if isinstance(x, (tuple, list)):
+                for item in x:
+                    if isinstance(item, torch.Tensor):
+                        return bool(item.requires_grad)
+                return False
+
+            # float/int/None など
+            return False
 
         # --------------------------------------------------------------
         # 0. グローバル latent オフセット管理
@@ -2361,15 +2381,16 @@ class VectorQuantize(nn.Module):
             #
             # 今回は chunk_start 修正が主目的なので、ここでは 0 のままにしておく。
 
-        # DEBUG: requires_grad チェック
-        if logger is not None:
+        if logger is not None and epoch is not None:
             logger.info(
-                "[VQ_DEBUG] commit_loss.requires_grad=%s, codebook_loss.requires_grad=%s, "
-                "repel_loss.requires_grad=%s, cb_repel_loss.requires_grad=%s",
-                bool(commit_loss.requires_grad),
-                bool(codebook_loss.requires_grad),
-                bool(repel_loss.requires_grad),
-                bool(cb_repel_loss.requires_grad),
+                "[VQ_DEBUG] commit_loss.requires_grad=%s, "
+                "codebook_loss.requires_grad=%s, "
+                "repel_loss.requires_grad=%s, "
+                "cb_repel_loss.requires_grad=%s",
+                _safe_requires_grad(commit_loss),
+                _safe_requires_grad(codebook_loss),
+                _safe_requires_grad(repel_loss),
+                _safe_requires_grad(cb_repel_loss),
             )
 
         # --------------------------------------------------------------
