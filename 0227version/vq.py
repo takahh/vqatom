@@ -531,7 +531,26 @@ class ContrastiveLoss(nn.Module):
     def forward(self, z, chunk, logger, codebook, key):
         import torch
         device = z.device
-        eps = 1e-8
+        N = z.shape[0]
+
+        # ---- 0. Subsample for pdist to avoid O(N^2) explosion ----
+        max_pdist_points = 4096  # or 2048 / 8192, as you like
+
+        if N > max_pdist_points:
+            # ランダムに max_pdist_points 個だけ選んで repulsive term を計算
+            perm = torch.randperm(N, device=device)
+            idx = perm[:max_pdist_points]
+            z_for_pdist = z[idx]
+            if logger is not None:
+                logger.info(
+                    f"[VQ_REPEL] z subsampled for pdist: N={N} -> {max_pdist_points}"
+                )
+        else:
+            z_for_pdist = z
+
+        # ここから先は z_for_pdist を使う
+        pdist_z = torch.pdist(z_for_pdist, p=2)  # [M*(M-1)/2], 1D, M <= max_pdist_points
+
         z = z.squeeze()
         # ---- 1) 距離の一次統計（1Dで扱う）----
         # z: [B, D]
@@ -541,7 +560,8 @@ class ContrastiveLoss(nn.Module):
         if z.shape[0] == 1:
             # print(f"latent count is only 1. Not calculating losses.")
             return 0, 0, 0, 0, 0
-        pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
+
+        # pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
 
         # （巨大時）サンプルを間引き
         sample = pdist_z
