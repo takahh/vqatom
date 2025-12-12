@@ -663,7 +663,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
     for epoch in range(1, conf["max_epoch"] + 1):
         print(f"\n====== epoch {epoch} ======")
         print("initial kmeans start ....")
-
+        logger.info("initial kmeans start ....")
         # fresh containers per epoch
         loss_list_list_train = [[] for _ in range(11)]
         loss_list_list_test = [[] for _ in range(11)]
@@ -758,6 +758,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
         print("[KMEANS] init_kmeans_final start")
+        logger.info("[KMEANS] init_kmeans_final start")
 
         # if epoch == 1:
         # first_batch_feat は CPU に戻してあるので GPU へ
@@ -775,6 +776,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             all_attr_tensor.to(device),
         )
         print("[KMEANS] initial kmeans done.")
+        logger.info("[KMEANS] initial kmeans done.")
         model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
@@ -787,7 +789,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             )
             model.latent_size_sum = 0
             print("TRAIN ---------------")
-
+            logger.info("TRAIN ---------------")
             # dataloader は再利用可能（新しい iterator が作られる）
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
@@ -877,6 +879,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # 4) TEST
         # ---------------------------
         print("TEST ---------------")
+        logger.info("TEST ---------------")
         ind_counts = Counter()
 
         if conf['train_or_infer'] == "hptune":
