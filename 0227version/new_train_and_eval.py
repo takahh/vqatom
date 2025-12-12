@@ -882,10 +882,9 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             start_num, end_num = 0, 1
         else:  # infer
             start_num, end_num = 6, 10
-
         for idx, (adj_batch, attr_batch) in enumerate(
-            itertools.islice(dataloader, start_num, end_num),
-            start=start_num
+                itertools.islice(dataloader, start_num, end_num),
+                start=start_num
         ):
             print(f"[TEST] batch idx {idx}")
             glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
@@ -893,7 +892,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             )
             chunk_size = conf["chunk_size"]
 
-            for i in range(0, len(glist), chunk_size):
+            # ★ ここ：バッチ内のチャンク番号を 0,1,2,... で作る
+            for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
                 chunk = glist[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]
 
@@ -901,8 +901,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 batched_graph_base = dgl.batch(chunk_base).to(device)
                 attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
 
-                with torch.no_grad():
-                    batched_feats = batched_graph.ndata["feat"]
+                # feats取得に no_grad は不要（evaluate 側が no_grad なので）
+                batched_feats = batched_graph.ndata["feat"]
 
                 #  loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
                 test_loss, test_emb, loss_list_test = evaluate(
@@ -913,7 +913,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     masks_3,
                     logger,
                     batched_graph_base,
-                    idx,
+                    chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
                     "test",
                     attr_chunk_test,
                 )
