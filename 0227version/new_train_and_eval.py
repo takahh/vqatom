@@ -93,6 +93,7 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
             model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return 0
         else:  # test
+            #  return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
             outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return outputs
 
@@ -910,7 +911,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 # feats取得に no_grad は不要（evaluate 側が no_grad なので）
                 batched_feats = batched_graph.ndata["feat"]
 
-                #  loss, embed, [commit_loss.item(), repel_loss.item(), cb_repel_loss.item()]
+                # return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
                 test_loss, test_emb, loss_list_test = evaluate(
                     model,
                     batched_graph,
@@ -969,10 +970,12 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         print(f"train - total_loss: {train_total:.6f}")
         logger.info(f"train - total_loss: {train_total:.6f}")
 
-        # test logs
+        # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         test_commit = safe_mean(loss_list_list_test[0])
         test_latrep = safe_mean(loss_list_list_test[2])
+        logger.info(f"test_cbrep before safe_mean: {loss_list_list_test[1]}")
         test_cbrep = safe_mean(loss_list_list_test[1])
+        logger.info(f"test_cbrep after safe_mean: {test_cbrep}")
         test_total = safe_mean(test_loss_list)
 
         print(f"test - commit_loss: {test_commit:.6f}, "
