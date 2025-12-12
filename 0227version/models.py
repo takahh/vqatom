@@ -63,75 +63,148 @@ def _zeros_like(x, device=None, dtype=None):
     return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
 
 import torch
+import torch
 
 def _normalize_quantize_output(qo, device=None, dtype=None):
     """
-    Normalize quantizer outputs to a fixed 7-tuple of tensors.
-    IMPORTANT:
-      - Do NOT detach anything.
-      - Preserve requires_grad for all tensors.
+    Normalize quantizer outputs to:
+      (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
+
+    Rules:
+      - Never detach.
+      - Never wrap existing tensors into new tensors.
+      - Never convert/embed-cast the embed tensor.
+      - Only convert python/np scalars to tensors.
     """
-    def _to_tensor(x):
+
+    def _infer_device_dtype(*xs):
+        nonlocal device, dtype
+        if device is None or dtype is None:
+            for x in xs:
+                if torch.is_tensor(x):
+                    if device is None:
+                        device = x.device
+                    if dtype is None:
+                        dtype = x.dtype
+                    return
+        # if still None, fall back safely
+        if device is None:
+            device = "cpu"
+        if dtype is None:
+            dtype = torch.float32
+
+    def _scalar_to_tensor(x):
+        """Convert only non-tensor scalars/None to tensor; keep tensors as-is."""
         if torch.is_tensor(x):
             return x
         if x is None:
-            return torch.tensor(0.0, device=device, dtype=dtype, requires_grad=False)
-        return torch.tensor(float(x), device=device, dtype=dtype, requires_grad=False)
+            _infer_device_dtype()
+            return torch.zeros((), device=device, dtype=dtype)
+        # numpy scalar / python number
+        try:
+            _infer_device_dtype()
+            return torch.as_tensor(x, device=device, dtype=dtype)
+        except Exception:
+            raise TypeError(f"Expected scalar/None/tensor for loss, got {type(x)}")
 
-    # ---- case 1: exact tuple/list of length 7 ----
+    # ---------------------------
+    # case 1: exact 7-tuple/list
+    # ---------------------------
     if isinstance(qo, (tuple, list)) and len(qo) == 7:
-        return tuple(_to_tensor(v) for v in qo)
+        loss, embed, commit, cb, sil, rep, cb_rep = qo
+        _infer_device_dtype(loss, embed, commit, cb, sil, rep, cb_rep)
+        return (
+            _scalar_to_tensor(loss),
+            embed,  # <- DO NOT TOUCH
+            _scalar_to_tensor(commit),
+            _scalar_to_tensor(cb),
+            _scalar_to_tensor(sil),
+            _scalar_to_tensor(rep),
+            _scalar_to_tensor(cb_rep),
+        )
 
-    # ---- case 2: dict-like ----
+    # ---------------------------
+    # case 2: dict-like
+    # ---------------------------
     if isinstance(qo, dict):
         embed = qo.get("embed", None)
         loss  = qo.get("total_loss", qo.get("loss", None))
-
         commit = qo.get("commit_loss", None)
         cb     = qo.get("codebook_loss", None)
         sil    = qo.get("silhouette_loss", None)
         rep    = qo.get("repel_loss", None)
         cb_rep = qo.get("cb_repel_loss", None)
 
+        _infer_device_dtype(loss, embed, commit, cb, sil, rep, cb_rep)
         return (
-            _to_tensor(loss),
-            embed,  # embed は detach してはいけない
-            _to_tensor(commit),
-            _to_tensor(cb),
-            _to_tensor(sil),
-            _to_tensor(rep),
-            _to_tensor(cb_rep),
+            _scalar_to_tensor(loss),
+            embed,  # <- DO NOT TOUCH
+            _scalar_to_tensor(commit),
+            _scalar_to_tensor(cb),
+            _scalar_to_tensor(sil),
+            _scalar_to_tensor(rep),
+            _scalar_to_tensor(cb_rep),
         )
 
-    # ---- case 3: 2-tuple like (loss, embed) or (embed, loss) ----
+    # ---------------------------
+    # case 3: 2-tuple (embed, loss) or (loss, embed)
+    # ---------------------------
     if isinstance(qo, (tuple, list)) and len(qo) == 2:
         a, b = qo
+
+        # If one is tensor and the other is scalar → tensor one is embed unless it's scalar-shaped
         if torch.is_tensor(a) and not torch.is_tensor(b):
-            loss, embed = a, b
+            # a could be loss tensor (scalar) or embed tensor (vector/matrix)
+            if a.ndim == 0:
+                loss, embed = a, b
+            else:
+                embed, loss = a, b
         elif torch.is_tensor(b) and not torch.is_tensor(a):
-            loss, embed = b, a
+            if b.ndim == 0:
+                loss, embed = b, a
+            else:
+                embed, loss = b, a
         else:
-            raise TypeError("Ambiguous 2-tuple for quantizer output")
+            # both tensors or both non-tensors: decide by ndim if tensors, else ambiguous
+            if torch.is_tensor(a) and torch.is_tensor(b):
+                if a.ndim == 0 and b.ndim >= 1:
+                    loss, embed = a, b
+                elif b.ndim == 0 and a.ndim >= 1:
+                    loss, embed = b, a
+                else:
+                    raise TypeError("Ambiguous 2-tuple: expected (loss scalar tensor, embed tensor) or vice versa")
+            else:
+                raise TypeError("Ambiguous 2-tuple: neither element is a tensor")
+
+        _infer_device_dtype(loss, embed)
+        z = torch.zeros((), device=device, dtype=dtype)
         return (
-            _to_tensor(loss),
+            _scalar_to_tensor(loss),
             embed,
-            _to_tensor(0.0),
-            _to_tensor(0.0),
-            _to_tensor(0.0),
-            _to_tensor(0.0),
-            _to_tensor(0.0),
+            z, z, z, z, z
         )
 
-    # ---- case 4: object with attributes ----
+    # ---------------------------
+    # case 4: object with attributes
+    # ---------------------------
     if hasattr(qo, "loss") and hasattr(qo, "embed"):
+        loss = getattr(qo, "loss")
+        embed = getattr(qo, "embed")
+        commit = getattr(qo, "commit_loss", None)
+        cb     = getattr(qo, "codebook_loss", None)
+        sil    = getattr(qo, "silhouette_loss", None)
+        rep    = getattr(qo, "repel_loss", None)
+        cb_rep = getattr(qo, "cb_repel_loss", None)
+
+        _infer_device_dtype(loss, embed, commit, cb, sil, rep, cb_rep)
         return (
-            _to_tensor(getattr(qo, "loss")),
-            getattr(qo, "embed"),
-            _to_tensor(getattr(qo, "commit_loss", 0.0)),
-            _to_tensor(getattr(qo, "codebook_loss", 0.0)),
-            _to_tensor(getattr(qo, "silhouette_loss", 0.0)),
-            _to_tensor(getattr(qo, "repel_loss", 0.0)),
-            _to_tensor(getattr(qo, "cb_repel_loss", 0.0)),
+            _scalar_to_tensor(loss),
+            embed,
+            _scalar_to_tensor(commit),
+            _scalar_to_tensor(cb),
+            _scalar_to_tensor(sil),
+            _scalar_to_tensor(rep),
+            _scalar_to_tensor(cb_rep),
         )
 
     raise TypeError(f"Unsupported quantizer output type: {type(qo)}")
