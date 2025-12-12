@@ -508,7 +508,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # モデルが返すのは (total_loss, embed, loss_list)
         # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
         #         loss, cb, loss_list3 = outputs
-        logger.info(f"repel_loss {repel_loss}")
+        logger.info(f"cb_repel_loss {cb_repel_loss}")
         return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
 
 

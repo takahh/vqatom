@@ -971,8 +971,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         # test logs
         test_commit = safe_mean(loss_list_list_test[0])
-        test_latrep = safe_mean(loss_list_list_test[1])
-        test_cbrep = safe_mean(loss_list_list_test[2])
+        test_latrep = safe_mean(loss_list_list_test[2])
+        test_cbrep = safe_mean(loss_list_list_test[1])
         test_total = safe_mean(test_loss_list)
 
         print(f"test - commit_loss: {test_commit:.6f}, "
