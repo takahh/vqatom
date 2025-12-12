@@ -2229,7 +2229,7 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
             repel_val     = ret[0]
             cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-
+            logger.info(f"repel_val {repel_val}")
             repel_num    = repel_num + repel_val * N_i
             total_cb_count += K_e
             cb_repel_num = cb_repel_num + cb_repel_val * K_e
@@ -2444,6 +2444,7 @@ class VectorQuantize(nn.Module):
             device = x.device
             dtype = x.dtype
 
+        logger.info(f"repel_loss before tensor {repel_loss}")
         commit_loss = _to_loss_tensor(commit_loss, device=device, dtype=dtype)
         codebook_loss = _to_loss_tensor(codebook_loss, device=device, dtype=dtype)
         repel_loss = _to_loss_tensor(repel_loss, device=device, dtype=dtype)
@@ -2459,7 +2460,7 @@ class VectorQuantize(nn.Module):
         # 4. 合計 loss と個別 loss を返す
         # --------------------------------------------------------------
         total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss
-
+        logger.info(f"repel_loss tensor {repel_loss}")
         # あなたの上位モデルに合わせて戻り値は変えてもOK。
         # ここでは: total_loss と 各 loss をタプルで返す形にしておく。
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss)

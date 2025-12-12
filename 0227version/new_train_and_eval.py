@@ -69,13 +69,14 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
     loss_scalar = float(loss.detach().cpu())
 
     loss_list_out = []
+    logger.info(f"loss_list3 {loss_list3}")
     for l in loss_list3:  # loss_list3 = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         # handle both Tensor and float / numpy
         if isinstance(l, torch.Tensor):
             loss_list_out.append(float(l.detach().cpu()))
         else:
             loss_list_out.append(float(l))
-
+    logger.info(f"loss_list_out {loss_list_out}")
     return loss_scalar, loss_list_out
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
@@ -845,6 +846,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                     # record scalar losses
                     clean_losses = [to_scalar(l) for l in loss_list_train]
+                    logger.info(f"clean_losses {clean_losses}")
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
                     loss_list.append(to_scalar(loss))
