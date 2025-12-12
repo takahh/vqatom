@@ -541,10 +541,10 @@ class ContrastiveLoss(nn.Module):
             perm = torch.randperm(N, device=device)
             idx = perm[:max_pdist_points]
             z_for_pdist = z[idx]
-            if logger is not None:
-                logger.info(
-                    f"[VQ_REPEL] z subsampled for pdist: N={N} -> {max_pdist_points}"
-                )
+            # if logger is not None:
+            #     logger.info(
+            #         f"[VQ_REPEL] z subsampled for pdist: N={N} -> {max_pdist_points}"
+            #     )
         else:
             z_for_pdist = z
 
@@ -2229,7 +2229,6 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
             repel_val     = ret[0]
             cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            logger.info(f"repel_val {repel_val}")
             repel_num    = repel_num + repel_val * N_i
             total_cb_count += K_e
             cb_repel_num = cb_repel_num + cb_repel_val * K_e
@@ -2390,17 +2389,17 @@ class VectorQuantize(nn.Module):
             #
             # 今回は chunk_start 修正が主目的なので、ここでは 0 のままにしておく。
 
-        if logger is not None and epoch is not None:
-            logger.info(
-                "[VQ_DEBUG] commit_loss.requires_grad=%s, "
-                "codebook_loss.requires_grad=%s, "
-                "repel_loss.requires_grad=%s, "
-                "cb_repel_loss.requires_grad=%s",
-                _safe_requires_grad(commit_loss),
-                _safe_requires_grad(codebook_loss),
-                _safe_requires_grad(repel_loss),
-                _safe_requires_grad(cb_repel_loss),
-            )
+        # if logger is not None and epoch is not None:
+        #     logger.info(
+        #         "[VQ_DEBUG] commit_loss.requires_grad=%s, "
+        #         "codebook_loss.requires_grad=%s, "
+        #         "repel_loss.requires_grad=%s, "
+        #         "cb_repel_loss.requires_grad=%s",
+        #         _safe_requires_grad(commit_loss),
+        #         _safe_requires_grad(codebook_loss),
+        #         _safe_requires_grad(repel_loss),
+        #         _safe_requires_grad(cb_repel_loss),
+        #     )
         import torch
 
         def _to_loss_tensor(x, device=None, dtype=None):
@@ -2444,7 +2443,6 @@ class VectorQuantize(nn.Module):
             device = x.device
             dtype = x.dtype
 
-        logger.info(f"repel_loss before tensor {repel_loss}")
         commit_loss = _to_loss_tensor(commit_loss, device=device, dtype=dtype)
         codebook_loss = _to_loss_tensor(codebook_loss, device=device, dtype=dtype)
         repel_loss = _to_loss_tensor(repel_loss, device=device, dtype=dtype)
@@ -2460,7 +2458,6 @@ class VectorQuantize(nn.Module):
         # 4. 合計 loss と個別 loss を返す
         # --------------------------------------------------------------
         total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss
-        logger.info(f"repel_loss tensor {repel_loss}")
         # あなたの上位モデルに合わせて戻り値は変えてもOK。
         # ここでは: total_loss と 各 loss をタプルで返す形にしておく。
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss)

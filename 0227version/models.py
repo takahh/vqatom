@@ -76,7 +76,6 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
       - Never wrap existing tensors into new tensors.
       - Only convert python/np scalars/None to tensors.
     """
-    logger.info(f"qo, {qo}")
 
     def _infer_device_dtype(*xs):
         nonlocal device, dtype
@@ -508,7 +507,6 @@ class EquivariantThreeHopGINE(nn.Module):
         # モデルが返すのは (total_loss, embed, loss_list)
         # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
         #         loss, cb, loss_list3 = outputs
-        logger.info(f"cb_repel_loss {cb_repel_loss}")
         return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
 
 

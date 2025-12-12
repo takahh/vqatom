@@ -69,14 +69,12 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
     loss_scalar = float(loss.detach().cpu())
 
     loss_list_out = []
-    logger.info(f"loss_list3 {loss_list3}")
     for l in loss_list3:  # loss_list3 = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         # handle both Tensor and float / numpy
         if isinstance(l, torch.Tensor):
             loss_list_out.append(float(l.detach().cpu()))
         else:
             loss_list_out.append(float(l))
-    logger.info(f"loss_list_out {loss_list_out}")
     return loss_scalar, loss_list_out
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
@@ -520,10 +518,10 @@ def collect_global_indices_compact(
             for v, cnt in sorted(ctr.items()):
                 lines.append(f"    value={v}  count={cnt}")
         text = "\n".join(lines)
-        if logger is not None:
-            logger.info(text)
-        else:
-            print(text)
+        # if logger is not None:
+        #     logger.info(text)
+        # else:
+        #     print(text)
 
     return masks_dict, atom_offset, mol_id
 
@@ -847,7 +845,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
                     # record scalar losses
                     clean_losses = [to_scalar(l) for l in loss_list_train]
-                    logger.info(f"clean_losses {clean_losses}")
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
                     loss_list.append(to_scalar(loss))
@@ -955,9 +952,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
         # train logs   # loss_list_list_train = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         train_commit = safe_mean(loss_list_list_train[0])
-        logger.info(f"loss_list_list_train[2] before safe_mean: {loss_list_list_train[2]}")
         train_latrep = safe_mean(loss_list_list_train[2])
-        logger.info(f"loss_list_list_train[2] after safe_mean: {loss_list_list_train[2]}")
         train_cbrep = safe_mean(loss_list_list_train[1])
         train_total = safe_mean(loss_list)
 
@@ -973,9 +968,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         test_commit = safe_mean(loss_list_list_test[0])
         test_latrep = safe_mean(loss_list_list_test[2])
-        logger.info(f"test_cbrep before safe_mean: {loss_list_list_test[1]}")
         test_cbrep = safe_mean(loss_list_list_test[1])
-        logger.info(f"test_cbrep after safe_mean: {test_cbrep}")
         test_total = safe_mean(test_loss_list)
 
         print(f"test - commit_loss: {test_commit:.6f}, "
