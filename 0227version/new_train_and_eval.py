@@ -69,7 +69,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
     loss_scalar = float(loss.detach().cpu())
 
     loss_list_out = []
-    for l in loss_list3:
+    for l in loss_list3:  # loss_list3 = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         # handle both Tensor and float / numpy
         if isinstance(l, torch.Tensor):
             loss_list_out.append(float(l.detach().cpu()))
@@ -946,10 +946,12 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
 
-        # train logs
+        # train logs   # loss_list_list_train = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         train_commit = safe_mean(loss_list_list_train[0])
-        train_latrep = safe_mean(loss_list_list_train[1])
-        train_cbrep = safe_mean(loss_list_list_train[2])
+        logger.info(f"loss_list_list_train[2] before safe_mean: {loss_list_list_train[2]}")
+        train_latrep = safe_mean(loss_list_list_train[2])
+        logger.info(f"loss_list_list_train[2] after safe_mean: {loss_list_list_train[2]}")
+        train_cbrep = safe_mean(loss_list_list_train[1])
         train_total = safe_mean(loss_list)
 
         print(f"train - commit_loss: {train_commit:.6f}, "
