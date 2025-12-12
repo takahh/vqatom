@@ -65,7 +65,7 @@ def _zeros_like(x, device=None, dtype=None):
 import torch
 import torch
 
-def _normalize_quantize_output(qo, device=None, dtype=None):
+def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     """
     Normalize quantizer outputs to:
       (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
@@ -76,7 +76,7 @@ def _normalize_quantize_output(qo, device=None, dtype=None):
       - Never convert/embed-cast the embed tensor.
       - Only convert python/np scalars to tensors.
     """
-
+    logger.info(f"qo, {qo}")
     def _infer_device_dtype(*xs):
         nonlocal device, dtype
         if device is None or dtype is None:
@@ -111,6 +111,7 @@ def _normalize_quantize_output(qo, device=None, dtype=None):
     # case 1: exact 7-tuple/list
     # ---------------------------
     if isinstance(qo, (tuple, list)) and len(qo) == 7:
+        logger.info(f"len 7 tuple list")
         loss, embed, commit, cb, sil, rep, cb_rep = qo
         _infer_device_dtype(loss, embed, commit, cb, sil, rep, cb_rep)
         return (
@@ -127,6 +128,7 @@ def _normalize_quantize_output(qo, device=None, dtype=None):
     # case 2: dict-like
     # ---------------------------
     if isinstance(qo, dict):
+        logger.info(f"dict")
         embed = qo.get("embed", None)
         loss  = qo.get("total_loss", qo.get("loss", None))
         commit = qo.get("commit_loss", None)
@@ -150,6 +152,7 @@ def _normalize_quantize_output(qo, device=None, dtype=None):
     # case 3: 2-tuple (embed, loss) or (loss, embed)
     # ---------------------------
     if isinstance(qo, (tuple, list)) and len(qo) == 2:
+        logger.info(f"len 2 tuple list")
         a, b = qo
 
         # If one is tensor and the other is scalar → tensor one is embed unless it's scalar-shaped
@@ -188,6 +191,7 @@ def _normalize_quantize_output(qo, device=None, dtype=None):
     # case 4: object with attributes
     # ---------------------------
     if hasattr(qo, "loss") and hasattr(qo, "embed"):
+        logger.info(f"loss and embed included")
         loss = getattr(qo, "loss")
         embed = getattr(qo, "embed")
         commit = getattr(qo, "commit_loss", None)
@@ -576,9 +580,9 @@ class EquivariantThreeHopGINE(nn.Module):
 
         # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
         loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
-            quantize_output,
+            quantize_output, logger,
             device=h_vq.device if torch.is_tensor(h_vq) else None,
-            dtype=getattr(h_vq, "dtype", None),
+            dtype=getattr(h_vq, "dtype", None)
         )
 
         # embed は今回は h_vq をそのまま使う（まだ本当の量子化はしていないバージョン）
