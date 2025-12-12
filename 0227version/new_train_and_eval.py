@@ -690,6 +690,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
             if idx == 5:
                 break
+            if idx == 1:
+                break
 
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
                 adj_batch, attr_batch, logger, start_atom_id, start_mol_id
@@ -791,6 +793,8 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 if idx == 5:
                     break
 
+                if idx == 1:
+                    break
                 print(f"[TRAIN] batch idx {idx}")
                 glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
                     adj_batch, attr_batch, logger
