@@ -63,14 +63,13 @@ def _zeros_like(x, device=None, dtype=None):
     return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
 
 import torch
-import torch
 def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     """
-    Normalize quantizer outputs to:
+    Normalize quantizer outputs to 7-tuple:
       (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
 
     Assumption (ALWAYS):
-      qo == (loss, (commit, cb, sil, rep[, cb_rep]))
+      qo == (total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss))
 
     Rules:
       - Never detach.
@@ -105,27 +104,28 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
 
     # ---------------------------
     # only supported shape:
-    # (loss, (commit, cb, sil, rep[, cb_rep]))
+    # (loss, (commit, cb, rep, cb_rep))
     # ---------------------------
     if not (isinstance(qo, (tuple, list)) and len(qo) == 2 and isinstance(qo[1], (tuple, list))):
-        raise TypeError(f"Expected (loss, (commit, cb, sil, rep[, cb_rep])) but got {type(qo)}: {qo}")
+        raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
 
     loss, inner = qo
-    if len(inner) not in (4, 5):
-        raise TypeError(f"Expected inner tuple length 4 or 5, got {len(inner)}: {inner}")
+    if len(inner) != 4:
+        raise TypeError(f"Expected inner tuple length 4: (commit, cb, rep, cb_rep), got {len(inner)}: {inner}")
 
-    commit, cb, sil, rep = inner[0], inner[1], inner[2], inner[3]
-    cb_rep = inner[4] if len(inner) == 5 else None
+    commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
 
-    _infer_device_dtype(loss, commit, cb, sil, rep, cb_rep)
+    _infer_device_dtype(loss, commit, cb, rep, cb_rep)
 
-    embed = None  # <- このqoにはembedが無い前提
+    embed = None  # qoにはembedが無い前提
+    sil = None    # qoにはsilが無い前提（0で埋める）
+
     return (
         _scalar_to_tensor(loss),
         embed,
         _scalar_to_tensor(commit),
         _scalar_to_tensor(cb),
-        _scalar_to_tensor(sil),
+        _scalar_to_tensor(sil),      # silhouette_loss = 0
         _scalar_to_tensor(rep),
         _scalar_to_tensor(cb_rep),
     )
