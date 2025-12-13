@@ -2327,6 +2327,16 @@ class VectorQuantize(nn.Module):
         # --------------------------------------------------------------
         # 1.5) Debug: mask_dict の global index が chunk 範囲内か検査
         # --------------------------------------------------------------
+        if getattr(self, "debug_index", False) and chunk_i == 0 and B > 0:
+            # 最初の1原子だけ確認
+            k = next(iter(mask_dict))
+            gi = mask_dict[k][0]  # global index
+            li = gi - global_start  # local index
+
+            z_norm = encoder_outputs[li].norm().item()
+            assert z_norm > 0 and not math.isnan(z_norm), \
+                f"latent invalid at global_id={gi}, local_id={li}"
+
         if getattr(self, "debug_index", False) and (mask_dict is not None) and (B > 0):
             # 先頭 chunk なら global_start は 0 のはず（設計通りなら）
             if mode in ("eval", "test", "init_kmeans_final") or (chunk_i == 0):
