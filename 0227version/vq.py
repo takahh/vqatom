@@ -2262,202 +2262,167 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
     from einops import rearrange
-
     @torch.amp.autocast("cuda", enabled=False)
     def forward(
-        self,
-        x,
-        feature=None,
-        mask_dict=None,
-        logger=None,
-        chunk_i=None,
-        epoch=None,
-        mode=None,
+            self,
+            x,
+            feature=None,
+            mask_dict=None,
+            logger=None,
+            chunk_i=None,
+            epoch=None,
+            mode=None,
     ):
         """
         Forward pass with per-element quantization and EMA update (commitment_loss 版).
 
-        Parameters
-        ----------
-        x : Tensor
-            - [B, D] or [1, B, D] を想定（たまに [B, C, H, W]）
-        feature : Any
-            互換性用。ここでは未使用。
-        mask_dict : dict[str|int -> LongTensor or BoolTensor]
-            collect_global_indices_compact からの「グローバル index」。
-        logger : logging.Logger or None
-        chunk_i : int or None
-            データローダ側の「このエポックでのチャンク番号」。
-        epoch : int or None
-        mode : str or None
-            "train" / "eval" / "test" / "init_kmeans_final" など。
+        - encoder_outputs は必ず [B_total, D] に flatten される
+        - mask_dict は collect_global_indices_compact 由来の「グローバル index」
+        - chunk_start (= global_start) を commitment_loss に渡し、
+          commitment_loss 内で global->local (global - chunk_start) 変換する前提
+
+        Debug:
+          self.debug_index = True のとき、mask_dict の index がこの chunk 範囲に入っているか検査。
         """
-
-        def _safe_requires_grad(x):
-            """
-            x が Tensor / (Tensor を含む tuple/list) / その他 いずれでも
-            安全に requires_grad を bool で返す。
-            """
-            import torch
-
-            # そのまま Tensor の場合
-            if isinstance(x, torch.Tensor):
-                return bool(x.requires_grad)
-
-            # tuple/list の場合は中から Tensor を探す
-            if isinstance(x, (tuple, list)):
-                for item in x:
-                    if isinstance(item, torch.Tensor):
-                        return bool(item.requires_grad)
-                return False
-
-            # float/int/None など
-            return False
+        import torch
+        from einops import rearrange
 
         # --------------------------------------------------------------
-        # 0. グローバル latent オフセット管理
+        # 0) グローバル latent オフセット管理
         # --------------------------------------------------------------
         if not hasattr(self, "latent_size_sum"):
-            # 初回だけ
             self.latent_size_sum = 0
 
-        # どのタイミングで 0 リセットするか
-        if mode in ("init_kmeans_final"):
-            # 評価系は「毎回 0 始まり」でOK
+        # eval/test/init は毎回 0 始まりにする（chunk_i が渡らないケースでも安全）
+        if mode in ("eval", "test", "init_kmeans_final"):
             self.latent_size_sum = 0
         elif chunk_i is not None and chunk_i == 0:
-            # 学習時: エポック頭のチャンクでリセット
             self.latent_size_sum = 0
 
         # --------------------------------------------------------------
-        # 1. 入力整形: encoder_outputs を [B, D] にする
+        # 1) 入力整形: encoder_outputs を [B_total, D] にする
         # --------------------------------------------------------------
         x = x.float()
 
-        # 画像 feature map をそのまま VQ したい場合
         if getattr(self, "accept_image_fmap", False) and x.ndim == 4:
             # (B, C, H, W) → (B*H*W, C)
-            x = rearrange(x, "b c h w -> (b h w) c")
+            encoder_outputs = rearrange(x, "b c h w -> (b h w) c")
         else:
-            # 通常: (B, D) or (1, B, D) or (B, N, D) を [B_total, D] に潰す
-            if x.ndim == 3:
-                x = x.view(-1, x.size(-1))  # (1,B,D) / (B,N,D) → (B_total, D)
-            elif x.ndim == 2:
-                pass  # (B, D) そのまま
+            # (B, D) / (1, B, D) / (B, N, D) / その他 → (B_total, D)
+            if x.ndim == 2:
+                encoder_outputs = x
+            elif x.ndim == 3:
+                encoder_outputs = x.reshape(-1, x.size(-1))
             else:
-                # 念のため fallback
-                x = x.view(-1, x.size(-1))
+                encoder_outputs = x.reshape(-1, x.size(-1))
 
-        encoder_outputs = x  # [B, D]
-        B = encoder_outputs.size(0)
+        B = int(encoder_outputs.size(0))
+        device = encoder_outputs.device
+        dtype = encoder_outputs.dtype
 
         # このチャンクのグローバル index 範囲
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
 
-        device = encoder_outputs.device
-        import torch
         # --------------------------------------------------------------
-        # 2. 各種 loss 初期化
+        # 1.5) Debug: mask_dict の global index が chunk 範囲内か検査
         # --------------------------------------------------------------
-        commit_loss = torch.tensor(0.0, device=device)
-        codebook_loss = torch.tensor(0.0, device=device)
-        repel_loss = torch.tensor(0.0, device=device)
-        cb_repel_loss = torch.tensor(0.0, device=device)
+        if getattr(self, "debug_index", False) and (mask_dict is not None) and (B > 0):
+            # 先頭 chunk なら global_start は 0 のはず（設計通りなら）
+            if mode in ("eval", "test", "init_kmeans_final") or (chunk_i == 0):
+                assert global_start == 0, f"[INDEX_MISMATCH] chunk head but global_start={global_start}"
 
-        # 実際の量子化（embed, indices）は、あなたの元コードに合わせてここで扱う。
-        # ここでは encoder_outputs のみを使って commitment_loss を計算する。
+            n_checked = 0
+            n_oob = 0
 
-        if mask_dict is not None and B > 0:
-            commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
+            for k, idxs in mask_dict.items():
+                if idxs is None:
+                    continue
+                if isinstance(idxs, torch.Tensor):
+                    gi = idxs.to(device=device)
+                else:
+                    gi = torch.as_tensor(idxs, device=device)
+
+                if gi.numel() == 0:
+                    continue
+
+                gi = gi.reshape(-1)
+                # 重くしないように最大 256 だけ見る
+                if gi.numel() > 256:
+                    gi = gi[:256]
+
+                in_chunk = (gi >= global_start) & (gi < global_end)
+                n_oob += int((~in_chunk).sum().item())
+                n_checked += int(gi.numel())
+                if n_checked >= 1024:
+                    break
+
+            assert n_oob == 0, (
+                f"[INDEX_MISMATCH] mask_dict contains out-of-chunk indices. "
+                f"global_range=[{global_start},{global_end}), checked={n_checked}, oob={n_oob}. "
+                f"Likely: start_atom_id/atom_offset chaining or chunk_start mismatch or ordering mismatch."
+            )
+
+        # --------------------------------------------------------------
+        # 2) loss 初期化（“新しい Tensor を作る”のではなく、必要なら 0 を作る）
+        #    ※ requires_grad は commit_loss の計算結果が持つはずなので、ここは0でOK
+        # --------------------------------------------------------------
+        commit_loss = torch.zeros((), device=device, dtype=dtype)
+        codebook_loss = torch.zeros((), device=device, dtype=dtype)
+        repel_loss = torch.zeros((), device=device, dtype=dtype)
+        cb_repel_loss = torch.zeros((), device=device, dtype=dtype)
+
+        # --------------------------------------------------------------
+        # 3) commitment_loss 計算（mask_dict があるときだけ）
+        # --------------------------------------------------------------
+        if (mask_dict is not None) and (B > 0):
+            out = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
-                codebook=self._codebook,  # ★あなたのクラスに合わせて調整（dict or Tensor）
+                codebook=self._codebook,  # あなたの実装に合わせる（dict or tensor/module）
                 logger=logger,
-                chunk_start=global_start,  # ★ここが重要
+                chunk_start=global_start,  # ★重要: global->local 変換の基準
                 beta=getattr(self, "beta", 0.25),
                 temperature=getattr(self, "temperature", None),
                 use_cosine=getattr(self, "use_cosine", False),
             )
 
-            # 他の loss（codebook_loss, repel_loss, cb_repel_loss）は
-            # 既に別メソッドがあるならそこで計算する。
-            #
-            # 例:
-            # codebook_loss = self.codebook_loss(...)
-            # repel_loss, cb_repel_loss = self.repel_losses(...)
-            #
-            # 今回は chunk_start 修正が主目的なので、ここでは 0 のままにしておく。
-
-        # if logger is not None and epoch is not None:
-        #     logger.info(
-        #         "[VQ_DEBUG] commit_loss.requires_grad=%s, "
-        #         "codebook_loss.requires_grad=%s, "
-        #         "repel_loss.requires_grad=%s, "
-        #         "cb_repel_loss.requires_grad=%s",
-        #         _safe_requires_grad(commit_loss),
-        #         _safe_requires_grad(codebook_loss),
-        #         _safe_requires_grad(repel_loss),
-        #         _safe_requires_grad(cb_repel_loss),
-        #     )
-        import torch
-
-        def _to_loss_tensor(x, device=None, dtype=None):
-            """
-            commit_loss / codebook_loss / repel_loss / cb_repel_loss など、
-            Tensor / (Tensorを含む tuple/list) / float / int / None を
-            安全に 0次元 Tensor に変換する。
-            """
-            # 既に Tensor の場合
-            if isinstance(x, torch.Tensor):
-                if device is not None or dtype is not None:
-                    return x.to(device=device if device is not None else x.device,
-                                dtype=dtype if dtype is not None else x.dtype)
-                return x
-
-            # tuple/list の場合 → 中から Tensor or scalar を拾う
-            if isinstance(x, (tuple, list)):
-                for item in x:
-                    if isinstance(item, torch.Tensor):
-                        return _to_loss_tensor(item, device=device, dtype=dtype)
-                for item in x:
-                    if isinstance(item, (float, int)):
-                        return torch.tensor(float(item), device=device, dtype=dtype)
-                # 何もなければ 0.0
-                return torch.tensor(0.0, device=device, dtype=dtype)
-
-            # 単なるスカラー
-            if isinstance(x, (float, int)):
-                return torch.tensor(float(x), device=device, dtype=dtype)
-
-            # None → 0.0
-            if x is None:
-                return torch.tensor(0.0, device=device, dtype=dtype)
-
-            # 想定外
-            raise TypeError(f"_to_loss_tensor: unsupported loss type {type(x)}")
-
-        device = None
-        dtype = None
-        if isinstance(x, torch.Tensor):
-            device = x.device
-            dtype = x.dtype
-
-        commit_loss = _to_loss_tensor(commit_loss, device=device, dtype=dtype)
-        codebook_loss = _to_loss_tensor(codebook_loss, device=device, dtype=dtype)
-        repel_loss = _to_loss_tensor(repel_loss, device=device, dtype=dtype)
-        cb_repel_loss = _to_loss_tensor(cb_repel_loss, device=device, dtype=dtype)
+            # commitment_loss 側が tuple を返す想定に合わせて受ける
+            # 期待: (commit, cb, rep, cb_rep)
+            if isinstance(out, (tuple, list)) and len(out) == 4:
+                commit_loss, codebook_loss, repel_loss, cb_repel_loss = out
+            else:
+                # 想定外の返り値は落とす（静かに壊れるより良い）
+                raise TypeError(f"commitment_loss must return 4-tuple, got {type(out)}: {out}")
 
         # --------------------------------------------------------------
-        # 3. グローバル offset 更新（学習モードのときだけ）
+        # 4) loss の “型/デバイス/次元” を揃える（0-dim Tensor）
+        #    - 既存 Tensor はラップしない（detach もしない）
+        #    - scalar/None だけ Tensor 化
+        # --------------------------------------------------------------
+        def _loss0(x):
+            if isinstance(x, torch.Tensor):
+                # 0次元に揃える（値のコピーは発生し得るが、wrap ではない）
+                return x.to(device=device, dtype=dtype).reshape(())
+            if x is None:
+                return torch.zeros((), device=device, dtype=dtype)
+            if isinstance(x, (float, int)):
+                return torch.tensor(float(x), device=device, dtype=dtype)
+            raise TypeError(f"_loss0: unsupported loss type {type(x)}")
+
+        commit_loss = _loss0(commit_loss)
+        codebook_loss = _loss0(codebook_loss)
+        repel_loss = _loss0(repel_loss)
+        cb_repel_loss = _loss0(cb_repel_loss)
+
+        # --------------------------------------------------------------
+        # 5) グローバル offset 更新（学習時のみ）
         # --------------------------------------------------------------
         if mode not in ("eval", "test", "init_kmeans_final"):
             self.latent_size_sum = global_end
 
         # --------------------------------------------------------------
-        # 4. 合計 loss と個別 loss を返す
+        # 6) return
         # --------------------------------------------------------------
         total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss
-        # あなたの上位モデルに合わせて戻り値は変えてもOK。
-        # ここでは: total_loss と 各 loss をタプルで返す形にしておく。
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss)
