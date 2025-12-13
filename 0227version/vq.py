@@ -2322,7 +2322,7 @@ class VectorQuantize(nn.Module):
             self.latent_size_sum = 0
 
         # どのタイミングで 0 リセットするか
-        if mode in ("eval", "test", "init_kmeans_final"):
+        if mode in ("init_kmeans_final"):
             # 評価系は「毎回 0 始まり」でOK
             self.latent_size_sum = 0
         elif chunk_i is not None and chunk_i == 0:
