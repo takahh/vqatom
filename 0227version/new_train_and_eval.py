@@ -389,20 +389,20 @@ def collect_global_indices_compact(
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
 
-        if i == 0 and debug:
-            print("=== [collect_global_indices_compact] batch 0 side-feature summary ===")
-            print("  ringSize (all nodes): unique", len(np.unique(ring_size_np)))
-            for v in np.unique(ring_size_np):
-                print(f"    value={v}  count={int((ring_size_np == v).sum())}")
-            print("  aromNbrs (all nodes): unique", len(np.unique(arom_nbrs_np)))
-            for v in np.unique(arom_nbrs_np):
-                print(f"    value={v}  count={int((arom_nbrs_np == v).sum())}")
-            print("  fusedId (all nodes): unique", len(np.unique(fused_id_np)))
-            for v in np.unique(fused_id_np):
-                print(f"    value={v}  count={int((fused_id_np == v).sum())}")
-            print("  func_id (all nodes): unique", len(np.unique(func_id_np)))
-            for v in np.unique(func_id_np):
-                print(f"    value={v}  count={int((func_id_np == v).sum())}")
+        # if i == 0 and debug:
+        #     print("=== [collect_global_indices_compact] batch 0 side-feature summary ===")
+        #     print("  ringSize (all nodes): unique", len(np.unique(ring_size_np)))
+        #     for v in np.unique(ring_size_np):
+        #         print(f"    value={v}  count={int((ring_size_np == v).sum())}")
+        #     print("  aromNbrs (all nodes): unique", len(np.unique(arom_nbrs_np)))
+        #     for v in np.unique(arom_nbrs_np):
+        #         print(f"    value={v}  count={int((arom_nbrs_np == v).sum())}")
+        #     print("  fusedId (all nodes): unique", len(np.unique(fused_id_np)))
+        #     for v in np.unique(fused_id_np):
+        #         print(f"    value={v}  count={int((fused_id_np == v).sum())}")
+        #     print("  func_id (all nodes): unique", len(np.unique(func_id_np)))
+        #     for v in np.unique(func_id_np):
+        #         print(f"    value={v}  count={int((func_id_np == v).sum())}")
 
         # ---- per-molecule pass (vectorized within the molecule) ----
         for m in range(M):
@@ -792,14 +792,14 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
                 if idx == 5:
                     break
-                print(f"[TRAIN] batch idx {idx}")
+                # print(f"[TRAIN] batch idx {idx}")
                 glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
                     adj_batch, attr_batch, logger
                 )
                 chunk_size = conf["chunk_size"]
 
                 for i in range(0, len(glist), chunk_size):
-                    print(f"[TRAIN]   chunk {i}")
+                    # print(f"[TRAIN]   chunk {i}")
                     chunk = glist[i:i + chunk_size]
                     batched_graph = dgl.batch(chunk).to(device)
                     attr_chunk = attr_matrices_all[i:i + chunk_size]
