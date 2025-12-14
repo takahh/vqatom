@@ -1276,7 +1276,8 @@ class EuclideanCodebook(nn.Module):
         - This module maintains a running global offset `self.latent_size_sum` so that
           each chunk sees the correct [global_start, global_end) window.
         """
-
+        if mode == "init_kmeans_final":
+            self.init_embed_(x, mask_dict=mask_dict)
         # --------------------------------------------------------------
         # 0. グローバル latent オフセット管理
         # --------------------------------------------------------------
