@@ -1228,9 +1228,11 @@ class EuclideanCodebook(nn.Module):
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
 
-            cs = torch.zeros(K_req, device=device, dtype=torch.float32)
-            ea = means_kd.detach().to(device=device, dtype=torch.float32) * counts_k.view(-1, 1)
+            # cs = torch.zeros(K_req, device=device, dtype=torch.float32)
+            # ea = means_kd.detach().to(device=device, dtype=torch.float32) * counts_k.view(-1, 1)
 
+            cs = counts_k.to(device=device, dtype=torch.float32)
+            ea = means_kd.detach().to(device=device, dtype=torch.float32) * cs.view(-1, 1)
             if hasattr(self, buf_name_cs):
                 delattr(self, buf_name_cs)
             if hasattr(self, buf_name_ea):
