@@ -1276,8 +1276,6 @@ class EuclideanCodebook(nn.Module):
         - This module maintains a running global offset `self.latent_size_sum` so that
           each chunk sees the correct [global_start, global_end) window.
         """
-        if mode == "init_kmeans_final":
-            self.init_embed_(x, mask_dict=mask_dict)
         # --------------------------------------------------------------
         # 0. グローバル latent オフセット管理
         # --------------------------------------------------------------
@@ -1298,6 +1296,8 @@ class EuclideanCodebook(nn.Module):
         flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
         B, D = flatten.shape[1], flatten.shape[2]
 
+        if mode == "init_kmeans_final":
+            self.init_embed_(flatten, mask_dict=mask_dict)
         # このチャンクが担当するグローバル範囲
         global_start = self.latent_size_sum
         global_end = global_start + B
