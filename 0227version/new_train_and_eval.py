@@ -686,7 +686,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         start_mol_id = 0
 
         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-            print(f"[KMEANS] batch idx {idx}")
 
             if idx == 5:
                 break
