@@ -1317,7 +1317,6 @@ class EuclideanCodebook(nn.Module):
                 return 0
 
             for key, idx_global in mask_dict.items():
-                logger.info(f"forward 0")
                 if idx_global.numel() == 0:
                     continue
 
@@ -1325,7 +1324,6 @@ class EuclideanCodebook(nn.Module):
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
-                logger.info(f"forward 1")
                 idx_local = (idx_global[gmask] - global_start).to(
                     device=flatten.device, dtype=torch.long
                 )
