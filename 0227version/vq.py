@@ -1268,7 +1268,7 @@ class EuclideanCodebook(nn.Module):
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
-    def forward(self, x, feature, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
+    def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """
         Forward pass with per-element quantization and EMA update.
 
