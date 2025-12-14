@@ -2323,8 +2323,6 @@ class VectorQuantize(nn.Module):
         # このチャンクのグローバル index 範囲
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
-        global_start = int(self.latent_size_sum)
-        global_end = global_start + B
 
         if mode == "init_kmeans_final":
             _ = self._codebook(
