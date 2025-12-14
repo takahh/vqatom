@@ -1306,6 +1306,7 @@ class EuclideanCodebook(nn.Module):
 
         # mask_dict を LongTensor のグローバル index に正規化
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
+        logger.info(f"[CODEBOOK] mode={mode}")
 
         # --------------------------------------------------------------
         # 2. K-Means init フェーズ
