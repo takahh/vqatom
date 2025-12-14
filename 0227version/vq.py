@@ -2325,6 +2325,21 @@ class VectorQuantize(nn.Module):
         # このチャンクのグローバル index 範囲
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
+        global_start = int(self.latent_size_sum)
+        global_end = global_start + B
+
+        if mode == "init_kmeans_final":
+            _ = self._codebook(
+                encoder_outputs,  # x
+                feature=feature,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode=mode,
+            )
+            z = torch.zeros((), device=device, dtype=dtype)
+            return z, (z, z, z, z)
 
         # --------------------------------------------------------------
         # 1.5) Debug: mask_dict の global index が chunk 範囲内か検査

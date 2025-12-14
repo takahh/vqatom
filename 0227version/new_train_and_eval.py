@@ -663,7 +663,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
     for epoch in range(1, conf["max_epoch"] + 1):
         print(f"\n====== epoch {epoch} ======")
         print("initial kmeans start ....")
-        logger.info("initial kmeans start ....")
+        logger.info("=== epoch {epoch} ==　initial kmeans start ....")
         # fresh containers per epoch
         loss_list_list_train = [[] for _ in range(11)]
         loss_list_list_test = [[] for _ in range(11)]
