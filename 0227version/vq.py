@@ -1315,7 +1315,12 @@ class EuclideanCodebook(nn.Module):
         # 2. K-Means init フェーズ
         #    （全データを一度に渡す or チャンクごとに渡す両方に対応）
         # --------------------------------------------------------------
+        import torch
         if mode == "init_kmeans_final":
+            # outside the for-loop, once per call
+            if not hasattr(self, "_kmeans_dump"):
+                self._kmeans_dump = {}  # per-run buffer
+
             if mask_dict is None:
                 return 0
 
@@ -1382,12 +1387,64 @@ class EuclideanCodebook(nn.Module):
                     print(f"Silhouette failed for {key}: {e}")
                     if logger:
                         logger.warning(f"Silhouette failed for {key}: {e}")
+                # ---- choose what to save ----
+                save_latents = True
+                save_centers = True
+                save_assign = True  # idx_code
+                save_quantized = False  # optional
 
+                # ---- make CPU copies for persistence (avoid GPU RAM blowup) ----
+                # (use fp16 for compactness; keep idx_code as int64)
+                lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16) if save_latents else None
+                ctr_cpu = code.detach().to("cpu", dtype=torch.float16) if save_centers else None
+                asg_cpu = idx_code.detach().to("cpu") if save_assign else None
+                qnt_cpu = quantize.detach().to("cpu", dtype=torch.float16) if save_quantized else None
+
+                # ---- append per key (across chunks) ----
+                entry = self._kmeans_dump.get(skey)
+                if entry is None:
+                    entry = {"latents": [], "centers": None, "assign": [], "quantize": []}
+                    self._kmeans_dump[skey] = entry
+
+                if save_latents:
+                    entry["latents"].append(lat_cpu)
+                if save_assign:
+                    entry["assign"].append(asg_cpu)
+                if save_quantized:
+                    entry["quantize"].append(qnt_cpu)
+
+                # centers are same for a key (usually) — store once
+                if save_centers and entry["centers"] is None:
+                    entry["centers"] = ctr_cpu
+
+            # ------------------------------------------------------------------
+            # Scatterプロット用データの保存
             # init フェーズでもオフセットを進めておくと、チャンク分割でも整合が取れる
+            # ------------------------------------------------------------------
+            import os, time, torch
             self.latent_size_sum = global_end
             torch.cuda.empty_cache()
-            return 0
 
+            out = {}
+            for k, v in self._kmeans_dump.items():
+                out[k] = {
+                    "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,  # [N, D]
+                    "centers": v["centers"],  # [K, D]
+                    "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,  # [N]
+                    "quantize": torch.cat(v["quantize"], dim=0) if len(v["quantize"]) else None,
+                }
+
+            # choose a filename per run
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            path = os.path.join("dumps", f"init_kmeans_final_dump_{stamp}.pt")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+
+            torch.save(out, path)
+            # optionally clear to avoid growth across calls
+            self._kmeans_dump = {}
+
+            return 0
+        import torch
         # --------------------------------------------------------------
         # 3. train / test / eval フェーズ
         # --------------------------------------------------------------
