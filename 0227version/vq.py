@@ -1392,7 +1392,7 @@ class EuclideanCodebook(nn.Module):
                     # -------------------------------------------------------------------------------------------
                     # prepare $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
                     # -------------------------------------------------------------------------------------------
-                    do_dump = (epoch is not None) and (epoch % 10 == 0)
+                    do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
                     if do_dump:
                         if skey not in key_list_to_dump:
                             continue
@@ -1419,7 +1419,7 @@ class EuclideanCodebook(nn.Module):
             # -------------------------------------------------------------------------------------------
             # write $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
             # -------------------------------------------------------------------------------------------
-            do_dump = (epoch is not None) and (epoch % 10 == 0)
+            do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
             if do_dump:
                 out = {}
                 for k, v in self._kmeans_dump.items():
