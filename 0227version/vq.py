@@ -1282,6 +1282,9 @@ class EuclideanCodebook(nn.Module):
         import time
         import torch
 
+        key_list_to_dump = ["6_0_3_1_1_2_6_2_1_1_11_0", "7_0_3_0_0_2_0_1_0_0_3_0", "16_-1_4_0_0_1_0_0_0_0_16_0",
+                            "16_1_4_0_1_3_6_0_5_0_0_0"]
+
         # --------------------------------------------------------------
         # 0. Global latent offset bookkeeping
         # --------------------------------------------------------------
@@ -1386,9 +1389,13 @@ class EuclideanCodebook(nn.Module):
                         if logger:
                             logger.warning(f"Silhouette failed for {key}: {e}")
 
-                    # ---- Dump for scatter plot (CPU, compact) ----
+                    # -------------------------------------------------------------------------------------------
+                    # prepare $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
+                    # -------------------------------------------------------------------------------------------
                     do_dump = (epoch is not None) and (epoch % 10 == 0)
                     if do_dump:
+                        if key not in key_list_to_dump:
+                            continue
                         lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
                         ctr_cpu = code.detach().to("cpu", dtype=torch.float16)
                         asg_cpu = idx_code.detach().to("cpu")  # keep int64
@@ -1409,11 +1416,15 @@ class EuclideanCodebook(nn.Module):
             # IMPORTANT: advance global offset for init phase too (always)
             self.latent_size_sum = global_end
 
-            # write dump (chunk-based file; safe without knowing last chunk)
+            # -------------------------------------------------------------------------------------------
+            # write $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
+            # -------------------------------------------------------------------------------------------
             do_dump = (epoch is not None) and (epoch % 10 == 0)
             if do_dump:
                 out = {}
                 for k, v in self._kmeans_dump.items():
+                    if k not in key_list_to_dump:
+                        continue
                     out[k] = {
                         "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,  # [N, D]
                         "centers": v["centers"],  # [K, D]
