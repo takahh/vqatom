@@ -1379,8 +1379,8 @@ class EuclideanCodebook(nn.Module):
                                 torch.from_numpy(ys).long(),
                             )
                             msg = (
-                                f"Silhouette Score (subsample): {key} {sil:.4f}, "
-                                f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}"
+                                f"SS: {key} {sil:.4f}, "
+                                f"size {masked_latents.shape[0]}, K_e {code.shape[0]}"
                             )
                             print(msg)
                             if logger:
