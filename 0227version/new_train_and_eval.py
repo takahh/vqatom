@@ -137,7 +137,6 @@ ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
 ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
-
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
@@ -148,96 +147,50 @@ def collect_global_indices_compact(
     ring_size_cap=8,
     arom_nbrs_cap=6,
     fused_id_cap=255,
-    # If your new features are already packed in attr_batch, give their column indices:
-    # 0  Z (atomic number)
-    # 1  degree  (not used; we recompute from adj)
-    # 2  charge
-    # 3  hyb
-    # 4  arom
-    # 5  ring
-    # 6  hnum
-    # 7–24  func base flags (18 dims)
-    # 25–26 h-bond donor / acceptor flags (2 dims)  ← NOT used in key (keep CBDICT compatible)
-    # 27 ring size
-    # 28 aromatic neighbor count (aromNbrs)
-    # 29 fused ring ID (fusedId)
-    # 30–77 bond_env_raw (48 dims) ← ignored here (key is 100% discrete, same as before)
+    # Attr columns (see your docstring)
     ring_size_col=27,
     arom_nbrs_col=28,
     fused_id_col=29,
-    # 官能基ベースのフラグ (one-hot / multi-hot) が attr に入っている範囲
-    # 例: attr[..., 7:25] に 18 個 (0..17) の官能基フラグがある想定
     func_base_start_col=7,
     n_func_base_flags=18,
-    # Or pass them separately (same batching/shape as attr_batch[...,0]):
-    ring_size_batch=None,         # list[Tensor] with shape (M,100) per batch item, or a Tensor viewable to (-1,100)
-    arom_nbrs_batch=None,         # ditto
-    fused_ring_id_batch=None,     # ditto
+    ring_size_batch=None,
+    arom_nbrs_batch=None,
+    fused_ring_id_batch=None,
     # Which fields to include in the string key and in what order:
-    include_keys=("Z","charge","hyb","arom","ring","deg",
-                  "ringSize","aromNbrs","fusedId","pos","func","hnum"),
-    # ★ この base キーだけ詳細集計したいときに使う ("6_0_3_1_1" など; deg は含めない)
+    # ★ added "nbrZ" (1-hop neighbor element multiset signature)
+    include_keys=("Z", "charge", "hyb", "arom", "ring", "deg",
+                  "ringSize", "aromNbrs", "fusedId", "nbrZ", "pos", "func", "hnum"),
+    # ★ Only split (i.e., use real nbrZ) for atoms whose base key starts with this prefix.
+    #   Others get nbrZ="X" so the vocabulary does not explode.
     target_base_prefix="6_0_3_1_1",
     debug=True,
     debug_max_print=1000,
 ):
     """
     Returns:
-      masks_dict: {
-        'Z_q_h_a_r_deg_ringSize_aromNbrs_fusedId_pos_func_hnum' : [global_idx, ...],
-        ...
-      }
-      atom_offset: next start atom id (global)
-      mol_id:      number of processed molecules
+      masks_dict: { key_string : [global_idx, ...], ... }
+      atom_offset: next global atom id
+      mol_id:      next global molecule id
+
+    Key fields (default include_keys order):
+      Z_charge_hyb_arom_ring_deg_ringSize_aromNbrs_fusedId_nbrZ_pos_func_hnum
 
     Notes:
-      - attr columns assumed base (first 30 dims):
-          0: Z
-          1: degree (ignored; recomputed from adjacency)
-          2: charge
-          3: hyb
-          4: arom
-          5: ring
-          6: hnum
-          7–24: func base flags (18 dims)
-          25–26: H-bond donor/acceptor (ignored in key)
-          27: ringSize
-          28: aromNbrs
-          29: fusedId
-        (30–77: bond_env_raw 48 dims; ignored here for CBDICT compatibility)
       - Degree computed from adjacency excluding self-loops
       - ringSize/aromNbrs/fusedId come from attr columns [27,28,29] by default
         or from side-channel tensors if *_col is None.
-      - func_base_start_col .. func_base_start_col + n_func_base_flags:
-          官能基ベースのフラグ (18個) を想定し、argmax で func_id (0..17) にまとめて key に入れる
-      - H-bond donor/acceptor flags (cols 25–26) are currently ignored by this function
-        so the number of discrete classes / CBDICT keys does not change.
-      - ここでは CBDICT に存在する key だけ masks_dict に残す
-      - target_base_prefix が指定されていれば、
-        その base キー (Z,charge,hyb,arom,ring,deg,hnum) のうち
-        「Z,charge,hyb,arom,ring が prefix 一致する原子」について
-        ringSize/aromNbrs/fusedId/deg/pos/hnum の分布を debug 出力する
+      - func_base flags are reduced via argmax -> func_id (0..n_func_base_flags-1)
+      - nbrZ is a canonical 1-hop neighbor element multiset signature like "6-6-8"
+        (sorted neighbor Zs, optionally capped by degree_cap).
+      - To avoid key explosion, nbrZ is only "active" (real) for atoms whose
+        base key starts with target_base_prefix. Others get nbrZ="X".
     """
     from collections import defaultdict, Counter
     import numpy as np
     import torch
     from utils import CBDICT
 
-    # membership を高速にするために set 化
     CBDICT_KEYS = set(CBDICT.keys())
-    """    atom.GetAtomicNum(),                 # 0: Z 
-        atom.GetDegree(),                    # 1: degree (not used here)
-        atom.GetFormalCharge(),              # 2: charge
-        int(atom.GetHybridization()),        # 3: hyb (enum int)
-        int(atom.GetIsAromatic()),           # 4: arom flag
-        int(atom.IsInRing()),                # 5: ring flag
-        hcount,                              # 6: total Hs (explicit+implicit)
-        *func_flags[idx],                    # 7–24: 官能基フラグ (18 dims)
-        *hbond_flags[idx],                   # 25–26: H-bond Donor/Acceptor (2 dims)
-        ring_size[idx],                      # 27: ringSize
-        arom_nbrs[idx],                      # 28: aromNbrs
-        fused_id[idx],                       # 29: fusedId     
-        30–77: bond_env_raw (48 dims)       """
 
     # Base columns in attr: [Z, charge, hyb, arom, ring, hnum]
     COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
@@ -246,7 +199,7 @@ def collect_global_indices_compact(
     # include_keys 内での各フィールドの位置（key 文字列を分解するときに使う）
     name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
     base_field_names = ("Z", "charge", "hyb", "arom", "ring", "deg", "hnum")
-    base_field_indices = [name_to_idx[n] for n in base_field_names]
+    base_field_indices = [name_to_idx[n] for n in base_field_names if n in name_to_idx]
 
     ringSize_idx = name_to_idx.get("ringSize", None)
     aromNbrs_idx = name_to_idx.get("aromNbrs", None)
@@ -255,6 +208,7 @@ def collect_global_indices_compact(
     deg_idx      = name_to_idx.get("deg", None)
     func_idx     = name_to_idx.get("func", None)
     hnum_idx     = name_to_idx.get("hnum", None)
+    nbrZ_idx     = name_to_idx.get("nbrZ", None)
 
     # 特定クラスの分布集計用
     target_stats = None
@@ -267,6 +221,7 @@ def collect_global_indices_compact(
             "deg": Counter(),
             "pos": Counter(),
             "hnum": Counter(),
+            "nbrZ": Counter(),
         }
 
     def _to_cpu_np(x):
@@ -278,8 +233,8 @@ def collect_global_indices_compact(
         """
         side_batch: None or
                     - list/tuple: side_batch[i] -> (M,100) or (M,100,1) or (M*100,)
-                    - np.ndarray / torch.Tensor: side_batch[i] 同様
-        戻り値: np.int32 の (M,100) または None
+                    - np.ndarray / torch.Tensor: side_batch[i] similarly
+        Returns: np.int32 (M,100)
         """
         if side_batch is None:
             return None
@@ -287,9 +242,7 @@ def collect_global_indices_compact(
         side_i = side_batch[i]
         side_np = _to_cpu_np(side_i)
 
-        # いろんな shape をそれっぽく (M,100) に揃える
         if side_np.ndim == 1:
-            # 長さ M*100 を想定
             side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 2:
             if side_np.shape == (M, 100):
@@ -301,7 +254,6 @@ def collect_global_indices_compact(
             else:
                 side_np = side_np.reshape(M, 100)
         elif side_np.ndim == 3:
-            # 典型例: (M,100,1)
             if side_np.shape[0] == M and side_np.shape[1] == 100:
                 side_np = side_np[..., 0]
             else:
@@ -311,7 +263,6 @@ def collect_global_indices_compact(
 
         return side_np.astype(np.int32)
 
-    from collections import defaultdict
     masks_dict = defaultdict(list)
     atom_offset = int(start_atom_id)
     mol_id = int(start_mol_id)
@@ -320,9 +271,6 @@ def collect_global_indices_compact(
 
     # ---------- main loop over batch items ----------
     for i in range(B):
-        # Shapes (想定):
-        #   attr_batch[i]: (M*100*D) 相当 → (M,100,D)
-        #   adj_batch[i]:  (M*100*100) 相当 → (M,100,100)
         D = attr_batch[i].shape[-1]
         attr_mats = attr_batch[i].view(-1, 100, D)
         adj_mats  = adj_batch[i].view(-1, 100, 100)
@@ -333,13 +281,13 @@ def collect_global_indices_compact(
         M = attr_np.shape[0]
 
         # Base attributes (Z, charge, hyb, arom, ring, hnum)
-        A_sel = attr_np[..., BASE_COLS].astype(np.int32)         # (M,100,6)
+        A_sel = attr_np[..., BASE_COLS].astype(np.int32)  # (M,100,6)
 
         # Valid (unpadded) node mask
-        node_mask = (np.abs(attr_np).sum(axis=2) > 0)            # (M,100) bool
+        node_mask = (np.abs(attr_np).sum(axis=2) > 0)     # (M,100) bool
 
         # Degree from adjacency (exclude self-loops)
-        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)   # (M,100)
+        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)  # (M,100)
         diag_nz   = (np.abs(np.diagonal(adj_np, axis1=1, axis2=2)) != 0).astype(np.int32)
         degrees   = deg_total - diag_nz
         if degree_cap is not None:
@@ -367,7 +315,7 @@ def collect_global_indices_compact(
             if fused_id_np is None:
                 fused_id_np = np.zeros((M, 100), np.int32)
 
-        # ---- functional base flags → func_id (0..n_func_base_flags-1) ----
+        # ---- functional base flags → func_id ----
         if func_base_start_col is not None and n_func_base_flags is not None:
             if attr_np.shape[2] < func_base_start_col + n_func_base_flags:
                 raise ValueError(
@@ -375,7 +323,6 @@ def collect_global_indices_compact(
                     f"func_base_start_col={func_base_start_col}, n_func_base_flags={n_func_base_flags}"
                 )
             func_flags_np = attr_np[..., func_base_start_col:func_base_start_col + n_func_base_flags]
-            # フラグは 0/1 想定だが、一応 argmax で 0..(n_func_base_flags-1) にまとめる
             func_flags_np = func_flags_np.astype(np.float32)
             func_id_np = np.argmax(func_flags_np, axis=2).astype(np.int32)  # (M,100)
         else:
@@ -389,29 +336,18 @@ def collect_global_indices_compact(
         if fused_id_cap is not None:
             fused_id_np = np.minimum(fused_id_np, int(fused_id_cap))
 
-        # if i == 0 and debug:
-        #     print("=== [collect_global_indices_compact] batch 0 side-feature summary ===")
-        #     print("  ringSize (all nodes): unique", len(np.unique(ring_size_np)))
-        #     for v in np.unique(ring_size_np):
-        #         print(f"    value={v}  count={int((ring_size_np == v).sum())}")
-        #     print("  aromNbrs (all nodes): unique", len(np.unique(arom_nbrs_np)))
-        #     for v in np.unique(arom_nbrs_np):
-        #         print(f"    value={v}  count={int((arom_nbrs_np == v).sum())}")
-        #     print("  fusedId (all nodes): unique", len(np.unique(fused_id_np)))
-        #     for v in np.unique(fused_id_np):
-        #         print(f"    value={v}  count={int((fused_id_np == v).sum())}")
-        #     print("  func_id (all nodes): unique", len(np.unique(func_id_np)))
-        #     for v in np.unique(func_id_np):
-        #         print(f"    value={v}  count={int((func_id_np == v).sum())}")
-
-        # ---- per-molecule pass (vectorized within the molecule) ----
+        # ---- per-molecule pass ----
         for m in range(M):
             nm = node_mask[m]  # (100,)
             if not nm.any():
                 mol_id += 1
                 continue
 
-            # Extract base cols
+            # local adjacency + z_all for neighbor signature
+            adj_m = adj_np[m]  # (100,100)
+            z_all = attr_np[m, :, COL_Z].astype(np.int32)
+
+            # Extract base cols (only valid nodes)
             z      = A_sel[m, :, 0][nm]
             charge = A_sel[m, :, 1][nm]
             hyb    = A_sel[m, :, 2][nm]
@@ -419,70 +355,111 @@ def collect_global_indices_compact(
             ring   = A_sel[m, :, 4][nm]
             hnum   = A_sel[m, :, 5][nm]
             deg    = degrees[m][nm]
-            # New features
+
+            # New features (only valid nodes)
             rs  = ring_size_np[m][nm]
             an  = arom_nbrs_np[m][nm]
             fid = fused_id_np[m][nm]
-
-            # 官能基カテゴリ (0..n_func_base_flags-1)
             func = func_id_np[m][nm]
 
-            # position flag (例: 芳香 sp2, ring=1, deg=2 の C の outer/inner 区別用)
+            # position flag example
             pos = (((z == 6) & (hyb == 3) & (arom == 1) & (ring == 1) & (deg == 2))).astype(np.int32)
+
+            # Compute neighbor Z multiset signature for each valid node
+            valid_atom_idx = np.where(nm)[0]
+            nbrZ_list = []
+            for atom_idx in valid_atom_idx:
+                nbr_mask = (adj_m[atom_idx] != 0)
+                nbr_mask[atom_idx] = False
+                nbr_z = z_all[nbr_mask]
+
+                if nbr_z.size == 0:
+                    nbrZ_list.append("0")
+                    continue
+
+                nbr_z_sorted = np.sort(nbr_z)
+                if degree_cap is not None:
+                    nbr_z_sorted = nbr_z_sorted[:int(degree_cap)]
+                nbrZ_list.append("-".join(map(str, nbr_z_sorted.tolist())))
+            nbrZ = np.array(nbrZ_list, dtype=object)  # (N,)
+
+            # Build base key strings (for gating + optional stats)
+            # base fields order: (Z, charge, hyb, arom, ring, deg, hnum)
+            base_cols = []
+            for name in ("Z", "charge", "hyb", "arom", "ring", "deg", "hnum"):
+                if name == "Z":
+                    base_cols.append(z)
+                elif name == "charge":
+                    base_cols.append(charge)
+                elif name == "hyb":
+                    base_cols.append(hyb)
+                elif name == "arom":
+                    base_cols.append(arom)
+                elif name == "ring":
+                    base_cols.append(ring)
+                elif name == "deg":
+                    base_cols.append(deg)
+                elif name == "hnum":
+                    base_cols.append(hnum)
+            base_cols = np.stack(base_cols, axis=1).astype(str)  # (N,7)
+            base_key_strings = base_cols[:, 0]
+            for c in range(1, base_cols.shape[1]):
+                base_key_strings = np.char.add(np.char.add(base_key_strings, "_"), base_cols[:, c])
+
+            # Gate nbrZ to avoid vocabulary explosion
+            if target_base_prefix is not None:
+                use_nbr = np.char.startswith(base_key_strings, target_base_prefix)
+                nbrZ_eff = np.where(use_nbr, nbrZ, "X")
+            else:
+                nbrZ_eff = nbrZ
 
             # Choose which fields to include and stack in that order
             fields = {
                 "Z": z, "charge": charge, "hyb": hyb, "arom": arom, "ring": ring, "deg": deg,
-                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "pos": pos, "func": func, "hnum": hnum
+                "ringSize": rs, "aromNbrs": an, "fusedId": fid, "nbrZ": nbrZ_eff,
+                "pos": pos, "func": func, "hnum": hnum
             }
+
             cols_to_stack = [fields[name] for name in include_keys]
-            keys = np.stack(cols_to_stack, axis=1).astype(np.int32)   # (N, K)
-            if keys.ndim == 1:
-                keys = keys.reshape(1, -1)
-            N = int(keys.shape[0])
 
-            # Global ids for these atoms
-            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
-
-            # Build string keys fast with np.char (full key)
-            ks = keys.astype(str)       # (N, K) of strings
+            # IMPORTANT: mixed dtypes (ints + strings) => use object, then stringify
+            keys = np.stack(cols_to_stack, axis=1).astype(object)   # (N, K)
+            ks = keys.astype(str)
             key_strings = ks[:, 0]
             for c in range(1, ks.shape[1]):
                 key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            # ★ target_base_prefix 用の集計：base キーの prefix が一致する原子だけ拾う
+            N = int(key_strings.shape[0])
+
+            # Global ids for these atoms
+            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
+
+            # Optional debug stats for target_base_prefix hits
             if target_stats is not None:
-                base_cols = keys[:, base_field_indices]      # (N, len(base_field_indices))
-                bs = base_cols.astype(str)
-                base_key_strings = bs[:, 0]
-                for c in range(1, bs.shape[1]):
-                    base_key_strings = np.char.add(np.char.add(base_key_strings, "_"), bs[:, c])
-
-                # prefix マッチ
                 mask = np.char.startswith(base_key_strings, target_base_prefix)
-
                 if mask.any():
-                    n_hit = int(mask.sum())
-                    target_stats["count"] += n_hit
-
+                    target_stats["count"] += int(mask.sum())
                     if ringSize_idx is not None:
-                        for v in keys[mask, ringSize_idx]:
+                        for v in rs[mask]:
                             target_stats["ringSize"][int(v)] += 1
                     if aromNbrs_idx is not None:
-                        for v in keys[mask, aromNbrs_idx]:
+                        for v in an[mask]:
                             target_stats["aromNbrs"][int(v)] += 1
                     if fusedId_idx is not None:
-                        for v in keys[mask, fusedId_idx]:
+                        for v in fid[mask]:
                             target_stats["fusedId"][int(v)] += 1
                     if deg_idx is not None:
-                        for v in keys[mask, deg_idx]:
+                        for v in deg[mask]:
                             target_stats["deg"][int(v)] += 1
                     if pos_idx is not None:
-                        for v in keys[mask, pos_idx]:
+                        for v in pos[mask]:
                             target_stats["pos"][int(v)] += 1
                     if hnum_idx is not None:
-                        for v in keys[mask, hnum_idx]:
+                        for v in hnum[mask]:
                             target_stats["hnum"][int(v)] += 1
+                    if nbrZ_idx is not None:
+                        for v in nbrZ_eff[mask]:
+                            target_stats["nbrZ"][str(v)] += 1
 
             # Group by unique key and extend once per key
             uniq_keys, inv = np.unique(key_strings, return_inverse=True)
@@ -491,8 +468,9 @@ def collect_global_indices_compact(
             for row_idx, bucket_id in enumerate(inv_list):
                 buckets[bucket_id].append(int(global_ids[row_idx]))
 
-            # ★ CBDICT に存在する key だけ masks_dict に追加
+            # Store (optionally filter by CBDICT)
             for uk, ids in zip(uniq_keys.tolist(), buckets):
+                # If you want strict compatibility, uncomment:
                 # if uk not in CBDICT_KEYS:
                 #     continue
                 masks_dict[uk].extend(ids)
@@ -501,21 +479,22 @@ def collect_global_indices_compact(
             atom_offset += N
             mol_id += 1
 
-    # for key, val in masks_dict.items():
-    #     logger.info(f"key {key}, val {len(val)}")
-    # logger.info(f"[collect_global_indices_compact] total keys in masks_dict: {len(masks_dict)}")
-
     # target_base_prefix の集計結果を最後にまとめて出力
     if target_stats is not None and debug:
         lines = []
         lines.append(f"=== [DEBUG target_base_prefix={target_base_prefix}] summary ===")
         lines.append(f"  total atoms: {target_stats['count']}")
         for fld in ("ringSize", "aromNbrs", "fusedId", "deg", "pos", "hnum"):
-            ctr = target_stats[fld]
+            ctr = target_stats.get(fld, None)
             if not ctr:
                 continue
             lines.append(f"  {fld}: {len(ctr)} unique values")
             for v, cnt in sorted(ctr.items()):
+                lines.append(f"    value={v}  count={cnt}")
+        if target_stats.get("nbrZ", None):
+            ctr = target_stats["nbrZ"]
+            lines.append(f"  nbrZ: {len(ctr)} unique values")
+            for v, cnt in ctr.most_common(min(debug_max_print, len(ctr))):
                 lines.append(f"    value={v}  count={cnt}")
         text = "\n".join(lines)
         # if logger is not None:

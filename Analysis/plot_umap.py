@@ -43,13 +43,38 @@ def make_common_grid(Y_lat, grid_size=300, pad_ratio=0.02):
 
 def kde_on_given_grid(Y_pts, Xg, Yg, bw_method=None):
     """
-    KDE evaluated ON THE GIVEN GRID (Xg,Yg). This keeps coordinates consistent.
+    KDE evaluated ON THE GIVEN GRID (Xg,Yg).
     """
     xy = np.vstack([Y_pts[:, 0], Y_pts[:, 1]])
     kde = gaussian_kde(xy, bw_method=bw_method)
     grid_xy = np.vstack([Xg.ravel(), Yg.ravel()])
     Z = kde(grid_xy).reshape(Xg.shape)
     return Z
+
+# ----------------------------
+# visualization scaling helpers
+# ----------------------------
+def compute_vmin_vmax(Z_plot, clip_percentiles=(5, 99)):
+    """
+    Robust color scaling to avoid "all yellow" saturation.
+    """
+    lo, hi = clip_percentiles
+    vmin = float(np.percentile(Z_plot, lo))
+    vmax = float(np.percentile(Z_plot, hi))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
+        vmin = float(np.nanmin(Z_plot))
+        vmax = float(np.nanmax(Z_plot))
+    return vmin, vmax
+
+def maybe_get_norm(use_power_norm=False, power_gamma=0.5):
+    """
+    Optional non-linear mapping for extra contrast.
+    """
+    if not use_power_norm:
+        return None
+    from matplotlib.colors import PowerNorm
+    # gamma < 1 emphasizes high values (useful after log/percentile)
+    return PowerNorm(gamma=power_gamma)
 
 # ----------------------------
 # plots
@@ -69,9 +94,15 @@ def plot_density_heatmap(
     show_centers=True,
     centers_size=40,
     cmap="viridis",
+
+    # --- NEW: contrast controls ---
+    clip_percentiles=(5, 99),
+    use_power_norm=False,
+    power_gamma=0.5,
 ):
     """
     True density heatmap for ALL latents (single KDE).
+    With robust color scaling so center areas don't become all-yellow.
     """
     Xg, Yg, xmin, xmax, ymin, ymax = make_common_grid(
         Y_lat, grid_size=grid_size, pad_ratio=pad_ratio
@@ -79,24 +110,34 @@ def plot_density_heatmap(
     Z = kde_on_given_grid(Y_lat, Xg, Yg, bw_method=bw_method)
 
     if use_log:
-        Z = np.log(Z + 1e-12)
+        Z_plot = np.log(Z + 1e-12)
+    else:
+        Z_plot = Z
+
+    vmin, vmax = compute_vmin_vmax(Z_plot, clip_percentiles=clip_percentiles)
+    norm = maybe_get_norm(use_power_norm=use_power_norm, power_gamma=power_gamma)
 
     plt.figure(figsize=(8, 7))
     im = plt.imshow(
-        Z,
+        Z_plot,
         origin="lower",
         extent=[xmin, xmax, ymin, ymax],
         cmap=cmap,
         aspect="auto",
+        vmin=vmin,
+        vmax=vmax,
+        norm=norm,
     )
 
     if add_contours:
+        # contour levels matched to the same clipped range
+        levels = np.linspace(vmin, vmax, contour_levels)
         plt.contour(
-            Xg, Yg, Z,
-            levels=contour_levels,
+            Xg, Yg, Z_plot,
+            levels=levels,
             colors="white",
             linewidths=0.6,
-            alpha=0.6,
+            alpha=0.7,
         )
 
     if show_centers and (Y_ctr is not None) and len(Y_ctr) > 0:
@@ -111,7 +152,7 @@ def plot_density_heatmap(
     plt.ylabel("UMAP-2")
 
     cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
-    cbar.set_label("log density" if use_log else "density")
+    cbar.set_label("log density (clipped)" if use_log else "density (clipped)")
 
     plt.tight_layout()
     plt.savefig(out_png, dpi=200)
@@ -135,14 +176,19 @@ def plot_assign_density_sum_FIXEDGRID(
     contour_levels=12,
     show_centers=True,
     cmap="viridis",
+
+    # --- NEW: contrast controls ---
+    clip_percentiles=(5, 99),
+    use_power_norm=False,
+    power_gamma=0.5,
 ):
     """
-    Assign-wise density SUM on a FIXED grid. (This fixes the 'totally off' bug.)
+    Assign-wise density SUM on a FIXED grid (bug-fixed).
+    With robust color scaling so dense areas show internal structure.
     """
     asg = asg.astype(int)
     K = int(asg.max()) + 1 if asg.size > 0 else 0
 
-    # ONE common grid for all clusters
     Xg, Yg, xmin, xmax, ymin, ymax = make_common_grid(
         Y_lat, grid_size=grid_size, pad_ratio=pad_ratio
     )
@@ -167,6 +213,9 @@ def plot_assign_density_sum_FIXEDGRID(
     else:
         Z_plot = Z_sum
 
+    vmin, vmax = compute_vmin_vmax(Z_plot, clip_percentiles=clip_percentiles)
+    norm = maybe_get_norm(use_power_norm=use_power_norm, power_gamma=power_gamma)
+
     plt.figure(figsize=(8, 7))
     im = plt.imshow(
         Z_plot,
@@ -174,22 +223,26 @@ def plot_assign_density_sum_FIXEDGRID(
         extent=[xmin, xmax, ymin, ymax],
         cmap=cmap,
         aspect="auto",
+        vmin=vmin,
+        vmax=vmax,
+        norm=norm,
     )
 
     if add_contours:
+        levels = np.linspace(vmin, vmax, contour_levels)
         plt.contour(
             Xg, Yg, Z_plot,
-            levels=contour_levels,
+            levels=levels,
             colors="white",
             linewidths=0.6,
-            alpha=0.6,
+            alpha=0.7,
         )
 
     if show_centers and (Y_ctr is not None) and len(Y_ctr) > 0:
         plt.scatter(
             Y_ctr[:, 0], Y_ctr[:, 1],
             marker="x", c="black",
-            s=20, linewidths=1.2,
+            s=40, linewidths=1.2,
         )
 
     plt.title(title)
@@ -197,7 +250,7 @@ def plot_assign_density_sum_FIXEDGRID(
     plt.ylabel("UMAP-2")
 
     cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
-    cbar.set_label("log density (sum)" if use_log else "density (sum)")
+    cbar.set_label("log density (sum, clipped)" if use_log else "density (sum, clipped)")
 
     plt.tight_layout()
     plt.savefig(out_png, dpi=200)
@@ -265,13 +318,18 @@ def plot_umap_from_dump(
     umap_min_dist=0.05,
     umap_metric="euclidean",
 
-    # ---- heatmap knobs ----
-    grid_size=320,
+    # ---- density knobs ----
+    grid_size=360,
     pad_ratio=0.02,
     bw_method=None,          # None or float like 0.2
     use_log=True,
     add_contours=True,
     contour_levels=12,
+
+    # ---- contrast knobs (THIS fixes "all yellow") ----
+    clip_percentiles=(10, 99),     # try (5,99) or (10,99.5)
+    use_power_norm=False,          # True for extra punch
+    power_gamma=0.55,              # 0.3~0.8
 
     # ---- extra plots ----
     make_assign_density=True,
@@ -354,6 +412,9 @@ def plot_umap_from_dump(
             add_contours=add_contours,
             contour_levels=contour_levels,
             show_centers=True,
+            clip_percentiles=clip_percentiles,
+            use_power_norm=use_power_norm,
+            power_gamma=power_gamma,
         )
         print(f"  -> saved {out1}")
 
@@ -375,6 +436,9 @@ def plot_umap_from_dump(
                 add_contours=assign_add_contours,
                 contour_levels=contour_levels,
                 show_centers=True,
+                clip_percentiles=clip_percentiles,
+                use_power_norm=use_power_norm,
+                power_gamma=power_gamma,
             )
             print(f"  -> saved {out2}")
 
@@ -396,7 +460,9 @@ def plot_umap_from_dump(
 # run
 # ----------------------------
 if __name__ == "__main__":
-    pt_path = "init_kmeans_final_ep1_chunkNone_20251218_025637.pt"
+    # pt_path = "init_kmeans_final_ep1_chunkNone_20251218_025637.pt"
+    # pt_path = "init_kmeans_final_ep10_chunkNone_20251218_074830.pt"
+    pt_path = "init_kmeans_final_ep40_chunkNone_20251218_235039.pt"
 
     plot_umap_from_dump(
         pt_path=pt_path,
@@ -408,12 +474,17 @@ if __name__ == "__main__":
         umap_min_dist=0.05,
         umap_metric="euclidean",
 
-        grid_size=120,
+        grid_size=360,
         pad_ratio=0.02,
-        bw_method=None,          # try 0.2 / 0.3 if you want tighter blobs
+        bw_method=None,           # try 0.2 / 0.3 for sharper blobs
         use_log=True,
         add_contours=True,
         contour_levels=12,
+
+        # ---- THIS is the key for "all yellow" ----
+        clip_percentiles=(10, 99), # try (5,99) or (10,99.5)
+        use_power_norm=False,      # set True if still too flat
+        power_gamma=0.55,
 
         make_assign_density=True,
         assign_min_points=80,
