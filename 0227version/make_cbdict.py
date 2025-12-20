@@ -2,118 +2,137 @@
 # -*- coding: utf-8 -*-
 
 import re
-from collections import OrderedDict
+import math
+import argparse
+from collections import defaultdict
 
 
-# ==================================================
-# 1. 変更点：RAW_TEXT を使わず外部ファイルを読む
-# ==================================================
-import re
+# --------------------------------------------------
+# Parsers
+# --------------------------------------------------
 
-# A: "key 123" / "key: 123" / '"key": 123,' etc
+# A) "key 123" / "key: 123" / '"key": 123,' など
 LINE_KEY_INT = re.compile(
     r'^\s*"?([^":,\s]+)"?\s*[: ,]\s*([0-9]+)\s*,?\s*$'
 )
 
-# B: Silhouette 行（あなたの例に一致）
+# B) Silhouette 行（freq = sample size）
 LINE_SIL = re.compile(
     r"""
     Silhouette\ Score.*?:\s*
-    (?P<key>[^\s]+)\s+                              # ← key（空白以外。- を含んでもOK）
-    (?P<ss>[0-9]*\.[0-9]+|[0-9]+)\s*,\s*            # ← ss（使わないがパースはする）
+    (?P<key>[^\s]+)\s+
+    (?P<ss>[0-9]*\.[0-9]+|[0-9]+)\s*,\s*
     sample\ size\s+(?P<n>[0-9]+)\s*,\s*
     K_e\s+(?P<ke>[0-9]+)
     """,
     re.VERBOSE,
 )
 
-def load_key_freq_pairs(path="key_raw_data", debug=False):
+
+def load_raw_counts(path: str) -> dict:
     """
-    外部ファイルから (key, freq) を抽出。
-    - Silhouette 行は (key, sample_size) として採用
-    - "key:int" 形式も採用
-    - それ以外はスキップ
+    raw[key] = total freq
+    - Silhouette 行: freq = sample size
+    - key:int 行: freq = int
+    - それ以外: 無視
     """
-    pairs = []
-    skipped = 0
+    raw = defaultdict(int)
 
     with open(path, "r", encoding="utf-8-sig") as f:
-        for lineno, line in enumerate(f, start=1):
+        for line in f:
             s = line.strip()
             if not s:
                 continue
 
-            # 1) Silhouette 行（freq = sample size）
             m = LINE_SIL.search(s)
             if m:
                 key = m.group("key")
                 freq = int(m.group("n"))
-                pairs.append((key, freq))
-                if debug:
-                    print(f"[OK:SIL] {lineno}: key={key} freq={freq}")
+                raw[key] += freq
                 continue
 
-            # 2) "key:int" 行
             m = LINE_KEY_INT.match(s)
             if m:
                 key = m.group(1)
                 freq = int(m.group(2))
-                pairs.append((key, freq))
-                if debug:
-                    print(f"[OK:RAW] {lineno}: key={key} freq={freq}")
+                raw[key] += freq
                 continue
 
-            # 3) その他スキップ（VQ_COMMIT 等）
-            skipped += 1
-            if debug:
-                print(f"[SKIP] {lineno}: {s}")
+            # [VQ_COMMIT] 等は無視
 
-    if debug:
-        print(f"[DONE] extracted={len(pairs)} skipped={skipped}")
-
-    return pairs
+    return dict(raw)
 
 
+# --------------------------------------------------
+# Codebook size proposal (あなたのロジックそのまま)
+# --------------------------------------------------
 
-# ==================================================
-# 2. ここから下は「元スクリプトと同じ」
-# ==================================================
+def propose_cb_sizes(raw: dict) -> dict:
+    proposed = {}
+    for k, freq in raw.items():
+        if freq <= 30:
+            cb_size = 1
+        elif freq < 1000:
+            cb_size = max(1, math.ceil(freq / 100))
+        else:
+            cb_size = max(1, math.ceil(freq / 30))
+        proposed[k] = cb_size
+    return proposed
 
-def build_count_dict(pairs):
+
+# --------------------------------------------------
+# Output
+# --------------------------------------------------
+
+def write_cbdict_txt(proposed: dict, path: str):
     """
-    (key, freq) -> key: total_freq
+    CBDICT を Python dict 形式でファイルに書き出す
+    （cb_size 降順）
     """
-    d = {}
-    for k, v in pairs:
-        d[k] = d.get(k, 0) + v
-    return d
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("CBDICT = {\n")
+        for k, v in sorted(proposed.items(), key=lambda x: x[1], reverse=True):
+            f.write(f"    '{k}': {v},\n")
+        f.write("}\n")
 
 
-def sort_counts(counts):
+def print_summary(raw: dict, proposed: dict):
     """
-    value 降順、key 昇順
+    統計情報のみ print
     """
-    return OrderedDict(
-        sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    )
+    total_atoms = sum(raw.values())
+    total_codes = sum(proposed.values())
+
+    print(f"[SUMMARY]")
+    print(f"  num_keys              = {len(raw)}")
+    print(f"  total_atoms (freq)    = {total_atoms}")
+    print(f"  total_codebook_size   = {total_codes}")
+
+    if total_codes > 0:
+        avg_freq = total_atoms / total_codes
+        print(f"  avg freq per code     ≈ {avg_freq:.2f}")
+    else:
+        print(f"  avg freq per code     = 0.0")
 
 
-def dump_as_python_dict(d, var_name="KEY_COUNTS"):
-    lines = [f"{var_name} = {{"]
-    for k, v in d.items():
-        lines.append(f'    "{k}": {v},')
-    lines.append("}")
-    return "\n".join(lines)
-
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
 
 def main():
-    # ---- RAW_TEXT の代わりにここで読む ----
-    pairs = load_key_freq_pairs("key_raw_data")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", default="key_raw_data", help="input file")
+    ap.add_argument("--output", default="cbdict.txt", help="output cbdict file")
+    args = ap.parse_args()
 
-    counts = build_count_dict(pairs)
-    sorted_counts = sort_counts(counts)
+    raw = load_raw_counts(args.input)
+    proposed = propose_cb_sizes(raw)
 
-    print(dump_as_python_dict(sorted_counts, var_name="CBDICT"))
+    # ← ここだけ print
+    print_summary(raw, proposed)
+
+    # ← CBDICT はファイルのみ
+    write_cbdict_txt(proposed, args.output)
 
 
 if __name__ == "__main__":
