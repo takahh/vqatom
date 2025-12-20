@@ -1360,8 +1360,10 @@ class EuclideanCodebook(nn.Module):
                         del dist
                     quantize = code.index_select(0, idx_code)
 
-                    self.quantize_dict[skey] = quantize
-                    self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+                    # self.quantize_dict[skey] = quantize
+                    # self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+                    self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
+                    self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
 
                     # ---- Silhouette (optional) ----
                     try:
