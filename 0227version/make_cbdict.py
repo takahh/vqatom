@@ -1890,8 +1890,10 @@ proposed = {}
 for k, freq in raw.items():
     if freq <= 30:
         cb_size = 1
-    else:
+    elif freq < 1000:
         cb_size = max(1, math.ceil(freq / 100))  # freq / cb_size <= 100 になるように
+    else:
+        cb_size = max(1, math.ceil(freq / 30))
     proposed[k] = cb_size
 
 # 参考: 合計コード数や平均などを見ておく

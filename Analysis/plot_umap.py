@@ -460,9 +460,7 @@ def plot_umap_from_dump(
 # run
 # ----------------------------
 if __name__ == "__main__":
-    # pt_path = "init_kmeans_final_ep1_chunkNone_20251218_025637.pt"
-    # pt_path = "init_kmeans_final_ep10_chunkNone_20251218_074830.pt"
-    pt_path = "init_kmeans_final_ep40_chunkNone_20251218_235039.pt"
+    pt_path = "init_kmeans_final_ep50_chunkNone_20251219_051051.pt"
 
     plot_umap_from_dump(
         pt_path=pt_path,

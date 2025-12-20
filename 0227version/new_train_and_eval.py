@@ -137,6 +137,7 @@ ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
 ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
+
 def collect_global_indices_compact(
     adj_batch,
     attr_batch,
