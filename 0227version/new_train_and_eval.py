@@ -505,19 +505,22 @@ def collect_global_indices_compact(
 
     return masks_dict, atom_offset, mol_id
 
+import torch
+import dgl
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
     from collections import defaultdict
-    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, logger, start_atom_id, start_mol_id)   # ✅ unpack
-    # print("masks_dict.keys()")
-    # print(masks_dict.keys())
+
+    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(
+        adj_batch, attr_batch, logger, start_atom_id, start_mol_id
+    )
+
     base_graphs = []
     extended_graphs = []
     attr_matrices_all = []
 
     for i in range(len(adj_batch)):
         args = get_args()
-        # both branches identical; keep one
         adj_matrices  = adj_batch[i].view(-1, 100, 100)
         attr_matrices = attr_batch[i].view(-1, 100, 78)
 
@@ -531,63 +534,69 @@ def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mo
             filtered_attr     = attr_matrix[nonzero_mask]
             filtered_adj      = adj_matrix[:num_total_nodes, :num_total_nodes]
 
-            # ---- base graph (make it bidirected before khop) ----
+            # ---- base graph (simple+bidirected) ----
             src, dst = filtered_adj.nonzero(as_tuple=True)
-            # keep both directions to ensure khop works symmetrically
-            # (if filtered_adj is symmetric, this already includes both directions)
             base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-            # ensure simple & bidirected
             base_g = dgl.to_simple(dgl.to_bidirected(base_g))
             base_g.ndata["feat"] = filtered_attr
-            base_g.edata["weight"] = filtered_adj[base_g.edges()[0], base_g.edges()[1]].float()
-            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
-            base_g = dgl.add_self_loop(base_g)
+
+            # ここは「1-hopの元の bond_type (1..4)」として残すなら long が安全
+            bs, bd = base_g.edges()
+            base_g.edata["bond_type"] = filtered_adj[bs, bd].long().clamp(0, 4)
+            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.long)
+            # self-loop は “結合なし” 扱いにしたいので fill_data=0
+            base_g = dgl.add_self_loop(base_g, edge_feat_names=["bond_type", "edge_type"], fill_data=0)
             base_graphs.append(base_g)
 
             # ---- k-hop ----
-            adj_2hop = dgl.khop_adj(base_g, 2)  # [N,N], 0/1
+            adj_2hop = dgl.khop_adj(base_g, 2)  # A^2 (path counts になり得る)
             adj_3hop = dgl.khop_adj(base_g, 3)
 
-            # ---- combine ----
-            full_adj = filtered_adj.clone()
-            full_adj += (adj_2hop * 0.5)
-            full_adj += (adj_3hop * 0.3)
+            # ---- combine (weight は “強さ” として使うなら保持OK) ----
+            full_adj = filtered_adj.clone().to(torch.float32)
+            full_adj += (adj_2hop.to(torch.float32) * 0.5)
+            full_adj += (adj_3hop.to(torch.float32) * 0.3)
             torch.diagonal(full_adj).fill_(1.0)
 
-            # ---- extended graph should come from full_adj ----
-            sf, df = full_adj.nonzero(as_tuple=True)                 # ✅ use full_adj
+            sf, df = full_adj.nonzero(as_tuple=True)
             extended_g = dgl.graph((sf, df), num_nodes=num_total_nodes)
-            e_src, e_dst = extended_g.edges()
-            extended_g.edata["weight"] = full_adj[e_src, e_dst].float()  # ✅ use full_adj
 
-            # edge types: classify by source matrices
+            e_src, e_dst = extended_g.edges()
+
+            # ---- (A) 重要：bond_type を “別フィールド” にする ----
             one_hop   = (filtered_adj[e_src, e_dst] > 0)
             two_hop   = (adj_2hop[e_src, e_dst] > 0) & ~one_hop
             three_hop = (adj_3hop[e_src, e_dst] > 0) & ~(one_hop | two_hop)
-            edge_types = torch.zeros_like(e_src, dtype=torch.int)
-            edge_types[one_hop]   = 1
-            edge_types[two_hop]   = 2
-            edge_types[three_hop] = 3
-            extended_g.edata["edge_type"] = edge_types
+
+            # hop種別: 0=other/self, 1=1hop, 2=2hop, 3=3hop
+            edge_type = torch.zeros_like(e_src, dtype=torch.long)
+            edge_type[one_hop]   = 1
+            edge_type[two_hop]   = 2
+            edge_type[three_hop] = 3
+            extended_g.edata["edge_type"] = edge_type
+
+            # bond_type: 1-hop のときだけ 1..4、2/3-hop は 0
+            bond_type = torch.zeros_like(e_src, dtype=torch.long)
+            bond_type[one_hop] = filtered_adj[e_src[one_hop], e_dst[one_hop]].long().clamp(0, 4)
+            extended_g.edata["bond_type"] = bond_type
+
+            # weight: 任意（k-hop の強さ等に使うなら残す）
+            extended_g.edata["weight"] = full_adj[e_src, e_dst].to(torch.float32)
 
             extended_g.ndata["feat"] = filtered_attr
-            extended_g = dgl.add_self_loop(extended_g)
 
-            # optional sanity check on padding tail
-            remaining_features = attr_matrix[num_total_nodes:]
-            # if remaining_features.numel() and not torch.all(remaining_features == 0):
-            #     # print("⚠️ WARNING: Non-zero values found in remaining features!")
-            #     nz = remaining_features[remaining_features != 0]
-            # else:
-            #     print("OK ===========")
-            #     # print(f"num_total_nodes {num_total_nodes}")
-            #     # print("Non-zero values:", nz[:20])
-            #     # print("Indices:", torch.nonzero(remaining_features)[:20])
+            # self-loop は bond_type=0, edge_type=0, weight=0(or1) でいい
+            # ここでは “集約で余計な情報を入れない” ため 0 推奨
+            extended_g = dgl.add_self_loop(
+                extended_g,
+                edge_feat_names=["bond_type", "edge_type", "weight"],
+                fill_data=0
+            )
 
-            attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
+            attr_matrices_all.append(filtered_attr)
             extended_graphs.append(extended_g)
 
-    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
+    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id
 
 
 from torch.utils.data import Dataset
