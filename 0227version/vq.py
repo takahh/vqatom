@@ -956,24 +956,85 @@ class EuclideanCodebook(nn.Module):
                     return None
         return None
 
-    def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None) -> str:
+    import torch
+    import torch.nn as nn
+
+    # ---------------------------
+    # 1) Safe key: add collision guard + create flag
+    # ---------------------------
+    def _get_or_create_safe_key(
+            self,
+            skey: str,
+            K_e=None,
+            D=None,
+            device=None,
+            *,
+            create: bool = True,
+    ) -> str:
         """
-        original key (skey) から safe_key を取得。
-        必要なら Parameter を作成（K_e, D, device が与えられている場合）。
+        Map original key -> safe_key.
+        Optionally create self.embed[safe_key] Parameter when missing.
+        Use create=False to NEVER create (so you can skip missing codebooks safely).
         """
         skey = str(skey)
+
         if skey in self.key_to_safe:
             safe = self.key_to_safe[skey]
         else:
             safe = self._safe_key(skey)
+
+            # ---- collision guard ----
+            if safe in self.safe_to_key and self.safe_to_key[safe] != skey:
+                raise RuntimeError(
+                    f"SAFE KEY COLLISION: safe='{safe}' maps to both "
+                    f"'{self.safe_to_key[safe]}' and '{skey}'"
+                )
+
             self.key_to_safe[skey] = safe
             self.safe_to_key[safe] = skey
 
-        if safe not in self.embed and K_e is not None and D is not None and device is not None:
+        # ---- create on demand ----
+        if create and (safe not in self.embed) and (K_e is not None) and (D is not None) and (device is not None):
             init = torch.randn(K_e, D, device=device) * 0.01
             self.embed[safe] = nn.Parameter(init, requires_grad=True)
 
         return safe
+
+    # ---------------------------
+    # 2) Better padding: use real data points for extra centers
+    # ---------------------------
+    def _pad_to_K_sample_points(means_1kd, counts_1k, K_req: int, *, data_nd: torch.Tensor):
+        """
+        means_1kd: [1, K_run, D]
+        counts_1k: [1, K_run]
+        data_nd:   [N, D]  (masked latents)  <-- used for padding
+        """
+        H, K_run, D = means_1kd.shape
+        assert H == 1, f"H must be 1, got {H}"
+
+        means_kd = means_1kd[0]  # [K_run, D]
+        counts_k = counts_1k[0]  # [K_run]
+
+        if K_req <= K_run:
+            return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
+
+        # pad by sampling actual points (much healthier than mu+tiny_noise)
+        N = int(data_nd.shape[0])
+        K_pad = int(K_req - K_run)
+
+        # sample with replacement
+        idx = torch.randint(0, N, (K_pad,), device=data_nd.device)
+        pad_centers = data_nd.index_select(0, idx).to(device=means_kd.device, dtype=means_kd.dtype)
+
+        out_means = torch.empty((K_req, D), device=means_kd.device, dtype=means_kd.dtype)
+        out_counts = torch.zeros((K_req,), device=counts_k.device, dtype=counts_k.dtype)
+
+        out_means[:K_run].copy_(means_kd)
+        out_counts[:K_run].copy_(counts_k)
+
+        out_means[K_run:].copy_(pad_centers)
+        # padded counts remain zero
+        return out_means, out_counts
 
     # ------------------------------------------------------------------
     # ユーティリティ / 初期化系
@@ -1296,10 +1357,10 @@ class EuclideanCodebook(nn.Module):
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
+
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         import os, time, torch
-        from einops import rearrange
 
         key_list_to_dump = {
             "6_0_3_1_1_2_6_2_1_1_11_0",
@@ -1309,7 +1370,7 @@ class EuclideanCodebook(nn.Module):
         }
 
         # --------------------------------------------------------------
-        # 0. Global latent offset bookkeeping
+        # 0) Global latent offset bookkeeping (global id -> local chunk)
         # --------------------------------------------------------------
         if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
@@ -1317,25 +1378,22 @@ class EuclideanCodebook(nn.Module):
             self.latent_size_sum = 0
 
         # --------------------------------------------------------------
-        # 1. Input reshape (expect [1,B,D] after this)
+        # 1) Input reshape (expect [1,B,D])
         # --------------------------------------------------------------
         x = x.float()
-        if x.ndim == 2:           # [B,D]
-            x = x.unsqueeze(0)    # [1,B,D]
-        elif x.ndim == 3:
-            pass                  # [1,B,D] or [B,T,D] etc; you decide upstream
+        if x.ndim == 2:
+            x = x.unsqueeze(0)  # [1,B,D]
         elif x.ndim >= 4:
-            # if you really pass (1,?, ?, D) etc, collapse middle dims
             x = x.view(x.shape[0], -1, x.shape[-1])
 
         if x.ndim != 3:
             raise RuntimeError(f"x must end up 3D [1,B,D], got shape={tuple(x.shape)}")
 
-        flatten = x               # [1,B,D]
-        B, D = flatten.shape[1], flatten.shape[2]
+        flatten = x  # [1,B,D]
+        B, D = int(flatten.shape[1]), int(flatten.shape[2])
 
-        global_start = self.latent_size_sum
-        global_end   = global_start + B
+        global_start = int(self.latent_size_sum)
+        global_end = global_start + B
 
         self.quantize_dict = {}
         self.embed_ind_dict = {}
@@ -1346,8 +1404,22 @@ class EuclideanCodebook(nn.Module):
             logger.info(f"[CODEBOOK] mode={mode}")
 
         # --------------------------------------------------------------
-        # 2. init_kmeans_final phase
+        # helper: K lookup
         # --------------------------------------------------------------
+        def _lookup_K(key_any):
+            K_e = self._get_absK_from_cb_dict(key_any)
+            if K_e is None:
+                K_e = self._get_absK_from_cb_dict(str(key_any))
+            if K_e is None:
+                K_e = int(self.codebook_size)
+                if logger:
+                    logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
+            return int(K_e)
+
+        # ==============================================================
+        # 2) init_kmeans_final phase
+        #   IMPORTANT: do NOT create missing codebooks here
+        # ==============================================================
         if mode == "init_kmeans_final":
             if not hasattr(self, "_kmeans_dump") or (chunk_i is not None and chunk_i == 0):
                 self._kmeans_dump = {}
@@ -1362,52 +1434,59 @@ class EuclideanCodebook(nn.Module):
                         continue
 
                     idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                    if idx_local.numel() == 0:
+                        continue
+
                     masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
                     if masked_latents.numel() == 0:
                         continue
 
                     skey = str(key)
+                    K_e = _lookup_K(key)
 
-                    # ---- robust K lookup: prefer your CBDICT-style getter ----
-                    K_e = self._get_absK_from_cb_dict(key)
-                    if K_e is None:
-                        K_e = self._get_absK_from_cb_dict(skey)
-                    if K_e is None:
-                        K_e = int(self.codebook_size)
+                    # ---- get code WITHOUT creating (prevents random new codebooks) ----
+                    code, safe = self._get_code_for_key_no_create(skey)
+                    if code is None:
                         if logger:
-                            logger.warning(f"[K_FALLBACK] key={skey} -> K_e={K_e} (not found in cb_dict)")
+                            logger.warning(f"[NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
+                        continue
 
-                    safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
-                    code_param = self.embed[safe]
-                    code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
+                    # optional: codebook health stats
+                    if logger is not None:
+                        with torch.no_grad():
+                            c = code.detach()
+                            logger.info(
+                                f"[CB_STATS] key={skey} K={c.shape[0]} D={c.shape[1]} "
+                                f"mean={c.mean().item():.6f} std={c.std().item():.6f} "
+                                f"row_std_mean={c.std(dim=1).mean().item():.6f}"
+                            )
 
                     with torch.no_grad():
-                        dist = torch.cdist(masked_latents, code, p=2).pow(2)  # [Ni, K_e]
-                        idx_code = dist.argmin(dim=-1)                        # [Ni]
-                    quantize = code.index_select(0, idx_code)                 # [Ni, D]
+                        dist = torch.cdist(masked_latents, code, p=2).pow(2)  # [Ni, K]
+                        idx_code = dist.argmin(dim=-1)  # [Ni]
+                    quantize = code.index_select(0, idx_code)  # [Ni, D]
 
                     # store cpu for debug/dump (OK in init mode)
                     self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
                     self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
 
-                    # ---- Silhouette (FIXED: use masked_latents / idx_code) ----
+                    # ---- Silhouette (use masked_latents / idx_code) ----
                     if logger is not None:
                         try:
                             X = masked_latents.detach().float().cpu()
                             labels = idx_code.detach().cpu().long()
+                            u, cts = labels.unique(return_counts=True)
 
-                            u, c = labels.unique(return_counts=True)
                             logger.info(
                                 f"[SS_IN] key={skey} N={X.shape[0]} D={X.shape[1]} "
                                 f"labels_unique={u.numel()} "
-                                f"mincnt={int(c.min()) if c.numel() else -1} "
-                                f"maxcnt={int(c.max()) if c.numel() else -1} "
+                                f"mincnt={int(cts.min()) if cts.numel() else -1} "
+                                f"maxcnt={int(cts.max()) if cts.numel() else -1} "
                                 f"x_mean={float(X.mean())} x_std={float(X.std())} "
                                 f"nan={bool(torch.isnan(X).any())} inf={bool(torch.isinf(X).any())}"
                             )
 
-                            # strict validity: need >=2 clusters and enough points
-                            if u.numel() >= 2 and X.shape[0] >= 3 and int(c.min()) >= 2:
+                            if u.numel() >= 2 and X.shape[0] >= 3 and int(cts.min()) >= 2:
                                 nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
 
@@ -1421,11 +1500,14 @@ class EuclideanCodebook(nn.Module):
                                 )
                                 logger.info(f"SS: {skey} {sil:.4f}, size {X.shape[0]}, K_e {K_e}")
                             else:
-                                logger.info(f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} mincnt={int(c.min()) if c.numel() else -1} K_e={K_e}")
+                                logger.info(
+                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} "
+                                    f"mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}"
+                                )
                         except Exception as e:
                             logger.warning(f"[SS_FAIL] key={skey} err={repr(e)}")
 
-                    # ---- dump preparation (unchanged idea) ----
+                    # ---- dump preparation ----
                     do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
                     if do_dump and (skey in key_list_to_dump):
                         lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
@@ -1467,67 +1549,59 @@ class EuclideanCodebook(nn.Module):
             torch.cuda.empty_cache()
             return 0
 
-        # --------------------------------------------------------------
-        # 3. train / test / eval phase
-        # --------------------------------------------------------------
-        # feature can be Tensor or list[Tensor]
+        # ==============================================================
+        # 3) train / test / eval phase
+        # ==============================================================
         if feature is None:
             raise RuntimeError("feature is required in train/test mode")
-        if torch.is_tensor(feature):
-            feat_flat = feature
-        else:
-            feat_flat = torch.cat(feature, dim=0)
+
+        feat_flat = feature if torch.is_tensor(feature) else torch.cat(feature, dim=0)
         feat_flat = feat_flat.contiguous().to(flatten.device)
 
         assert feat_flat.ndim == 2 and feat_flat.size(1) == 78, f"feat_flat shape={tuple(feat_flat.shape)}"
         assert feat_flat.size(0) == B, f"feat_flat N={feat_flat.size(0)} != B={B}"
 
-        # IMPORTANT: do NOT overwrite self.cb_dict here
-        # self.cb_dict should already be your CBDICT mapping, used via _get_absK_from_cb_dict
+        if mask_dict is not None:
+            for key, idx_global in mask_dict.items():
+                if idx_global is None or idx_global.numel() == 0:
+                    continue
 
-        for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
-            if idx_global is None or idx_global.numel() == 0:
-                continue
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not gmask.any():
+                    continue
 
-            gmask = (idx_global >= global_start) & (idx_global < global_end)
-            if not gmask.any():
-                continue
+                idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                if idx_local.numel() == 0:
+                    continue
 
-            idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-            masked_latents = flatten[0].index_select(0, idx_local)
-            if masked_latents.numel() == 0:
-                continue
+                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
+                if masked_latents.numel() == 0:
+                    continue
 
-            skey = str(key)
+                skey = str(key)
+                K_e = _lookup_K(key)
 
-            # Use the same robust K lookup here too
-            K_e = self._get_absK_from_cb_dict(key)
-            if K_e is None:
-                K_e = self._get_absK_from_cb_dict(skey)
-            if K_e is None:
-                K_e = int(self.codebook_size)
+                # create is OK in train/eval (but ideally everything exists already)
+                safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device, create=True)
+                code_param = self.embed[safe]
+                code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
 
-            safe = self._get_or_create_safe_key(skey, K_e, D, device=flatten.device)
-            code_param = self.embed[safe]
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
+                with torch.no_grad():
+                    dist = torch.cdist(masked_latents, code, p=2).pow(2)
+                    idx_code = dist.argmin(dim=-1)
+                quantize = code.index_select(0, idx_code)
 
-            with torch.no_grad():
-                dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                idx_code = dist.argmin(dim=-1)
-            quantize = code.index_select(0, idx_code)
+                self.quantize_dict[skey] = quantize
+                self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-            self.quantize_dict[skey] = quantize
-            self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+                if self.training and epoch is not None and epoch < 30:
+                    # ... your EMA update block ...
+                    pass
 
-            # EMA update block: keep your logic (unchanged), but ensure shapes match K_e
-            if self.training and epoch is not None and epoch < 30:
-                # ... (your existing EMA code here, but keep K_e consistent with code_param) ...
-                pass
+                del masked_latents, code, idx_code, quantize
 
-            del masked_latents, code, idx_code, quantize
-
-        # Build full quantize for this chunk (your existing code is fine)
-        quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
+        # ---- SAFE: initialize with original (prevents uninitialized holes) ----
+        quantize_full = flatten[0].clone()  # [B, D]
 
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
@@ -1545,23 +1619,6 @@ class EuclideanCodebook(nn.Module):
                 qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
                 if idx_local.numel() > 0:
                     quantize_full.index_copy_(0, idx_local, qk)
-
-        # fill unused with original
-        all_local = []
-        if mask_dict is not None:
-            for idx in mask_dict.values():
-                if idx is None or idx.numel() == 0:
-                    continue
-                in_chunk = idx[(idx >= global_start) & (idx < global_end)]
-                if in_chunk.numel() > 0:
-                    all_local.append(in_chunk - global_start)
-
-        used = torch.unique(torch.cat(all_local, dim=0)) if len(all_local) > 0 else torch.empty(0, dtype=torch.long, device=flatten.device)
-        unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
-        if used.numel() > 0:
-            unused[used] = False
-        if unused.any():
-            quantize_full[unused] = flatten[0][unused]
 
         quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
         quantize_st = quantize_st.unsqueeze(0)
@@ -2270,6 +2327,7 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
     from einops import rearrange
+
     @torch.amp.autocast("cuda", enabled=False)
     def forward(
             self,
