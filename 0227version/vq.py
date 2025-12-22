@@ -2566,6 +2566,46 @@ class VectorQuantize(nn.Module):
 
         return None, False
 
+    # ---------------------------
+    # 1) Safe key: add collision guard + create flag
+    # ---------------------------
+    def _get_or_create_safe_key(
+            self,
+            skey: str,
+            K_e=None,
+            D=None,
+            device=None,
+            *,
+            create: bool = True,
+    ) -> str:
+        """
+        Map original key -> safe_key.
+        Optionally create self.embed[safe_key] Parameter when missing.
+        Use create=False to NEVER create (so you can skip missing codebooks safely).
+        """
+        skey = str(skey)
+
+        if skey in self.key_to_safe:
+            safe = self.key_to_safe[skey]
+        else:
+            safe = self._safe_key(skey)
+
+            # ---- collision guard ----
+            if safe in self.safe_to_key and self.safe_to_key[safe] != skey:
+                raise RuntimeError(
+                    f"SAFE KEY COLLISION: safe='{safe}' maps to both "
+                    f"'{self.safe_to_key[safe]}' and '{skey}'"
+                )
+
+            self.key_to_safe[skey] = safe
+            self.safe_to_key[safe] = skey
+
+        # ---- create on demand ----
+        if create and (safe not in self.embed) and (K_e is not None) and (D is not None) and (device is not None):
+            init = torch.randn(K_e, D, device=device) * 0.01
+            self.embed[safe] = nn.Parameter(init, requires_grad=True)
+
+        return safe
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         import os, time, torch
