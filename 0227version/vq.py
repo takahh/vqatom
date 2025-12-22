@@ -2413,7 +2413,6 @@ class VectorQuantize(nn.Module):
         return int(default)
 
     import torch
-    import torch.nn.functional as F
     from einops import rearrange
 
     @torch.amp.autocast("cuda", enabled=False)
