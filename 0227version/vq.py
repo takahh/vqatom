@@ -1897,6 +1897,32 @@ class VectorQuantize(nn.Module):
 
         return rearrange(codebook, '1 ... -> ...')
 
+    def _safe_key(self, skey: str) -> str:
+        """
+        Convert arbitrary skey to a ModuleDict/ParameterDict-safe string key.
+        - keep [A-Za-z0-9_]
+        - replace others with '_'
+        - avoid empty
+        - reduce collision risk by appending short hash when needed
+        """
+
+        import re
+        import hashlib
+        s = str(skey)
+
+        # replace illegal chars
+        base = re.sub(r"[^0-9A-Za-z_]+", "_", s).strip("_")
+        if base == "":
+            base = "key"
+
+        # keep it from getting ridiculously long & help uniqueness
+        h = hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
+        # if already ends with that hash, don't double-append
+        if not base.endswith(h):
+            base = f"{base}__{h}"
+
+        return base
+
     def _cb_to_tensor(self, cb):
         """
         Normalize various "codebook" containers to a [K, D] Tensor.
