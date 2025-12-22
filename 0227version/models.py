@@ -397,137 +397,121 @@ class EquivariantThreeHopGINE(nn.Module):
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
 
-    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
-                batched_graph_base=None, mode=None, attr_list=None):
-        import torch
-        dev = next(self.parameters()).device
+def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
+            batched_graph_base=None, mode=None, attr_list=None):
+    import torch
+    dev = next(self.parameters()).device
 
-        if mode == "init_kmeans_final":
-            if hasattr(data, "to"):
-                data = data.to(dev)
-            if torch.is_tensor(features):
-                features = features.to(dev, non_blocking=True)
-            self.vq(data, attr_list, mask_dict, logger, chunk_i, epoch, mode)
-            return 0
-        #
-        # # Edges (mirror for undirected) -> dev
-        # s1, d1 = data.edges()
-        # s1 = s1.to(dev, non_blocking=True); d1 = d1.to(dev, non_blocking=True)
-        # src = torch.cat([s1, d1], 0); dst = torch.cat([d1, s1], 0)
-        # edge_index = torch.stack([src, dst], 0)
-        #
-        # # Edge attributes (bond types {1..4}, 0 otherwise)
-        # eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
-        # eb = eb.to(dev, non_blocking=True)
-        # e  = torch.cat([eb, eb], 0)
-        # e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
-        # edge_attr = self.bond_emb(e.long())
+    # ----------------------------
+    # init_kmeans_final
+    # ----------------------------
+    if mode == "init_kmeans_final":
+        if hasattr(data, "to"):
+            data = data.to(dev)
+        if torch.is_tensor(features):
+            features = features.to(dev, non_blocking=True)
+        self.vq(data, attr_list, mask_dict, logger, chunk_i, epoch, mode)
+        return 0
 
-        # --- Edge build (mirror for undirected) ---
-        s1, d1 = data.edges()
-        s1 = s1.to(dev, non_blocking=True);
-        d1 = d1.to(dev, non_blocking=True)
-        src = torch.cat([s1, d1], 0);
-        dst = torch.cat([d1, s1], 0)
-        edge_index = torch.stack([src, dst], 0)
+    # ----------------------------
+    # Edge build (mirror for undirected)
+    # ----------------------------
+    s1, d1 = data.edges()
+    s1 = s1.to(dev, non_blocking=True)
+    d1 = d1.to(dev, non_blocking=True)
+    src = torch.cat([s1, d1], dim=0)
+    dst = torch.cat([d1, s1], dim=0)
+    edge_index = torch.stack([src, dst], dim=0)   # [2, 2E]
 
-        # --- bond_type (0..4) ---
-        bt = data.edata.get("bond_type", None)
-        if bt is None:
-            # fallback: 旧データ互換（ただし推奨しない）
-            bt = data.edata.get("weight", torch.zeros(data.num_edges(), device=dev)).long()
-        bt = bt.to(dev, non_blocking=True)
-        bt = torch.where((bt >= 1) & (bt <= 4), bt, torch.zeros_like(bt))
-        bt = torch.cat([bt, bt], 0)  # mirror
+    # ----------------------------
+    # Edge attributes:
+    #   bond_type: 0..4 (0=none/self, 1..4=bond)
+    #   edge_type: 0..3 (0=self/other, 1=1hop, 2=2hop, 3=3hop)
+    # ----------------------------
+    bt = data.edata.get("bond_type", None)
+    if bt is None:
+        # fallback (旧グラフ互換) - できれば convert_to_dgl 側で bond_type を必ず付ける
+        bt = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=dev)).long()
+    bt = bt.to(dev, non_blocking=True).long()
+    bt = torch.where((bt >= 1) & (bt <= 4), bt, torch.zeros_like(bt))
+    bt = torch.cat([bt, bt], dim=0)  # mirror -> [2E]
 
-        # --- hop_type / edge_type (0..3) ---
-        et = data.edata.get("edge_type", None)
-        if et is None:
-            et = torch.zeros(data.num_edges(), dtype=torch.long, device=dev)
-        et = et.to(dev, non_blocking=True).long().clamp(0, 3)
-        et = torch.cat([et, et], 0)  # mirror
+    et = data.edata.get("edge_type", None)
+    if et is None:
+        et = torch.zeros(data.num_edges(), dtype=torch.long, device=dev)
+    et = et.to(dev, non_blocking=True).long().clamp(0, 3)
+    et = torch.cat([et, et], dim=0)  # mirror -> [2E]
 
-        # --- edge_attr: bond + hop ---
-        edge_attr = self.bond_emb(bt) + self.hop_emb(et)
+    # bond + hop
+    edge_attr = self.bond_emb(bt) + self.hop_emb(et)   # [2E, edge_emb_dim]
 
-        if logger is not None:
-            logger.info(f"[EDGE] bond_type unique={torch.unique(bt)[:10].tolist()}")
-            logger.info(f"[EDGE] edge_type unique={torch.unique(et)[:10].tolist()}")
-            logger.info(f"[EDGE] bond_nonzero_ratio={(bt != 0).float().mean().item():.4f}")
-            logger.info(f"[EDGE] hop_nonzero_ratio={(et != 0).float().mean().item():.4f}")
+    if logger is not None:
+        # NOTE: bt/et は mirror 後なので 2E 個。unique/ratio の確認には十分。
+        logger.info(f"[EDGE] bond_type unique={torch.unique(bt)[:10].tolist()}")
+        logger.info(f"[EDGE] edge_type unique={torch.unique(et)[:10].tolist()}")
+        logger.info(f"[EDGE] bond_nonzero_ratio={(bt != 0).float().mean().item():.4f}")
+        logger.info(f"[EDGE] hop_nonzero_ratio={(et != 0).float().mean().item():.4f}")
 
-        # Node features -> h0
-        features = features.to(dev, non_blocking=True)
-        h0_raw = self.feat_embed(features)              # [N, 64]
-        h0 = self.ln_in(self.linear_0(h0_raw))          # [N, args.hidden_dim]
+    # ----------------------------
+    # Node features -> h0
+    # ----------------------------
+    features = features.to(dev, non_blocking=True)
+    h0_raw = self.feat_embed(features)             # [N, 64]
+    h0 = self.ln_in(self.linear_0(h0_raw))         # [N, args.hidden_dim]
 
-        # Hop 1
-        h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
-        h1 = self.gine1(h0, edge_index, edge_attr)
-        h1 = self.ln1(h1 * self.res1 + h0_for1)
+    # ----------------------------
+    # 3-hop GINE + residual + LN
+    # ----------------------------
+    h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
 
-        # Hop 2
-        h2 = self.gine2(h1, edge_index, edge_attr)
-        h2 = self.ln2(h2 * self.res2 + h1)
-        # Hop 3
-        h3 = self.gine3(h2, edge_index, edge_attr)
-        h3 = self.ln3(h3 * self.res3 + h2)
+    h1 = self.gine1(h0, edge_index, edge_attr)
+    h1 = self.ln1(h1 * self.res1 + h0_for1)
 
-        # JK concat
-        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
-        h_mid = self.mix(h_cat)
-        h_out = self.out_proj(h_mid)
+    h2 = self.gine2(h1, edge_index, edge_attr)
+    h2 = self.ln2(h2 * self.res2 + h1)
 
-        # K-means 用のループ時は VQ を通さずにそのまま返す
-        if mode == "init_kmeans_loop":
-            return h_out
-        #
-        # # ----- VQ 部分 -----
-        # h_vq = self.pre_vq_ln(h_out)
-        #
-        # # 生の出力（tuple / dict / オブジェクトなど何でも）
-        # quantize_output = self.vq(
-        #     h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
-        # )
-        #
-        # # ここで一気に正規化して 7 タプルにそろえる
-        # (loss,
-        #  embed,
-        #  commit_loss,
-        #  cb_loss,
-        #  sil_loss,
-        #  repel_loss,
-        #  cb_repel_loss) = _normalize_quantize_output(
-        #     quantize_output,
-        #     device=h_vq.device,
-        #     dtype=h_vq.dtype,
-        # )
-        h_vq = self.pre_vq_ln(h_out)
+    h3 = self.gine3(h2, edge_index, edge_attr)
+    h3 = self.ln3(h3 * self.res3 + h2)
 
-        quantize_output = self.vq(
-            h_vq,
-            attr_list,
-            mask_dict,
-            logger,
-            chunk_i,
-            epoch,
-            mode,
-        )
+    # ----------------------------
+    # JK concat -> mix -> out_proj
+    # ----------------------------
+    h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
+    h_mid = self.mix(h_cat)
+    h_out = self.out_proj(h_mid)
 
-        # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
-        loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
-            quantize_output, logger,
-            device=h_vq.device if torch.is_tensor(h_vq) else None,
-            dtype=getattr(h_vq, "dtype", None)
-        )
+    # ----------------------------
+    # init_kmeans_loop: return pre-VQ vector
+    # ----------------------------
+    if mode == "init_kmeans_loop":
+        return h_out
 
-        # embed は今回は h_vq をそのまま使う（まだ本当の量子化はしていないバージョン）
-        embed = h_vq
+    # ----------------------------
+    # VQ
+    # ----------------------------
+    h_vq = self.pre_vq_ln(h_out)
 
-        # モデルが返すのは (total_loss, embed, loss_list)
-        # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
-        #         loss, cb, loss_list3 = outputs
-        return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+    quantize_output = self.vq(
+        h_vq,
+        attr_list,
+        mask_dict,
+        logger,
+        chunk_i,
+        epoch,
+        mode,
+    )
+
+    loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
+        quantize_output,
+        logger,
+        device=h_vq.device,
+        dtype=h_vq.dtype,
+    )
+
+    # embed は現状 h_vq を返す（「量子化した埋め込み」を返す版にするならここを差し替え）
+    embed = h_vq
+
+    return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
 
 
 class Model(nn.Module):
