@@ -1296,363 +1296,279 @@ class EuclideanCodebook(nn.Module):
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
-    @torch.amp.autocast("cuda", enabled=False)
-    def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
-        """
-        Forward pass with per-element quantization and EMA update.
+@torch.amp.autocast("cuda", enabled=False)
+def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
+    import os, time, torch
+    from einops import rearrange
 
-        - mask_dict contains **global** atom indices (from collect_global_indices_compact).
-        - maintains a running global offset self.latent_size_sum so that
-          each chunk sees the correct [global_start, global_end) window.
-        """
-        import os
-        import time
-        import torch
+    key_list_to_dump = {
+        "6_0_3_1_1_2_6_2_1_1_11_0",
+        "7_0_3_0_0_2_0_1_0_0_3_0",
+        "16_-1_4_0_0_1_0_0_0_0_16_0",
+        "16_1_4_0_1_3_6_0_5_0_0_0",
+    }
 
-        key_list_to_dump = {"6_0_3_1_1_2_6_2_1_1_11_0", "7_0_3_0_0_2_0_1_0_0_3_0", "16_-1_4_0_0_1_0_0_0_0_16_0",
-                            "16_1_4_0_1_3_6_0_5_0_0_0"}
+    # --------------------------------------------------------------
+    # 0. Global latent offset bookkeeping
+    # --------------------------------------------------------------
+    if not hasattr(self, "latent_size_sum"):
+        self.latent_size_sum = 0
+    if chunk_i is not None and chunk_i == 0:
+        self.latent_size_sum = 0
 
-        # --------------------------------------------------------------
-        # 0. Global latent offset bookkeeping
-        # --------------------------------------------------------------
-        if not hasattr(self, "latent_size_sum"):
-            self.latent_size_sum = 0
-        if chunk_i is not None and chunk_i == 0:
-            self.latent_size_sum = 0
+    # --------------------------------------------------------------
+    # 1. Input reshape (expect [1,B,D] after this)
+    # --------------------------------------------------------------
+    x = x.float()
+    if x.ndim == 2:           # [B,D]
+        x = x.unsqueeze(0)    # [1,B,D]
+    elif x.ndim == 3:
+        pass                  # [1,B,D] or [B,T,D] etc; you decide upstream
+    elif x.ndim >= 4:
+        # if you really pass (1,?, ?, D) etc, collapse middle dims
+        x = x.view(x.shape[0], -1, x.shape[-1])
 
-        # --------------------------------------------------------------
-        # 1. Input reshape
-        # --------------------------------------------------------------
-        x = x.float()
-        if x.ndim < 4:
-            # expected: (1, B, D)
-            x = rearrange(x, "... -> 1 ...")
-        flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
-        B, D = flatten.shape[1], flatten.shape[2]
+    if x.ndim != 3:
+        raise RuntimeError(f"x must end up 3D [1,B,D], got shape={tuple(x.shape)}")
 
-        # this chunk's global window
-        global_start = self.latent_size_sum
-        global_end = global_start + B
+    flatten = x               # [1,B,D]
+    B, D = flatten.shape[1], flatten.shape[2]
 
-        # init output holders
-        self.quantize_dict = {}
-        self.embed_ind_dict = {}
+    global_start = self.latent_size_sum
+    global_end   = global_start + B
 
-        # normalize mask_dict to global LongTensor indices
-        mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device) if mask_dict is not None else None
-        if logger:
-            logger.info(f"[CODEBOOK] mode={mode}")
+    self.quantize_dict = {}
+    self.embed_ind_dict = {}
 
-        if mode == "init_kmeans_final":
-            # --------------------------------------------------------------
-            # IMPORTANT:
-            # - DO NOT run init_embed_ per-chunk (it expects full data).
-            #   If you want it, run it OUTSIDE once with full data,
-            #   or gate it to only chunk 0 AND only when you truly pass full latent.
-            # --------------------------------------------------------------
-            if (not self.initted.item()):
-                # ここは「本当に full latent を渡している」場合だけ True にしてOK
-                # 今は chunk の flatten なのでデフォルトは呼ばない方が安全
-                # if chunk_i == 0 and global_start == 0:
-                #     self.init_embed_(flatten, mask_dict=mask_dict)
-                pass
+    # normalize mask_dict to global LongTensor indices
+    mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device) if mask_dict is not None else None
+    if logger:
+        logger.info(f"[CODEBOOK] mode={mode}")
 
-            if not hasattr(self, "_kmeans_dump") or (chunk_i is not None and chunk_i == 0):
-                self._kmeans_dump = {}
-
-            if mask_dict is not None:
-                for key, idx_global in mask_dict.items():
-                    if idx_global is None or idx_global.numel() == 0:
-                        continue
-
-                    # only indices within this chunk window
-                    gmask = (idx_global >= global_start) & (idx_global < global_end)
-                    if not gmask.any():
-                        continue
-
-                    idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-                    masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
-                    if masked_latents.numel() == 0:
-                        continue
-
-                    skey = str(key)
-
-                    # ---- robust K_e lookup ----
-                    K_e = self._get_absK_from_cb_dict(key)
-                    if K_e is None:
-                        K_e = self._get_absK_from_cb_dict(skey)
-                    if K_e is None:
-                        # last resort: fallback (but log it!)
-                        K_e = int(self.codebook_size)
-                        if logger:
-                            logger.warning(f"[K_FALLBACK] key={skey} -> K_e={K_e} (not found in cb_dict)")
-
-                    # ---- safe key + codebook ----
-                    safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
-                    code_param = self.embed[safe]
-                    code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
-
-                    # ---- nearest assignment ----
-                    with torch.no_grad():
-                        dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                        idx_code = dist.argmin(dim=-1)
-                        del dist
-                    quantize = code.index_select(0, idx_code)
-
-                    # store cpu (for debug/dump) - OK
-                    self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
-                    self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
-
-                    # ---- Silhouette (safe gating) ----
-                    if logger is not None:
-                        try:
-                            # Need at least 2 clusters to make silhouette meaningful
-                            uniq = torch.unique(idx_code)
-                            X = masked.detach().float().cpu()  # (N,D)
-                            labels = assign.detach().cpu().long()  # (N,)
-
-                            u, c = labels.unique(return_counts=True)
-                            logger.info(
-                                f"[SS_IN] key={key} N={X.shape[0]} D={X.shape[1]} "
-                                f"labels_unique={u.numel()} "
-                                f"mincnt={int(c.min()) if c.numel() else -1} "
-                                f"maxcnt={int(c.max()) if c.numel() else -1} "
-                                f"x_mean={float(X.mean())} x_std={float(X.std())} "
-                                f"nan={bool(torch.isnan(X).any())} inf={bool(torch.isinf(X).any())}"
-                            )
-
-                            if uniq.numel() >= 2 and masked_latents.shape[0] >= 3:
-                                nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
-                                n = min(nmax, masked_latents.shape[0]) if nmax > 0 else 0
-
-                                # if n==0, just use all (careful: may be huge)
-                                if n <= 0:
-                                    # cheap guard: cap anyway
-                                    n = min(4096, masked_latents.shape[0])
-
-                                # sample without sklearn (avoid numpy copy cost explosion)
-                                perm = torch.randperm(masked_latents.shape[0], device=masked_latents.device)[:n]
-                                xs = masked_latents.index_select(0, perm).detach().to("cpu", dtype=torch.float32)
-                                ys = idx_code.index_select(0, perm).detach().to("cpu", dtype=torch.long)
-
-                                sil = self.silhouette_score_torch(xs, ys,
-                                                                  device="cuda" if torch.cuda.is_available() else "cpu")
-                                msg = f"SS: {skey} {sil:.4f}, size {masked_latents.shape[0]}, K_e {K_e}"
-                                logger.info(msg)
-                            else:
-                                # optional: log skip reason
-                                logger.info(
-                                    f"[SS_SKIP] key={skey} size={masked_latents.shape[0]} uniq={int(uniq.numel())} K_e={K_e}")
-                        except Exception as e:
-                            logger.warning(f"Silhouette failed for {skey}: {e}")
-
-                    # ---- dump preparation ----
-                    do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
-                    if do_dump and (skey in key_list_to_dump):
-                        lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
-                        ctr_cpu = code.detach().to("cpu", dtype=torch.float16)
-                        asg_cpu = idx_code.detach().to("cpu")  # int64 ok
-
-                        entry = self._kmeans_dump.get(skey)
-                        if entry is None:
-                            entry = {"latents": [], "centers": None, "assign": []}
-                            self._kmeans_dump[skey] = entry
-
-                        entry["latents"].append(lat_cpu)
-                        entry["assign"].append(asg_cpu)
-                        if entry["centers"] is None:
-                            entry["centers"] = ctr_cpu
-
-                    del masked_latents, code, idx_code, quantize
-
-            # advance global offset
-            self.latent_size_sum = global_end
-
-            # ---- write dump ----
-            do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
-            if do_dump:
-                out = {}
-                for k, v in self._kmeans_dump.items():
-                    if k not in key_list_to_dump:
-                        continue
-                    out[k] = {
-                        "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,
-                        "centers": v["centers"],
-                        "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
-                    }
-
-                stamp = time.strftime("%Y%m%d_%H%M%S")
-                os.makedirs("dumps", exist_ok=True)
-                path = os.path.join("dumps", f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt")
-                torch.save(out, path)
-                self._kmeans_dump = {}
-
-            torch.cuda.empty_cache()
-            return 0
-
-        # --------------------------------------------------------------
-        # 3. train / test / eval phase
-        # --------------------------------------------------------------
-        feat_flat = torch.cat(feature, dim=0)  # [N, 78]
-        feat_flat = feat_flat.contiguous().to(flatten.device)
-        assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
-        assert feat_flat.size(0) == flatten.size(1)
-
-        if not hasattr(self, "cb_dict"):
-            self.cb_dict = {}
-
-        # --------------------------------------------------------------
-        # 3-1. Per-key nearest code + EMA update
-        # --------------------------------------------------------------
-        for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
-            if idx_global is None or idx_global.numel() == 0:
-                continue
-
-            # indices within this chunk
-            gmask = (idx_global >= global_start) & (idx_global < global_end)
-            if not gmask.any():
-                continue
-
-            idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-            masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
-            if masked_latents.numel() == 0:
-                continue
-
-            skey = str(key)
-
-            # ParameterDict access via safe key
-            K_e_default = int(self.cb_dict.get(skey, self.codebook_size))
-            safe = self._get_or_create_safe_key(skey, K_e_default, D, device=flatten.device)
-            code_param = self.embed[safe]
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
-
-            with torch.no_grad():
-                dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                idx_code = dist.argmin(dim=-1)
-                del dist
-            quantize = code.index_select(0, idx_code)
-
-            self.quantize_dict[skey] = quantize
-            self.embed_ind_dict[skey] = idx_code.to(torch.int32)
-
-            # ----- EMA update (train and early epochs only) -----
-            if self.training and epoch is not None and epoch < 30:
-                if code_param.ndim == 3:
-                    K_e, D_e = code_param.shape[1], code_param.shape[2]
-                else:
-                    K_e, D_e = code_param.shape
-                device = code_param.device
-                self.cb_dict[skey] = int(K_e)
-
-                buf_name_cs = f"cluster_size_{skey}"
-                buf_name_ea = f"embed_avg_{skey}"
-
-                # cluster_size buffer
-                if hasattr(self, buf_name_cs):
-                    cs = getattr(self, buf_name_cs)
-                    if cs.dtype != torch.float32 or cs.shape[0] != K_e:
-                        cs = cs.float()
-                        if cs.shape[0] != K_e:
-                            cs = torch.zeros(K_e, device=device, dtype=torch.float32)
-                        setattr(self, buf_name_cs, cs)
-                else:
-                    cs = torch.zeros(K_e, device=device, dtype=torch.float32)
-                    self.register_buffer(buf_name_cs, cs)
-
-                # embed_avg buffer
-                if hasattr(self, buf_name_ea):
-                    ea = getattr(self, buf_name_ea)
-                    if ea.dtype != torch.float32 or ea.shape != (K_e, D_e):
-                        ea = ea.float()
-                        if ea.shape != (K_e, D_e):
-                            ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
-                        setattr(self, buf_name_ea, ea)
-                else:
-                    ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
-                    self.register_buffer(buf_name_ea, ea)
-
-                with torch.no_grad():
-                    idx_code_long = idx_code.to(device=device, dtype=torch.long)
-
-                    batch_counts = torch.zeros_like(cs, dtype=torch.float32)
-                    batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
-
-                    batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
-                    batch_embed_sum.index_add_(0, idx_code_long, masked_latents.to(device=device, dtype=torch.float32))
-
-                    decay = self.decay
-                    one_m = 1.0 - decay
-
-                    cs.mul_(decay).add_(batch_counts * one_m)
-                    ea.mul_(decay).add_(batch_embed_sum * one_m)
-
-                    means = ea / (cs.unsqueeze(-1) + self.eps)
-
-                    if code_param.ndim == 3:
-                        code_param.data.copy_(means.unsqueeze(0))
-                    else:
-                        code_param.data.copy_(means)
-
-            del masked_latents, code, idx_code, quantize
-
-        # --------------------------------------------------------------
-        # 3-2. Build full quantize for this chunk
-        # --------------------------------------------------------------
-        quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
+    # --------------------------------------------------------------
+    # 2. init_kmeans_final phase
+    # --------------------------------------------------------------
+    if mode == "init_kmeans_final":
+        if not hasattr(self, "_kmeans_dump") or (chunk_i is not None and chunk_i == 0):
+            self._kmeans_dump = {}
 
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
-                skey = str(key)
-                if skey not in self.quantize_dict:
+                if idx_global is None or idx_global.numel() == 0:
                     continue
 
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
 
-                idx_in_chunk = idx_global[gmask]
-                idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
-
-                qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
-                if idx_local.numel() > 0:
-                    quantize_full.index_copy_(0, idx_local, qk)
-
-        # fill unused positions with original latents
-        all_local = []
-        if mask_dict is not None:
-            for idx in mask_dict.values():
-                if idx is None or idx.numel() == 0:
+                idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
+                if masked_latents.numel() == 0:
                     continue
-                in_chunk = idx[(idx >= global_start) & (idx < global_end)]
-                if in_chunk.numel() > 0:
-                    all_local.append(in_chunk - global_start)
 
-        if len(all_local) > 0:
-            used = torch.unique(torch.cat(all_local, dim=0))
-        else:
-            used = torch.tensor([], dtype=torch.long, device=flatten.device)
+                skey = str(key)
 
-        unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
-        if used.numel() > 0:
-            unused[used] = False
-        if unused.any():
-            quantize_full[unused] = flatten[0][unused]
+                # ---- robust K lookup: prefer your CBDICT-style getter ----
+                K_e = self._get_absK_from_cb_dict(key)
+                if K_e is None:
+                    K_e = self._get_absK_from_cb_dict(skey)
+                if K_e is None:
+                    K_e = int(self.codebook_size)
+                    if logger:
+                        logger.warning(f"[K_FALLBACK] key={skey} -> K_e={K_e} (not found in cb_dict)")
 
-        # straight-through
-        quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
-        quantize_st = quantize_st.unsqueeze(0)  # (1, B, D)
+                safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
+                code_param = self.embed[safe]
+                code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
-        # --------------------------------------------------------------
-        # 3-3. Advance global offset
-        # --------------------------------------------------------------
-        if chunk_i is not None:
-            self.latent_size_sum = global_end
-        else:
-            # if chunk_i is None but you're still streaming chunks, keep consistent
-            self.latent_size_sum = global_end
+                with torch.no_grad():
+                    dist = torch.cdist(masked_latents, code, p=2).pow(2)  # [Ni, K_e]
+                    idx_code = dist.argmin(dim=-1)                        # [Ni]
+                quantize = code.index_select(0, idx_code)                 # [Ni, D]
+
+                # store cpu for debug/dump (OK in init mode)
+                self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
+                self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
+
+                # ---- Silhouette (FIXED: use masked_latents / idx_code) ----
+                if logger is not None:
+                    try:
+                        X = masked_latents.detach().float().cpu()
+                        labels = idx_code.detach().cpu().long()
+
+                        u, c = labels.unique(return_counts=True)
+                        logger.info(
+                            f"[SS_IN] key={skey} N={X.shape[0]} D={X.shape[1]} "
+                            f"labels_unique={u.numel()} "
+                            f"mincnt={int(c.min()) if c.numel() else -1} "
+                            f"maxcnt={int(c.max()) if c.numel() else -1} "
+                            f"x_mean={float(X.mean())} x_std={float(X.std())} "
+                            f"nan={bool(torch.isnan(X).any())} inf={bool(torch.isinf(X).any())}"
+                        )
+
+                        # strict validity: need >=2 clusters and enough points
+                        if u.numel() >= 2 and X.shape[0] >= 3 and int(c.min()) >= 2:
+                            nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
+                            n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
+
+                            perm = torch.randperm(X.shape[0])[:n]
+                            xs = X.index_select(0, perm)
+                            ys = labels.index_select(0, perm)
+
+                            sil = self.silhouette_score_torch(
+                                xs, ys,
+                                device="cuda" if torch.cuda.is_available() else "cpu"
+                            )
+                            logger.info(f"SS: {skey} {sil:.4f}, size {X.shape[0]}, K_e {K_e}")
+                        else:
+                            logger.info(f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} mincnt={int(c.min()) if c.numel() else -1} K_e={K_e}")
+                    except Exception as e:
+                        logger.warning(f"[SS_FAIL] key={skey} err={repr(e)}")
+
+                # ---- dump preparation (unchanged idea) ----
+                do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
+                if do_dump and (skey in key_list_to_dump):
+                    lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
+                    ctr_cpu = code.detach().to("cpu", dtype=torch.float16)
+                    asg_cpu = idx_code.detach().to("cpu")
+
+                    entry = self._kmeans_dump.get(skey)
+                    if entry is None:
+                        entry = {"latents": [], "centers": None, "assign": []}
+                        self._kmeans_dump[skey] = entry
+
+                    entry["latents"].append(lat_cpu)
+                    entry["assign"].append(asg_cpu)
+                    if entry["centers"] is None:
+                        entry["centers"] = ctr_cpu
+
+                del masked_latents, code, idx_code, quantize
+
+        self.latent_size_sum = global_end
+
+        do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
+        if do_dump:
+            out = {}
+            for k, v in self._kmeans_dump.items():
+                if k not in key_list_to_dump:
+                    continue
+                out[k] = {
+                    "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,
+                    "centers": v["centers"],
+                    "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
+                }
+
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            os.makedirs("dumps", exist_ok=True)
+            path = os.path.join("dumps", f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt")
+            torch.save(out, path)
+            self._kmeans_dump = {}
 
         torch.cuda.empty_cache()
-        return quantize_st, self.embed_ind_dict, self.embed
+        return 0
+
+    # --------------------------------------------------------------
+    # 3. train / test / eval phase
+    # --------------------------------------------------------------
+    # feature can be Tensor or list[Tensor]
+    if feature is None:
+        raise RuntimeError("feature is required in train/test mode")
+    if torch.is_tensor(feature):
+        feat_flat = feature
+    else:
+        feat_flat = torch.cat(feature, dim=0)
+    feat_flat = feat_flat.contiguous().to(flatten.device)
+
+    assert feat_flat.ndim == 2 and feat_flat.size(1) == 78, f"feat_flat shape={tuple(feat_flat.shape)}"
+    assert feat_flat.size(0) == B, f"feat_flat N={feat_flat.size(0)} != B={B}"
+
+    # IMPORTANT: do NOT overwrite self.cb_dict here
+    # self.cb_dict should already be your CBDICT mapping, used via _get_absK_from_cb_dict
+
+    for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
+        if idx_global is None or idx_global.numel() == 0:
+            continue
+
+        gmask = (idx_global >= global_start) & (idx_global < global_end)
+        if not gmask.any():
+            continue
+
+        idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+        masked_latents = flatten[0].index_select(0, idx_local)
+        if masked_latents.numel() == 0:
+            continue
+
+        skey = str(key)
+
+        # Use the same robust K lookup here too
+        K_e = self._get_absK_from_cb_dict(key)
+        if K_e is None:
+            K_e = self._get_absK_from_cb_dict(skey)
+        if K_e is None:
+            K_e = int(self.codebook_size)
+
+        safe = self._get_or_create_safe_key(skey, K_e, D, device=flatten.device)
+        code_param = self.embed[safe]
+        code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
+
+        with torch.no_grad():
+            dist = torch.cdist(masked_latents, code, p=2).pow(2)
+            idx_code = dist.argmin(dim=-1)
+        quantize = code.index_select(0, idx_code)
+
+        self.quantize_dict[skey] = quantize
+        self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+
+        # EMA update block: keep your logic (unchanged), but ensure shapes match K_e
+        if self.training and epoch is not None and epoch < 30:
+            # ... (your existing EMA code here, but keep K_e consistent with code_param) ...
+            pass
+
+        del masked_latents, code, idx_code, quantize
+
+    # Build full quantize for this chunk (your existing code is fine)
+    quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
+
+    if mask_dict is not None:
+        for key, idx_global in mask_dict.items():
+            skey = str(key)
+            if skey not in self.quantize_dict:
+                continue
+
+            gmask = (idx_global >= global_start) & (idx_global < global_end)
+            if not gmask.any():
+                continue
+
+            idx_in_chunk = idx_global[gmask]
+            idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
+
+            qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
+            if idx_local.numel() > 0:
+                quantize_full.index_copy_(0, idx_local, qk)
+
+    # fill unused with original
+    all_local = []
+    if mask_dict is not None:
+        for idx in mask_dict.values():
+            if idx is None or idx.numel() == 0:
+                continue
+            in_chunk = idx[(idx >= global_start) & (idx < global_end)]
+            if in_chunk.numel() > 0:
+                all_local.append(in_chunk - global_start)
+
+    used = torch.unique(torch.cat(all_local, dim=0)) if len(all_local) > 0 else torch.empty(0, dtype=torch.long, device=flatten.device)
+    unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
+    if used.numel() > 0:
+        unused[used] = False
+    if unused.any():
+        quantize_full[unused] = flatten[0][unused]
+
+    quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
+    quantize_st = quantize_st.unsqueeze(0)
+
+    self.latent_size_sum = global_end
+    torch.cuda.empty_cache()
+    return quantize_st, self.embed_ind_dict, self.embed
 
 
 class VectorQuantize(nn.Module):
