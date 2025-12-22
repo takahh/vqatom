@@ -450,6 +450,12 @@ class EquivariantThreeHopGINE(nn.Module):
         # --- edge_attr: bond + hop ---
         edge_attr = self.bond_emb(bt) + self.hop_emb(et)
 
+        if logger is not None:
+            logger.info(f"[EDGE] bond_type unique={torch.unique(bt)[:10].tolist()}")
+            logger.info(f"[EDGE] edge_type unique={torch.unique(et)[:10].tolist()}")
+            logger.info(f"[EDGE] bond_nonzero_ratio={(bt != 0).float().mean().item():.4f}")
+            logger.info(f"[EDGE] hop_nonzero_ratio={(et != 0).float().mean().item():.4f}")
+
         # Node features -> h0
         features = features.to(dev, non_blocking=True)
         h0_raw = self.feat_embed(features)              # [N, 64]
