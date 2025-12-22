@@ -2379,6 +2379,39 @@ class VectorQuantize(nn.Module):
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
+    def _get_absK_from_cb_dict(self, key_any, default=1) -> int:
+        """
+        Lookup absolute K for a given key from self.cb_dict.
+        Accepts str/int keys, returns int >= 1.
+        """
+        cb = getattr(self, "cb_dict", None)
+        if cb is None:
+            return int(default)
+
+        # normalize: try exact, str, int (if possible)
+        candidates = []
+        candidates.append(key_any)
+        candidates.append(str(key_any))
+
+        # if key looks like int, also try int form
+        try:
+            candidates.append(int(key_any))
+        except Exception:
+            pass
+
+        for k in candidates:
+            if k in cb:
+                v = cb[k]
+                if v is None:
+                    break
+                try:
+                    v = int(v)
+                except Exception:
+                    v = int(float(v))
+                return max(1, v)
+
+        return int(default)
+
     import torch
     import torch.nn.functional as F
     from einops import rearrange
