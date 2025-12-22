@@ -1357,6 +1357,98 @@ class EuclideanCodebook(nn.Module):
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
+    def _get_absK_from_cb_dict(self, key_any, default=1) -> int:
+        """
+        Lookup absolute K for a given key from self.cb_dict.
+        Accepts str/int keys, returns int >= 1.
+        """
+        cb = getattr(self, "cb_dict", None)
+        if cb is None:
+            return int(default)
+
+        # normalize: try exact, str, int (if possible)
+        candidates = []
+        candidates.append(key_any)
+        candidates.append(str(key_any))
+
+        # if key looks like int, also try int form
+        try:
+            candidates.append(int(key_any))
+        except Exception:
+            pass
+
+        for k in candidates:
+            if k in cb:
+                v = cb[k]
+                if v is None:
+                    break
+                try:
+                    v = int(v)
+                except Exception:
+                    v = int(float(v))
+                return max(1, v)
+
+        return int(default)
+
+    def _get_code_for_key_no_create(self, key):
+        """
+        Return (code_tensor_or_None, safe_bool)
+
+        - safe=True  : key exists and returns a Tensor/Parameter [K, D]
+        - safe=False : key not found (or codebook not initialized)
+        - NEVER creates a new codebook entry.
+        """
+        import torch
+        import torch.nn as nn
+
+        cb_src = getattr(self, "_codebook", None)
+        if cb_src is None:
+            return None, False
+
+        # normalize key candidates
+        key_s = str(key)
+        candidates = [key, key_s]
+
+        t = None
+
+        # ---- dict / ModuleDict / ParameterDict ----
+        if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
+            for k in candidates:
+                if k in cb_src:
+                    t = cb_src[k]
+                    break
+
+            if t is None:
+                # try relaxed match: str(k) equality
+                if isinstance(cb_src, dict):
+                    for k2, v2 in cb_src.items():
+                        if str(k2) == key_s:
+                            t = v2
+                            break
+
+            if t is None:
+                return None, False
+
+            # unwrap Embedding/Parameter
+            if isinstance(t, nn.Embedding):
+                t = t.weight
+            elif isinstance(t, nn.Parameter):
+                t = t
+
+            if not torch.is_tensor(t):
+                return None, False
+
+            return t, True
+
+        # ---- single Tensor / Parameter / Embedding ----
+        if isinstance(cb_src, nn.Embedding):
+            return cb_src.weight, True
+        if isinstance(cb_src, nn.Parameter):
+            return cb_src, True
+        if torch.is_tensor(cb_src):
+            return cb_src, True
+
+        return None, False
 
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
@@ -2414,6 +2506,65 @@ class VectorQuantize(nn.Module):
 
     import torch
     from einops import rearrange
+    def _get_code_for_key_no_create(self, key):
+        """
+        Return (code_tensor_or_None, safe_bool)
+
+        - safe=True  : key exists and returns a Tensor/Parameter [K, D]
+        - safe=False : key not found (or codebook not initialized)
+        - NEVER creates a new codebook entry.
+        """
+        import torch
+        import torch.nn as nn
+
+        cb_src = getattr(self, "_codebook", None)
+        if cb_src is None:
+            return None, False
+
+        # normalize key candidates
+        key_s = str(key)
+        candidates = [key, key_s]
+
+        t = None
+
+        # ---- dict / ModuleDict / ParameterDict ----
+        if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
+            for k in candidates:
+                if k in cb_src:
+                    t = cb_src[k]
+                    break
+
+            if t is None:
+                # try relaxed match: str(k) equality
+                if isinstance(cb_src, dict):
+                    for k2, v2 in cb_src.items():
+                        if str(k2) == key_s:
+                            t = v2
+                            break
+
+            if t is None:
+                return None, False
+
+            # unwrap Embedding/Parameter
+            if isinstance(t, nn.Embedding):
+                t = t.weight
+            elif isinstance(t, nn.Parameter):
+                t = t
+
+            if not torch.is_tensor(t):
+                return None, False
+
+            return t, True
+
+        # ---- single Tensor / Parameter / Embedding ----
+        if isinstance(cb_src, nn.Embedding):
+            return cb_src.weight, True
+        if isinstance(cb_src, nn.Parameter):
+            return cb_src, True
+        if torch.is_tensor(cb_src):
+            return cb_src, True
+
+        return None, False
 
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
