@@ -26,11 +26,11 @@ def parse_log_epoch_ss(path: str):
                 continue
 
             # --- Silhouette ---
-            if "Silhouette Score (subsample):" in line_s:
+            if "SS:" in line_s:
                 if epoch < 0:
                     epoch = 0
 
-                tail = line_s.split("Silhouette Score (subsample):", 1)[1].strip()
+                tail = line_s.split("SS:", 1)[1].strip()
                 parts = tail.split()
                 ss = float(parts[1].rstrip(","))
 

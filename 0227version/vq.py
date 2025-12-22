@@ -2157,9 +2157,11 @@ class VectorQuantize(nn.Module):
                     if head in cb_src:
                         t = self._cb_to_tensor(cb_src[head])
 
-                # 3) それでも無ければ「全部まとめて」連結して使う
+                # # 3) それでも無ければ「全部まとめて」連結して使う
+                # if t is None:
+                #     t = self._cb_to_tensor(cb_src)
                 if t is None:
-                    t = self._cb_to_tensor(cb_src)
+                    return None  # or raise
 
             else:
                 # ---------- 単一 Tensor / Parameter / Embedding 等 ----------
