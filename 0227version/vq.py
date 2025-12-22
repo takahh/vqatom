@@ -1408,6 +1408,19 @@ class EuclideanCodebook(nn.Module):
                         try:
                             # Need at least 2 clusters to make silhouette meaningful
                             uniq = torch.unique(idx_code)
+                            X = masked.detach().float().cpu()  # (N,D)
+                            labels = assign.detach().cpu().long()  # (N,)
+
+                            u, c = labels.unique(return_counts=True)
+                            logger.info(
+                                f"[SS_IN] key={key} N={X.shape[0]} D={X.shape[1]} "
+                                f"labels_unique={u.numel()} "
+                                f"mincnt={int(c.min()) if c.numel() else -1} "
+                                f"maxcnt={int(c.max()) if c.numel() else -1} "
+                                f"x_mean={float(X.mean())} x_std={float(X.std())} "
+                                f"nan={bool(torch.isnan(X).any())} inf={bool(torch.isinf(X).any())}"
+                            )
+
                             if uniq.numel() >= 2 and masked_latents.shape[0] >= 3:
                                 nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, masked_latents.shape[0]) if nmax > 0 else 0
