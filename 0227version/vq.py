@@ -1887,6 +1887,8 @@ class VectorQuantize(nn.Module):
         self.tau_ema = float(tau_ema)
         self.codebook_max_norm = codebook_max_norm
 
+        self.key_to_safe = {}
+        self.safe_to_key = {}
     @property
     def codebook(self):
         codebook = self._codebook.embed
