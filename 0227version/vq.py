@@ -929,6 +929,33 @@ class EuclideanCodebook(nn.Module):
             s = "k_" + s
         return s
 
+    def _get_absK_from_cb_dict(self, key) -> int | None:
+        """
+        Robust K lookup for cb_dict.
+        Accepts key as original (int/str/tuple/etc).
+        Returns int(K) or None if not found / invalid.
+        """
+        d = getattr(self, "cb_dict", None)
+        if not isinstance(d, dict):
+            return None
+
+        # candidates: raw, str(raw), int(str) if digit
+        cands = [key, str(key)]
+        try:
+            if isinstance(key, str) and key.isdigit():
+                cands.append(int(key))
+        except Exception:
+            pass
+
+        for k in cands:
+            if k in d:
+                try:
+                    v = int(d[k])
+                    return v if v > 0 else None
+                except Exception:
+                    return None
+        return None
+
     def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None) -> str:
         """
         original key (skey) から safe_key を取得。
@@ -1316,15 +1343,20 @@ class EuclideanCodebook(nn.Module):
         if logger:
             logger.info(f"[CODEBOOK] mode={mode}")
 
-        # --------------------------------------------------------------
-        # 2. K-Means init phase (nearest assignment to current centers)
-        # --------------------------------------------------------------
         if mode == "init_kmeans_final":
-            # optional: run your init (safe if you want it every chunk; otherwise move outside)
-            # NOTE: if init_embed_ expects full data, calling per-chunk may not be intended.
-            self.init_embed_(flatten, mask_dict=mask_dict)
+            # --------------------------------------------------------------
+            # IMPORTANT:
+            # - DO NOT run init_embed_ per-chunk (it expects full data).
+            #   If you want it, run it OUTSIDE once with full data,
+            #   or gate it to only chunk 0 AND only when you truly pass full latent.
+            # --------------------------------------------------------------
+            if (not self.initted.item()):
+                # ここは「本当に full latent を渡している」場合だけ True にしてOK
+                # 今は chunk の flatten なのでデフォルトは呼ばない方が安全
+                # if chunk_i == 0 and global_start == 0:
+                #     self.init_embed_(flatten, mask_dict=mask_dict)
+                pass
 
-            # buffer across keys within this call (and optionally across chunks)
             if not hasattr(self, "_kmeans_dump") or (chunk_i is not None and chunk_i == 0):
                 self._kmeans_dump = {}
 
@@ -1333,7 +1365,7 @@ class EuclideanCodebook(nn.Module):
                     if idx_global is None or idx_global.numel() == 0:
                         continue
 
-                    # keep only indices belonging to this chunk
+                    # only indices within this chunk window
                     gmask = (idx_global >= global_start) & (idx_global < global_end)
                     if not gmask.any():
                         continue
@@ -1344,63 +1376,69 @@ class EuclideanCodebook(nn.Module):
                         continue
 
                     skey = str(key)
-                    safe = self._get_or_create_safe_key(
-                        skey,
-                        K_e=int(self.cb_dict.get(skey, self.codebook_size)),
-                        D=D,
-                        device=flatten.device,
-                    )
 
+                    # ---- robust K_e lookup ----
+                    K_e = self._get_absK_from_cb_dict(key)
+                    if K_e is None:
+                        K_e = self._get_absK_from_cb_dict(skey)
+                    if K_e is None:
+                        # last resort: fallback (but log it!)
+                        K_e = int(self.codebook_size)
+                        if logger:
+                            logger.warning(f"[K_FALLBACK] key={skey} -> K_e={K_e} (not found in cb_dict)")
+
+                    # ---- safe key + codebook ----
+                    safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
                     code_param = self.embed[safe]
                     code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
 
+                    # ---- nearest assignment ----
                     with torch.no_grad():
                         dist = torch.cdist(masked_latents, code, p=2).pow(2)
                         idx_code = dist.argmin(dim=-1)
                         del dist
                     quantize = code.index_select(0, idx_code)
 
-                    # self.quantize_dict[skey] = quantize
-                    # self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+                    # store cpu (for debug/dump) - OK
                     self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
                     self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
 
-                    # ---- Silhouette (optional) ----
-                    try:
-                        from sklearn.utils import resample
-                        n = min(getattr(self, "samples_latent_in_kmeans", 0) or 0, masked_latents.shape[0])
-                        if n > 1:
-                            xs, ys = resample(
-                                masked_latents.detach().cpu().numpy(),
-                                idx_code.detach().cpu().numpy(),
-                                n_samples=n,
-                                random_state=42,
-                            )
-                            sil = self.silhouette_score_torch(
-                                torch.from_numpy(xs).float(),
-                                torch.from_numpy(ys).long(),
-                            )
-                            msg = (
-                                f"SS: {key} {sil:.4f}, "
-                                f"size {masked_latents.shape[0]}, K_e {code.shape[0]}"
-                            )
-                            print(msg)
-                            if logger:
-                                logger.info(msg)
-                    except Exception as e:
-                        if logger:
-                            logger.warning(f"Silhouette failed for {key}: {e}")
+                    # ---- Silhouette (safe gating) ----
+                    if logger is not None:
+                        try:
+                            # Need at least 2 clusters to make silhouette meaningful
+                            uniq = torch.unique(idx_code)
+                            if uniq.numel() >= 2 and masked_latents.shape[0] >= 3:
+                                nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
+                                n = min(nmax, masked_latents.shape[0]) if nmax > 0 else 0
 
-                    # -------------------------------------------------------------------------------------------
-                    # prepare $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
-                    # -------------------------------------------------------------------------------------------
+                                # if n==0, just use all (careful: may be huge)
+                                if n <= 0:
+                                    # cheap guard: cap anyway
+                                    n = min(4096, masked_latents.shape[0])
+
+                                # sample without sklearn (avoid numpy copy cost explosion)
+                                perm = torch.randperm(masked_latents.shape[0], device=masked_latents.device)[:n]
+                                xs = masked_latents.index_select(0, perm).detach().to("cpu", dtype=torch.float32)
+                                ys = idx_code.index_select(0, perm).detach().to("cpu", dtype=torch.long)
+
+                                sil = self.silhouette_score_torch(xs, ys,
+                                                                  device="cuda" if torch.cuda.is_available() else "cpu")
+                                msg = f"SS: {skey} {sil:.4f}, size {masked_latents.shape[0]}, K_e {K_e}"
+                                logger.info(msg)
+                            else:
+                                # optional: log skip reason
+                                logger.info(
+                                    f"[SS_SKIP] key={skey} size={masked_latents.shape[0]} uniq={int(uniq.numel())} K_e={K_e}")
+                        except Exception as e:
+                            logger.warning(f"Silhouette failed for {skey}: {e}")
+
+                    # ---- dump preparation ----
                     do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
-                    if do_dump:
-                        if skey not in key_list_to_dump:
-                            continue
+                    if do_dump and (skey in key_list_to_dump):
                         lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
                         ctr_cpu = code.detach().to("cpu", dtype=torch.float16)
-                        asg_cpu = idx_code.detach().to("cpu")  # keep int64
+                        asg_cpu = idx_code.detach().to("cpu")  # int64 ok
 
                         entry = self._kmeans_dump.get(skey)
                         if entry is None:
@@ -1412,15 +1450,12 @@ class EuclideanCodebook(nn.Module):
                         if entry["centers"] is None:
                             entry["centers"] = ctr_cpu
 
-                    # cleanup (GPU)
                     del masked_latents, code, idx_code, quantize
 
-            # IMPORTANT: advance global offset for init phase too (always)
+            # advance global offset
             self.latent_size_sum = global_end
 
-            # -------------------------------------------------------------------------------------------
-            # write $$$ DUMP $$$ (chunk-based file; safe without knowing last chunk)
-            # -------------------------------------------------------------------------------------------
+            # ---- write dump ----
             do_dump = (epoch is not None) and (epoch % 10 == 0 or epoch == 1)
             if do_dump:
                 out = {}
@@ -1428,17 +1463,15 @@ class EuclideanCodebook(nn.Module):
                     if k not in key_list_to_dump:
                         continue
                     out[k] = {
-                        "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,  # [N, D]
-                        "centers": v["centers"],  # [K, D]
-                        "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,     # [N]
+                        "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,
+                        "centers": v["centers"],
+                        "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
                     }
 
                 stamp = time.strftime("%Y%m%d_%H%M%S")
                 os.makedirs("dumps", exist_ok=True)
                 path = os.path.join("dumps", f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt")
                 torch.save(out, path)
-
-                # since we're saving per-chunk, clear to avoid growth
                 self._kmeans_dump = {}
 
             torch.cuda.empty_cache()
