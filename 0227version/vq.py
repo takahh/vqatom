@@ -2369,7 +2369,7 @@ class VectorQuantize(nn.Module):
         self.embed_ind_dict = {}
 
         # normalize mask_dict to global LongTensor indices
-        mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device) if mask_dict is not None else None
+        mask_dict = self._normalize_mask_dict(mask_dict) if mask_dict is not None else None
         if logger:
             logger.info(f"[CODEBOOK] mode={mode}")
 
