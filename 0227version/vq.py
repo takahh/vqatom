@@ -1594,9 +1594,64 @@ class EuclideanCodebook(nn.Module):
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
+                # ----- EMA update (train and early epochs only) -----
                 if self.training and epoch is not None and epoch < 30:
-                    # ... your EMA update block ...
-                    pass
+                    if code_param.ndim == 3:
+                        K_e, D_e = code_param.shape[1], code_param.shape[2]
+                    else:
+                        K_e, D_e = code_param.shape
+                    device = code_param.device
+                    self.cb_dict[skey] = int(K_e)
+
+                    buf_name_cs = f"cluster_size_{skey}"
+                    buf_name_ea = f"embed_avg_{skey}"
+
+                    # cluster_size buffer
+                    if hasattr(self, buf_name_cs):
+                        cs = getattr(self, buf_name_cs)
+                        if cs.dtype != torch.float32 or cs.shape[0] != K_e:
+                            cs = cs.float()
+                            if cs.shape[0] != K_e:
+                                cs = torch.zeros(K_e, device=device, dtype=torch.float32)
+                            setattr(self, buf_name_cs, cs)
+                    else:
+                        cs = torch.zeros(K_e, device=device, dtype=torch.float32)
+                        self.register_buffer(buf_name_cs, cs)
+
+                    # embed_avg buffer
+                    if hasattr(self, buf_name_ea):
+                        ea = getattr(self, buf_name_ea)
+                        if ea.dtype != torch.float32 or ea.shape != (K_e, D_e):
+                            ea = ea.float()
+                            if ea.shape != (K_e, D_e):
+                                ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
+                            setattr(self, buf_name_ea, ea)
+                    else:
+                        ea = torch.zeros(K_e, D_e, device=device, dtype=torch.float32)
+                        self.register_buffer(buf_name_ea, ea)
+
+                    with torch.no_grad():
+                        idx_code_long = idx_code.to(device=device, dtype=torch.long)
+
+                        batch_counts = torch.zeros_like(cs, dtype=torch.float32)
+                        batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
+
+                        batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
+                        batch_embed_sum.index_add_(0, idx_code_long,
+                                                   masked_latents.to(device=device, dtype=torch.float32))
+
+                        decay = self.decay
+                        one_m = 1.0 - decay
+
+                        cs.mul_(decay).add_(batch_counts * one_m)
+                        ea.mul_(decay).add_(batch_embed_sum * one_m)
+
+                        means = ea / (cs.unsqueeze(-1) + self.eps)
+
+                        if code_param.ndim == 3:
+                            code_param.data.copy_(means.unsqueeze(0))
+                        else:
+                            code_param.data.copy_(means)
 
                 del masked_latents, code, idx_code, quantize
 
@@ -2332,6 +2387,29 @@ class VectorQuantize(nn.Module):
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         import os, time, torch
 
+        # vq.py (forward内) どこか上の方に追加
+        import torch
+        import numpy as np
+
+        def _as_index_tensor2(idx, device=x.device):
+            """
+            idx: None / Tensor / list / tuple / numpy array
+            return: LongTensor on device, shape [N]
+            """
+            if idx is None:
+                return None
+            if torch.is_tensor(idx):
+                return idx.to(device=device, non_blocking=True).long()
+            if isinstance(idx, np.ndarray):
+                return torch.from_numpy(idx).to(device=device, non_blocking=True).long()
+            if isinstance(idx, (list, tuple)):
+                if len(idx) == 0:
+                    # 空は空tensorに統一（numel=0）
+                    return torch.empty(0, device=device, dtype=torch.long)
+                return torch.tensor(idx, device=device, dtype=torch.long)
+            # 最後の保険：スカラーっぽい
+            return torch.tensor([int(idx)], device=device, dtype=torch.long)
+
         key_list_to_dump = {
             "6_0_3_1_1_2_6_2_1_1_11_0",
             "7_0_3_0_0_2_0_1_0_0_3_0",
@@ -2396,6 +2474,7 @@ class VectorQuantize(nn.Module):
 
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
+                    idx_global = _as_index_tensor2(idx_global)
                     if idx_global is None or idx_global.numel() == 0:
                         continue
 
@@ -2533,6 +2612,7 @@ class VectorQuantize(nn.Module):
 
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
+                idx_global = _as_index_tensor2(idx_global)
                 if idx_global is None or idx_global.numel() == 0:
                     continue
 
