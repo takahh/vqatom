@@ -1499,8 +1499,7 @@ class EuclideanCodebook(nn.Module):
         # normalize mask_dict to global LongTensor indices
         mask_dict = self._normalize_mask_dict(mask_dict, logger, device=flatten.device) if mask_dict is not None else None
         if logger:
-            logger.info(f"[CODEBOOK] mode={mode}")
-            print("[HB] after CODEBOOK log", flush=True)
+            print(f"[CODEBOOK] mode={mode}")
 
         def _lookup_K(key_any):
             import time
