@@ -1328,7 +1328,9 @@ class EuclideanCodebook(nn.Module):
 
             self.register_buffer(buf_name_cs, cs)
             self.register_buffer(buf_name_ea, ea)
-            K_req = int(K_req)
+            K_req = int(get_absK(self.cb_dict, skey))
+            N_i = int(N_i)
+            K_run = min(K_req, N_i)
 
             nz = int((counts_k > 0).sum().item())
             print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
