@@ -1500,20 +1500,21 @@ class EuclideanCodebook(nn.Module):
         mask_dict = self._normalize_mask_dict(mask_dict, logger, device=flatten.device) if mask_dict is not None else None
         if logger:
             logger.info(f"[CODEBOOK] mode={mode}")
+            print("[HB] after CODEBOOK log", flush=True)
 
         def _lookup_K(key_any):
             import time
             t0 = time.time()
-            logger.info(f"[HB] lookup_K enter key={key_any!r}", flush=True)
+            logger.info(f"[HB] lookup_K enter key={key_any!r}")
 
-            logger.info("[HB] before get_absK(key_any)", flush=True)
+            logger.info("[HB] before get_absK(key_any)")
             K_e = self._get_absK_from_cb_dict(key_any)
-            logger.info(f"[HB] after get_absK(key_any) -> {K_e}", flush=True)
+            logger.info(f"[HB] after get_absK(key_any) -> {K_e}")
 
             if K_e is None:
-                logger.info("[HB] before get_absK(str)", flush=True)
+                logger.info("[HB] before get_absK(str)")
                 K_e = self._get_absK_from_cb_dict(str(key_any))
-                logger.info(f"[HB] after get_absK(str) -> {K_e}", flush=True)
+                logger.info(f"[HB] after get_absK(str) -> {K_e}")
 
             if K_e is None:
                 K_e = int(self.codebook_size)
@@ -1521,7 +1522,7 @@ class EuclideanCodebook(nn.Module):
                     logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
 
             K_e = int(K_e)
-            logger.info(f"[HB] lookup_K exit K_e={K_e} dt={time.time() - t0:.3f}s", flush=True)
+            logger.info(f"[HB] lookup_K exit K_e={K_e} dt={time.time() - t0:.3f}s")
             return K_e
 
         # ==============================================================
@@ -1529,6 +1530,7 @@ class EuclideanCodebook(nn.Module):
         #   IMPORTANT: do NOT create missing codebooks here
         # ==============================================================
         if mode == "init_kmeans_final":
+            print(f"[HB] mode check passed? mode={mode!r}", flush=True)
             if not hasattr(self, "_kmeans_dump") or (chunk_i is not None and chunk_i == 0):
                 self._kmeans_dump = {}
 
