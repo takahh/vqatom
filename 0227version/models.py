@@ -105,16 +105,26 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     # only supported shape:
     # (loss, (commit, cb, rep, cb_rep))
     # ---------------------------
-    logger.info(f"norm q 0")
-    if not (isinstance(qo, (tuple, list)) and len(qo) == 2 and isinstance(qo[1], (tuple, list))):
-        raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
+    logger.info("norm q 0")
 
-    logger.info(f"norm q 1")
+    if not isinstance(qo, (tuple, list)) or len(qo) != 2:
+        raise TypeError(
+            f"Expected qo=(loss, (commit, cb, rep, cb_rep)), "
+            f"got type={type(qo)} value={qo}"
+        )
+
     loss, inner = qo
-    if len(inner) != 4:
-        raise TypeError(f"Expected inner tuple length 4: (commit, cb, rep, cb_rep), got {len(inner)}: {inner}")
 
-    logger.info(f"norm q 2")
+    logger.info("norm q 1")
+    if not isinstance(inner, (tuple, list)) or len(inner) != 4:
+        raise TypeError(
+            f"Expected inner=(commit, cb, rep, cb_rep), "
+            f"got type={type(inner)} len={len(inner) if hasattr(inner, '__len__') else 'NA'} value={inner}"
+        )
+
+    commit, cb, rep, cb_rep = inner
+    logger.info("norm q 2")
+
     commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
 
     _infer_device_dtype(loss, commit, cb, rep, cb_rep)
