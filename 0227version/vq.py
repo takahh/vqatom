@@ -2912,7 +2912,21 @@ class VectorQuantize(nn.Module):
                 skey = str(key)
                 if skey not in self.quantize_dict:
                     continue
+                # vq.py (forward), gmask を作る直前
+                import torch
 
+                if isinstance(idx_global, list):
+                    # list[int] も list[list[int]] も想定して潰す
+                    if len(idx_global) > 0 and isinstance(idx_global[0], list):
+                        idx_global = [x for sub in idx_global for x in sub]
+                    idx_global = torch.as_tensor(idx_global, device=dev, dtype=torch.long)
+
+                elif torch.is_tensor(idx_global):
+                    idx_global = idx_global.to(device=dev, dtype=torch.long, non_blocking=True)
+
+                else:
+                    # numpy 等もここに来うるので保険
+                    idx_global = torch.as_tensor(idx_global, device=dev, dtype=torch.long)
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
