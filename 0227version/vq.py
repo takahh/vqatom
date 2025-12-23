@@ -2440,7 +2440,7 @@ class VectorQuantize(nn.Module):
 
         mask_dict = self._normalize_mask_dict(mask_dict) if (mask_dict is not None) else None
         if logger is not None:
-            logger.info(f"[CODEBOOK] mode={mode}")
+            print(f"[CODEBOOK] mode={mode}")
 
         def _lookup_K(key_any):
             K_e = self._get_absK_from_cb_dict(key_any)
@@ -2586,18 +2586,20 @@ class VectorQuantize(nn.Module):
 
         feat_flat = feature if torch.is_tensor(feature) else torch.cat(feature, dim=0)
         feat_flat = feat_flat.contiguous().to(flatten.device)
-
+        logger.info(f"stop 0")
         if not (feat_flat.ndim == 2 and feat_flat.size(1) == 78):
             raise RuntimeError(f"feat_flat shape={tuple(feat_flat.shape)} (expected [B,78])")
         if feat_flat.size(0) != B:
             raise RuntimeError(f"feat_flat N={feat_flat.size(0)} != B={B}")
 
+        logger.info(f"stop 1")
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
                 idx_global = _as_index_tensor2(idx_global)
                 if idx_global is None or idx_global.numel() == 0:
                     continue
 
+                logger.info(f"stop 2")
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
@@ -2628,6 +2630,7 @@ class VectorQuantize(nn.Module):
 
         quantize_full = flatten[0].clone()
 
+        logger.info(f"stop 3")
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
                 skey = str(key)
@@ -2652,6 +2655,7 @@ class VectorQuantize(nn.Module):
         quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
         quantize_st = quantize_st.unsqueeze(0)
 
+        logger.info(f"stop 4")
         self.latent_size_sum = global_end
         torch.cuda.empty_cache()
         return quantize_st, self.embed_ind_dict, self.embed
