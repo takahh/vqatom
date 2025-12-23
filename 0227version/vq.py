@@ -1659,6 +1659,7 @@ class EuclideanCodebook(nn.Module):
         # ==============================================================
         # 3) train / test / eval phase
         # ==============================================================
+        logger.info(f"stop -1")
         if feature is None:
             raise RuntimeError("feature is required in train/test mode")
         logger.info(f"stop 0")
