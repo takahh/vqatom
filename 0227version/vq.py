@@ -1887,6 +1887,9 @@ class VectorQuantize(nn.Module):
         self.tau_ema = float(tau_ema)
         self.codebook_max_norm = codebook_max_norm
 
+        # per-safe-key の埋め込み（コードブック）を持つ辞書
+        if not hasattr(self, "embed") or self.embed is None:
+            self.embed = nn.ParameterDict()   # safe_key -> [K, D] Parameter
         self.key_to_safe = {}
         self.safe_to_key = {}
     @property
