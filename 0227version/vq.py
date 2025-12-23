@@ -2640,6 +2640,11 @@ class VectorQuantize(nn.Module):
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         import os, time, torch
+        # vq.py (forward の冒頭)
+        import torch
+
+        # この forward が属する module の device を取得
+        dev = next(self.parameters()).device
 
         # vq.py (forward内) どこか上の方に追加
         import torch
