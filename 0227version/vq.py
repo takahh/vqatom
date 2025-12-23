@@ -2644,7 +2644,7 @@ class VectorQuantize(nn.Module):
         import torch
 
         # この forward が属する module の device を取得
-        dev = next(self.parameters()).device
+        dev = x.device
 
         # vq.py (forward内) どこか上の方に追加
         import torch
