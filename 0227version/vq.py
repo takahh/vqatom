@@ -2388,41 +2388,112 @@ class VectorQuantize(nn.Module):
     # -------------------------------------------------------------------------
     # Forward
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # VQ forward (COPY-PASTE)
+    # - 返り値は必ず: (total_loss, (commit_loss, cb_loss, repel_loss, cb_repel_loss))
+    # - ただし “変更後の処理” (= quantize / embed_ind / embed 更新) は内部で維持
+    # - mask_dict の global/offset 健全性チェックを軽量に復活（debug_index で強化）
+    # -------------------------------------------------------------------------
+
+
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
-        dev = x.device
+        import os, time, math
+        import torch
+        import numpy as np
 
-        def _as_index_tensor2(idx, device=dev):
+        # -----------------------------
+        # helpers
+        # -----------------------------
+        def _as_index_tensor(idx, device):
             if idx is None:
                 return None
             if torch.is_tensor(idx):
-                return idx.to(device=device, non_blocking=True).long()
+                return idx.to(device=device, non_blocking=True).reshape(-1).long()
             if isinstance(idx, np.ndarray):
-                return torch.from_numpy(idx).to(device=device, non_blocking=True).long()
+                return torch.from_numpy(idx).to(device=device, non_blocking=True).reshape(-1).long()
             if isinstance(idx, (list, tuple)):
                 if len(idx) == 0:
                     return torch.empty(0, device=device, dtype=torch.long)
-                if len(idx) > 0 and isinstance(idx[0], list):
+                # list of lists -> flatten
+                if len(idx) > 0 and isinstance(idx[0], (list, tuple, np.ndarray)):
                     flat = []
                     for sub in idx:
-                        flat.extend(sub)
+                        flat.extend(list(sub))
                     idx = flat
-                return torch.tensor(idx, device=device, dtype=torch.long)
+                return torch.tensor(idx, device=device, dtype=torch.long).reshape(-1)
             return torch.tensor([int(idx)], device=device, dtype=torch.long)
 
-        key_list_to_dump = {
-            "6_0_3_1_1_2_6_2_1_1_11_0",
-            "7_0_3_0_0_2_0_1_0_0_3_0",
-            "16_-1_4_0_0_1_0_0_0_0_16_0",
-            "16_1_4_0_1_3_6_0_5_0_0_0",
-        }
+        def _loss0(val, device, dtype):
+            """loss を 0-dim Tensor に揃える（grad を壊さない）"""
+            if torch.is_tensor(val):
+                return val.to(device=device, dtype=dtype).reshape(())
+            if val is None:
+                return torch.zeros((), device=device, dtype=dtype)
+            if isinstance(val, (float, int)):
+                return torch.tensor(float(val), device=device, dtype=dtype)
+            raise TypeError(f"loss must be Tensor/float/int/None, got {type(val)}")
 
-        if chunk_i is not None and int(chunk_i) == 0:
+        def _lookup_K(key_any):
+            K_e = self._get_absK_from_cb_dict(key_any)
+            if K_e is None:
+                K_e = self._get_absK_from_cb_dict(str(key_any))
+            if K_e is None:
+                K_e = int(getattr(self, "codebook_size", 1))
+                if logger is not None:
+                    logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
+            return int(K_e)
+
+        def _check_mask_global(md, global_start, global_end, logger, chunk_i, mode):
+            """軽量チェック: 各 key から最大32個, 合計256個だけ見る"""
+            if md is None or logger is None:
+                return
+            # chunk0 は設計上 “global_start==0 であるべき” なら hard に
+            hard = (chunk_i is not None and int(chunk_i) == 0 and mode not in ("eval", "test", "init_kmeans_final"))
+
+            checked = 0
+            oob = 0
+            for k, idx in md.items():
+                if idx is None or idx.numel() == 0:
+                    continue
+                s = idx
+                if s.numel() > 32:
+                    s = s[:32]
+                in_chunk = (s >= global_start) & (s < global_end)
+                oob += int((~in_chunk).sum().item())
+                checked += int(s.numel())
+                if checked >= 256:
+                    break
+
+            msg = f"[MASKCHK] checked={checked} oob={oob} range=[{global_start},{global_end}) chunk_i={chunk_i} mode={mode}"
+            if checked == 0:
+                logger.info(msg + " (no indices)")
+                return
+            if oob == 0:
+                logger.info(msg)
+            else:
+                if hard:
+                    raise RuntimeError(msg + " => mask_dict is likely NOT global or offset mismatch")
+                logger.warning(msg + " (non-fatal)")
+
+        # -----------------------------
+        # 0) global offset bookkeeping
+        # -----------------------------
+        if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
 
+        # 旧挙動に寄せる：eval/test/init は毎回 0 始まり（必要なら外してOK）
+        if mode in ("eval", "test", "init_kmeans_final"):
+            self.latent_size_sum = 0
+        elif chunk_i is not None and int(chunk_i) == 0:
+            self.latent_size_sum = 0
+
+        # -----------------------------
+        # 1) reshape -> flatten [1,B,D]
+        # -----------------------------
         x = x.float()
         if x.ndim == 2:
-            x = x.unsqueeze(0)
+            x = x.unsqueeze(0)  # [1,B,D]
         elif x.ndim >= 4:
             x = x.view(x.shape[0], -1, x.shape[-1])
 
@@ -2430,135 +2501,151 @@ class VectorQuantize(nn.Module):
             raise RuntimeError(f"x must be 3D [1,B,D], got shape={tuple(x.shape)}")
 
         flatten = x
-        B, D = int(flatten.shape[1]), int(flatten.shape[2])
+        B = int(flatten.shape[1])
+        D = int(flatten.shape[2])
+        device = flatten.device
+        dtype = flatten.dtype
 
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
 
-        self.quantize_dict: Dict[str, torch.Tensor] = {}
-        self.embed_ind_dict: Dict[str, torch.Tensor] = {}
+        # -----------------------------
+        # 2) normalize mask_dict (global LongTensor)
+        # -----------------------------
+        if mask_dict is not None:
+            # あなたの normalize が (device, logger) を受けられるならそれを使う
+            try:
+                mask_dict = self._normalize_mask_dict(mask_dict, logger, device=device)
+            except TypeError:
+                mask_dict = self._normalize_mask_dict(mask_dict)
 
-        mask_dict = self._normalize_mask_dict(mask_dict) if (mask_dict is not None) else None
+            # 最終保険: 必ず cuda long 1D に揃える
+            md2 = {}
+            for k, v in mask_dict.items():
+                vv = _as_index_tensor(v, device=device)
+                md2[k] = vv
+            mask_dict = md2
+
         if logger is not None:
-            print(f"[CODEBOOK] mode={mode}")
+            logger.info(f"[CODEBOOK] mode={mode}")
 
-        def _lookup_K(key_any):
-            K_e = self._get_absK_from_cb_dict(key_any)
-            if K_e is None:
-                K_e = self._get_absK_from_cb_dict(str(key_any))
-            if K_e is None:
-                K_e = int(self.codebook_size)
-                if logger is not None:
-                    logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
-            return int(K_e)
+        # 軽量グローバル健全性チェック
+        _check_mask_global(mask_dict, global_start, global_end, logger, chunk_i, mode)
+
+        # 強いチェック（重い）：debug_index が立ってたら oob を強制的に落とす
+        if getattr(self, "debug_index", False) and mask_dict is not None and B > 0:
+            # chunk0 のとき global_start は 0 のはず、という設計なら強制
+            if chunk_i is not None and int(chunk_i) == 0 and mode not in ("eval", "test", "init_kmeans_final"):
+                assert global_start == 0, f"[INDEX_MISMATCH] chunk head but global_start={global_start}"
+
+            n_checked = 0
+            n_oob = 0
+            for k, gi in mask_dict.items():
+                if gi is None or gi.numel() == 0:
+                    continue
+                s = gi
+                if s.numel() > 256:
+                    s = s[:256]
+                in_chunk = (s >= global_start) & (s < global_end)
+                n_oob += int((~in_chunk).sum().item())
+                n_checked += int(s.numel())
+                if n_checked >= 1024:
+                    break
+            assert n_oob == 0, (
+                f"[INDEX_MISMATCH] mask_dict contains out-of-chunk indices. "
+                f"range=[{global_start},{global_end}), checked={n_checked}, oob={n_oob}"
+            )
 
         # -----------------------------
-        # init_kmeans_final (no create)
+        # 3) init_kmeans_final: “作らない”で割当/SS/dump（返り値は loss 形式に合わせる）
         # -----------------------------
         if mode == "init_kmeans_final":
+            key_list_to_dump = {
+                "6_0_3_1_1_2_6_2_1_1_11_0",
+                "7_0_3_0_0_2_0_1_0_0_3_0",
+                "16_-1_4_0_0_1_0_0_0_0_16_0",
+                "16_1_4_0_1_3_6_0_5_0_0_0",
+            }
+
             if (not hasattr(self, "_kmeans_dump")) or (chunk_i is not None and int(chunk_i) == 0):
                 self._kmeans_dump = {}
 
+            self.quantize_dict = {}
+            self.embed_ind_dict = {}
+
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
-                    idx_global = _as_index_tensor2(idx_global)
                     if idx_global is None or idx_global.numel() == 0:
                         continue
-
                     gmask = (idx_global >= global_start) & (idx_global < global_end)
                     if not gmask.any():
                         continue
-
-                    idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                    idx_local = (idx_global[gmask] - global_start).to(device=device, dtype=torch.long)
                     if idx_local.numel() == 0:
                         continue
 
-                    masked_latents = flatten[0].index_select(0, idx_local)
+                    masked_latents = flatten[0].index_select(0, idx_local)  # [Ni,D]
                     if masked_latents.numel() == 0:
                         continue
 
                     skey = str(key)
                     K_e = _lookup_K(key)
 
+                    # ここは “作らない”
                     code, found = self._get_code_for_key_no_create(skey)
                     if code is None or (not found):
                         if logger is not None:
                             logger.warning(f"[NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
                         continue
 
-                    if logger is not None:
-                        with torch.no_grad():
-                            c = code.detach()
-                            logger.info(
-                                f"[CB_STATS] key={skey} K={c.shape[0]} D={c.shape[1]} "
-                                f"mean={c.mean().item():.6f} std={c.std().item():.6f} "
-                                f"row_std_mean={c.std(dim=1).mean().item():.6f}"
-                            )
-
                     with torch.no_grad():
                         dist = torch.cdist(masked_latents, code, p=2).pow(2)
                         idx_code = dist.argmin(dim=-1)
-
                     quantize = code.index_select(0, idx_code)
 
+                    # debug 保存（CPU）
                     self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
                     self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
 
-                    if logger is not None:
+                    # silhouette は必要ならここで（あなたの既存関数を呼ぶ）
+                    if logger is not None and hasattr(self, "silhouette_score_torch"):
                         try:
                             X = masked_latents.detach().float().cpu()
                             labels = idx_code.detach().cpu().long()
                             u, cts = labels.unique(return_counts=True)
-
-                            logger.info(
-                                f"[SS_IN] key={skey} N={X.shape[0]} D={X.shape[1]} "
-                                f"labels_unique={u.numel()} "
-                                f"mincnt={int(cts.min()) if cts.numel() else -1} "
-                                f"maxcnt={int(cts.max()) if cts.numel() else -1} "
-                                f"x_mean={float(X.mean())} x_std={float(X.std())} "
-                                f"nan={bool(torch.isnan(X).any())} inf={bool(torch.isinf(X).any())}"
-                            )
-
                             if u.numel() >= 2 and X.shape[0] >= 3 and int(cts.min()) >= 2:
-                                nmax = int(self.samples_latent_in_kmeans or 0)
+                                nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
-
                                 perm = torch.randperm(X.shape[0])[:n]
                                 xs = X.index_select(0, perm)
                                 ys = labels.index_select(0, perm)
-
-                                sil = self.silhouette_score_torch(
-                                    xs, ys, device="cuda" if torch.cuda.is_available() else "cpu"
-                                )
+                                sil = self.silhouette_score_torch(xs, ys,
+                                                                  device="cuda" if torch.cuda.is_available() else "cpu")
                                 logger.info(f"SS: {skey} {sil:.4f}, size {X.shape[0]}, K_e {K_e}")
                             else:
                                 logger.info(
-                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} "
-                                    f"mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}"
-                                )
+                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}")
                         except Exception as e:
                             logger.warning(f"[SS_FAIL] key={skey} err={repr(e)}")
 
+                    # dump
                     do_dump = (epoch is not None) and ((int(epoch) % 10 == 0) or (int(epoch) == 1))
                     if do_dump and (skey in key_list_to_dump):
-                        lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16)
-                        ctr_cpu = code.detach().to("cpu", dtype=torch.float16)
-                        asg_cpu = idx_code.detach().to("cpu")
-
-                        entry = self._kmeans_dump.get(skey, None)
+                        entry = self._kmeans_dump.get(skey)
                         if entry is None:
                             entry = {"latents": [], "centers": None, "assign": []}
                             self._kmeans_dump[skey] = entry
-
-                        entry["latents"].append(lat_cpu)
-                        entry["assign"].append(asg_cpu)
+                        entry["latents"].append(masked_latents.detach().to("cpu", dtype=torch.float16))
+                        entry["assign"].append(idx_code.detach().to("cpu"))
                         if entry["centers"] is None:
-                            entry["centers"] = ctr_cpu
+                            entry["centers"] = code.detach().to("cpu", dtype=torch.float16)
+
+                    del masked_latents, code, idx_code, quantize
 
             self.latent_size_sum = global_end
 
             do_dump = (epoch is not None) and ((int(epoch) % 10 == 0) or (int(epoch) == 1))
-            if do_dump:
+            if do_dump and len(getattr(self, "_kmeans_dump", {})) > 0:
                 out = {}
                 for k, v in self._kmeans_dump.items():
                     if k not in key_list_to_dump:
@@ -2568,7 +2655,6 @@ class VectorQuantize(nn.Module):
                         "centers": v["centers"],
                         "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
                     }
-
                 stamp = time.strftime("%Y%m%d_%H%M%S")
                 os.makedirs("dumps", exist_ok=True)
                 path = os.path.join("dumps", f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt")
@@ -2576,86 +2662,125 @@ class VectorQuantize(nn.Module):
                 self._kmeans_dump = {}
 
             torch.cuda.empty_cache()
-            return 0
+
+            # 返り値は “loss 形式” に統一
+            z = torch.zeros((), device=device, dtype=dtype)
+            return z, (z, z, z, z)
 
         # -----------------------------
-        # train / eval
+        # 4) train/eval: “変更後の処理” = quantize を作る + embed_ind を保存
         # -----------------------------
         if feature is None:
-            raise RuntimeError("feature is required in train/test/eval mode")
+            raise RuntimeError("feature is required in train/eval mode")
 
+        # feature はチェックだけ（必要ならここで feature 由来の key 生成等も可能）
         feat_flat = feature if torch.is_tensor(feature) else torch.cat(feature, dim=0)
-        feat_flat = feat_flat.contiguous().to(flatten.device)
-        logger.info(f"stop 0")
+        feat_flat = feat_flat.contiguous().to(device)
         if not (feat_flat.ndim == 2 and feat_flat.size(1) == 78):
             raise RuntimeError(f"feat_flat shape={tuple(feat_flat.shape)} (expected [B,78])")
         if feat_flat.size(0) != B:
             raise RuntimeError(f"feat_flat N={feat_flat.size(0)} != B={B}")
 
-        logger.info(f"stop 1")
+        self.quantize_dict = {}
+        self.embed_ind_dict = {}
+
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
-                idx_global = _as_index_tensor2(idx_global)
                 if idx_global is None or idx_global.numel() == 0:
                     continue
 
-                logger.info(f"stop 2")
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
 
-                idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                idx_local = (idx_global[gmask] - global_start).to(device=device, dtype=torch.long)
                 if idx_local.numel() == 0:
                     continue
 
-                masked_latents = flatten[0].index_select(0, idx_local)
+                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni,D]
                 if masked_latents.numel() == 0:
                     continue
 
                 skey = str(key)
                 K_e = _lookup_K(key)
 
-                safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device, create=True)
+                # train/eval は create OK（ただし理想は全部事前生成）
+                safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=device, create=True)
                 code_param = self.embed[safe]
-                code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
+                code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K,D]
 
                 with torch.no_grad():
                     dist = torch.cdist(masked_latents, code, p=2).pow(2)
                     idx_code = dist.argmin(dim=-1)
 
-                quantize = code.index_select(0, idx_code)
-
+                quantize = code.index_select(0, idx_code)  # [Ni,D]
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-        quantize_full = flatten[0].clone()
+                del masked_latents, code, idx_code, quantize
 
-        logger.info(f"stop 3")
+        # flatten[0] の一部を quantize に差し替える（“変更後の処理” の結果）
+        quantize_full = flatten[0].clone()  # [B,D]
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
                 skey = str(key)
                 if skey not in self.quantize_dict:
                     continue
-
-                idx_global = _as_index_tensor2(idx_global, device=dev)
                 if idx_global is None or idx_global.numel() == 0:
                     continue
-
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not gmask.any():
                     continue
+                idx_local = (idx_global[gmask] - global_start).to(device=device, dtype=torch.long)
+                if idx_local.numel() == 0:
+                    continue
+                qk = self.quantize_dict[skey].to(device=device, dtype=quantize_full.dtype)
+                quantize_full.index_copy_(0, idx_local, qk)
 
-                idx_in_chunk = idx_global[gmask]
-                idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
-
-                qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
-                if idx_local.numel() > 0:
-                    quantize_full.index_copy_(0, idx_local, qk)
-
+        # straight-through（返さないが、必要ならここで downstream 用に内部保持しても良い）
         quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
-        quantize_st = quantize_st.unsqueeze(0)
+        quantize_st = quantize_st.unsqueeze(0)  # [1,B,D]
+        self._last_quantize_st = quantize_st  # optional
 
-        logger.info(f"stop 4")
-        self.latent_size_sum = global_end
+        # -----------------------------
+        # 5) loss 計算（loss だけ返すための “旧インタフェース”）
+        #    - もし commitment_loss があるなら旧版の 4-tuple をそのまま使う
+        #    - 無い/使わないなら 0 を返す（normalize 側が落ちないように）
+        # -----------------------------
+        commit_loss = None
+        cb_loss = None
+        repel_loss = None
+        cb_repel_loss = None
+
+        if hasattr(self, "commitment_loss") and mask_dict is not None and B > 0:
+            # 期待: (commit, cb, rep, cb_rep)
+            out = self.commitment_loss(
+                encoder_outputs=flatten[0],  # [B,D]
+                mask_dict=mask_dict,  # global indices
+                codebook=getattr(self, "_codebook", None) or getattr(self, "embed", None),
+                logger=logger,
+                chunk_start=global_start,
+                beta=getattr(self, "beta", 0.25),
+                temperature=getattr(self, "temperature", None),
+                use_cosine=getattr(self, "use_cosine", False),
+            )
+            if not (isinstance(out, (tuple, list)) and len(out) == 4):
+                raise TypeError(f"commitment_loss must return 4-tuple, got {type(out)}: {out}")
+            commit_loss, cb_loss, repel_loss, cb_repel_loss = out
+
+        commit_loss = _loss0(commit_loss, device=device, dtype=dtype)
+        cb_loss = _loss0(cb_loss, device=device, dtype=dtype)
+        repel_loss = _loss0(repel_loss, device=device, dtype=dtype)
+        cb_repel_loss = _loss0(cb_repel_loss, device=device, dtype=dtype)
+
+        total_loss = commit_loss + cb_loss + repel_loss + cb_repel_loss
+
+        # -----------------------------
+        # 6) global offset update
+        # -----------------------------
+        if mode not in ("eval", "test", "init_kmeans_final"):
+            self.latent_size_sum = global_end
         torch.cuda.empty_cache()
-        return quantize_st, self.embed_ind_dict, self.embed
+
+        # 返り値は “loss 形式” だけ
+        return total_loss, (commit_loss, cb_loss, repel_loss, cb_repel_loss)
