@@ -107,13 +107,35 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     # ---------------------------
     logger.info("norm q 0")
 
-    if not isinstance(qo, (tuple, list)) or len(qo) != 2:
-        raise TypeError(
-            f"Expected qo=(loss, (commit, cb, rep, cb_rep)), "
-            f"got type={type(qo)} value={qo}"
-        )
+    def _extract_loss(qo):
+        import torch
 
-    loss, inner = qo
+        # case1: already scalar/tensor loss
+        if torch.is_tensor(qo) or isinstance(qo, (float, int)):
+            return qo, (0.0, 0.0, 0.0, 0.0)
+
+        # case2: (loss, inner)
+        if isinstance(qo, (tuple, list)) and len(qo) == 2:
+            loss, inner = qo
+            if isinstance(inner, (tuple, list)) and len(inner) == 4:
+                return loss, tuple(inner)
+            # inner malformed -> treat as zeros
+            return loss, (0.0, 0.0, 0.0, 0.0)
+
+        # case3: model forward style (quantize, embed_ind_dict, embed)
+        # ここに落ちるなら、qo には「loss」ではなく forward 出力が入ってる
+        if isinstance(qo, (tuple, list)) and len(qo) == 3:
+            q, embed_ind_dict, embed = qo
+            raise TypeError(
+                "qo looks like model forward output (quantize, embed_ind_dict, embed), "
+                "not (loss, (commit, cb, rep, cb_rep)). "
+                "You probably passed the wrong variable into this normalization."
+            )
+
+        raise TypeError(f"Unrecognized qo format: type={type(qo)} value={repr(qo)[:500]}")
+
+    loss, (commit, cb, rep, cb_rep) = _extract_loss(qo)
+    logger.info("norm q 1")
 
     logger.info("norm q 1")
     if not isinstance(inner, (tuple, list)) or len(inner) != 4:
