@@ -1661,13 +1661,14 @@ class EuclideanCodebook(nn.Module):
         # ==============================================================
         if feature is None:
             raise RuntimeError("feature is required in train/test mode")
-
+        logger.info(f"stop 0")
         feat_flat = feature if torch.is_tensor(feature) else torch.cat(feature, dim=0)
         feat_flat = feat_flat.contiguous().to(flatten.device)
 
         assert feat_flat.ndim == 2 and feat_flat.size(1) == 78, f"feat_flat shape={tuple(feat_flat.shape)}"
         assert feat_flat.size(0) == B, f"feat_flat N={feat_flat.size(0)} != B={B}"
 
+        logger.info(f"stop 1")
         if mask_dict is not None:
             for key, idx_global in mask_dict.items():
                 if idx_global is None or idx_global.numel() == 0:
@@ -1787,6 +1788,8 @@ class EuclideanCodebook(nn.Module):
 
         self.latent_size_sum = global_end
         torch.cuda.empty_cache()
+
+        logger.info(f"stop 2")
         return quantize_st, self.embed_ind_dict, self.embed
 
 import os
