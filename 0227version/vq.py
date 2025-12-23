@@ -1900,31 +1900,25 @@ class VectorQuantize(nn.Module):
 
         return rearrange(codebook, '1 ... -> ...')
 
-    def _safe_key(self, skey: str) -> str:
-        """
-        Convert arbitrary skey to a ModuleDict/ParameterDict-safe string key.
-        - keep [A-Za-z0-9_]
-        - replace others with '_'
-        - avoid empty
-        - reduce collision risk by appending short hash when needed
-        """
-
+    def _safe_base(self, skey: str) -> str:
         import re
-        import hashlib
         s = str(skey)
-
-        # replace illegal chars
         base = re.sub(r"[^0-9A-Za-z_]+", "_", s).strip("_")
-        if base == "":
-            base = "key"
+        return base if base else "key"
 
-        # keep it from getting ridiculously long & help uniqueness
-        h = hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
-        # if already ends with that hash, don't double-append
-        if not base.endswith(h):
-            base = f"{base}__{h}"
+    def _safe_key(self, skey: str, *, force_hash: bool = False) -> str:
+        """
+        - 通常は base だけ返す（見た目が綺麗、デバッグしやすい）
+        - 衝突時/強制時だけ __hash を付ける
+        """
+        import hashlib
+        base = self._safe_base(skey)
 
-        return base
+        if not force_hash:
+            return base
+
+        h = hashlib.sha1(str(skey).encode("utf-8")).hexdigest()[:10]
+        return f"{base}__{h}"
 
     def _cb_to_tensor(self, cb):
         """
@@ -2081,88 +2075,6 @@ class VectorQuantize(nn.Module):
         equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
         return equivalence_groups
 
-    def orthogonal_loss_fn(
-            self, mask_dict, embed_ind_dict, codebook, init_feat, x, quantize_dict, logger, epoch, chunk=0
-        ):
-        import torch
-        dev = x.device if hasattr(x, "device") else "cpu"
-
-        # Accumulators
-        repel_wsum = torch.zeros((), device=dev)
-        cb_repel_wsum = torch.zeros((), device=dev)
-        sil_wsum = torch.zeros((), device=dev)
-        w_total = 0.0  # total weight of contributing elements
-        # OPTIONAL: collect debug info
-        contributed_keys = []
-        # print(f"[ORTHO] epoch={epoch} chunk={chunk} type(embed_ind_dict)={type(embed_ind_dict).__name__}")
-        # if hasattr(embed_ind_dict, "__len__"):
-        #     print(f"[ORTHO] keys={list(embed_ind_dict.keys())[:8]} len={len(embed_ind_dict)}")
-        # else:
-        #     print("[ORTHO] embed_ind_dict has no __len__")
-        #
-        # # If dict-like but empty, say why we return zeros:
-        # if not embed_ind_dict:
-        #     print(f"[ORTHO SKIP] epoch={epoch} chunk={chunk}: embed_ind_dict is empty")
-
-        # Iterate per element
-        for key in sorted(embed_ind_dict.keys()):
-            inds = embed_ind_dict[key]
-            # inds may be tensor or list; normalize length
-            n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
-            # print(f"n {n}")
-            # Need >=2 for pairwise losses; skip otherwise
-            if n < 2:
-                continue
-            # Fetch per-element latents/embeds as you already do
-            # Example (adapt to your variables):
-            # z_k = quantize_dict[key]  # [n, D]
-            # cb_k = codebook[str(key)]  # [K, D] or similar
-
-            # --- compute your per-element losses here (examples as placeholders) ---
-            # repel_k = ...
-            # cb_repel_k = ...
-            # sil_k = ...
-            sil_k = 0
-            repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
-                (self.compute_contrastive_loss(x, chunk, logger, codebook[str(key)]))
-            # print(f"repel_k {repel_k}")
-            weight_by_counts = True
-            # Weight: either by count or uniform per contributing element
-            w = float(n) if weight_by_counts else 1.0
-
-            # Accumulate weighted sums
-            repel_wsum = repel_wsum + w * repel_k
-            cb_repel_wsum = cb_repel_wsum + w * cb_repel_k
-            sil_wsum = sil_wsum + w * sil_k
-
-            w_total += w
-            contributed_keys.append((key, n))
-            # print(f"w_total {w_total}")
-
-        if w_total == 0.0:
-            # No contributors in this chunk → return clean zeros (and optionally log)
-            if logger is not None:
-                logger.info(f"[orthogonal_loss_fn] chunk {chunk}: no contributing elements; returning zeros.")
-            zero = torch.zeros((), device=dev)
-            return {
-                "repel_loss": zero,
-                "cb_repel_loss": zero,
-                "sil_loss": zero,
-                "contrib": [],
-            }
-
-        # Safe averages
-        repel_avg = repel_wsum / w_total
-        cb_repel_avg = cb_repel_wsum / w_total
-        sil_avg = sil_wsum / w_total
-        # print(f"repel_avg {repel_avg}")  # this is nonzero
-        return {
-            "repel_loss": repel_avg,
-            "cb_repel_loss": cb_repel_avg,
-            "sil_loss": sil_avg,
-            "contrib": contributed_keys,  # for debugging
-        }
-
     def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
         # embed_ind_dict.to("cuda")
         codebook.to("cuda")
@@ -2190,15 +2102,6 @@ class VectorQuantize(nn.Module):
 
     import torch
     import torch.nn.functional as F
-
-    def pairwise_sq_dists(self, x, y):
-        # x: [B, D], y: [K, D]
-        # computes ||x - y||^2 without sqrt (better gradients / numerics)
-        x2 = (x ** 2).sum(dim=1, keepdim=True)  # [B, 1]
-        y2 = (y ** 2).sum(dim=1, keepdim=True).t()  # [1, K]
-        # Clamp to avoid tiny negatives from fp errors
-        d2 = torch.clamp(x2 + y2 - 2.0 * x @ y.t(), min=0.0)
-        return d2
 
     @staticmethod
     def pairwise_sq_dists(x, y):  # [B,D], [K,D] -> [B,K]
@@ -2377,6 +2280,13 @@ class VectorQuantize(nn.Module):
         repel_num    = encoder_outputs.new_zeros(())
         cb_repel_num = encoder_outputs.new_zeros(())
 
+        # commitment_loss 内の for k, g_idx in mask_dict.items(): の少し上で
+        def _get_cb_param_for_key(k):
+            safe = self._get_or_create_safe_key(str(k), create=False)  # createしない
+            if safe in self.embed:
+                return self.embed[safe]
+            return None
+
         # ---- 3. main loop over mask_dict keys ----
         for k, g_idx in mask_dict.items():
             # -------------------------------
@@ -2427,7 +2337,11 @@ class VectorQuantize(nn.Module):
             # -------------------------------
             # 3-4) この key 用コードブック取得 [K_e, D]
             # -------------------------------
-            cb = _get_codebook_for_key(k, device=device, dtype=dtype)  # [K_e, D]
+            cb_param = _get_cb_param_for_key(k)
+            if cb_param is None:
+                continue
+            cb = cb_param  # [K,D]
+
             K_e, Dk = cb.shape
             assert Dk == D, f"latent D={D} != codebook D={Dk} for key={k}"
 
@@ -2535,108 +2449,79 @@ class VectorQuantize(nn.Module):
 
         return int(default)
 
-    import torch
-    from einops import rearrange
-    def _get_code_for_key_no_create(self, key):
-        """
-        Return (code_tensor_or_None, safe_bool)
-
-        - safe=True  : key exists and returns a Tensor/Parameter [K, D]
-        - safe=False : key not found (or codebook not initialized)
-        - NEVER creates a new codebook entry.
-        """
+    def _get_or_create_safe_key(
+            self, skey: str, K_e=None, D=None, device=None, *, create: bool = True
+    ) -> str:
         import torch
         import torch.nn as nn
 
-        cb_src = getattr(self, "_codebook", None)
-        if cb_src is None:
-            return None, False
-
-        # normalize key candidates
-        key_s = str(key)
-        candidates = [key, key_s]
-
-        t = None
-
-        # ---- dict / ModuleDict / ParameterDict ----
-        if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
-            for k in candidates:
-                if k in cb_src:
-                    t = cb_src[k]
-                    break
-
-            if t is None:
-                # try relaxed match: str(k) equality
-                if isinstance(cb_src, dict):
-                    for k2, v2 in cb_src.items():
-                        if str(k2) == key_s:
-                            t = v2
-                            break
-
-            if t is None:
-                return None, False
-
-            # unwrap Embedding/Parameter
-            if isinstance(t, nn.Embedding):
-                t = t.weight
-            elif isinstance(t, nn.Parameter):
-                t = t
-
-            if not torch.is_tensor(t):
-                return None, False
-
-            return t, True
-
-        # ---- single Tensor / Parameter / Embedding ----
-        if isinstance(cb_src, nn.Embedding):
-            return cb_src.weight, True
-        if isinstance(cb_src, nn.Parameter):
-            return cb_src, True
-        if torch.is_tensor(cb_src):
-            return cb_src, True
-
-        return None, False
-
-    # ---------------------------
-    # 1) Safe key: add collision guard + create flag
-    # ---------------------------
-    def _get_or_create_safe_key(
-            self,
-            skey: str,
-            K_e=None,
-            D=None,
-            device=None,
-            *,
-            create: bool = True,
-    ) -> str:
-        """
-        Map original key -> safe_key.
-        Optionally create self.embed[safe_key] Parameter when missing.
-        Use create=False to NEVER create (so you can skip missing codebooks safely).
-        """
         skey = str(skey)
 
+        # 既に確定済みならそれを返す（ロード後も安定）
         if skey in self.key_to_safe:
             safe = self.key_to_safe[skey]
         else:
-            safe = self._safe_key(skey)
+            base = self._safe_key(skey, force_hash=False)
 
-            # ---- collision guard ----
-            if safe in self.safe_to_key and self.safe_to_key[safe] != skey:
-                raise RuntimeError(
-                    f"SAFE KEY COLLISION: safe='{safe}' maps to both "
-                    f"'{self.safe_to_key[safe]}' and '{skey}'"
-                )
+            # base が未使用なら base を採用
+            if base not in self.safe_to_key:
+                safe = base
+
+            # base が同一元キーに紐づいてるなら同じ safe を採用
+            elif self.safe_to_key[base] == skey:
+                safe = base
+
+            # base が別元キーに使われてる → hash 付きへフォールバック
+            else:
+                safe = self._safe_key(skey, force_hash=True)
+                # それでも万が一衝突したらエラー
+                if safe in self.safe_to_key and self.safe_to_key[safe] != skey:
+                    raise RuntimeError(f"SAFE KEY COLLISION even after hash: {safe}")
 
             self.key_to_safe[skey] = safe
             self.safe_to_key[safe] = skey
 
-        # ---- create on demand ----
-        if create and (safe not in self.embed) and (K_e is not None) and (D is not None) and (device is not None):
+        # create on demand
+        if create and (safe not in self.embed):
+            if (K_e is None) or (D is None) or (device is None):
+                raise RuntimeError(f"Need K_e/D/device to create codebook for {skey}")
             init = torch.randn(K_e, D, device=device) * 0.01
             self.embed[safe] = nn.Parameter(init, requires_grad=True)
 
         return safe
+
+    import torch
+    from einops import rearrange
+    def _get_code_for_key_no_create(self, key):
+        """
+        Return (code_tensor_or_None, found_bool)
+        - NEVER creates
+        """
+        import torch
+
+        skey = str(key)
+        # 既に mapping があるならそれ優先
+        safe = self.key_to_safe.get(skey, None)
+        if safe is not None and safe in self.embed:
+            return self.embed[safe], True
+
+        # mapping が無い場合：base / base__hash の両方を試す
+        base = self._safe_key(skey, force_hash=False)
+        if base in self.embed:
+            # mapping もここで確定させる（今後速くなる）
+            self.key_to_safe[skey] = base
+            self.safe_to_key.setdefault(base, skey)
+            return self.embed[base], True
+
+        # hash 付きも試す（旧データ互換）
+        hashed = self._safe_key(skey, force_hash=True)
+        if hashed in self.embed:
+            self.key_to_safe[skey] = hashed
+            self.safe_to_key.setdefault(hashed, skey)
+            return self.embed[hashed], True
+
+        return None, False
+
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         import os, time, torch
