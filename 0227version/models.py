@@ -105,17 +105,21 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     # only supported shape:
     # (loss, (commit, cb, rep, cb_rep))
     # ---------------------------
+    logger.info(f"norm q 0")
     if not (isinstance(qo, (tuple, list)) and len(qo) == 2 and isinstance(qo[1], (tuple, list))):
         raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
 
+    logger.info(f"norm q 1")
     loss, inner = qo
     if len(inner) != 4:
         raise TypeError(f"Expected inner tuple length 4: (commit, cb, rep, cb_rep), got {len(inner)}: {inner}")
 
+    logger.info(f"norm q 2")
     commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
 
     _infer_device_dtype(loss, commit, cb, rep, cb_rep)
 
+    logger.info(f"norm q 3")
     embed = None  # qoにはembedが無い前提
     sil = None    # qoにはsilが無い前提（0で埋める）
 

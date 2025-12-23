@@ -37,6 +37,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
         loss, cb, loss_list3 = outputs
 
+    logger.info(f"train sage 0")
     # ---- sanity checks on loss ----
     if not isinstance(loss, torch.Tensor):
         raise RuntimeError(
@@ -44,6 +45,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
             "Do not use .item() / float() for the training loss."
         )
 
+    logger.info(f"train sage 1")
     if not loss.requires_grad:
         raise RuntimeError(
             f"[train_sage] loss.requires_grad=False (shape={loss.shape}, "
@@ -51,6 +53,7 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
             "Likely .detach() or .item() used on loss inside the model."
         )
 
+    logger.info(f"train sage 2")
     # ---- backward & step ----
     if scaler is not None:
         scaler.scale(loss).backward()
@@ -63,11 +66,14 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
+    logger.info(f"train sage 3")
     optimizer.zero_grad(set_to_none=True)
 
+    logger.info(f"train sage 4")
     # ---- convert outputs for logging ----
     loss_scalar = float(loss.detach().cpu())
 
+    logger.info(f"train sage 5")
     loss_list_out = []
     for l in loss_list3:  # loss_list3 = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         # handle both Tensor and float / numpy
@@ -75,6 +81,8 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
             loss_list_out.append(float(l.detach().cpu()))
         else:
             loss_list_out.append(float(l))
+
+    logger.info(f"train sage 6")
     return loss_scalar, loss_list_out
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
