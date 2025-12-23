@@ -293,7 +293,8 @@ def collect_global_indices_compact(
         A_sel = attr_np[..., BASE_COLS].astype(np.int32)  # (M,100,6)
 
         # Valid (unpadded) node mask
-        node_mask = (np.abs(attr_np).sum(axis=2) > 0)     # (M,100) bool
+        # Valid (unpadded) node mask  ←最重要
+        node_mask = (attr_np[..., COL_Z] > 0)  # (M,100) bool
 
         # Degree from adjacency (exclude self-loops)
         deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)  # (M,100)
