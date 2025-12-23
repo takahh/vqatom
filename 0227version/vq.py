@@ -1340,9 +1340,10 @@ class EuclideanCodebook(nn.Module):
     # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
     # ------------------------------------------------------------------
-    def _normalize_mask_dict(self, mask_dict, device=None):
+    def _normalize_mask_dict(self, mask_dict, logger, device=None):
         import numpy as np
 
+        logger.info(f"fnorm 0")
         if mask_dict is None:
             return None
         norm = {}
@@ -1496,7 +1497,7 @@ class EuclideanCodebook(nn.Module):
         self.embed_ind_dict = {}
 
         # normalize mask_dict to global LongTensor indices
-        mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device) if mask_dict is not None else None
+        mask_dict = self._normalize_mask_dict(mask_dict, logger, device=flatten.device) if mask_dict is not None else None
         if logger:
             logger.info(f"[CODEBOOK] mode={mode}")
 
