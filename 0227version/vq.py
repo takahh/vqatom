@@ -1316,8 +1316,13 @@ class EuclideanCodebook(nn.Module):
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
 
-            # cs = torch.zeros(K_req, device=device, dtype=torch.float32)
-            # ea = means_kd.detach().to(device=device, dtype=torch.float32) * counts_k.view(-1, 1)
+            K_req = int(get_absK(self.cb_dict, skey))
+            N_i = int(N_i)
+            K_run = min(K_req, N_i)
+
+            # ここで「counts_k と means_kd が K_req になってる」ことを保証
+            assert counts_k.shape[0] == K_req, (skey, counts_k.shape, K_req)
+            assert means_kd.shape[0] == K_req, (skey, means_kd.shape, K_req)
 
             cs = counts_k.to(device=device, dtype=torch.float32)
             ea = means_kd.detach().to(device=device, dtype=torch.float32) * cs.view(-1, 1)
@@ -1328,9 +1333,6 @@ class EuclideanCodebook(nn.Module):
 
             self.register_buffer(buf_name_cs, cs)
             self.register_buffer(buf_name_ea, ea)
-            K_req = int(get_absK(self.cb_dict, skey))
-            N_i = int(N_i)
-            K_run = min(K_req, N_i)
 
             nz = int((counts_k > 0).sum().item())
             print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
