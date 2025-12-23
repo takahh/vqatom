@@ -1500,18 +1500,28 @@ class EuclideanCodebook(nn.Module):
         if logger:
             logger.info(f"[CODEBOOK] mode={mode}")
 
-        # --------------------------------------------------------------
-        # helper: K lookup
-        # --------------------------------------------------------------
         def _lookup_K(key_any):
+            import time
+            t0 = time.time()
+            print(f"[HB] lookup_K enter key={key_any!r}", flush=True)
+
+            print("[HB] before get_absK(key_any)", flush=True)
             K_e = self._get_absK_from_cb_dict(key_any)
+            print(f"[HB] after get_absK(key_any) -> {K_e}", flush=True)
+
             if K_e is None:
+                print("[HB] before get_absK(str)", flush=True)
                 K_e = self._get_absK_from_cb_dict(str(key_any))
+                print(f"[HB] after get_absK(str) -> {K_e}", flush=True)
+
             if K_e is None:
                 K_e = int(self.codebook_size)
                 if logger:
                     logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
-            return int(K_e)
+
+            K_e = int(K_e)
+            print(f"[HB] lookup_K exit K_e={K_e} dt={time.time() - t0:.3f}s", flush=True)
+            return K_e
 
         # ==============================================================
         # 2) init_kmeans_final phase
