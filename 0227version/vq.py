@@ -1941,10 +1941,10 @@ class VectorQuantize(nn.Module):
         self.tau_ema = float(tau_ema)
         self.codebook_max_norm = codebook_max_norm
 
-        # Per-key codebooks
-        self.embed = nn.ParameterDict()  # safe_key -> [K, D] Parameter
-        self.key_to_safe: Dict[str, str] = {}
-        self.safe_to_key: Dict[str, str] = {}
+        # # Per-key codebooks
+        # self.embed = nn.ParameterDict()  # safe_key -> [K, D] Parameter
+        # self.key_to_safe: Dict[str, str] = {}
+        # self.safe_to_key: Dict[str, str] = {}
 
         # Global latent offset bookkeeping (updated in forward)
         self.latent_size_sum = 0
@@ -2202,44 +2202,6 @@ class VectorQuantize(nn.Module):
 
         return int(default)
 
-    # -------------------------------------------------------------------------
-    # Safe-key mapping + creation
-    # -------------------------------------------------------------------------
-    def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None, *, create: bool = True) -> str:
-        skey = str(skey)
-
-        if skey in self.key_to_safe:
-            safe = self.key_to_safe[skey]
-        else:
-            safe = self._safe_key(skey)
-            if safe in self.safe_to_key and self.safe_to_key[safe] != skey:
-                # With base64 encoding this should not happen unless corrupted state
-                raise RuntimeError(f"SAFE KEY COLLISION (unexpected): safe={safe} {self.safe_to_key[safe]} != {skey}")
-            self.key_to_safe[skey] = safe
-            self.safe_to_key[safe] = skey
-
-        if create and (safe not in self.embed):
-            if (K_e is None) or (D is None) or (device is None):
-                raise RuntimeError(f"Need K_e/D/device to create codebook for {skey}")
-            init = torch.randn(int(K_e), int(D), device=device) * 0.01
-            self.embed[safe] = nn.Parameter(init, requires_grad=True)
-
-        return safe
-
-    def _get_code_for_key_no_create(self, key) -> Tuple[Optional[torch.Tensor], bool]:
-        skey = str(key)
-
-        safe = self.key_to_safe.get(skey, None)
-        if safe is not None and safe in self.embed:
-            return self.embed[safe], True
-
-        safe2 = self._safe_key(skey)
-        if safe2 in self.embed:
-            self.key_to_safe[skey] = safe2
-            self.safe_to_key.setdefault(safe2, skey)
-            return self.embed[safe2], True
-
-        return None, False
 
     # -------------------------------------------------------------------------
     # Commitment loss (your weighted per-key loop, cleaned + base64 safe keys)
@@ -2280,8 +2242,8 @@ class VectorQuantize(nn.Module):
 
         def _get_cb_param_for_key(k_any):
             safe = self._get_or_create_safe_key(str(k_any), create=False)
-            if safe in self.embed:
-                return self.embed[safe]
+            if safe in self._codebook.embed:
+                return self._codebook.embed[safe]
             return None
 
         for k, g_idx in mask_dict.items():
@@ -2587,6 +2549,7 @@ class VectorQuantize(nn.Module):
         # -----------------------------
         # 3) init_kmeans_final: “作らない”で割当/SS/dump（返り値は loss 形式に合わせる）
         # -----------------------------
+
         if mode == "init_kmeans_final":
             key_list_to_dump = {
                 "6_0_3_1_1_2_6_2_1_1_11_0",
@@ -2634,25 +2597,30 @@ class VectorQuantize(nn.Module):
                     # debug 保存（CPU）
                     self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
                     self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
-
-                    # silhouette は必要ならここで（あなたの既存関数を呼ぶ）
-                    if logger is not None and hasattr(self, "silhouette_score_torch"):
+                    # silhouette（1回だけ）
+                    if logger is not None and hasattr(self._codebook, "silhouette_score_torch"):
                         try:
                             X = masked_latents.detach().float().cpu()
                             labels = idx_code.detach().cpu().long()
                             u, cts = labels.unique(return_counts=True)
+
                             if u.numel() >= 2 and X.shape[0] >= 3 and int(cts.min()) >= 2:
                                 nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
+
                                 perm = torch.randperm(X.shape[0])[:n]
                                 xs = X.index_select(0, perm)
                                 ys = labels.index_select(0, perm)
-                                sil = self.silhouette_score_torch(xs, ys,
-                                                                  device="cuda" if torch.cuda.is_available() else "cpu")
+
+                                sil = self._codebook.silhouette_score_torch(
+                                    xs, ys, device="cuda" if torch.cuda.is_available() else "cpu"
+                                )
                                 logger.info(f"SS: {skey} {sil:.4f}, size {X.shape[0]}, K_e {K_e}")
                             else:
                                 logger.info(
-                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}")
+                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} "
+                                    f"mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}"
+                                )
                         except Exception as e:
                             logger.warning(f"[SS_FAIL] key={skey} err={repr(e)}")
 
@@ -2734,7 +2702,7 @@ class VectorQuantize(nn.Module):
 
                 # train/eval は create OK（ただし理想は全部事前生成）
                 safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=device, create=True)
-                code_param = self.embed[safe]
+                code_param = self._codebook.embed[safe]
                 code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K,D]
 
                 with torch.no_grad():
