@@ -2701,7 +2701,7 @@ class VectorQuantize(nn.Module):
                 K_e = _lookup_K(key)
 
                 # train/eval は create OK（ただし理想は全部事前生成）
-                safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=device, create=True)
+                safe = self._codebook._get_or_create_safe_key(skey, K_e=K_e, D=D, device=device, create=True)
                 code_param = self._codebook.embed[safe]
                 code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K,D]
 
