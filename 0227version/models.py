@@ -61,8 +61,8 @@ import torch
 
 def _zeros_like(x, device=None, dtype=None):
     return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
-
 import torch
+
 def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     """
     Normalize quantizer outputs to 7-tuple:
@@ -86,7 +86,7 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
                         device = x.device
                     if dtype is None:
                         dtype = x.dtype
-                    return
+                    break
         if device is None:
             device = "cpu"
         if dtype is None:
@@ -95,49 +95,40 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     def _scalar_to_tensor(x):
         if torch.is_tensor(x):
             return x
-        if x is None:
-            _infer_device_dtype()
-            return torch.zeros((), device=device, dtype=dtype)
         _infer_device_dtype()
+        if x is None:
+            return torch.zeros((), device=device, dtype=dtype)
         return torch.as_tensor(x, device=device, dtype=dtype)
 
-    # ---------------------------
-    # only supported shape:
-    # (loss, (commit, cb, rep, cb_rep))
-    # ---------------------------
     logger.info("norm q 0")
 
-    def _extract_loss(qo):
-        import torch
-
+    def _extract_loss(qo_):
         # case1: already scalar/tensor loss
-        if torch.is_tensor(qo) or isinstance(qo, (float, int)):
-            return qo, (0.0, 0.0, 0.0, 0.0)
+        if torch.is_tensor(qo_) or isinstance(qo_, (float, int)):
+            return qo_, (0.0, 0.0, 0.0, 0.0)
 
         # case2: (loss, inner)
-        if isinstance(qo, (tuple, list)) and len(qo) == 2:
-            loss, inner = qo
-            if isinstance(inner, (tuple, list)) and len(inner) == 4:
-                return loss, tuple(inner)
+        if isinstance(qo_, (tuple, list)) and len(qo_) == 2:
+            loss_, inner_ = qo_
+            if isinstance(inner_, (tuple, list)) and len(inner_) == 4:
+                return loss_, tuple(inner_)
             # inner malformed -> treat as zeros
-            return loss, (0.0, 0.0, 0.0, 0.0)
+            return loss_, (0.0, 0.0, 0.0, 0.0)
 
         # case3: model forward style (quantize, embed_ind_dict, embed)
-        # ここに落ちるなら、qo には「loss」ではなく forward 出力が入ってる
-        if isinstance(qo, (tuple, list)) and len(qo) == 3:
-            q, embed_ind_dict, embed = qo
+        if isinstance(qo_, (tuple, list)) and len(qo_) == 3:
             raise TypeError(
                 "qo looks like model forward output (quantize, embed_ind_dict, embed), "
                 "not (loss, (commit, cb, rep, cb_rep)). "
                 "You probably passed the wrong variable into this normalization."
             )
 
-        raise TypeError(f"Unrecognized qo format: type={type(qo)} value={repr(qo)[:500]}")
+        raise TypeError(f"Unrecognized qo format: type={type(qo_)} value={repr(qo_)[:500]}")
 
-    loss, (commit, cb, rep, cb_rep) = _extract_loss(qo)
+    loss, inner = _extract_loss(qo)
     logger.info("norm q 1")
 
-    logger.info("norm q 1")
+    # inner is guaranteed 4-tuple here (or zeros)
     if not isinstance(inner, (tuple, list)) or len(inner) != 4:
         raise TypeError(
             f"Expected inner=(commit, cb, rep, cb_rep), "
@@ -147,20 +138,19 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     commit, cb, rep, cb_rep = inner
     logger.info("norm q 2")
 
-    commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
-
     _infer_device_dtype(loss, commit, cb, rep, cb_rep)
 
-    logger.info(f"norm q 3")
     embed = None  # qoにはembedが無い前提
-    sil = None    # qoにはsilが無い前提（0で埋める）
+    sil = 0.0     # silhouette_loss はここでは 0 埋め
+
+    logger.info("norm q 3")
 
     return (
         _scalar_to_tensor(loss),
         embed,
         _scalar_to_tensor(commit),
         _scalar_to_tensor(cb),
-        _scalar_to_tensor(sil),      # silhouette_loss = 0
+        _scalar_to_tensor(sil),
         _scalar_to_tensor(rep),
         _scalar_to_tensor(cb_rep),
     )
