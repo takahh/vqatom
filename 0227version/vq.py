@@ -2444,37 +2444,65 @@ class VectorQuantize(nn.Module):
                     logger.warning(f"[K_FALLBACK] key={str(key_any)} -> K_e={K_e} (not found in cb_dict)")
             return int(K_e)
 
-        def _check_mask_global(md, global_start, global_end, logger, chunk_i, mode):
-            """軽量チェック: 各 key から最大32個, 合計256個だけ見る"""
-            if md is None or logger is None:
-                return
-            # chunk0 は設計上 “global_start==0 であるべき” なら hard に
-            hard = (chunk_i is not None and int(chunk_i) == 0 and mode not in ("eval", "test", "init_kmeans_final"))
+        def _check_mask_global(mask_dict, global_start, global_end, logger, chunk_i, mode, max_report=5):
+            """
+            mask_dict は「グローバル index の集合」でよい。
+            このchunk外の index が含まれていても問題ない（forward側で gmask で切る）。
+            ただし負の index はバグなので落とす。
+            """
+            import torch
 
-            checked = 0
+            if mask_dict is None:
+                return
+
+            neg = 0
             oob = 0
-            for k, idx in md.items():
-                if idx is None or idx.numel() == 0:
+            checked = 0
+            examples = []
+
+            for k, idx in mask_dict.items():
+                if idx is None:
                     continue
-                s = idx
-                if s.numel() > 32:
-                    s = s[:32]
-                in_chunk = (s >= global_start) & (s < global_end)
-                oob += int((~in_chunk).sum().item())
-                checked += int(s.numel())
+                if not torch.is_tensor(idx):
+                    idx = torch.as_tensor(idx)
+
+                idx = idx.reshape(-1)
+                if idx.numel() == 0:
+                    continue
+
+                # 重すぎ回避：先頭だけ
+                if idx.numel() > 256:
+                    idx = idx[:256]
+
+                checked += int(idx.numel())
+
+                neg_mask = (idx < 0)
+                if neg_mask.any():
+                    neg += int(neg_mask.sum().item())
+                    if len(examples) < max_report:
+                        examples.append((str(k), idx[neg_mask][:5].tolist()))
+
+                oob_mask = (idx < global_start) | (idx >= global_end)
+                if oob_mask.any():
+                    oob += int(oob_mask.sum().item())
+                    if len(examples) < max_report:
+                        examples.append((str(k), idx[oob_mask][:5].tolist()))
+
                 if checked >= 256:
                     break
 
-            msg = f"[MASKCHK] checked={checked} oob={oob} range=[{global_start},{global_end}) chunk_i={chunk_i} mode={mode}"
-            if checked == 0:
-                logger.info(msg + " (no indices)")
-                return
-            if oob == 0:
-                logger.info(msg)
-            else:
-                if hard:
-                    raise RuntimeError(msg + " => mask_dict is likely NOT global or offset mismatch")
-                logger.warning(msg + " (non-fatal)")
+            if neg > 0:
+                msg = (f"[MASKCHK] NEGATIVE indices found! checked={checked} neg={neg} "
+                       f"range=[{global_start},{global_end}) chunk_i={chunk_i} mode={mode} ex={examples}")
+                raise RuntimeError(msg)
+
+            # chunk外が混ざるのは普通にあり得るので warn のみ
+            if oob > 0 and logger is not None:
+                logger.warning(
+                    f"[MASKCHK] checked={checked} oob={oob} range=[{global_start},{global_end}) "
+                    f"chunk_i={chunk_i} mode={mode} (OK if mask_dict is global; forward will gmask-filter). "
+                    f"ex={examples}"
+                )
 
         # -----------------------------
         # 0) global offset bookkeeping
