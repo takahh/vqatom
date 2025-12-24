@@ -2583,7 +2583,7 @@ class VectorQuantize(nn.Module):
                     K_e = _lookup_K(key)
 
                     # ここは “作らない”
-                    code, found = self._get_code_for_key_no_create(skey)
+                    code, found = self._codebook._get_code_for_key_no_create(skey)
                     if code is None or (not found):
                         if logger is not None:
                             logger.warning(f"[NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
