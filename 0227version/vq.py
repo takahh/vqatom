@@ -2241,7 +2241,7 @@ class VectorQuantize(nn.Module):
         cb_repel_num = encoder_outputs.new_zeros(())
 
         def _get_cb_param_for_key(k_any):
-            safe = self._get_or_create_safe_key(str(k_any), create=False)
+            safe = self._codebook._get_or_create_safe_key(str(k_any), create=False)
             if safe in self._codebook.embed:
                 return self._codebook.embed[safe]
             return None
