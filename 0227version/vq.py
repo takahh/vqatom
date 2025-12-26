@@ -1406,6 +1406,8 @@ class EuclideanCodebook(nn.Module):
         """
         import torch
         import torch.nn as nn
+        print(f"LOOKUP key='{key}' type={type(key)} len={len(str(key))}")
+        print(f"HAS={key in self.cb_dict}  KEYSAMPLE={list(self.cb_dict)[:3]}")
 
         cb_src = getattr(self, "_codebook", None)
         if cb_src is None:
