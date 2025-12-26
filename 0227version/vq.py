@@ -913,6 +913,8 @@ class EuclideanCodebook(nn.Module):
             orig = str(key)
             K_e = int(self.cb_dict[key])
             safe = self._get_or_create_safe_key(orig, K_e, dim, device="cpu")
+        test_key = '8_0_3_0_0_1_0_0_0_X_0_4_0'
+        print(f"TEST_KEY in cb_dict? {test_key in self.cb_dict}")
 
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
