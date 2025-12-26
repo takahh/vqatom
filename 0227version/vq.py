@@ -2567,7 +2567,10 @@ class VectorQuantize(nn.Module):
 
             self.quantize_dict = {}
             self.embed_ind_dict = {}
-
+            print("mask_dict")
+            print(mask_dict)
+            print("self.cb_dict")
+            print(self.cb_dict)
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
                     if idx_global is None or idx_global.numel() == 0:
