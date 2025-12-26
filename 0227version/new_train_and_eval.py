@@ -523,7 +523,6 @@ def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mo
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(
         adj_batch, attr_batch, logger, start_atom_id, start_mol_id
     )
-    logger.info(f"masks_dict: {masks_dict}")
     base_graphs = []
     extended_graphs = []
     attr_matrices_all = []
