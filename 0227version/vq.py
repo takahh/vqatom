@@ -492,7 +492,6 @@ def batched_embedding(indices, embed):
 import torch
 import torch.nn as nn
 
-
 class ContrastiveLoss(nn.Module):
     def __init__(self, latent_dim, atom_feat_dim, margin=0.5, temperature=0.1, init_sigmoid_base=0.5):
         super().__init__()
@@ -534,17 +533,13 @@ class ContrastiveLoss(nn.Module):
         N = z.shape[0]
 
         # ---- 0. Subsample for pdist to avoid O(N^2) explosion ----
-        max_pdist_points = 4096  # or 2048 / 8192, as you like
+        # NOTE: このサンプルは quantile 用だけに使用
+        max_pdist_points = 100000  # effectively N (change if needed)
 
         if N > max_pdist_points:
-            # ランダムに max_pdist_points 個だけ選んで repulsive term を計算
             perm = torch.randperm(N, device=device)
             idx = perm[:max_pdist_points]
             z_for_pdist = z[idx]
-            # if logger is not None:
-            #     logger.info(
-            #         f"[VQ_REPEL] z subsampled for pdist: N={N} -> {max_pdist_points}"
-            #     )
         else:
             z_for_pdist = z
 
@@ -556,12 +551,9 @@ class ContrastiveLoss(nn.Module):
         # z: [B, D]
         if z.dim() == 1:
             z = z.unsqueeze(0)
-        # print(f"z {z.shape}")
         if z.shape[0] == 1:
-            # print(f"latent count is only 1. Not calculating losses.")
-            return 0, 0, 0, 0, 0
-
-        # pdist_z = torch.pdist(z, p=2)  # [B*(B-1)/2], 1D
+            # latent が 1 個しかないときはロス計算しない
+            return z.new_tensor(0.0), z.new_tensor(0.0), z.new_tensor(0.0), z.new_tensor(0.0), z.new_tensor(0.0)
 
         # （巨大時）サンプルを間引き
         sample = pdist_z
@@ -570,24 +562,23 @@ class ContrastiveLoss(nn.Module):
 
         # 分位点などは学習に使う重みの境界値なので勾配不要
         with torch.no_grad():
-            dynamic_threshold = torch.quantile(sample, 0.10)  # tensor
-            lower_q, upper_q = 0, 0.9
+            # dynamic_threshold = torch.quantile(sample, 0.10)  # ← 未使用なのでコメントアウト可
             lower_thresh = torch.quantile(sample, 0.25)  # tensor
             upper_thresh = torch.quantile(sample, 0.75)  # tensor
-            center = (lower_thresh + upper_thresh) / 2  # tensor
+            center = (lower_thresh + upper_thresh) / 2   # tensor
 
         # ---- ログ（負荷・転送を抑えて）----
-        if chunk % 32 == 0:
-            with torch.no_grad():
-                s = sample
-                if s.numel() > 100_000:
-                    idx = torch.randperm(s.numel(), device=s.device)[:100_000]
-                    s = s.index_select(0, idx)
-                s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
-                hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
-                vals = hist.tolist()
-                # print(f"{key} {vals}")
-                # logger.info(vals)
+        # ログを使わないなら丸ごとコメントアウトで OK
+        # if chunk % 32 == 0 and logger is not None:
+        #     with torch.no_grad():
+        #         s = sample
+        #         if s.numel() > 100_000:
+        #             idx = torch.randperm(s.numel(), device=s.device)[:100_000]
+        #             s = s.index_select(0, idx)
+        #         s_cpu = s.detach().to('cpu', dtype=torch.float32).flatten()
+        #         hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
+        #         vals = hist.tolist()
+        #         logger.info(f"[{key}] dist hist: {vals}")
 
         def latent_repel_mid_chunked(
                 z,
@@ -653,12 +644,11 @@ class ContrastiveLoss(nn.Module):
             n_blocks_total = count_blocks(B, row_block, col_block)
 
             # -------------------------------
-            # 2. block_loss (ここで assert 挿入)
+            # 2. block_loss
             # -------------------------------
             def block_loss(zi, zj, low_t, high_t, center_t, sigma_t):
                 import torch
 
-                # 必ず requires_grad をチェック
                 if self.training:
                     assert zi.requires_grad, "zi lost grad!"
                     assert zj.requires_grad, "zj lost grad!"
@@ -675,7 +665,6 @@ class ContrastiveLoss(nn.Module):
                 sigma32 = torch.clamp(sigma_t.float(), min=1e-6)
 
                 d = torch.cdist(zi32, zj32, p=2)
-
                 mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
                 d = d[mask]
 
@@ -697,13 +686,11 @@ class ContrastiveLoss(nn.Module):
                 out = num / den
                 out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # ここでも require_grad チェック
                 if self.training:
                     assert out.requires_grad, "OUTPUT of block_loss lost grad!"
 
                 return out
 
-            # checkpoint wrapper
             def block_loss_ckpt(zi, zj, low_t, high_t, center_t, sigma_t):
                 return block_loss(zi, zj, low_t, high_t, center_t, sigma_t)
 
@@ -736,89 +723,42 @@ class ContrastiveLoss(nn.Module):
 
             out = total / n_blocks_total
 
-            # -------------------------------
-            # 4. FINAL OUTPUT requires_grad check
-            # -------------------------------
             if self.training:
                 assert out.requires_grad, "FINAL OUTPUT lost grad somewhere in repel_loss!"
 
             return out
 
-        # ---- 3) コードブック反発（チャンク & no-backward）----
-        def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
-            """
-            cb: [K, D]
-            返り値は全ペア（上三角＋ブロック間）の平均（スカラーTensor）。
-            """
-            K = cb.size(0)
-            sum_val = cb.new_zeros(())
-            cnt = 0
-
-            for i in range(0, K, block):
-                ci = cb[i:i + block]  # [bi, D]
-
-                # 同ブロック内の上三角（pdist）
-                if ci.size(0) >= 2:
-                    dij = torch.pdist(ci, p=2)  # [bi*(bi-1)/2]
-                    if dij.numel() > 0:
-                        li = torch.exp(-dij.pow(2) / (2 * sigma ** 2))
-                        sum_val = sum_val + li.sum()
-                        cnt += li.numel()
-                    del dij
-
-                # ブロック間（cdist）
-                for j in range(i + block, K, block):
-                    cj = cb[j:j + block]  # [bj, D]
-                    if ci.size(0) > 0 and cj.size(0) > 0:
-                        d = torch.cdist(ci, cj, p=2)  # [bi, bj]
-                        lj = torch.exp(-d.pow(2) / (2 * sigma ** 2))
-                        sum_val = sum_val + lj.sum()
-                        cnt += lj.numel()
-                        del d, lj
-                    del cj
-
-                del ci
-
-            if cnt == 0:
-                return sum_val  # 0
-            return sum_val / cnt
-
-        # ---- 4) そのほかの軽量ロス ----
-        def repel_from_zero_1d(d, margin):
-            # 0 から margin までの距離にペナルティ（平均）
-            return torch.relu(margin - d).mean()
-
-        # ---- 5) ロス計算 ----
+        # ---- 3) MAIN LOSS ONLY ----
         latent_repel_loss_mid = latent_repel_mid_chunked(
             z,
             low=lower_thresh, high=upper_thresh, center=center,
             sigma=1.0, sharp=20.0,
             row_block=1024, col_block=1024,
             detach_weight=True,
-            use_checkpoint=True,  # 推奨: True
-            stream_backward=False,  # forward 内では False
+            use_checkpoint=True,
+            stream_backward=False,
         )
-        # print(f"latent_repel_loss_mid {latent_repel_loss_mid}")
-        # ほかの損失と合算して最後に一度だけ backward()
+
+        # ---- 4) COMMENTED OUT EXTRA LOSSES (heavy) ----
         # 参考指標（元式に相当）
-        repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
+        # repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
+        #
+        # cb_loss = repel_codebooks_chunked(codebook)
+        #
+        # def repel_from_zero_1d(d, margin):
+        #     return torch.relu(margin - d).mean()
+        #
+        # latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
 
-        cb_loss = repel_codebooks_chunked(codebook)
-
-        # “ゼロからのマージン反発”を 1D 距離で
-        latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
-
-        # 必要に応じて attract を使うならここで足す
-        # attract_weight = 1.0
         repel_weight = 1.0
-
         final_loss = repel_weight * latent_repel_loss_mid
         neg_loss = z.new_tensor(1.0)  # プレースホルダ（元コードの返却形に合わせて）
 
-        # （注意）empty_cache は通常は不要。OOM 調査中だけ使うのが無難
-        # del pdist_z, sample
-        # torch.cuda.empty_cache()
-        # final_loss and cb_loss are used
+        # ここでは 3,4,5 番目の返り値を軽量化するため 0 で埋める
+        repel_from_2 = z.new_tensor(0.0)
+        cb_loss = z.new_tensor(0.0)
+        latent_repel_loss = z.new_tensor(0.0)
+
         return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
 
 
