@@ -1435,9 +1435,6 @@ class EuclideanCodebook(nn.Module):
         candidates = [key, key_s]
 
         t = None
-        print(f"k {key_s}, cb_src {cb_src}, candidates {candidates}")
-        print(f"candidates[0] in cb_src {candidates[0] in cb_src}")
-        print(f"candidates[1] in cb_src {candidates[1] in cb_src}")
         # ---- dict / ModuleDict / ParameterDict ----
         if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
             for k in candidates:
@@ -2572,9 +2569,12 @@ class VectorQuantize(nn.Module):
         # 3) init_kmeans_final: “作らない”で割当/SS/dump（返り値は loss 形式に合わせる）
         # -----------------------------
         if mode == "init_kmeans_final":
-            # ---------------------------------------------
+            import os
+            import time
+            import torch
+            import torch.nn as nn
+
             # どのキーを dump 対象にするか
-            # ---------------------------------------------
             key_list_to_dump = {
                 "6_0_3_1_1_2_6_2_1_1_11_0",
                 "7_0_3_0_0_2_0_1_0_0_3_0",
@@ -2586,9 +2586,61 @@ class VectorQuantize(nn.Module):
             if (not hasattr(self, "_kmeans_dump")) or (chunk_i is not None and int(chunk_i) == 0):
                 self._kmeans_dump = {}
 
-            # デバッグ用に、量子化後ベクトルとインデックスを毎回作り直す
+            # デバッグ用: 量子化後ベクトルとインデックス
             self.quantize_dict = {}
             self.embed_ind_dict = {}
+
+            # EuclideanCodebook インスタンス
+            cb = self._codebook  # type: EuclideanCodebook を想定
+            if not hasattr(cb, "_codebook") or cb._codebook is None:
+                cb._codebook = nn.ParameterDict()
+
+            def _get_K_e(key_str: str) -> int:
+                # いつもの K_e ルックアップ
+                K = _lookup_K(key_str)  # すでにある関数をそのまま使う想定
+                if K is None or K <= 0:
+                    K = 1
+                return int(K)
+
+            def _stats(x_nd: torch.Tensor):
+                if x_nd.numel() == 0:
+                    return None
+                mu = x_nd.mean(dim=0)
+                with torch.no_grad():
+                    dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
+                    sigma = torch.quantile(dev, 0.5)
+                return mu, sigma
+
+            def _pad_to_K(means_1kd, counts_1k, K_req: int, D: int, data_stats=None):
+                """
+                means_1kd: [1, K_run, D]
+                counts_1k: [1, K_run]
+                """
+                H, K_run, Dd = means_1kd.shape
+                assert H == 1 and Dd == D
+                means_kd = means_1kd[0]
+                counts_k = counts_1k[0]
+
+                if K_req <= K_run:
+                    return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
+
+                K_pad = K_req - K_run
+                out_means = torch.empty((K_req, D), device=means_kd.device, dtype=means_kd.dtype)
+                out_counts = torch.zeros((K_req,), device=counts_k.device, dtype=counts_k.dtype)
+
+                out_means[:K_run].copy_(means_kd)
+                out_counts[:K_run].copy_(counts_k)
+
+                if data_stats is not None:
+                    mu, sigma = data_stats
+                    noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (
+                            0.01 * sigma + 1e-6
+                    )
+                    out_means[K_run:] = mu + noise
+                else:
+                    out_means[K_run:] = 0.0
+
+                return out_means, out_counts
 
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
@@ -2609,22 +2661,46 @@ class VectorQuantize(nn.Module):
                         continue
 
                     skey = str(key)
-                    N_i = masked_latents.shape[0]
-                    K_e = _lookup_K(key)
+                    N_i, D = masked_latents.shape
+                    K_e = _get_K_e(skey)
+                    K_run = min(K_e, N_i)
 
-                    logger.info(f"{skey}: N={N_i}, K_e={K_e}")
+                    if logger is not None:
+                        logger.info(f"[init_kmeans_final] {skey}: N={N_i}, K_e={K_e}, K_run={K_run}")
 
-                    # ここでは「新しく作らない」＝既存 codebook のみ使う
-                    code, found = self._codebook._get_code_for_key_no_create(skey)
-                    if (code is None) or (not found):
-                        if logger is not None:
-                            logger.warning(f"[vq NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
-                        continue
+                    # -------------------------------------------------
+                    # ここで k-means を回してコードブックを「作る」
+                    # -------------------------------------------------
+                    means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
+                        masked_latents.unsqueeze(0).to(device),
+                        num_clusters=K_run,
+                        use_cosine_sim=False,
+                        n_init=3 if N_i > 5000 else 1,
+                    )
+                    means_kd, counts_k = _pad_to_K(
+                        means_1kd,
+                        counts_1k,
+                        K_req=K_e,
+                        D=D,
+                        data_stats=_stats(masked_latents),
+                    )  # means_kd: [K_e, D]
+
+                    # EuclideanCodebook._codebook に直接書き込む
+                    if (skey not in cb._codebook) or (cb._codebook[skey].shape != (K_e, D)):
+                        cb._codebook[skey] = nn.Parameter(
+                            means_kd.detach().to(device=device, dtype=means_kd.dtype),
+                            requires_grad=True,
+                        )
+                    else:
+                        cb._codebook[skey].data.copy_(
+                            means_kd.detach().to(device=device, dtype=means_kd.dtype)
+                        )
 
                     # -----------------------------------------
-                    # 最近傍コードへの割り当て
+                    # 割り当て / SS / dump 用にもう一度 assign
                     # -----------------------------------------
                     with torch.no_grad():
+                        code = cb._codebook[skey]  # [K_e, D]
                         dist = torch.cdist(masked_latents, code, p=2).pow(2)  # [N_i, K_e]
                         idx_code = dist.argmin(dim=-1)  # [N_i]
                     quantized = code.index_select(0, idx_code)  # [N_i, D]
@@ -2636,7 +2712,7 @@ class VectorQuantize(nn.Module):
                     # -----------------------------------------
                     # Silhouette Score（条件を満たす場合だけ計算）
                     # -----------------------------------------
-                    if logger is not None and hasattr(self._codebook, "silhouette_score_torch"):
+                    if logger is not None and hasattr(cb, "silhouette_score_torch"):
                         try:
                             X = masked_latents.detach().float().cpu()
                             labels = idx_code.detach().cpu().long()
@@ -2650,7 +2726,7 @@ class VectorQuantize(nn.Module):
                                 xs = X.index_select(0, perm)
                                 ys = labels.index_select(0, perm)
 
-                                sil = self._codebook.silhouette_score_torch(
+                                sil = cb.silhouette_score_torch(
                                     xs,
                                     ys,
                                     device="cuda" if torch.cuda.is_available() else "cpu",
@@ -2669,9 +2745,7 @@ class VectorQuantize(nn.Module):
                     # -----------------------------------------
                     # debug dump
                     # -----------------------------------------
-                    do_dump = (epoch is not None) and (
-                            int(epoch) == 1 or int(epoch) % 10 == 0
-                    )
+                    do_dump = (epoch is not None) and (int(epoch) == 1 or int(epoch) % 10 == 0)
                     if do_dump and (skey in key_list_to_dump):
                         entry = self._kmeans_dump.get(skey)
                         if entry is None:
@@ -2686,15 +2760,13 @@ class VectorQuantize(nn.Module):
                             entry["centers"] = code.detach().to("cpu", dtype=torch.float16)
 
                     # メモリ解放
-                    del masked_latents, code, idx_code, quantized
+                    del masked_latents, quantized, idx_code, means_1kd, counts_1k
 
             # このチャンクまで見た global index の終端を記録
             self.latent_size_sum = global_end
 
             # まとめて dump
-            do_dump = (epoch is not None) and (
-                    int(epoch) == 1 or int(epoch) % 10 == 0
-            )
+            do_dump = (epoch is not None) and (int(epoch) == 1 or int(epoch) % 10 == 0)
             if do_dump and len(getattr(self, "_kmeans_dump", {})) > 0:
                 out = {}
                 for k, v in self._kmeans_dump.items():
