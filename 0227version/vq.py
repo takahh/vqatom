@@ -1400,12 +1400,15 @@ class EuclideanCodebook(nn.Module):
         # print(f"HAS={key in self.cb_dict}  KEYSAMPLE={list(self.cb_dict)[:3]}")
 
         cb_src = getattr(self, "_codebook", None)
+        print("cb_src")
+        print(cb_src)
         if cb_src is None:
             return None, False
 
         # normalize key candidates
         key_s = str(key)
         candidates = [key, key_s]
+        print("candidates", candidates)
 
         t = None
 
@@ -1549,7 +1552,7 @@ class EuclideanCodebook(nn.Module):
                     code, safe = self._get_code_for_key_no_create(skey)
                     if code is None:
                         if logger:
-                            logger.warning(f"[NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
+                            logger.warning(f"[eu NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
                         continue
 
                     # optional: codebook health stats
@@ -2579,7 +2582,7 @@ class VectorQuantize(nn.Module):
                     code, found = self._codebook._get_code_for_key_no_create(skey)
                     if code is None or (not found):
                         if logger is not None:
-                            logger.warning(f"[NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
+                            logger.warning(f"[vq NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
                         continue
 
                     with torch.no_grad():
