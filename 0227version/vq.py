@@ -2644,6 +2644,7 @@ class VectorQuantize(nn.Module):
 
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
+                    print(f"SS prep 0")
                     if idx_global is None or idx_global.numel() == 0:
                         continue
 
@@ -2652,6 +2653,7 @@ class VectorQuantize(nn.Module):
                     if not in_chunk.any():
                         continue
 
+                    print(f"SS prep 1")
                     idx_local = (idx_global[in_chunk] - global_start).to(device=device, dtype=torch.long)
                     if idx_local.numel() == 0:
                         continue
@@ -2660,6 +2662,7 @@ class VectorQuantize(nn.Module):
                     if masked_latents.numel() == 0:
                         continue
 
+                    print(f"SS prep 2")
                     skey = str(key)
                     N_i, D = masked_latents.shape
                     K_e = _get_K_e(skey)
@@ -2719,6 +2722,8 @@ class VectorQuantize(nn.Module):
                             uniq_labels, counts = labels.unique(return_counts=True)
 
                             if uniq_labels.numel() >= 2 and X.shape[0] >= 3 and int(counts.min()) >= 2:
+
+                                print(f"SS prep 3")
                                 nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
 
