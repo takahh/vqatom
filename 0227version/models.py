@@ -61,8 +61,8 @@ import torch
 
 def _zeros_like(x, device=None, dtype=None):
     return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
-import torch
 
+import torch
 def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     """
     Normalize quantizer outputs to 7-tuple:
@@ -86,7 +86,7 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
                         device = x.device
                     if dtype is None:
                         dtype = x.dtype
-                    break
+                    return
         if device is None:
             device = "cpu"
         if dtype is None:
@@ -95,62 +95,36 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
     def _scalar_to_tensor(x):
         if torch.is_tensor(x):
             return x
-        _infer_device_dtype()
         if x is None:
+            _infer_device_dtype()
             return torch.zeros((), device=device, dtype=dtype)
+        _infer_device_dtype()
         return torch.as_tensor(x, device=device, dtype=dtype)
 
-    logger.info("norm q 0")
+    # ---------------------------
+    # only supported shape:
+    # (loss, (commit, cb, rep, cb_rep))
+    # ---------------------------
+    if not (isinstance(qo, (tuple, list)) and len(qo) == 2 and isinstance(qo[1], (tuple, list))):
+        raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
 
-    def _extract_loss(qo_):
-        # case1: already scalar/tensor loss
-        if torch.is_tensor(qo_) or isinstance(qo_, (float, int)):
-            return qo_, (0.0, 0.0, 0.0, 0.0)
+    loss, inner = qo
+    if len(inner) != 4:
+        raise TypeError(f"Expected inner tuple length 4: (commit, cb, rep, cb_rep), got {len(inner)}: {inner}")
 
-        # case2: (loss, inner)
-        if isinstance(qo_, (tuple, list)) and len(qo_) == 2:
-            loss_, inner_ = qo_
-            if isinstance(inner_, (tuple, list)) and len(inner_) == 4:
-                return loss_, tuple(inner_)
-            # inner malformed -> treat as zeros
-            return loss_, (0.0, 0.0, 0.0, 0.0)
-
-        # case3: model forward style (quantize, embed_ind_dict, embed)
-        if isinstance(qo_, (tuple, list)) and len(qo_) == 3:
-            raise TypeError(
-                "qo looks like model forward output (quantize, embed_ind_dict, embed), "
-                "not (loss, (commit, cb, rep, cb_rep)). "
-                "You probably passed the wrong variable into this normalization."
-            )
-
-        raise TypeError(f"Unrecognized qo format: type={type(qo_)} value={repr(qo_)[:500]}")
-
-    loss, inner = _extract_loss(qo)
-    logger.info("norm q 1")
-
-    # inner is guaranteed 4-tuple here (or zeros)
-    if not isinstance(inner, (tuple, list)) or len(inner) != 4:
-        raise TypeError(
-            f"Expected inner=(commit, cb, rep, cb_rep), "
-            f"got type={type(inner)} len={len(inner) if hasattr(inner, '__len__') else 'NA'} value={inner}"
-        )
-
-    commit, cb, rep, cb_rep = inner
-    logger.info("norm q 2")
+    commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
 
     _infer_device_dtype(loss, commit, cb, rep, cb_rep)
 
     embed = None  # qoにはembedが無い前提
-    sil = 0.0     # silhouette_loss はここでは 0 埋め
-
-    logger.info("norm q 3")
+    sil = None    # qoにはsilが無い前提（0で埋める）
 
     return (
         _scalar_to_tensor(loss),
         embed,
         _scalar_to_tensor(commit),
         _scalar_to_tensor(cb),
-        _scalar_to_tensor(sil),
+        _scalar_to_tensor(sil),      # silhouette_loss = 0
         _scalar_to_tensor(rep),
         _scalar_to_tensor(cb_rep),
     )
@@ -159,57 +133,75 @@ import torch.nn as nn
 import torch
 import torch.nn as nn
 from utils import CORE_ELEMENTS
-import torch
-import torch.nn as nn
-
 
 class AtomEmbedding(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(AtomEmbedding, self).__init__()
 
         # ---- 埋め込み定義（離散 0-29 部分）----
-        self.degree_embed   = nn.Embedding(num_embeddings=7, embedding_dim=4)  # 0..6
-        self.ring_embed     = nn.Embedding(num_embeddings=2, embedding_dim=4)  # ring flag 0/1
-        self.charge_embed   = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7 にクリップ
-        self.aromatic_embed = nn.Embedding(num_embeddings=2, embedding_dim=4)  # 0/1
-        self.hybrid_embed   = nn.Embedding(num_embeddings=6, embedding_dim=4)  # 0..5
-        self.hydrogen_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
+        self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
+        self.ring_embed     = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # ring flag+1 など
+        self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
+        self.aromatic_embed = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # 0/1
+        self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
+        self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
 
-        # ---- element (Z) ----
-        # 既知元素 + UNK を 1 つ追加
         ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
-        self.ELEMENTS = ELEMENTS
-        self.UNK_ELEM_INDEX = len(ELEMENTS)  # 最後をUNK
-
-        self.register_buffer("element_lut", self._build_element_lut(ELEMENTS, unk_index=self.UNK_ELEM_INDEX))
-        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS) + 1, embedding_dim=4)  # +1 for UNK
+        self.register_buffer(
+            "element_lut",
+            self._build_element_lut(ELEMENTS)
+        )
+        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
 
         # 0/1 フラグ系は全部 2 クラス想定
         def flag_emb():
             return nn.Embedding(num_embeddings=2, embedding_dim=2)
 
         # 官能基フラグ 18 個 (7-24)
-        self.func_embeds = nn.ModuleList([flag_emb() for _ in range(18)])
+        self.func_embed_0  = flag_emb()
+        self.func_embed_1  = flag_emb()
+        self.func_embed_2  = flag_emb()
+        self.func_embed_3  = flag_emb()
+        self.func_embed_4  = flag_emb()
+        self.func_embed_5  = flag_emb()
+        self.func_embed_6  = flag_emb()
+        self.func_embed_7  = flag_emb()
+        self.func_embed_8  = flag_emb()
+        self.func_embed_9  = flag_emb()
+        self.func_embed_10 = flag_emb()
+        self.func_embed_11 = flag_emb()
+        self.func_embed_12 = flag_emb()
+        self.func_embed_13 = flag_emb()
+        self.func_embed_14 = flag_emb()
+        self.func_embed_15 = flag_emb()
+        self.func_embed_16 = flag_emb()
+        self.func_embed_17 = flag_emb()
 
         # H-bond Donor / Acceptor (25, 26)
-        self.h_don_embed = flag_emb()
-        self.h_acc_embed = flag_emb()
+        self.h_don_embed   = flag_emb()
+        self.h_acc_embed   = flag_emb()
 
         # ring size / aromatic neighbors / fused-id (27, 28, 29)
-        # ringSize のユニーク値: [0,3,4,5,6,7,8] → 7種類
+        # ringSize のユニーク値: ['0', '3', '4', '5', '6', '7', '8'] → 7種類
         self.ringsize_embed  = nn.Embedding(num_embeddings=7, embedding_dim=4)
         self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
-        self.fused_id_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
+        self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
 
         # 官能基フラグ 18 個 (各 2 次元) → 36 次元を 4 次元に圧縮
         self.func_reduce = nn.Linear(18 * 2, 4)
 
-        # ringSize の LUT（高速化）
-        # raw: 0,3,4,5,6,7,8 を 0..6 に写像。その他は最後(=6)に落とす。
-        ring_vals = [0, 3, 4, 5, 6, 7, 8]
-        self.register_buffer("ringsize_lut", self._build_value_lut(ring_vals, unk_index=len(ring_vals) - 1))
+        # ringSize の元の値 → index の対応（0,3,4,5,6,7,8 → 0..6）
+        uniq = ['0', '3', '4', '5', '6', '7', '8']
+        uniq_int = sorted(int(x) for x in uniq)  # [0,3,4,5,6,7,8]
+        mapping = {v: i for i, v in enumerate(uniq_int)}
+        self.register_buffer(
+            "ring_values_tensor",
+            torch.tensor(uniq_int, dtype=torch.long)
+        )
+        self.ring_value_to_index = mapping
 
         # ---- bond_env_raw (30-77, 48 dims) 用の射影 ----
+        # 48 次元 → 16 次元に圧縮して concat
         self.bond_env_proj = nn.Linear(48, 16)
 
         # このクラスの最終出力次元:
@@ -219,28 +211,11 @@ class AtomEmbedding(nn.Module):
         self.out_dim = 48 + 16
 
     @staticmethod
-    def _build_element_lut(elements, unk_index: int):
-        """
-        Z -> index (0..len(elements)) の LUT。
-        - elements に含まれない Z は unk_index に落とす
-        - Z が範囲外 (>=lut_size) になった場合は forward 側で clamp する
-        """
-        max_z = max(elements)
-        lut = torch.full((max_z + 1,), fill_value=unk_index, dtype=torch.long)
-        for i, z in enumerate(elements):
+    def _build_element_lut(ELEMENTS):
+        max_z = max(ELEMENTS)
+        lut = torch.zeros(max_z + 1, dtype=torch.long)
+        for i, z in enumerate(ELEMENTS):
             lut[z] = i
-        return lut
-
-    @staticmethod
-    def _build_value_lut(allowed_values, unk_index: int):
-        """
-        value -> index LUT を作る（負や大きい値は forward 側で処理）。
-        allowed_values の max まで LUT を作り、存在しない値は unk_index。
-        """
-        mx = max(allowed_values)
-        lut = torch.full((mx + 1,), fill_value=unk_index, dtype=torch.long)
-        for i, v in enumerate(allowed_values):
-            lut[v] = i
         return lut
 
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
@@ -262,40 +237,34 @@ class AtomEmbedding(nn.Module):
         29    : fused ring id (0..7)
         30-77 : bond_env_raw (48)  ← sum+max bond features
         """
-        # device は buffer 側（LUT）に合わせるのが安全
-        device = self.element_lut.device
+        device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
 
-        # 0: element (Z) -> known index or UNK
+        # 0: element (Z)
         z_raw = atom_inputs[:, 0].long()
-
-        # z_raw を LUT 範囲に入れる（負や >max_z は一旦 0 にして後で mask で UNK にする）
         max_z = self.element_lut.shape[0] - 1
-        z_safe = z_raw.clamp(0, max_z)
-        idx0 = self.element_lut[z_safe]
-
-        # ただし、範囲外 (z_raw<0 or z_raw>max_z) は UNK に落とす
-        out_of_range = (z_raw < 0) | (z_raw > max_z)
-        if out_of_range.any():
-            idx0 = idx0.clone()
-            idx0[out_of_range] = self.UNK_ELEM_INDEX
-
-        x0 = self.element_embed(idx0.clamp(0, self.element_embed.num_embeddings - 1))
+        mask = (z_raw >= 0) & (z_raw <= max_z)
+        z = torch.where(mask, z_raw, torch.zeros_like(z_raw))
+        idx0 = self.element_lut[z]
+        idx0 = idx0.clamp(0, self.element_embed.num_embeddings - 1)
+        x0 = self.element_embed(idx0)
 
         # 1: degree
         idx1 = atom_inputs[:, 1].long().clamp(0, self.degree_embed.num_embeddings - 1)
         x1 = self.degree_embed(idx1)
 
-        # 2: ring flag (0/1)  ※ここが修正点（+1しない）
-        ring_idx = atom_inputs[:, 5].long().clamp(0, 1)
-        x2 = self.ring_embed(ring_idx)
+        # 2: ring_embed 用スカラー（ここでは ring flag + 1）
+        val_raw = atom_inputs[:, 5].long() + 1
+        val_idx = val_raw.clamp(0, self.ring_embed.num_embeddings - 1)
+        x2 = self.ring_embed(val_idx)
 
         # 3: charge
-        chg_idx = atom_inputs[:, 2].long().clamp(0, self.charge_embed.num_embeddings - 1)
+        chg_raw = atom_inputs[:, 2].long()
+        chg_idx = chg_raw.clamp(0, self.charge_embed.num_embeddings - 1)
         x3 = self.charge_embed(chg_idx)
 
         # 4: aromatic (0/1)
-        arom_idx = atom_inputs[:, 4].long().clamp(0, 1)
+        arom_idx = atom_inputs[:, 4].long().clamp(0, self.aromatic_embed.num_embeddings - 1)
         x4 = self.aromatic_embed(arom_idx)
 
         # 5: hybrid
@@ -310,34 +279,55 @@ class AtomEmbedding(nn.Module):
         def flag_idx(col: int) -> torch.Tensor:
             return atom_inputs[:, col].long().clamp(0, 1)
 
-        # 7–24: 18 functional flags → ModuleList でまとめて処理
-        func_embs = [emb(flag_idx(7 + i)) for i, emb in enumerate(self.func_embeds)]
-        flags = torch.cat(func_embs, dim=-1)  # [N, 36]
-        flags4 = self.func_reduce(flags)      # [N, 4]
+        # 7–24: 18 functional flags
+        x7  = self.func_embed_0(flag_idx(7))
+        x8  = self.func_embed_1(flag_idx(8))
+        x9  = self.func_embed_2(flag_idx(9))
+        x10 = self.func_embed_3(flag_idx(10))
+        x11 = self.func_embed_4(flag_idx(11))
+        x12 = self.func_embed_5(flag_idx(12))
+        x13 = self.func_embed_6(flag_idx(13))
+        x14 = self.func_embed_7(flag_idx(14))
+        x15 = self.func_embed_8(flag_idx(15))
+        x16 = self.func_embed_9(flag_idx(16))
+        x17 = self.func_embed_10(flag_idx(17))
+        x18 = self.func_embed_11(flag_idx(18))
+        x19 = self.func_embed_12(flag_idx(19))
+        x20 = self.func_embed_13(flag_idx(20))
+        x21 = self.func_embed_14(flag_idx(21))
+        x22 = self.func_embed_15(flag_idx(22))
+        x23 = self.func_embed_16(flag_idx(23))
+        x24 = self.func_embed_17(flag_idx(24))
+
+        # merge functional flags: 18 flags * 2 dim = 36 dim → 4 dim
+        flags = torch.cat(
+            [x7, x8, x9, x10, x11, x12, x13, x14, x15,
+             x16, x17, x18, x19, x20, x21, x22, x23, x24],
+            dim=-1
+        )  # [N, 36]
+        flags4 = self.func_reduce(flags)  # [N, 4]
 
         # 25, 26: H-bond donor / acceptor
         x25 = self.h_don_embed(flag_idx(25))
         x26 = self.h_acc_embed(flag_idx(26))
 
-        # 27: ringSize (0,3,4,5,6,7,8 → 0..6)
+        # 27: ringSize (0,3,4,5,6,7,8 → 0..6 に写像)
         raw27 = atom_inputs[:, 27].long()
-        # 負は 0 に寄せる。max より大きい値は LUT 参照できないので clamp。
-        raw27_safe = raw27.clamp(0, self.ringsize_lut.shape[0] - 1)
-        mapped27 = self.ringsize_lut[raw27_safe]
-        # 元が範囲外 (raw27 > max_supported) も最後(=UNK扱い)に落とす
-        too_large = raw27 > (self.ringsize_lut.shape[0] - 1)
-        if too_large.any():
-            mapped27 = mapped27.clone()
-            mapped27[too_large] = self.ringsize_embed.num_embeddings - 1
-        x27 = self.ringsize_embed(mapped27.clamp(0, self.ringsize_embed.num_embeddings - 1))
+        mapped27 = torch.full_like(raw27, fill_value=self.ringsize_embed.num_embeddings - 1)
+        for v, idx in self.ring_value_to_index.items():
+            mapped27[raw27 == v] = idx
+        mapped27 = mapped27.clamp(0, self.ringsize_embed.num_embeddings - 1)
+        x27 = self.ringsize_embed(mapped27)
 
         # 28: #aromatic neighbors
-        idx28 = atom_inputs[:, 28].long().clamp(0, self.aroma_num_embed.num_embeddings - 1)
+        raw28 = atom_inputs[:, 28].long()
+        idx28 = raw28.clamp(0, self.aroma_num_embed.num_embeddings - 1)
         x28 = self.aroma_num_embed(idx28)
 
         # 29: fused ring id
-        idx29 = atom_inputs[:, 29].long().clamp(0, self.fused_id_embed.num_embeddings - 1)
-        x29 = self.fused_id_embed(idx29)
+        raw29 = atom_inputs[:, 29].long()
+        idx29 = raw29.clamp(0, self.fused_if_embed.num_embeddings - 1)
+        x29 = self.fused_if_embed(idx29)
 
         # 30-77: bond_env_raw (48 dims, float)
         bond_env = atom_inputs[:, 30:].to(torch.float32)  # [N, 48]
@@ -416,9 +406,6 @@ class EquivariantThreeHopGINE(nn.Module):
             decay=getattr(args, "ema_decay", 0.8),
             threshold_ema_dead_code=2,
         )
-        edge_emb_dim = getattr(args, "edge_emb_dim", 32)
-        self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)  # 0..4
-        self.hop_emb = nn.Embedding(4, edge_emb_dim, padding_idx=0)  # 0..3
 
     def reset_kmeans(self):
         self.vq._codebook.reset_kmeans()
@@ -428,9 +415,6 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch
         dev = next(self.parameters()).device
 
-        # ----------------------------
-        # init_kmeans_final
-        # ----------------------------
         if mode == "init_kmeans_final":
             if hasattr(data, "to"):
                 data = data.to(dev)
@@ -439,82 +423,65 @@ class EquivariantThreeHopGINE(nn.Module):
             self.vq(data, attr_list, mask_dict, logger, chunk_i, epoch, mode)
             return 0
 
-        # ----------------------------
-        # Edge build (mirror for undirected)
-        # ----------------------------
+        # Edges (mirror for undirected) -> dev
         s1, d1 = data.edges()
-        s1 = s1.to(dev, non_blocking=True)
-        d1 = d1.to(dev, non_blocking=True)
-        src = torch.cat([s1, d1], dim=0)
-        dst = torch.cat([d1, s1], dim=0)
-        edge_index = torch.stack([src, dst], dim=0)   # [2, 2E]
+        s1 = s1.to(dev, non_blocking=True); d1 = d1.to(dev, non_blocking=True)
+        src = torch.cat([s1, d1], 0); dst = torch.cat([d1, s1], 0)
+        edge_index = torch.stack([src, dst], 0)
 
-        # ----------------------------
-        # Edge attributes:
-        #   bond_type: 0..4 (0=none/self, 1..4=bond)
-        #   edge_type: 0..3 (0=self/other, 1=1hop, 2=2hop, 3=3hop)
-        # ----------------------------
-        bt = data.edata.get("bond_type", None)
-        if bt is None:
-            # fallback (旧グラフ互換) - できれば convert_to_dgl 側で bond_type を必ず付ける
-            bt = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=dev)).long()
-        bt = bt.to(dev, non_blocking=True).long()
-        bt = torch.where((bt >= 1) & (bt <= 4), bt, torch.zeros_like(bt))
-        bt = torch.cat([bt, bt], dim=0)  # mirror -> [2E]
+        # Edge attributes (bond types {1..4}, 0 otherwise)
+        eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
+        eb = eb.to(dev, non_blocking=True)
+        e  = torch.cat([eb, eb], 0)
+        e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+        edge_attr = self.bond_emb(e.long())
 
-        et = data.edata.get("edge_type", None)
-        if et is None:
-            et = torch.zeros(data.num_edges(), dtype=torch.long, device=dev)
-        et = et.to(dev, non_blocking=True).long().clamp(0, 3)
-        et = torch.cat([et, et], dim=0)  # mirror -> [2E]
-
-        # bond + hop
-        edge_attr = self.bond_emb(bt) + self.hop_emb(et)   # [2E, edge_emb_dim]
-
-        if logger is not None:
-            # NOTE: bt/et は mirror 後なので 2E 個。unique/ratio の確認には十分。
-            logger.info(f"[EDGE] bond_type unique={torch.unique(bt)[:10].tolist()}")
-            logger.info(f"[EDGE] edge_type unique={torch.unique(et)[:10].tolist()}")
-            logger.info(f"[EDGE] bond_nonzero_ratio={(bt != 0).float().mean().item():.4f}")
-            logger.info(f"[EDGE] hop_nonzero_ratio={(et != 0).float().mean().item():.4f}")
-
-        # ----------------------------
         # Node features -> h0
-        # ----------------------------
         features = features.to(dev, non_blocking=True)
-        h0_raw = self.feat_embed(features)             # [N, 64]
-        h0 = self.ln_in(self.linear_0(h0_raw))         # [N, args.hidden_dim]
+        h0_raw = self.feat_embed(features)              # [N, 64]
+        h0 = self.ln_in(self.linear_0(h0_raw))          # [N, args.hidden_dim]
 
-        # ----------------------------
-        # 3-hop GINE + residual + LN
-        # ----------------------------
+        # Hop 1
         h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
-
         h1 = self.gine1(h0, edge_index, edge_attr)
         h1 = self.ln1(h1 * self.res1 + h0_for1)
 
+        # Hop 2
         h2 = self.gine2(h1, edge_index, edge_attr)
         h2 = self.ln2(h2 * self.res2 + h1)
-
+        # Hop 3
         h3 = self.gine3(h2, edge_index, edge_attr)
         h3 = self.ln3(h3 * self.res3 + h2)
 
-        # ----------------------------
-        # JK concat -> mix -> out_proj
-        # ----------------------------
+        # JK concat
         h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
         h_mid = self.mix(h_cat)
         h_out = self.out_proj(h_mid)
 
-        # ----------------------------
-        # init_kmeans_loop: return pre-VQ vector
-        # ----------------------------
+        # K-means 用のループ時は VQ を通さずにそのまま返す
         if mode == "init_kmeans_loop":
             return h_out
-
-        # ----------------------------
-        # VQ
-        # ----------------------------
+        #
+        # # ----- VQ 部分 -----
+        # h_vq = self.pre_vq_ln(h_out)
+        #
+        # # 生の出力（tuple / dict / オブジェクトなど何でも）
+        # quantize_output = self.vq(
+        #     h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
+        # )
+        #
+        # # ここで一気に正規化して 7 タプルにそろえる
+        # (loss,
+        #  embed,
+        #  commit_loss,
+        #  cb_loss,
+        #  sil_loss,
+        #  repel_loss,
+        #  cb_repel_loss) = _normalize_quantize_output(
+        #     quantize_output,
+        #     device=h_vq.device,
+        #     dtype=h_vq.dtype,
+        # )
         h_vq = self.pre_vq_ln(h_out)
 
         quantize_output = self.vq(
@@ -527,16 +494,19 @@ class EquivariantThreeHopGINE(nn.Module):
             mode,
         )
 
+        # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
         loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
-            quantize_output,
-            logger,
-            device=h_vq.device,
-            dtype=h_vq.dtype,
+            quantize_output, logger,
+            device=h_vq.device if torch.is_tensor(h_vq) else None,
+            dtype=getattr(h_vq, "dtype", None)
         )
 
-        # embed は現状 h_vq を返す（「量子化した埋め込み」を返す版にするならここを差し替え）
+        # embed は今回は h_vq をそのまま使う（まだ本当の量子化はしていないバージョン）
         embed = h_vq
 
+        # モデルが返すのは (total_loss, embed, loss_list)
+        # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
+        #         loss, cb, loss_list3 = outputs
         return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
 
 
