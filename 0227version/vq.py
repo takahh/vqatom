@@ -846,6 +846,9 @@ class EuclideanCodebook(nn.Module):
     ):
         super().__init__()
 
+        import torch
+        import torch.nn as nn
+
         self.decay = float(decay)
         self.codebook_size = codebook_size
         self.num_codebooks = num_codebooks
@@ -907,6 +910,11 @@ class EuclideanCodebook(nn.Module):
         self.embed_ind_dict = {}
         self.quantize_dict = {}
 
+        self.cb_dict = CBDICT  # 既存
+        self.dim = dim  # まだ持ってなければ
+
+        # コードブック本体: key -> [K_e, D] の Parameter
+        self._codebook = nn.ParameterDict()
     # ------------------------------------------------------------------
     # key まわりのユーティリティ
     # ------------------------------------------------------------------
@@ -1292,15 +1300,34 @@ class EuclideanCodebook(nn.Module):
 
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-            # embed
-            safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
-            if self.embed[safe].shape != (K_req, D):
-                self.embed[safe] = nn.Parameter(
+            # # embed
+            # safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
+            # if self.embed[safe].shape != (K_req, D):
+            #     self.embed[safe] = nn.Parameter(
+            #         means_kd.detach().to(device=device, dtype=means_kd.dtype),
+            #         requires_grad=True,
+            #     )
+            # else:
+            #     self.embed[safe].data.copy_(means_kd)
+            import torch.nn as nn  # 関数の先頭あたり
+
+            # ループ内
+            key_str = str(skey)
+
+            if not hasattr(self, "_codebook") or self._codebook is None:
+                self._codebook = nn.ParameterDict()
+
+            # まだ無い or 形が違う → Parameter を新規に作り直し
+            if (key_str not in self._codebook) or (self._codebook[key_str].shape != (K_req, D)):
+                self._codebook[key_str] = nn.Parameter(
                     means_kd.detach().to(device=device, dtype=means_kd.dtype),
                     requires_grad=True,
                 )
             else:
-                self.embed[safe].data.copy_(means_kd)
+                # 既存の Parameter に値だけコピー
+                self._codebook[key_str].data.copy_(
+                    means_kd.detach().to(device=device, dtype=means_kd.dtype)
+                )
 
             # cluster_size / embed_avg を必ず float32 で再構築（バッファ名は元キー）
             buf_name_cs = f"cluster_size_{skey}"
