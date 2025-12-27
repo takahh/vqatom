@@ -1435,7 +1435,9 @@ class EuclideanCodebook(nn.Module):
         candidates = [key, key_s]
 
         t = None
-
+        print(f"k {k}, cb_src {cb_src}, candidates {candidates}")
+        print(f"candidates[0] in cb_src {candidates[0] in cb_src}")
+        print(f"candidates[1] in cb_src {candidates[1] in cb_src}")
         # ---- dict / ModuleDict / ParameterDict ----
         if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
             for k in candidates:
