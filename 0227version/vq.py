@@ -2572,8 +2572,10 @@ class VectorQuantize(nn.Module):
         # -----------------------------
         # 3) init_kmeans_final: “作らない”で割当/SS/dump（返り値は loss 形式に合わせる）
         # -----------------------------
-
         if mode == "init_kmeans_final":
+            # ---------------------------------------------
+            # どのキーを dump 対象にするか
+            # ---------------------------------------------
             key_list_to_dump = {
                 "6_0_3_1_1_2_6_2_1_1_11_0",
                 "7_0_3_0_0_2_0_1_0_0_3_0",
@@ -2581,53 +2583,67 @@ class VectorQuantize(nn.Module):
                 "16_1_4_0_1_3_6_0_5_0_0_0",
             }
 
+            # 1チャンク目で dump 用バッファをリセット
             if (not hasattr(self, "_kmeans_dump")) or (chunk_i is not None and int(chunk_i) == 0):
                 self._kmeans_dump = {}
 
+            # デバッグ用に、量子化後ベクトルとインデックスを毎回作り直す
             self.quantize_dict = {}
             self.embed_ind_dict = {}
+
             if mask_dict is not None:
                 for key, idx_global in mask_dict.items():
                     if idx_global is None or idx_global.numel() == 0:
                         continue
-                    gmask = (idx_global >= global_start) & (idx_global < global_end)
-                    if not gmask.any():
+
+                    # このチャンクに属するグローバル index だけを抜き出す
+                    in_chunk = (idx_global >= global_start) & (idx_global < global_end)
+                    if not in_chunk.any():
                         continue
-                    idx_local = (idx_global[gmask] - global_start).to(device=device, dtype=torch.long)
+
+                    idx_local = (idx_global[in_chunk] - global_start).to(device=device, dtype=torch.long)
                     if idx_local.numel() == 0:
                         continue
 
-                    masked_latents = flatten[0].index_select(0, idx_local)  # [Ni,D]
-                    logger.info(f"{key}: {len(masked_latents)}, ")
+                    masked_latents = flatten[0].index_select(0, idx_local)  # [N_i, D]
                     if masked_latents.numel() == 0:
                         continue
 
                     skey = str(key)
+                    N_i = masked_latents.shape[0]
                     K_e = _lookup_K(key)
 
-                    # ここは “作らない”
+                    logger.info(f"{skey}: N={N_i}, K_e={K_e}")
+
+                    # ここでは「新しく作らない」＝既存 codebook のみ使う
                     code, found = self._codebook._get_code_for_key_no_create(skey)
-                    if code is None or (not found):
+                    if (code is None) or (not found):
                         if logger is not None:
                             logger.warning(f"[vq NO_CODEBOOK] key={skey} missing embed; skip assign/SS")
                         continue
 
+                    # -----------------------------------------
+                    # 最近傍コードへの割り当て
+                    # -----------------------------------------
                     with torch.no_grad():
-                        dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                        idx_code = dist.argmin(dim=-1)
-                    quantize = code.index_select(0, idx_code)
+                        dist = torch.cdist(masked_latents, code, p=2).pow(2)  # [N_i, K_e]
+                        idx_code = dist.argmin(dim=-1)  # [N_i]
+                    quantized = code.index_select(0, idx_code)  # [N_i, D]
 
-                    # debug 保存（CPU）
-                    self.quantize_dict[skey] = quantize.detach().to("cpu", dtype=torch.float16)
+                    # CPU に退避して保存
+                    self.quantize_dict[skey] = quantized.detach().to("cpu", dtype=torch.float16)
                     self.embed_ind_dict[skey] = idx_code.detach().to("cpu", dtype=torch.int32)
-                    # silhouette（1回だけ）
+
+                    # -----------------------------------------
+                    # Silhouette Score（条件を満たす場合だけ計算）
+                    # -----------------------------------------
                     if logger is not None and hasattr(self._codebook, "silhouette_score_torch"):
                         try:
                             X = masked_latents.detach().float().cpu()
                             labels = idx_code.detach().cpu().long()
-                            u, cts = labels.unique(return_counts=True)
+                            uniq_labels, counts = labels.unique(return_counts=True)
 
-                            if u.numel() >= 2 and X.shape[0] >= 3 and int(cts.min()) >= 2:
+                            if uniq_labels.numel() >= 2 and X.shape[0] >= 3 and int(counts.min()) >= 2:
                                 nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
                                 n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
 
@@ -2636,34 +2652,50 @@ class VectorQuantize(nn.Module):
                                 ys = labels.index_select(0, perm)
 
                                 sil = self._codebook.silhouette_score_torch(
-                                    xs, ys, device="cuda" if torch.cuda.is_available() else "cpu"
+                                    xs,
+                                    ys,
+                                    device="cuda" if torch.cuda.is_available() else "cpu",
                                 )
                                 logger.info(f"SS: {skey} {sil:.4f}, size {X.shape[0]}, K_e {K_e}")
                             else:
                                 logger.info(
-                                    f"[SS_SKIP] key={skey} N={X.shape[0]} uniq={u.numel()} "
-                                    f"mincnt={int(cts.min()) if cts.numel() else -1} K_e={K_e}"
+                                    f"[SS_SKIP] key={skey} "
+                                    f"N={X.shape[0]} uniq={uniq_labels.numel()} "
+                                    f"mincnt={int(counts.min()) if counts.numel() else -1} "
+                                    f"K_e={K_e}"
                                 )
                         except Exception as e:
                             logger.warning(f"[SS_FAIL] key={skey} err={repr(e)}")
 
-                    # dump
-                    do_dump = (epoch is not None) and ((int(epoch) % 10 == 0) or (int(epoch) == 1))
+                    # -----------------------------------------
+                    # debug dump
+                    # -----------------------------------------
+                    do_dump = (epoch is not None) and (
+                            int(epoch) == 1 or int(epoch) % 10 == 0
+                    )
                     if do_dump and (skey in key_list_to_dump):
                         entry = self._kmeans_dump.get(skey)
                         if entry is None:
                             entry = {"latents": [], "centers": None, "assign": []}
                             self._kmeans_dump[skey] = entry
-                        entry["latents"].append(masked_latents.detach().to("cpu", dtype=torch.float16))
+
+                        entry["latents"].append(
+                            masked_latents.detach().to("cpu", dtype=torch.float16)
+                        )
                         entry["assign"].append(idx_code.detach().to("cpu"))
                         if entry["centers"] is None:
                             entry["centers"] = code.detach().to("cpu", dtype=torch.float16)
 
-                    del masked_latents, code, idx_code, quantize
+                    # メモリ解放
+                    del masked_latents, code, idx_code, quantized
 
+            # このチャンクまで見た global index の終端を記録
             self.latent_size_sum = global_end
 
-            do_dump = (epoch is not None) and ((int(epoch) % 10 == 0) or (int(epoch) == 1))
+            # まとめて dump
+            do_dump = (epoch is not None) and (
+                    int(epoch) == 1 or int(epoch) % 10 == 0
+            )
             if do_dump and len(getattr(self, "_kmeans_dump", {})) > 0:
                 out = {}
                 for k, v in self._kmeans_dump.items():
@@ -2674,9 +2706,13 @@ class VectorQuantize(nn.Module):
                         "centers": v["centers"],
                         "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
                     }
+
                 stamp = time.strftime("%Y%m%d_%H%M%S")
                 os.makedirs("dumps", exist_ok=True)
-                path = os.path.join("dumps", f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt")
+                path = os.path.join(
+                    "dumps",
+                    f"init_kmeans_final_ep{epoch}_chunk{chunk_i}_{stamp}.pt",
+                )
                 torch.save(out, path)
                 self._kmeans_dump = {}
 
