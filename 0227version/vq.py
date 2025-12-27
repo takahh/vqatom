@@ -1435,7 +1435,7 @@ class EuclideanCodebook(nn.Module):
         candidates = [key, key_s]
 
         t = None
-        print(f"k {k}, cb_src {cb_src}, candidates {candidates}")
+        print(f"k {key_s}, cb_src {cb_src}, candidates {candidates}")
         print(f"candidates[0] in cb_src {candidates[0] in cb_src}")
         print(f"candidates[1] in cb_src {candidates[1] in cb_src}")
         # ---- dict / ModuleDict / ParameterDict ----
