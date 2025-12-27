@@ -1287,6 +1287,7 @@ class EuclideanCodebook(nn.Module):
                 masked.unsqueeze(0).to(device),
                 num_clusters=K_run,
                 use_cosine_sim=use_cosine_sim,
+                n_init=3 if N_i > 5000 else 1,
             )
 
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
