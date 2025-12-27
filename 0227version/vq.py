@@ -128,6 +128,7 @@ def kmeans(
     n_block: int = 131072,          # tile size over N (points)
     k_block: int = 4096,            # tile size over K (centers)
     element_names: Optional[Sequence[str]] = None,  # optional: labels for heads (e.g., ["C","N","O",...])
+    n_init: int = 1,  # NEW: number of restarts
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[Dict[str, int]]]:
     """
     Lloyd K-Means w/ K-Means++ init, streaming/blocked (no [H,N,K] allocation).
@@ -138,7 +139,17 @@ def kmeans(
         used_per_head:  [H]           # number of non-empty clusters per head
         used_per_label: dict[str,int] # only if element_names provided, else None
     """
+    import math
+
     H, N, D = samples.shape
+
+    # only auto-set when max_iters <= 0
+    if max_iters <= 0:
+        # start at 20, grow slowly with log10(N), cap at 100
+        base = 20
+        extra = int(10 * max(0.0, math.log10(max(N, 1)) - 2.0))  # grows after N~100
+        max_iters = min(100, base + extra)
+
     device, dtype = samples.device, samples.dtype
 
     # cap K to N
@@ -302,9 +313,13 @@ def kmeans(
             #     print(f"{k},", end="")
 
             # build stabilized probabilities from current closest distances
-            rp = closest
-            rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
-            rp = rp * rp  # squared prob is standard k-means++
+            # rp = closest
+            # rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
+            # rp = rp * rp  # squared prob is standard k-means++
+
+            # build probabilities from current closest distances (canonical k-means++)
+            rp = closest.clamp_min_(eps)  # avoid zeros
+            rp = rp * rp  # p ∝ D(x)^2
 
             idxk = _sample_block_cpu_cumsum(rp) if deterministic == "cpu_cumsum" else _sample_block_gpu_scan(rp)
 
@@ -405,37 +420,69 @@ def kmeans(
 
         return new_means, bins
 
-    prev_means = None
-    for it in range(max_iters):
-        buckets = assign_pass(samples, means)                       # [H,N]
-        new_means, bins = update_pass(samples, buckets, K)          # [H,K,D], [H,K]
-        if tol > 0.0:
-            prev_means = means
-        means = new_means
-        if tol > 0.0:
-            shift = (means - prev_means).pow(2).sum(-1).sqrt().mean()
-            if float(shift) <= tol:
-                break
+    best_means = None
+    best_bins = None
+    best_inertia = None
+
+    # number of restarts (>=1)
+    num_restarts = max(int(n_init), 1)
+
+    for r in range(num_restarts):
+        # fresh k-means++ init each restart
+        means = kmeanspp_init_blockwise(samples, K, use_cosine_sim, eps)
+
+        prev_means = None
+        for it in range(max_iters):
+            buckets = assign_pass(samples, means)  # [H,N]
+            new_means, bins = update_pass(samples, buckets, K)  # [H,K,D], [H,K]
+
+            if tol > 0.0:
+                prev_means = means
+
+            means = new_means
+
+            if tol > 0.0 and prev_means is not None:
+                shift = (means - prev_means).pow(2).sum(-1).sqrt().mean()
+                if float(shift) <= tol:
+                    break
+
+        # ---- compute inertia for this restart ----
+        with torch.no_grad():
+            buckets_final = assign_pass(samples, means)  # [H,N]
+            inertia = 0.0
+            for h in range(H):
+                Xh = samples[h]  # [N,D]
+                Ch = means[h]  # [K,D]
+                bh = buckets_final[h]  # [N]
+                diff = Xh - Ch[bh]
+                inertia_h = (diff * diff).sum(dim=-1).mean()
+                inertia += float(inertia_h)
+            inertia /= max(H, 1)
+
+        # keep best run
+        if best_inertia is None or inertia < best_inertia:
+            best_inertia = inertia
+            best_means = means.clone()
+            best_bins = bins.clone()
+
+    # ---- use the best run ----
+    means = best_means
+    bins = best_bins
 
     # final counts matched to final means
     buckets = assign_pass(samples, means)
     _, bins = update_pass(samples, buckets, K)
 
-    # ---- NEW: report actually-used codebook size per head ----
-    used_per_head = (bins > 0).sum(dim=1)   # [H]
+    # ---- report used-per-head ----
+    used_per_head = (bins > 0).sum(dim=1)  # [H]
 
     used_per_label: Optional[Dict[str, int]] = None
     if element_names is not None:
         if len(element_names) != H:
             raise ValueError(f"element_names must have length H={H}, got {len(element_names)}")
         used_per_label = {element_names[h]: int(used_per_head[h].item()) for h in range(H)}
-        # neat printout
-        # print("\n[Used codebook size per element]")
-        # for name, cnt in used_per_label.items():
-        #     print(f"  {name:>4s} : {cnt}")
 
     return means, bins, used_per_head, used_per_label
-
 
 
 def compact_clusters(means: torch.Tensor, bins: torch.Tensor, pad_to_max: bool = True):
@@ -1540,12 +1587,13 @@ class EuclideanCodebook(nn.Module):
                             )
 
                             if u.numel() >= 2 and X.shape[0] >= 3 and int(cts.min()) >= 2:
-                                nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
-                                n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
-
-                                perm = torch.randperm(X.shape[0])[:n]
-                                xs = X.index_select(0, perm)
-                                ys = labels.index_select(0, perm)
+                                # nmax = int(getattr(self, "samples_latent_in_kmeans", 0) or 0)
+                                # n = min(nmax, X.shape[0]) if nmax > 0 else min(4096, X.shape[0])
+                                # perm = torch.randperm(X.shape[0])[:n]
+                                # xs = X.index_select(0, perm)
+                                # ys = labels.index_select(0, perm)
+                                xs = X
+                                ys = labels
 
                                 sil = self.silhouette_score_torch(
                                     xs, ys,
