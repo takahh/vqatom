@@ -1427,15 +1427,12 @@ class EuclideanCodebook(nn.Module):
         # print(f"HAS={key in self.cb_dict}  KEYSAMPLE={list(self.cb_dict)[:3]}")
 
         cb_src = getattr(self, "_codebook", None)
-        print("cb_src")
-        print(cb_src)
         if cb_src is None:
             return None, False
 
         # normalize key candidates
         key_s = str(key)
         candidates = [key, key_s]
-        print("candidates", candidates)
 
         t = None
 
