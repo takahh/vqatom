@@ -1368,36 +1368,72 @@ class EuclideanCodebook(nn.Module):
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-                # Silhouette (任意)
+                # Silhouette (任意・クラスバランス付きサンプリング)
                 try:
-                    from sklearn.utils import resample
+                    # ---- CPU に集約してラベルごとにサンプリング ----
+                    X_cpu = masked_latents.detach().to("cpu", dtype=torch.float32)
+                    labels_cpu = idx_code.detach().to("cpu", dtype=torch.long)
 
-                    n = min(self.samples_latent_in_kmeans, masked_latents.shape[0])
-                    # n = masked_latents.shape[0]
-                    if n > 1:
-                        xs, ys = resample(
-                            masked_latents.cpu().numpy(),
-                            idx_code.cpu().numpy(),
-                            n_samples=n,
-                            random_state=42,
-                        )
+                    uniq, counts = labels_cpu.unique(return_counts=True)
+
+                    # 1クラスタあたりの最大サンプル数／全体の上限を属性から上書き可能に
+                    max_per_cluster = int(getattr(self, "ss_max_per_cluster", 200))
+                    max_total = int(getattr(self, "ss_max_total", 20000))
+
+                    idx_list = []
+                    for lbl, cnt in zip(uniq, counts):
+                        c = int(cnt.item())
+                        # silhouette に貢献するには同一クラスタで最低2点必要
+                        if c < 2:
+                            continue
+
+                        mask = (labels_cpu == lbl).nonzero(as_tuple=True)[0]  # indices for this label
+
+                        # クラスタ内が多すぎるときは max_per_cluster までランダムサンプリング
+                        if c > max_per_cluster:
+                            perm = torch.randperm(c)[:max_per_cluster]
+                            mask = mask[perm]
+
+                        idx_list.append(mask)
+
+                    if len(idx_list) > 1:
+                        idx_sub = torch.cat(idx_list, dim=0)
+
+                        # 全体の上限でさらに絞る（保険）
+                        if idx_sub.numel() > max_total:
+                            perm = torch.randperm(idx_sub.numel())[:max_total]
+                            idx_sub = idx_sub[perm]
+
+                        xs = X_cpu.index_select(0, idx_sub)
+                        ys = labels_cpu.index_select(0, idx_sub)
+
+                        n_used = xs.shape[0]
+
                         sil = self.silhouette_score_torch(
-                            torch.from_numpy(xs).float(),
-                            torch.from_numpy(ys).long(),
+                            xs,
+                            ys,
+                            row_block=2048,  # メモリと速度のバランス用
                         )
                         msg = (
                             f"Silhouette Score (subsample): {key} {sil:.4f}, "
-                            f"sample size {masked_latents.shape[0]}, K_e {code.shape[0]}"
+                            f"sample size {masked_latents.shape[0]}, "
+                            f"used_for_SS {n_used}, K_e {code.shape[0]}"
                         )
                         print(msg)
                         if logger:
                             logger.info(msg)
                     else:
-                        print("n <= 1 !!!!!!!!!")
+                        # 有効クラスタが 1 個以下 or 点が少なすぎる
+                        msg = f"[Silhouette] skip key={key}: not enough clusters/points."
+                        print(msg)
+                        if logger:
+                            logger.info(msg)
+
                 except Exception as e:
                     print(f"Silhouette failed for {key}: {e}")
                     if logger:
                         logger.warning(f"Silhouette failed for {key}: {e}")
+
                 # ---- choose what to save ----
                 save_latents = True
                 save_centers = True
@@ -1873,34 +1909,6 @@ class VectorQuantize(nn.Module):
         return codes
 
     import torch
-
-    def fast_silhouette_loss(self, embeddings, embed_ind, num_clusters, temperature=1.0, margin=0.1):
-        device = embeddings.device
-        batch_size = embeddings.size(0)
-        # Get soft cluster assignments with temperature control
-        if embed_ind.dim() == 1:
-            embed_ind = embed_ind.unsqueeze(1)  # (N, 1)
-        logits = embed_ind.expand(-1, num_clusters)  # (N, K)
-        cluster_assignments = F.softmax(logits / temperature, dim=-1)  # (N, K)
-        hard_assignments = torch.zeros_like(cluster_assignments).scatter_(
-            1, cluster_assignments.argmax(dim=1, keepdim=True), 1.0
-        )
-        cluster_sums = hard_assignments.T @ embeddings  # (K, D)
-        cluster_sizes = hard_assignments.sum(dim=0, keepdim=True).T  # (K, 1)
-        cluster_sizes = cluster_sizes.clamp(min=1.0)  # Avoid division by very small numbers
-        centroids = cluster_sums / cluster_sizes  # (K, D)
-        assigned_clusters = cluster_assignments.argmax(dim=1)  # (N,)
-        assigned_centroids = centroids[assigned_clusters]  # (N, D)
-        a = torch.norm(embeddings - assigned_centroids, dim=1)  # (N,)
-        mask = torch.ones((batch_size, num_clusters), device=device)
-        mask.scatter_(1, assigned_clusters.unsqueeze(1), 0)
-        all_distances = torch.cdist(embeddings, centroids)  # (N, K)
-        masked_distances = all_distances * mask + (1 - mask) * 1e6  # Set assigned cluster distance high
-        b, _ = torch.min(masked_distances, dim=1)  # (N,)
-        max_dist = torch.max(a, b) + 1e-6
-        silhouette = (b - a) / max_dist - margin
-        loss = 1 - torch.mean(torch.tanh(silhouette))
-        return loss
 
     def fast_find_equivalence_groups(self, latents):
         from collections import defaultdict
