@@ -138,7 +138,17 @@ def kmeans(
         used_per_head:  [H]           # number of non-empty clusters per head
         used_per_label: dict[str,int] # only if element_names provided, else None
     """
+    import math
+
     H, N, D = samples.shape
+
+    # only auto-set when max_iters <= 0
+    if max_iters <= 0:
+        # start at 20, grow slowly with log10(N), cap at 100
+        base = 20
+        extra = int(10 * max(0.0, math.log10(max(N, 1)) - 2.0))  # grows after N~100
+        max_iters = min(100, base + extra)
+
     device, dtype = samples.device, samples.dtype
 
     # cap K to N
@@ -1363,6 +1373,7 @@ class EuclideanCodebook(nn.Module):
                     from sklearn.utils import resample
 
                     n = min(self.samples_latent_in_kmeans, masked_latents.shape[0])
+                    # n = masked_latents.shape[0]
                     if n > 1:
                         xs, ys = resample(
                             masked_latents.cpu().numpy(),

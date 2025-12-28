@@ -59,7 +59,7 @@ def get_args():
         "--num_exp", type=int, default=1, help="Repeat how many experiments"
     )
     parser.add_argument(
-        "--samples_latent_in_kmeans", type=int, default=10000, help="samples of latent in init_embed"
+        "--samples_latent_in_kmeans", type=int, default=20000, help="samples of latent in init_embed"
     )
     parser.add_argument(
         "--exp_setting",
