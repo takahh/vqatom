@@ -4,8 +4,16 @@ from collections import namedtuple
 
 Entry = namedtuple("Entry", ["key", "n"])
 
-RE_FREQ = re.compile(
-    r":\s+(?P<key>[0-9_X\-]+):\s+(?P<n>[0-9]+),"
+# --- case 1: Silhouette Score 行 ---
+RE_SS = re.compile(
+    r"Silhouette Score .*?:\s+"
+    r"(?P<key>[0-9_X\-]+)\s+"          # key
+    r"[0-9\.\-]+,\s*sample size\s+(?P<n>[0-9]+)"
+)
+
+# --- case 2: skip 行（n=0扱い or 無視したければ後で除外可）---
+RE_SKIP = re.compile(
+    r"skip key=(?P<key>[0-9_X\-]+):"
 )
 
 
@@ -13,10 +21,18 @@ def parse_freq_log(path):
     entries = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            m = RE_FREQ.search(line)
-            if not m:
+
+            m = RE_SS.search(line)
+            if m:
+                entries.append(Entry(key=m.group("key"), n=int(m.group("n"))))
                 continue
-            entries.append(Entry(key=m.group("key"), n=int(m.group("n"))))
+
+            m = RE_SKIP.search(line)
+            if m:
+                # スキップ行は n=0 として入れる（またはコメントアウトで無視もOK）
+                entries.append(Entry(key=m.group("key"), n=0))
+                continue
+
     return entries
 
 
@@ -24,10 +40,10 @@ def recommend_ke(n: int, max_k: int | None = None) -> int:
     """
     Guarantee n/Ke <= 100 (unless max_k clips it).
     """
-    if n <= 100:
+    if n <= 30:
         ke = 1
     else:
-        ke = math.ceil(n / 100)
+        ke = math.ceil(n / 30)
 
     if max_k is not None:
         ke = min(ke, max_k)
@@ -37,7 +53,7 @@ def recommend_ke(n: int, max_k: int | None = None) -> int:
 
 def main():
 
-    log_path = "log.txt"
+    log_path = "log_to_analyze"
     out_path = "cbdict.txt"
 
     entries = parse_freq_log(log_path)
@@ -53,9 +69,9 @@ def main():
     ratios = []
 
     for e in entries:
-        ke = recommend_ke(e.n, max_k=None)   # <-- hard guarantee
+        ke = recommend_ke(e.n, max_k=None)
         total_cb += ke
-        ratios.append(e.n / ke)
+        ratios.append(e.n / ke if ke > 0 else 0)
 
     min_ratio = min(ratios)
     mean_ratio = sum(ratios) / len(ratios)
