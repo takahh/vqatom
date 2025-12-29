@@ -67,6 +67,10 @@ def get_args():
         default="tran",
         help="Experiment setting, one of [tran, ind]",
     )
+    # ss_max_total_latent_count
+    parser.add_argument(
+        "--ss_max_total_latent_count", type=int, default=20000, help="max count of latent used in SS calc."
+    )
     parser.add_argument(
         "--eval_interval", type=int, default=1, help="Evaluate once per how many epochs"
     )

@@ -923,7 +923,7 @@ class EuclideanCodebook(nn.Module):
             orig = str(key)
             K_e = int(self.cb_dict[key])
             safe = self._get_or_create_safe_key(orig, K_e, dim, device="cpu")
-
+        self.ss_max_total = args.ss_max_total_latent_count
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
         self.quantize_dict = {}
@@ -1919,163 +1919,6 @@ class VectorQuantize(nn.Module):
         equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
         return equivalence_groups
 
-    def orthogonal_loss_fn(
-            self, mask_dict, embed_ind_dict, codebook, init_feat, x, quantize_dict, logger, epoch, chunk=0
-        ):
-        import torch
-        dev = x.device if hasattr(x, "device") else "cpu"
-
-        # Accumulators
-        repel_wsum = torch.zeros((), device=dev)
-        cb_repel_wsum = torch.zeros((), device=dev)
-        sil_wsum = torch.zeros((), device=dev)
-        w_total = 0.0  # total weight of contributing elements
-        # OPTIONAL: collect debug info
-        contributed_keys = []
-        # print(f"[ORTHO] epoch={epoch} chunk={chunk} type(embed_ind_dict)={type(embed_ind_dict).__name__}")
-        # if hasattr(embed_ind_dict, "__len__"):
-        #     print(f"[ORTHO] keys={list(embed_ind_dict.keys())[:8]} len={len(embed_ind_dict)}")
-        # else:
-        #     print("[ORTHO] embed_ind_dict has no __len__")
-        #
-        # # If dict-like but empty, say why we return zeros:
-        # if not embed_ind_dict:
-        #     print(f"[ORTHO SKIP] epoch={epoch} chunk={chunk}: embed_ind_dict is empty")
-
-        # Iterate per element
-        for key in sorted(embed_ind_dict.keys()):
-            inds = embed_ind_dict[key]
-            # inds may be tensor or list; normalize length
-            n = int(inds.numel()) if torch.is_tensor(inds) else (len(inds) if inds is not None else 0)
-            # print(f"n {n}")
-            # Need >=2 for pairwise losses; skip otherwise
-            if n < 2:
-                continue
-            # Fetch per-element latents/embeds as you already do
-            # Example (adapt to your variables):
-            # z_k = quantize_dict[key]  # [n, D]
-            # cb_k = codebook[str(key)]  # [K, D] or similar
-
-            # --- compute your per-element losses here (examples as placeholders) ---
-            # repel_k = ...
-            # cb_repel_k = ...
-            # sil_k = ...
-            sil_k = 0
-            repel_k, div_nega_loss, repel_loss_from_2, cb_repel_k, repel_loss_mid_high = \
-                (self.compute_contrastive_loss(x, chunk, logger, codebook[str(key)]))
-            # print(f"repel_k {repel_k}")
-            weight_by_counts = True
-            # Weight: either by count or uniform per contributing element
-            w = float(n) if weight_by_counts else 1.0
-
-            # Accumulate weighted sums
-            repel_wsum = repel_wsum + w * repel_k
-            cb_repel_wsum = cb_repel_wsum + w * cb_repel_k
-            sil_wsum = sil_wsum + w * sil_k
-
-            w_total += w
-            contributed_keys.append((key, n))
-            # print(f"w_total {w_total}")
-
-        if w_total == 0.0:
-            # No contributors in this chunk → return clean zeros (and optionally log)
-            if logger is not None:
-                logger.info(f"[orthogonal_loss_fn] chunk {chunk}: no contributing elements; returning zeros.")
-            zero = torch.zeros((), device=dev)
-            return {
-                "repel_loss": zero,
-                "cb_repel_loss": zero,
-                "sil_loss": zero,
-                "contrib": [],
-            }
-
-        # Safe averages
-        repel_avg = repel_wsum / w_total
-        cb_repel_avg = cb_repel_wsum / w_total
-        sil_avg = sil_wsum / w_total
-        # print(f"repel_avg {repel_avg}")  # this is nonzero
-        return {
-            "repel_loss": repel_avg,
-            "cb_repel_loss": cb_repel_avg,
-            "sil_loss": sil_avg,
-            "contrib": contributed_keys,  # for debugging
-        }
-
-    def orthogonal_loss_fn(self, embed_ind_dict, codebook, init_feat, latents, quantized_dict, logger, epoch, chunk=0):
-        # embed_ind_dict.to("cuda")
-        codebook.to("cuda")
-        init_feat.to("cuda")
-        latents.to("cuda")
-        quantized_dict.to("cuda")
-        latent_len_sum = 0
-        two_repel_loss_weighted_sum = 0
-        cb_loss_weighted_sum = 0
-        for key in embed_ind_dict.keys():
-            import torch
-            latents_for_sil = torch.squeeze(latents)
-            latents_size = latents_for_sil.shape[0]
-            latent_len_sum += latents_size
-            # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            two_repel_loss, div_nega_loss, repel_loss_from_2, cb_loss, repel_loss_mid_high = (
-                self.compute_contrastive_loss(latents_for_sil, chunk, logger, codebook[str(key)]))
-
-            two_repel_loss_weighted_sum += latents_size * two_repel_loss
-            cb_loss_weighted_sum += latents_size * cb_loss
-        two_repel_loss_avg = two_repel_loss_weighted_sum / latent_len_sum
-        cb_loss_avg = cb_loss_weighted_sum / latent_len_sum
-
-        return (two_repel_loss_avg, cb_loss_avg)
-
-    import torch
-    import torch.nn.functional as F
-
-    def pairwise_sq_dists(self, x, y):
-        # x: [B, D], y: [K, D]
-        # computes ||x - y||^2 without sqrt (better gradients / numerics)
-        x2 = (x ** 2).sum(dim=1, keepdim=True)  # [B, 1]
-        y2 = (y ** 2).sum(dim=1, keepdim=True).t()  # [1, K]
-        # Clamp to avoid tiny negatives from fp errors
-        d2 = torch.clamp(x2 + y2 - 2.0 * x @ y.t(), min=0.0)
-        return d2
-
-    @staticmethod
-    def pairwise_sq_dists(x, y):  # [B,D], [K,D] -> [B,K]
-        # robust and efficient squared Euclidean
-        x2 = (x*x).sum(dim=-1, keepdim=True)       # [B,1]
-        y2 = (y*y).sum(dim=-1).unsqueeze(0)        # [1,K]
-        xy = x @ y.t()                              # [B,K]
-        d2 = x2 + y2 - 2*xy
-        return torch.clamp(d2, min=0.0)
-
-    def _latent_radius_loss(self, z):
-        # Penalize norms above a target radius (no penalty inside the ball)
-        norms = torch.linalg.norm(z, dim=-1)
-        excess = F.relu(norms - self.target_radius)
-        return (excess * excess).mean()
-
-    def _center_batch(self, z):
-        # small mean-shift to keep z centered (doesn’t block gradients)
-        return z - z.mean(dim=0, keepdim=True)
-
-    import torch
-    import torch.nn.functional as F
-    from torch import nn
-    import torch
-    import torch
-    import torch.nn as nn
-    import torch.nn.functional as F
-
-    def _as_index_tensor(self, idx_raw, N, device):
-        """Make a 1D LongTensor of indices on device. Accepts list/np/tensor/bool-mask."""
-        if idx_raw is None:
-            return torch.arange(N, device=device)
-        if torch.is_tensor(idx_raw):
-            if idx_raw.dtype == torch.bool:
-                return torch.nonzero(idx_raw, as_tuple=False).squeeze(-1).to(device)
-            return idx_raw.to(device).long().view(-1)
-        # list / numpy
-        return torch.as_tensor(idx_raw, device=device).long().view(-1)
-
     def _unwrap_codebook_entry(self, cb):
         """
         Accept: Tensor, nn.Parameter, dict/ParameterDict possibly holding 'embed'.
@@ -2089,31 +1932,6 @@ class VectorQuantize(nn.Module):
         raise TypeError(f"Unsupported codebook entry type: {type(cb)}. "
                         "Expected Tensor/Parameter or dict/ParameterDict with 'embed'.")
 
-    def _squeeze_01(self, x):
-        # [1, K, D] -> [K, D]; leave [K, D] unchanged
-        return x.squeeze(0) if x.dim() == 3 and x.size(0) == 1 else x
-
-    def _normalize_mask_dict(self, mask_dict):
-        """mask_dict のキーを str / int / torch.scalar の同義語に正規化して返す（非破壊）"""
-        if mask_dict is None:
-            return None
-        norm = dict(mask_dict)  # shallow copy
-        for k, v in list(mask_dict.items()):
-            # int alias
-            if isinstance(k, str) and k.isdigit():
-                norm.setdefault(int(k), v)
-            # str alias
-            if isinstance(k, int):
-                norm.setdefault(str(k), v)
-            # torch scalar alias
-            if hasattr(k, "item") and callable(k.item):
-                try:
-                    ki = int(k.item())
-                    norm.setdefault(ki, v)
-                    norm.setdefault(str(ki), v)
-                except Exception:
-                    pass
-        return norm
     def commitment_loss(
             self,
             encoder_outputs,  # [B, D]
