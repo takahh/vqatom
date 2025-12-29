@@ -662,30 +662,30 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
 
     for epoch in range(1, conf["max_epoch"] + 1):
         print(f"\n====== epoch {epoch} ======")
+        # fresh containers per epoch
+        loss_list_list_train = [[] for _ in range(11)]
+        loss_list_list_test = [[] for _ in range(11)]
+        loss_list = []
+        test_loss_list = []
+
+        cb_unique_num_list = []
+        cb_unique_num_list_test = []
+
+        # ------------------------------------------
+        # 1) K-means 用 latent / attr 収集
+        # ------------------------------------------
+        all_latents = []
+        all_attr = []
+
+        all_masks_dict = defaultdict(list)
+        masks_count = defaultdict(int)
+        first_batch_feat = None
+        start_atom_id = 0
+        start_mol_id = 0
+
         if (epoch - 1) % 3 == 0:
             print("initial kmeans start ....")
             logger.info("=== epoch {epoch} ==　initial kmeans start ....")
-            # fresh containers per epoch
-            loss_list_list_train = [[] for _ in range(11)]
-            loss_list_list_test = [[] for _ in range(11)]
-            loss_list = []
-            test_loss_list = []
-
-            cb_unique_num_list = []
-            cb_unique_num_list_test = []
-
-            # ------------------------------------------
-            # 1) K-means 用 latent / attr 収集
-            # ------------------------------------------
-            all_latents = []
-            all_attr = []
-
-            all_masks_dict = defaultdict(list)
-            masks_count = defaultdict(int)
-            first_batch_feat = None
-            start_atom_id = 0
-            start_mol_id = 0
-
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
                 if idx == 5:
