@@ -1144,7 +1144,7 @@ class EuclideanCodebook(nn.Module):
         return float(sil_sum / max(processed, 1))
 
     @torch.jit.ignore
-    def init_embed_(self, data, mask_dict=None, use_cosine_sim: bool = False):
+    def init_embed_(self, data, logger, mask_dict=None, use_cosine_sim: bool = False):
         """
         Initialize per-element codebooks using absolute K from self.cb_dict.
         data: [1, N, D]
@@ -1252,7 +1252,7 @@ class EuclideanCodebook(nn.Module):
             self.register_buffer(buf_name_ea, ea)
 
             nz = int((counts_k > 0).sum().item())
-            print(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+            logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
     # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
@@ -1309,7 +1309,7 @@ class EuclideanCodebook(nn.Module):
         B, D = flatten.shape[1], flatten.shape[2]
 
         if mode == "init_kmeans_final":
-            self.init_embed_(flatten, mask_dict=mask_dict)
+            self.init_embed_(flatten, logger, mask_dict=mask_dict)
         # このチャンクが担当するグローバル範囲
         global_start = self.latent_size_sum
         global_end = global_start + B
