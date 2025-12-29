@@ -1541,7 +1541,7 @@ class EuclideanCodebook(nn.Module):
             self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
             # ----- EMA update (train かつ早期エポックのみ) -----
-            if self.training and epoch is not None and epoch < 30:
+            if self.training and epoch is not None:
                 if code_param.ndim == 3:
                     K_e, D_e = code_param.shape[1], code_param.shape[2]
                 else:
