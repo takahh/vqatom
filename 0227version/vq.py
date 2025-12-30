@@ -923,7 +923,7 @@ class EuclideanCodebook(nn.Module):
             orig = str(key)
             K_e = int(self.cb_dict[key])
             safe = self._get_or_create_safe_key(orig, K_e, dim, device="cpu")
-        self.ss_max_total = args.ss_max_total_latent_count
+        self.ss_max_total_latent_count = args.ss_max_total_latent_count
         self.latent_size_sum = 0
         self.embed_ind_dict = {}
         self.quantize_dict = {}
