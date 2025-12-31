@@ -2107,7 +2107,8 @@ class VectorQuantize(nn.Module):
             # クラスの重みゲット
             # ---------------
             from utils import WDICT
-            class_weight = float(WDICT[str(k)])
+            # class_weight = float(WDICT[str(k)])
+            class_weight = float(WDICT.get(str(k), 1.0))
 
             # -------------------------------
             # 3-6) commitment / codebook loss
