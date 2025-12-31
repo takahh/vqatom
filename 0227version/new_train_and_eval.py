@@ -683,99 +683,99 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         start_atom_id = 0
         start_mol_id = 0
 
-        if (epoch - 1) % 3 == 0:
-            print("initial kmeans start ....")
-            logger.info("=== epoch {epoch} ==　initial kmeans start ....")
-            for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+        # if (epoch - 1) % 3 == 0:
+        print("initial kmeans start ....")
+        logger.info("=== epoch {epoch} ==　initial kmeans start ....")
+        for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-                if idx == 5:
-                    break
+            if idx == 5:
+                break
 
-                glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
-                    adj_batch, attr_batch, logger, start_atom_id, start_mol_id
-                )  # 10000 molecules per glist
+            glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
+                adj_batch, attr_batch, logger, start_atom_id, start_mol_id
+            )  # 10000 molecules per glist
 
-                all_attr.append(attr_matrices)
+            all_attr.append(attr_matrices)
 
-                # masks を集約
-                for atom_type, masks in masks_dict.items():
-                    all_masks_dict[atom_type].extend(masks)
-                    masks_count[atom_type] += len(masks)
+            # masks を集約
+            for atom_type, masks in masks_dict.items():
+                all_masks_dict[atom_type].extend(masks)
+                masks_count[atom_type] += len(masks)
 
-                chunk_size = conf["chunk_size"]  # in 10,000 molecules
-                for i in range(0, len(glist), chunk_size):
-                    chunk = glist[i:i + chunk_size]
-                    attr_chunk = attr_matrices[i:i + chunk_size]
-                    chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+            chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            for i in range(0, len(glist), chunk_size):
+                chunk = glist[i:i + chunk_size]
+                attr_chunk = attr_matrices[i:i + chunk_size]
+                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
 
-                    batched_graph = dgl.batch(chunk)
-                    batched_graph_base = dgl.batch(chunk_base)
+                batched_graph = dgl.batch(chunk)
+                batched_graph_base = dgl.batch(chunk_base)
 
-                    with torch.no_grad():
-                        batched_feats = batched_graph.ndata["feat"].to(device)
+                with torch.no_grad():
+                    batched_feats = batched_graph.ndata["feat"].to(device)
 
-                    # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
-                    latents = evaluate(
-                        model,
-                        batched_graph,
-                        batched_feats,
-                        epoch,
-                        all_masks_dict,
-                        logger,
-                        batched_graph_base,
-                        idx,
-                        "init_kmeans_loop",
-                        attr_chunk,
-                    )
-                    all_latents.append(latents.cpu())  # save on CPU
+                # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
+                latents = evaluate(
+                    model,
+                    batched_graph,
+                    batched_feats,
+                    epoch,
+                    all_masks_dict,
+                    logger,
+                    batched_graph_base,
+                    idx,
+                    "init_kmeans_loop",
+                    attr_chunk,
+                )
+                all_latents.append(latents.cpu())  # save on CPU
 
-                    if i == 0 and idx == 0:
-                        first_batch_feat = batched_feats.clone().cpu()
+                if i == 0 and idx == 0:
+                    first_batch_feat = batched_feats.clone().cpu()
 
-                    # cleanup small stuff
-                    del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
-                # glist をクリーンアップ
-                for g in glist:
-                    g.ndata.clear()
-                    g.edata.clear()
-                for g in glist_base:
-                    g.ndata.clear()
-                    g.edata.clear()
-                del glist, glist_base
+                # cleanup small stuff
+                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
                 gc.collect()
+                torch.cuda.empty_cache()
 
-            # all_latents: [ (#atoms_chunk, D), ... ] -> (N, D)
-            all_latents_tensor = torch.cat(all_latents, dim=0)  # [N, D]
+            # glist をクリーンアップ
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base
+            gc.collect()
 
-            # attr を flatten: list[list[tensor (N_i,27)]] -> (N,27)
-            flat_attr_list = [t for batch in all_attr for t in batch]
-            all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
+        # all_latents: [ (#atoms_chunk, D), ... ] -> (N, D)
+        all_latents_tensor = torch.cat(all_latents, dim=0)  # [N, D]
 
-            # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
-            print("[KMEANS] init_kmeans_final start")
-            logger.info("[KMEANS] init_kmeans_final start")
+        # attr を flatten: list[list[tensor (N_i,27)]] -> (N,27)
+        flat_attr_list = [t for batch in all_attr for t in batch]
+        all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
 
-            # if epoch == 1:
-            # first_batch_feat は CPU に戻してあるので GPU へ
-            first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
-            evaluate(
-                model,
-                all_latents_tensor.to(device),
-                first_batch_feat_dev,
-                epoch,
-                all_masks_dict,
-                logger,
-                None,
-                None,
-                "init_kmeans_final",
-                all_attr_tensor.to(device),
-            )
-            print("[KMEANS] initial kmeans done.")
-            logger.info("[KMEANS] initial kmeans done.")
-            model.vq._codebook.latent_size_sum = 0
+        # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
+        print("[KMEANS] init_kmeans_final start")
+        logger.info("[KMEANS] init_kmeans_final start")
+
+        # if epoch == 1:
+        # first_batch_feat は CPU に戻してあるので GPU へ
+        first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
+        evaluate(
+            model,
+            all_latents_tensor.to(device),
+            first_batch_feat_dev,
+            epoch,
+            all_masks_dict,
+            logger,
+            None,
+            None,
+            "init_kmeans_final",
+            all_attr_tensor.to(device),
+        )
+        print("[KMEANS] initial kmeans done.")
+        logger.info("[KMEANS] initial kmeans done.")
+        model.vq._codebook.latent_size_sum = 0
 
         # ---------------------------
         # 2) TRAIN

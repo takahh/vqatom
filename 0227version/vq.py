@@ -1378,10 +1378,8 @@ class EuclideanCodebook(nn.Module):
 
                     # 1クラスタあたりの最大サンプル数／全体の上限を属性から上書き可能に
                     max_per_cluster = int(getattr(self, "ss_max_per_cluster", 200))
-                    print("self.ss_max_total_latent_count")
-                    print(self.ss_max_total_latent_count)
                     # max_total = int(getattr(self, "ss_max_total_latent_count", 40000))
-                    max_total = int(40000)
+                    max_total = int(20000)
 
                     idx_list = []
                     for lbl, cnt in zip(uniq, counts):
@@ -2105,6 +2103,12 @@ class VectorQuantize(nn.Module):
 
             e_star = cb[nn_idx]  # [N_i, D]
 
+            # ---------------
+            # クラスの重みゲット
+            # ---------------
+            from utils import WDICT
+            class_weight = float(WDICT[str(k)])
+
             # -------------------------------
             # 3-6) commitment / codebook loss
             # -------------------------------
@@ -2112,8 +2116,8 @@ class VectorQuantize(nn.Module):
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
 
             total_latent += N_i
-            commit_num   = commit_num + commit_part * N_i
-            codebk_num   = codebk_num + codebk_part * N_i
+            commit_num   = commit_num + commit_part * N_i * class_weight
+            codebk_num   = codebk_num + codebk_part * N_i * class_weight
 
             # -------------------------------
             # 3-7) repel loss (contrastive)
@@ -2123,15 +2127,14 @@ class VectorQuantize(nn.Module):
                 cb_for_contrast = codebook[k]
             else:
                 cb_for_contrast = cb  # Tensor でも compute_contrastive_loss が対応していれば OK
-
             # compute_contrastive_loss は旧実装と同じインターフェースを仮定
             # 返り値: (repel_loss, ..., ..., cb_repel_loss, ...)
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
             repel_val     = ret[0]
             cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            repel_num    = repel_num + repel_val * N_i
+            repel_num    = repel_num + repel_val * N_i * class_weight
             total_cb_count += K_e
-            cb_repel_num = cb_repel_num + cb_repel_val * K_e
+            cb_repel_num = cb_repel_num + cb_repel_val * K_e * class_weight
 
         # ---- 4. 集計 ----
         if total_latent == 0:
