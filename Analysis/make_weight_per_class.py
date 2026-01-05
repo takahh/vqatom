@@ -49,7 +49,7 @@ def main():
 
     weights = compute_weights_from_ke(
         cbdict,
-        alpha=0.5,   # <-- change here if needed
+        alpha=0.2,   # <-- change here if needed
         normalize=True
     )
 
