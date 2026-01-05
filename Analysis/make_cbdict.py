@@ -4,14 +4,12 @@ from collections import namedtuple
 
 Entry = namedtuple("Entry", ["key", "n"])
 
-# --- case 1: Silhouette Score 行 ---
-RE_SS = re.compile(
-    r"Silhouette Score .*?:\s+"
-    r"(?P<key>[0-9_X\-]+)\s+"          # key
-    r"[0-9\.\-]+,\s*sample size\s+(?P<n>[0-9]+)"
+# --- case 1: init_embed_ 行から key と N を拾う ---
+RE_INIT = re.compile(
+    r"\[init_embed_.*?\]\s+Z=(?P<key>[0-9_X\-]+)\s+N=(?P<n>[0-9]+)"
 )
 
-# --- case 2: skip 行（n=0扱い or 無視したければ後で除外可）---
+# --- case 2: skip 行（必要なら n=0扱い）---
 RE_SKIP = re.compile(
     r"skip key=(?P<key>[0-9_X\-]+):"
 )
@@ -21,15 +19,13 @@ def parse_freq_log(path):
     entries = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-
-            m = RE_SS.search(line)
+            m = RE_INIT.search(line)
             if m:
                 entries.append(Entry(key=m.group("key"), n=int(m.group("n"))))
                 continue
 
             m = RE_SKIP.search(line)
             if m:
-                # スキップ行は n=0 として入れる（またはコメントアウトで無視もOK）
                 entries.append(Entry(key=m.group("key"), n=0))
                 continue
 
@@ -58,7 +54,7 @@ def main():
 
     entries = parse_freq_log(log_path)
 
-    # keep last occurrence
+    # ---- keep last occurrence ----
     uniq = {}
     for e in entries:
         uniq[e.key] = e.n
