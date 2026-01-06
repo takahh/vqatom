@@ -1386,6 +1386,7 @@ class EuclideanCodebook(nn.Module):
                         # silhouette に貢献するには同一クラスタで最低2点必要
                         if c < 2:
                             continue
+
                         mask = (labels_cpu == lbl).nonzero(as_tuple=True)[0]  # indices for this label
                         # クラスタ内が多すぎるときは max_per_cluster までランダムサンプリング
                         if c > max_per_cluster:
