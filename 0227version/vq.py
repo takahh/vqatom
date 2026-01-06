@@ -1380,7 +1380,6 @@ class EuclideanCodebook(nn.Module):
                     max_per_cluster = int(getattr(self, "ss_max_per_cluster", 200))
                     # max_total = int(getattr(self, "ss_max_total_latent_count", 40000))
                     max_total = int(20000)
-
                     idx_list = []
                     for lbl, cnt in zip(uniq, counts):
                         c = int(cnt.item())
