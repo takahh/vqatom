@@ -1391,7 +1391,6 @@ class EuclideanCodebook(nn.Module):
                         if c > max_per_cluster:
                             perm = torch.randperm(c)[:max_per_cluster]
                             mask = mask[perm]
-
                         idx_list.append(mask)
 
                     if len(idx_list) > 1:
