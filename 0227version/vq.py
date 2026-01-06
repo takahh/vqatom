@@ -1379,7 +1379,7 @@ class EuclideanCodebook(nn.Module):
                     # 1クラスタあたりの最大サンプル数／全体の上限を属性から上書き可能に
                     max_per_cluster = int(getattr(self, "ss_max_per_cluster", 200))
                     # max_total = int(getattr(self, "ss_max_total_latent_count", 40000))
-                    max_total = int(20000)
+                    max_total = int(40000)
 
                     idx_list = []
                     for lbl, cnt in zip(uniq, counts):
