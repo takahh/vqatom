@@ -877,7 +877,6 @@ class EuclideanCodebook(nn.Module):
         self.sample_codebook_temp = sample_codebook_temp
 
         args = get_args()
-        self.samples_latent_in_kmeans = args.samples_latent_in_kmeans
         self.epoch_at_mode_shift = args.epoch_at_mode_shift
         self.train_or_infer = args.train_or_infer
         self.use_checkpoint = args.use_checkpoint
