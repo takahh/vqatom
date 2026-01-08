@@ -254,7 +254,7 @@ def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mo
         args = get_args()
         # both branches identical; keep one
         adj_matrices  = adj_batch[i].view(-1, 100, 100)
-        attr_matrices = attr_batch[i].view(-1, 100, 78)
+        attr_matrices = attr_batch[i].view(-1, 100, 79)
 
         for j in range(len(attr_matrices)):
             adj_matrix  = adj_matrices[j]
