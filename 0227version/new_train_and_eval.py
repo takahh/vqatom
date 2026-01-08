@@ -420,7 +420,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             chunk_size = conf["chunk_size"]  # in 10,000 molecules
             for i in range(0, len(glist), chunk_size):
                 chunk = glist[i:i + chunk_size]
-                print(chunk)
                 attr_chunk = attr_matrices[i:i + chunk_size]
                 chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
 
@@ -443,7 +442,6 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     "init_kmeans_loop",
                     attr_chunk,
                 )
-                print(latents)
                 all_latents.append(latents.cpu())  # save on CPU
 
                 if i == 0 and idx == 0:
