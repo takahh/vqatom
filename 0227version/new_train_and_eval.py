@@ -138,7 +138,7 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-def collect_global_indices_compact_runtime(
+def collect_global_indices_compact(
     adj_batch,
     attr_batch,
     logger,
