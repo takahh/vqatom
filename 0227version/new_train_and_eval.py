@@ -442,6 +442,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                     "init_kmeans_loop",
                     attr_chunk,
                 )
+                print(latents)
                 all_latents.append(latents.cpu())  # save on CPU
 
                 if i == 0 and idx == 0:
