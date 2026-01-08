@@ -138,7 +138,7 @@ class AtomEmbedding(nn.Module):
     def __init__(self):
         super(AtomEmbedding, self).__init__()
 
-        # ---- 埋め込み定義（離散 0-29 部分）----
+        # ---- 埋め込み定義（離散 0-30 部分）----
         self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
         self.ring_embed     = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # ring flag+1 など
         self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
@@ -187,6 +187,9 @@ class AtomEmbedding(nn.Module):
         self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
         self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
 
+        # NEW: het27 (30) 用の embedding (0..26 → 27クラス)
+        self.het27_embed = nn.Embedding(num_embeddings=27, embedding_dim=4)
+
         # 官能基フラグ 18 個 (各 2 次元) → 36 次元を 4 次元に圧縮
         self.func_reduce = nn.Linear(18 * 2, 4)
 
@@ -200,13 +203,21 @@ class AtomEmbedding(nn.Module):
         )
         self.ring_value_to_index = mapping
 
-        # ---- bond_env_raw (30-77, 48 dims) 用の射影 ----
+        # ---- bond_env_raw (31-78, 48 dims) 用の射影 ----
         # 48 次元 → 16 次元に圧縮して concat
         self.bond_env_proj = nn.Linear(48, 16)
 
+        # ---- 離散部分（x0..x6 + flags4 + x25,x26 + x27,x28,x29,x30）を 52→48 に圧縮 ----
+        #   x0..x6: 7*4 = 28
+        #   flags4: 4
+        #   x25,x26: 2+2 = 4
+        #   x27,x28,x29,x30: 4*4 = 16
+        #   合計 = 28 + 4 + 4 + 16 = 52
+        self.disc_proj = nn.Linear(52, 48)
+
         # このクラスの最終出力次元:
-        #   離散部: 7*4 + 4 + 2*2 + 3*4 = 48
-        #   bond_env_proj: 16
+        #   離散部 (disc_proj 後) : 48
+        #   bond_env_proj         : 16
         #   合計 = 64
         self.out_dim = 48 + 16
 
@@ -220,7 +231,7 @@ class AtomEmbedding(nn.Module):
 
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
         """
-        atom_inputs: Tensor [N, 78] を想定
+        atom_inputs: Tensor [N, 79] を想定
 
         0 : Z
         1 : degree
@@ -235,7 +246,8 @@ class AtomEmbedding(nn.Module):
         27    : ringSize (0,3,4,5,6,7,8,...)
         28    : #aromatic neighbors
         29    : fused ring id (0..7)
-        30-77 : bond_env_raw (48)  ← sum+max bond features
+        30    : het27 (0..26)
+        31-78 : bond_env_raw (48)  ← sum+max bond features
         """
         device = next(self.parameters()).device
         atom_inputs = atom_inputs.to(device, non_blocking=True)
@@ -329,19 +341,31 @@ class AtomEmbedding(nn.Module):
         idx29 = raw29.clamp(0, self.fused_if_embed.num_embeddings - 1)
         x29 = self.fused_if_embed(idx29)
 
-        # 30-77: bond_env_raw (48 dims, float)
-        bond_env = atom_inputs[:, 30:].to(torch.float32)  # [N, 48]
+        # 30: het27 (0..26)
+        raw30 = atom_inputs[:, 30].long()
+        idx30 = raw30.clamp(0, self.het27_embed.num_embeddings - 1)
+        x30 = self.het27_embed(idx30)
+
+        # 31-78: bond_env_raw (48 dims, float)
+        bond_env = atom_inputs[:, 31:].to(torch.float32)  # [N, 48]
         bond_env_emb = self.bond_env_proj(bond_env)       # [N, 16]
 
-        # 離散部分の埋め込み (48 dims) ＋ bond_env_emb (16 dims) = 64 dims
-        out = torch.cat(
+        # ----- 離散部分まとめて 52→48 に圧縮 -----
+        disc_cat = torch.cat(
             [
                 x0, x1, x2, x3, x4, x5, x6,   # 7*4 = 28
                 flags4,                       # 4
                 x25, x26,                     # 2+2 = 4
-                x27, x28, x29,                # 3*4 = 12
-                bond_env_emb,                 # 16
+                x27, x28, x29, x30,           # 4*4 = 16
             ],
+            dim=-1,
+        )  # [N, 52]
+
+        disc_emb = self.disc_proj(disc_cat)   # [N, 48]
+
+        # 離散 48 + bond_env 16 = 64
+        out = torch.cat(
+            [disc_emb, bond_env_emb],
             dim=-1,
         )
         return out

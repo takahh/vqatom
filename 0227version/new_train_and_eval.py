@@ -138,138 +138,34 @@ ALLOWED_CHARGE = {-1, 0, 1}
 ALLOWED_HYB    = {2, 3, 4}
 ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
 
-def collect_global_indices_compact(
+def collect_global_indices_compact_runtime(
     adj_batch,
     attr_batch,
     logger,
     start_atom_id=0,
     start_mol_id=0,
-    degree_cap=None,
-    ring_size_cap=8,
-    arom_nbrs_cap=6,
-    fused_id_cap=255,
-    ring_size_col=27,
-    arom_nbrs_col=28,
-    fused_id_col=29,
-    func_base_start_col=7,
-    n_func_base_flags=18,
-    ring_size_batch=None,
-    arom_nbrs_batch=None,
-    fused_ring_id_batch=None,
-    include_keys=("Z","charge","hyb","arom","ring","deg",
-                  "ringSize","aromNbrs","fusedId","pos","func","hnum","het27"),
-    target_base_prefix="6_0_3_1_1",
     debug=True,
     debug_max_print=1000,
 ):
-    from collections import defaultdict, Counter
+    """
+    Runtime version:
+      - Keys are intrinsic only: (Z, charge, hyb, arom, ring, hnum)
+      - Environmental context (deg, ringSize, aromNbrs, fusedId, pos, func, het27)
+        is NOT part of the key anymore.
+      - Assumes env features are already present in attr_batch and will be used
+        by the GNN as node features, not for grouping.
+    """
+    from collections import defaultdict
     import numpy as np
     import torch
-    from utils import CBDICT
 
-    # ---------- NEW: hetero tagging ----------
-    HETERO_TAG = {
-        7: "N",    # N
-        8: "O",    # O
-        16: "R",   # S
-        9: "R",    # F
-        17: "R",   # Cl
-        35: "R",   # Br
-    }
-
-    def _bucket2(x: int) -> int:
-        if x <= 0:
-            return 0
-        if x == 1:
-            return 1
-        return 2
-
-    def _hetero_second_shell_code_27(adj_mat, Z_arr, center):
-        """
-        adj_mat: (100,100)
-        Z_arr:   (100,)
-        center:  int
-        """
-        # ---- 1-hop ----
-        nbr1 = np.nonzero(adj_mat[center])[0]
-
-        # ---- 2-hop ----
-        nbr2 = set()
-        for j in nbr1:
-            for k in np.nonzero(adj_mat[j])[0]:
-                if k == center or k in nbr1:
-                    continue
-                nbr2.add(k)
-
-        cntN = cntO = cntR = 0
-        for k in nbr2:
-            z = int(Z_arr[k])
-            tag = HETERO_TAG.get(z, None)
-            if tag == "N":
-                cntN += 1
-            elif tag == "O":
-                cntO += 1
-            elif tag == "R":
-                cntR += 1
-
-        bN    = _bucket2(cntN)
-        bO    = _bucket2(cntO)
-        bRest = _bucket2(cntR)
-
-        return int(bN + 3*bO + 9*bRest)   # 0..26
-
-    # ---------- original setup ----------
-    CBDICT_KEYS = set(CBDICT.keys())
-
-    COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 2, 3, 4, 5, 6
-    BASE_COLS = [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]
-
-    name_to_idx = {name: idx for idx, name in enumerate(include_keys)}
-    base_field_names = ("Z","charge","hyb","arom","ring","deg","hnum")
-    base_field_indices = [name_to_idx[n] for n in base_field_names]
-
-    ringSize_idx = name_to_idx.get("ringSize", None)
-    aromNbrs_idx = name_to_idx.get("aromNbrs", None)
-    fusedId_idx  = name_to_idx.get("fusedId", None)
-    pos_idx      = name_to_idx.get("pos", None)
-    deg_idx      = name_to_idx.get("deg", None)
-    func_idx     = name_to_idx.get("func", None)
-    hnum_idx     = name_to_idx.get("hnum", None)
-
-    target_stats = None
-    if target_base_prefix is not None:
-        target_stats = {
-            "count": 0,
-            "ringSize": Counter(),
-            "aromNbrs": Counter(),
-            "fusedId": Counter(),
-            "deg": Counter(),
-            "pos": Counter(),
-            "hnum": Counter(),
-        }
+    # columns in attr: must match your data layout
+    COL_Z, COL_DEG, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 1, 2, 3, 4, 5, 6
 
     def _to_cpu_np(x):
         if isinstance(x, torch.Tensor):
             return x.detach().cpu().numpy()
         return x
-
-    def _extract_side_feature(side_batch, i, M):
-        if side_batch is None:
-            return None
-        side_i = side_batch[i]
-        side_np = _to_cpu_np(side_i)
-
-        if side_np.ndim == 1:
-            side_np = side_np.reshape(M, 100)
-        elif side_np.ndim == 2:
-            if side_np.shape != (M, 100):
-                side_np = side_np.reshape(M, 100)
-        elif side_np.ndim == 3:
-            side_np = side_np[...,0]
-        else:
-            side_np = side_np.reshape(M, 100)
-
-        return side_np.astype(np.int32)
 
     masks_dict = defaultdict(list)
     atom_offset = int(start_atom_id)
@@ -279,50 +175,19 @@ def collect_global_indices_compact(
 
     for i in range(B):
         D = attr_batch[i].shape[-1]
-        attr_mats = attr_batch[i].view(-1,100,D)
-        adj_mats  = adj_batch[i].view(-1,100,100)
+        attr_mats = attr_batch[i].view(-1, 100, D)
+        adj_mats  = adj_batch[i].view(-1, 100, 100)
 
         attr_np = _to_cpu_np(attr_mats)
         adj_np  = _to_cpu_np(adj_mats)
 
         M = attr_np.shape[0]
 
-        A_sel = attr_np[...,BASE_COLS].astype(np.int32)
+        # just select intrinsic cols once
+        A_sel = attr_np[..., [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]].astype(np.int32)
+
+        # node existence mask
         node_mask = (np.abs(attr_np).sum(axis=2) > 0)
-
-        deg_total = (adj_np != 0).sum(axis=2).astype(np.int32)
-        diag_nz   = (np.abs(np.diagonal(adj_np,axis1=1,axis2=2)) != 0).astype(np.int32)
-        degrees   = deg_total - diag_nz
-        if degree_cap is not None:
-            degrees = np.minimum(degrees, int(degree_cap))
-
-        if ring_size_col is not None:
-            ring_size_np = attr_np[...,ring_size_col].astype(np.int32)
-        else:
-            ring_size_np = _extract_side_feature(ring_size_batch,i,M) or np.zeros((M,100),np.int32)
-
-        if arom_nbrs_col is not None:
-            arom_nbrs_np = attr_np[...,arom_nbrs_col].astype(np.int32)
-        else:
-            arom_nbrs_np = _extract_side_feature(arom_nbrs_batch,i,M) or np.zeros((M,100),np.int32)
-
-        if fused_id_col is not None:
-            fused_id_np = attr_np[...,fused_id_col].astype(np.int32)
-        else:
-            fused_id_np = _extract_side_feature(fused_ring_id_batch,i,M) or np.zeros((M,100),np.int32)
-
-        if func_base_start_col is not None and n_func_base_flags is not None:
-            func_flags_np = attr_np[...,func_base_start_col:func_base_start_col+n_func_base_flags].astype(np.float32)
-            func_id_np = np.argmax(func_flags_np,axis=2).astype(np.int32)
-        else:
-            func_id_np = np.zeros((M,100),np.int32)
-
-        if ring_size_cap is not None:
-            ring_size_np = np.minimum(ring_size_np,int(ring_size_cap))
-        if arom_nbrs_cap is not None:
-            arom_nbrs_np = np.minimum(arom_nbrs_np,int(arom_nbrs_cap))
-        if fused_id_cap is not None:
-            fused_id_np = np.minimum(fused_id_np,int(fused_id_cap))
 
         for m in range(M):
             nm = node_mask[m]
@@ -330,62 +195,51 @@ def collect_global_indices_compact(
                 mol_id += 1
                 continue
 
-            z      = A_sel[m,:,0][nm]
-            charge = A_sel[m,:,1][nm]
-            hyb    = A_sel[m,:,2][nm]
-            arom   = A_sel[m,:,3][nm]
-            ring   = A_sel[m,:,4][nm]
-            hnum   = A_sel[m,:,5][nm]
-            deg    = degrees[m][nm]
+            z      = A_sel[m, :, 0][nm]
+            charge = A_sel[m, :, 1][nm]
+            hyb    = A_sel[m, :, 2][nm]
+            arom   = A_sel[m, :, 3][nm]
+            ring   = A_sel[m, :, 4][nm]
+            hnum   = A_sel[m, :, 5][nm]
 
-            rs  = ring_size_np[m][nm]
-            an  = arom_nbrs_np[m][nm]
-            fid = fused_id_np[m][nm]
-            func = func_id_np[m][nm]
-
-            pos = (((z==6)&(hyb==3)&(arom==1)&(ring==1)&(deg==2))).astype(np.int32)
-
-            # ---- NEW: 2-hop hetero bucket ----
-            het_codes = np.zeros(len(z),dtype=np.int32)
-            full_adj = adj_np[m]
-            full_Z   = attr_np[m,:,0]
-            nm_idx = np.where(nm)[0]
-            for ii,(idx_local,idx_global) in enumerate(zip(range(len(nm_idx)),nm_idx)):
-                het_codes[ii] = _hetero_second_shell_code_27(full_adj,full_Z,int(idx_global))
-
+            # intrinsic fields only
             fields = {
-                "Z":z,"charge":charge,"hyb":hyb,"arom":arom,"ring":ring,"deg":deg,
-                "ringSize":rs,"aromNbrs":an,"fusedId":fid,"pos":pos,"func":func,"hnum":hnum,
-                "het27":het_codes
+                "Z": z,
+                "charge": charge,
+                "hyb": hyb,
+                "arom": arom,
+                "ring": ring,
+                "hnum": hnum,
             }
 
+            include_keys = ("Z", "charge", "hyb", "arom", "ring", "hnum")
             cols_to_stack = [fields[name] for name in include_keys]
-            keys = np.stack(cols_to_stack,axis=1).astype(np.int32)
+            keys = np.stack(cols_to_stack, axis=1).astype(np.int32)
             if keys.ndim == 1:
-                keys = keys.reshape(1,-1)
+                keys = keys.reshape(1, -1)
             N = keys.shape[0]
 
             global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
 
+            # build key strings but now they are short
             ks = keys.astype(str)
-            key_strings = ks[:,0]
-            for c in range(1,ks.shape[1]):
-                key_strings = np.char.add(np.char.add(key_strings,"_"),ks[:,c])
+            key_strings = ks[:, 0]
+            for c in range(1, ks.shape[1]):
+                key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
 
-            uniq_keys, inv = np.unique(key_strings,return_inverse=True)
+            uniq_keys, inv = np.unique(key_strings, return_inverse=True)
             buckets = [[] for _ in range(len(uniq_keys))]
             inv_list = inv.tolist()
-            for row_idx,bucket_id in enumerate(inv_list):
+            for row_idx, bucket_id in enumerate(inv_list):
                 buckets[bucket_id].append(int(global_ids[row_idx]))
 
-            for uk,ids in zip(uniq_keys.tolist(),buckets):
+            for uk, ids in zip(uniq_keys.tolist(), buckets):
                 masks_dict[uk].extend(ids)
 
             atom_offset += N
             mol_id += 1
 
     return masks_dict, atom_offset, mol_id
-
 
 def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
     from collections import defaultdict
