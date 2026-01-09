@@ -1318,6 +1318,71 @@ class EuclideanCodebook(nn.Module):
             norm[k_str] = v
         return norm
 
+    import torch
+
+    @torch.no_grad()
+    def argmin_dist_blockwise_l2(x: torch.Tensor, code: torch.Tensor, k_block: int = 1024):
+        """
+        x:    [N, D] (fp16/fp32 ok)
+        code: [K, D]
+        Returns:
+          idx: [N] long, argmin over K
+        Memory: O(N + k_block*D) not O(N*K)
+        """
+        # Do math in fp32 for stability; keep x/code on GPU
+        x_f = x.float()
+        c_f = code.float()
+
+        # x2: [N,1]
+        x2 = (x_f * x_f).sum(dim=1, keepdim=True)  # [N,1]
+
+        best_val = torch.full((x_f.size(0),), float("inf"), device=x.device, dtype=torch.float32)
+        best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
+
+        K = c_f.size(0)
+        for k0 in range(0, K, k_block):
+            k1 = min(k0 + k_block, K)
+            ck = c_f[k0:k1]  # [kb,D]
+            c2 = (ck * ck).sum(dim=1).unsqueeze(0)  # [1,kb]
+
+            # d2 = x2 + c2 - 2*x@c^T
+            xc = x_f @ ck.t()  # [N,kb]
+            d2 = (x2 + c2 - 2.0 * xc).clamp_min_(0.0)  # [N,kb]
+
+            vals, idxs = d2.min(dim=1)  # [N]
+            update = vals < best_val
+            best_val = torch.where(update, vals, best_val)
+            best_idx = torch.where(update, idxs + k0, best_idx)
+
+            # free block temps promptly
+            del ck, c2, xc, d2, vals, idxs, update
+
+        return best_idx
+
+    @torch.no_grad()
+    def argmax_sim_blockwise_cos(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 2048, eps: float = 1e-12):
+        """
+        cosine similarity argmax without allocating [N,K]
+        """
+        x_f = torch.nn.functional.normalize(x.float(), p=2, dim=1, eps=eps)
+        c_f = torch.nn.functional.normalize(code.float(), p=2, dim=1, eps=eps)
+
+        best_val = torch.full((x_f.size(0),), -float("inf"), device=x.device, dtype=torch.float32)
+        best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
+
+        K = c_f.size(0)
+        for k0 in range(0, K, k_block):
+            k1 = min(k0 + k_block, K)
+            ck = c_f[k0:k1]  # [kb,D]
+            sims = x_f @ ck.t()  # [N,kb]
+            vals, idxs = sims.max(dim=1)
+            update = vals > best_val
+            best_val = torch.where(update, vals, best_val)
+            best_idx = torch.where(update, idxs + k0, best_idx)
+            del ck, sims, vals, idxs, update
+
+        return best_idx
+
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
@@ -1400,11 +1465,11 @@ class EuclideanCodebook(nn.Module):
                 )
                 code_param = self.embed[safe]
                 code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
-
                 with torch.no_grad():
-                    dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                    idx_code = dist.argmin(dim=-1)
-                    del dist
+                    # choose one:
+                    idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)
+                    # idx_code = argmax_sim_blockwise_cos(masked_latents, code, k_block=2048)
+
                 quantize = code.index_select(0, idx_code)
 
                 self.quantize_dict[skey] = quantize
