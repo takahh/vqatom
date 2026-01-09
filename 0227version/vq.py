@@ -140,7 +140,7 @@ def kmeans(
     """
     import math
     samples = samples.to("cuda", non_blocking=True)
-
+    print("kmeans is running...")
     H, N, D = samples.shape
 
     # only auto-set when max_iters <= 0
