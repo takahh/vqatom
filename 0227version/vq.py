@@ -139,6 +139,7 @@ def kmeans(
         used_per_label: dict[str,int] # only if element_names provided, else None
     """
     import math
+    samples = samples.to("cuda", non_blocking=True)
 
     H, N, D = samples.shape
 
@@ -207,91 +208,35 @@ def kmeans(
         # 2) initialize closest distances
         closest = dist_to_center(Xwork, C[:, 0, :])  # [H, N], fp32
 
-        # --- deterministic-safe samplers ---
-        def _sample_block_cpu_cumsum(rp: torch.Tensor) -> torch.Tensor:
+        def _sample_block_gpu_cumsum(rp: torch.Tensor) -> torch.Tensor:
+            # rp: [H,N] nonnegative
             totals = rp.sum(dim=1)  # [H]
             zero_mask = totals <= 0
-            u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
+            u = torch.rand(H, device=rp.device, dtype=rp.dtype) * torch.clamp(totals, min=eps)
 
             idx_out = torch.empty(H, device=rp.device, dtype=torch.long)
-            cum = torch.zeros(H, device=rp.device, dtype=dtype_prob)
+            cum = torch.zeros(H, device=rp.device, dtype=rp.dtype)
             found = torch.zeros(H, device=rp.device, dtype=torch.bool)
 
             start = 0
             while start < N:
                 end = min(start + sample_block_elems, N)
-                block = rp[:, start:end]              # [H,B]
-                block_sum = block.sum(dim=1)          # [H]
+                block = rp[:, start:end]  # [H,B]
+                block_sum = block.sum(dim=1)  # [H]
 
-                target_in_block = (~found) & (cum + block_sum >= u)
-                if target_in_block.any():
-                    h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
+                target = (~found) & (cum + block_sum >= u)
+                if target.any():
+                    h_idx = target.nonzero(as_tuple=False).squeeze(1)  # [H_sel]
+                    sub = block[h_idx]  # [H_sel,B]
+                    need = (u[h_idx] - cum[h_idx]).unsqueeze(1)  # [H_sel,1]
 
-                    # CPU hop for deterministic cumsum
-                    sub_cpu = block[h_idx].to("cpu", dtype=torch.float64, non_blocking=False)  # [H_sel,B]
-                    sub_cum_cpu = sub_cpu.cumsum(dim=1)                                        # deterministic
-                    need_cpu = (u[h_idx] - cum[h_idx]).to("cpu", dtype=torch.float64).unsqueeze(1)
-                    pos_cpu = torch.searchsorted(sub_cum_cpu, need_cpu, right=False).squeeze(1) # [H_sel]
-                    pos = pos_cpu.to(device=rp.device, dtype=torch.long, non_blocking=False)
-
-                    idx_out[h_idx] = start + pos
-                    found[h_idx] = True
-
-                # advance cum for unresolved heads
-                not_found = ~found
-                if not_found.any():
-                    cum[not_found] = cum[not_found] + block_sum[not_found]
-
-                start = end
-                if found.all():
-                    break
-
-            # finalize unresolved / degenerate
-            if (~found).any():
-                idx_out[~found] = N - 1
-            if zero_mask.any():
-                idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=rp.device)
-            return idx_out
-
-        def _sample_block_gpu_scan(rp: torch.Tensor) -> torch.Tensor:
-            totals = rp.sum(dim=1)  # [H]
-            zero_mask = totals <= 0
-            u = torch.rand(H, device=rp.device, dtype=dtype_prob) * torch.clamp(totals, min=eps)
-
-            idx_out = torch.empty(H, device=rp.device, dtype=torch.long)
-            cum = torch.zeros(H, device=rp.device, dtype=dtype_prob)
-            found = torch.zeros(H, device=rp.device, dtype=torch.bool)
-
-            start = 0
-            while start < N:
-                end = min(start + sample_block_elems, N)
-                block = rp[:, start:end]              # [H,B]
-                block_sum = block.sum(dim=1)          # [H]
-
-                target_in_block = (~found) & (cum + block_sum >= u)
-                if target_in_block.any():
-                    h_idx = target_in_block.nonzero(as_tuple=False).squeeze(1)
-                    sub = block[h_idx]                # [H_sel,B]
-                    need = (u[h_idx] - cum[h_idx])    # [H_sel]
-
-                    # row-wise deterministic scan (no cumsum)
-                    pos = torch.empty_like(h_idx, dtype=torch.long, device=rp.device)
-                    for n in range(sub.size(0)):
-                        row = sub[n]                  # [B]
-                        running = torch.zeros((), device=rp.device, dtype=row.dtype)
-                        j = 0
-                        B = row.numel()
-                        while j < B:
-                            running = running + row[j]
-                            if running >= need[n]:
-                                break
-                            j += 1
-                        pos[n] = j if j < B else (B - 1)
+                    sub_cum = sub.cumsum(dim=1)  # GPU cumsum
+                    pos = torch.searchsorted(sub_cum, need, right=False).squeeze(1)
+                    pos = pos.clamp_max(sub.size(1) - 1)
 
                     idx_out[h_idx] = start + pos
                     found[h_idx] = True
 
-                # advance cum for unresolved heads
                 not_found = ~found
                 if not_found.any():
                     cum[not_found] = cum[not_found] + block_sum[not_found]
@@ -304,6 +249,7 @@ def kmeans(
                 idx_out[~found] = N - 1
             if zero_mask.any():
                 idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=rp.device)
+
             return idx_out
 
         # --- outer loop: pick K-1 more centers ---
