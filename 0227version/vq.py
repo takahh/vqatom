@@ -262,7 +262,7 @@ def kmeans(
             rp = (rp - rp.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
             rp = rp * rp  # squared prob is standard k-means++
 
-            idxk = _sample_block_cpu_cumsum(rp) if deterministic == "cpu_cumsum" else _sample_block_gpu_scan(rp)
+            idxk = _sample_block_gpu_cumsum(rp) if deterministic == "cpu_cumsum" else _sample_block_gpu_scan(rp)
 
             # set new center
             C[:, k, :] = X[torch.arange(H, device=device), idxk, :]
