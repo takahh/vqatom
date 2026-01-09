@@ -1319,21 +1319,13 @@ class EuclideanCodebook(nn.Module):
         return norm
 
     import torch
-
     @torch.no_grad()
-    def argmin_dist_blockwise_l2(x: torch.Tensor, code: torch.Tensor, k_block: int = 1024):
-        """
-        x:    [N, D] (fp16/fp32 ok)
-        code: [K, D]
-        Returns:
-          idx: [N] long, argmin over K
-        Memory: O(N + k_block*D) not O(N*K)
-        """
-        # Do math in fp32 for stability; keep x/code on GPU
+    def argmin_dist_blockwise_l2(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024):
+        import torch
+
         x_f = x.float()
         c_f = code.float()
 
-        # x2: [N,1]
         x2 = (x_f * x_f).sum(dim=1, keepdim=True)  # [N,1]
 
         best_val = torch.full((x_f.size(0),), float("inf"), device=x.device, dtype=torch.float32)
@@ -1345,16 +1337,14 @@ class EuclideanCodebook(nn.Module):
             ck = c_f[k0:k1]  # [kb,D]
             c2 = (ck * ck).sum(dim=1).unsqueeze(0)  # [1,kb]
 
-            # d2 = x2 + c2 - 2*x@c^T
             xc = x_f @ ck.t()  # [N,kb]
-            d2 = (x2 + c2 - 2.0 * xc).clamp_min_(0.0)  # [N,kb]
+            d2 = (x2 + c2 - 2.0 * xc).clamp_min_(0.0)
 
-            vals, idxs = d2.min(dim=1)  # [N]
+            vals, idxs = d2.min(dim=1)
             update = vals < best_val
             best_val = torch.where(update, vals, best_val)
             best_idx = torch.where(update, idxs + k0, best_idx)
 
-            # free block temps promptly
             del ck, c2, xc, d2, vals, idxs, update
 
         return best_idx
