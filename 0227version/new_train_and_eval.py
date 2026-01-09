@@ -452,6 +452,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
                 gc.collect()
                 torch.cuda.empty_cache()
 
+            print("latent output is done")
             # glist をクリーンアップ
             for g in glist:
                 g.ndata.clear()
