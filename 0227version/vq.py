@@ -366,11 +366,12 @@ def kmeans(
     # If determinism is enabled, default to CPU sampling (no crash).
     # If you prefer "allow nondet only for cumsum", set deterministic="gpu_cumsum_nondet_ok".
     means = kmeanspp_init_blockwise(
-        samples, K,
+        samples,
+        K,
         cosine=use_cosine_sim,
         eps=eps,
-        deterministic="auto",
-    )  # [H,K,D]
+        deterministic="gpu_cumsum_nondet_ok",
+    )
 
     # ----------------------------
     # Lloyd steps (streaming/blocked)
