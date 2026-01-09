@@ -250,7 +250,15 @@ def convert_to_dgl(
     device=None,
     two_hop_w=0.5,
     three_hop_w=0.3,
+    make_base_bidirected=True,   # keep base graph symmetric for khop
+    add_self_loops=True,
 ):
+    """
+    GPU-friendly DGL conversion WITHOUT dgl.to_simple / dgl.to_bidirected (CPU-only in your DGL build).
+
+    Returns:
+        base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id
+    """
     import torch
     import dgl
 
@@ -258,10 +266,9 @@ def convert_to_dgl(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device)
 
-    from collections import defaultdict
-
-    # NOTE: your collect_global_indices_compact probably expects CPU tensors.
-    # Keep it as-is unless you've already made it CUDA-safe.
+    # ----------------------------
+    # collect masks (likely CPU-safe; keep as-is)
+    # ----------------------------
     masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(
         adj_batch, attr_batch, logger, start_atom_id, start_mol_id
     )
@@ -270,90 +277,162 @@ def convert_to_dgl(
     extended_graphs = []
     attr_matrices_all = []
 
-    # ---- helpers (GPU k-hop via sparse) ----
-    def khop_from_edges(num_nodes, src, dst, k: int):
+    # ----------------------------
+    # helpers
+    # ----------------------------
+    def make_bidirected_simple_edges(src, dst, num_nodes: int):
         """
-        Return boolean adjacency (dense) for k-hop based on 1-hop edges.
-        Uses sparse matmul on GPU.
+        Build bidirected + deduplicated edges on GPU via hashing.
+        src,dst: int64 tensors on GPU
+        returns src_u, dst_u (int64) on GPU
         """
-        # A: sparse [N,N] with 1s on edges
-        val = torch.ones(src.numel(), device=device, dtype=torch.float32)
+        # bidirected
+        src2 = torch.cat([src, dst], dim=0)
+        dst2 = torch.cat([dst, src], dim=0)
+
+        # remove self edges now (we add self-loops later)
+        m = (src2 != dst2)
+        src2, dst2 = src2[m], dst2[m]
+
+        # unique by key = src*N + dst
+        N = int(num_nodes)
+        key = src2 * N + dst2
+        key_u = torch.unique(key)  # sorted unique on GPU
+
+        src_u = key_u // N
+        dst_u = key_u % N
+        return src_u, dst_u
+
+    def khop_bool_dense_from_A(num_nodes: int, src, dst, k: int):
+        """
+        k-hop adjacency as boolean dense [N,N] using sparse matmul on GPU.
+        NOTE: N=100 here so dense is fine.
+        """
+        # sparse A (unweighted)
+        vals = torch.ones(src.numel(), device=device, dtype=torch.float32)
         A = torch.sparse_coo_tensor(
             torch.stack([src, dst], dim=0),
-            val,
+            vals,
             size=(num_nodes, num_nodes),
             device=device,
         ).coalesce()
 
-        # compute Ak = A^k (boolean-ish)
         Ak = A
         for _ in range(k - 1):
             Ak = torch.sparse.mm(Ak, A)
-            # clamp values to 1 to prevent growth
             Ak = Ak.coalesce()
+            # clamp >0 to 1 (boolean-ish)
             Ak = torch.sparse_coo_tensor(
                 Ak.indices(), Ak.values().clamp_(0, 1), Ak.size(), device=device
             ).coalesce()
 
-        # convert to dense 0/1 (for edge typing + weight mixing)
         return Ak.to_dense().bool()
 
-    # ---- main loop ----
+    # ----------------------------
+    # main
+    # ----------------------------
     B = len(adj_batch)
     for i in range(B):
-        # move batch slice to GPU once
-        adj_matrices  = adj_batch[i].view(-1, 100, 100).to(device, non_blocking=True)
+        # move a whole batch item to GPU once
+        adj_matrices = adj_batch[i].view(-1, 100, 100).to(device, non_blocking=True)
         attr_matrices = attr_batch[i].view(-1, 100, 79).to(device, non_blocking=True)
 
         for j in range(attr_matrices.shape[0]):
-            adj_matrix  = adj_matrices[j]
-            attr_matrix = attr_matrices[j]
+            adj_matrix = adj_matrices[j]        # [100,100] on GPU
+            attr_matrix = attr_matrices[j]      # [100,79]  on GPU
 
             # ---- depad ----
-            nonzero_mask    = (attr_matrix.abs().sum(dim=1) > 0)
+            nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
             num_total_nodes = int(nonzero_mask.sum().item())
-            filtered_attr   = attr_matrix[nonzero_mask]  # [N,79]
-            filtered_adj    = adj_matrix[:num_total_nodes, :num_total_nodes].float()  # [N,N]
+            if num_total_nodes <= 0:
+                continue
 
-            # ---- 1-hop edges from filtered_adj ----
-            src, dst = (filtered_adj > 0).nonzero(as_tuple=True)  # GPU indices
+            filtered_attr = attr_matrix[nonzero_mask]  # [N,79]
+            filtered_adj = adj_matrix[:num_total_nodes, :num_total_nodes].float()  # [N,N]
 
-            # ---- base graph on GPU ----
-            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
+            # ---- 1-hop edges from original weighted adjacency ----
+            # (treat >0 as edge existence)
+            src, dst = (filtered_adj > 0).nonzero(as_tuple=True)
+            if src.numel() == 0:
+                # make an empty graph with N nodes (still add self-loop if requested)
+                base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
+                base_g.ndata["feat"] = filtered_attr
+                if add_self_loops:
+                    base_g = dgl.add_self_loop(base_g)
+                base_graphs.append(base_g)
 
-            # make bidirected + simple on GPU (works on recent DGL; if not, see note below)
-            base_g = dgl.to_simple(dgl.to_bidirected(base_g))
-            base_g = dgl.add_self_loop(base_g)
+                # extended graph = just self loops
+                extended_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
+                extended_g.ndata["feat"] = filtered_attr
+                if add_self_loops:
+                    extended_g = dgl.add_self_loop(extended_g)
+                    e_src, e_dst = extended_g.edges()
+                    extended_g.edata["weight"] = torch.ones(e_src.numel(), device=device, dtype=torch.float32)
+                    extended_g.edata["edge_type"] = torch.zeros(e_src.numel(), device=device, dtype=torch.int32)
+                extended_graphs.append(extended_g)
 
+                attr_matrices_all.append(filtered_attr)
+                continue
+
+            # ---- base graph edges: bidirected + simple on GPU (NO dgl.to_simple/to_bidirected) ----
+            if make_base_bidirected:
+                bsrc, bdst = make_bidirected_simple_edges(src, dst, num_total_nodes)
+            else:
+                # still dedup directed edges
+                N = int(num_total_nodes)
+                key = src * N + dst
+                key_u = torch.unique(key)
+                bsrc, bdst = key_u // N, key_u % N
+
+            base_g = dgl.graph((bsrc, bdst), num_nodes=num_total_nodes, device=device)
             base_g.ndata["feat"] = filtered_attr
-            bsrc, bdst = base_g.edges()
-            base_g.edata["weight"] = filtered_adj[bsrc, bdst]
+
+            # edge weights for base graph: from filtered_adj
+            es, ed = base_g.edges()
+            base_g.edata["weight"] = filtered_adj[es, ed]
             base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), device=device, dtype=torch.int32)
+
+            if add_self_loops:
+                base_g = dgl.add_self_loop(base_g)
 
             base_graphs.append(base_g)
 
-            # ---- k-hop on GPU ----
-            # compute 2-hop and 3-hop adjacency (boolean dense)
-            adj_2hop_bool = khop_from_edges(num_total_nodes, src, dst, k=2)
-            adj_3hop_bool = khop_from_edges(num_total_nodes, src, dst, k=3)
+            # ---- k-hop (computed from base edges) ----
+            # Use base edges (without self-loops) for k-hop; self-loops don't matter much but keep clean:
+            # (bsrc, bdst) is already without self edges because we removed them in helper.
+            adj_2hop_bool = khop_bool_dense_from_A(num_total_nodes, bsrc, bdst, k=2)
+            adj_3hop_bool = khop_bool_dense_from_A(num_total_nodes, bsrc, bdst, k=3)
 
-            # ---- combine weighted dense adjacency on GPU ----
+            # ---- combine weighted dense adjacency ----
             full_adj = filtered_adj.clone()
-            full_adj = full_adj + adj_2hop_bool.float() * two_hop_w
-            full_adj = full_adj + adj_3hop_bool.float() * three_hop_w
+            full_adj += adj_2hop_bool.float() * float(two_hop_w)
+            full_adj += adj_3hop_bool.float() * float(three_hop_w)
             full_adj.fill_diagonal_(1.0)
 
-            # ---- extended graph from full_adj (GPU) ----
+            # ---- extended graph from full_adj ----
             sf, df = (full_adj > 0).nonzero(as_tuple=True)
+
+            # OPTIONAL: make extended edges simple (dedup) too
+            N = int(num_total_nodes)
+            key = sf * N + df
+            key_u = torch.unique(key)
+            sf, df = key_u // N, key_u % N
+
             extended_g = dgl.graph((sf, df), num_nodes=num_total_nodes, device=device)
-            extended_g = dgl.add_self_loop(extended_g)
+
+            if add_self_loops:
+                # If you want explicit self-loop edges with weight=1 and type=0,
+                # it's better to add after computing edge attributes.
+                pass
 
             e_src, e_dst = extended_g.edges()
-            extended_g.edata["weight"] = full_adj[e_src, e_dst]
 
-            # edge types based on origin
-            one_hop   = (filtered_adj[e_src, e_dst] > 0)
-            two_hop   = adj_2hop_bool[e_src, e_dst] & ~one_hop
+            # weights from full_adj
+            extended_g.edata["weight"] = full_adj[e_src, e_dst].float()
+
+            # edge types: 1=onehop, 2=twohop-only, 3=threehop-only, 0=other (incl self later)
+            one_hop = (filtered_adj[e_src, e_dst] > 0)
+            two_hop = adj_2hop_bool[e_src, e_dst] & ~one_hop
             three_hop = adj_3hop_bool[e_src, e_dst] & ~(one_hop | two_hop)
 
             edge_types = torch.zeros(e_src.numel(), device=device, dtype=torch.int32)
@@ -364,8 +443,36 @@ def convert_to_dgl(
 
             extended_g.ndata["feat"] = filtered_attr
 
-            attr_matrices_all.append(filtered_attr)
+            if add_self_loops:
+                # Add self loops and set their weight/type cleanly:
+                # After add_self_loop, new edges appended at end in DGL.
+                old_e = extended_g.num_edges()
+                extended_g = dgl.add_self_loop(extended_g)
+                new_e = extended_g.num_edges()
+
+                if new_e > old_e:
+                    # expand edata for new edges
+                    w = extended_g.edata["weight"]
+                    t = extended_g.edata["edge_type"]
+                    # DGL should have already expanded automatically, but to be safe:
+                    if w.numel() != new_e:
+                        w2 = torch.empty(new_e, device=device, dtype=w.dtype)
+                        w2[:old_e] = w
+                        w2[old_e:] = 1.0
+                        extended_g.edata["weight"] = w2
+                    else:
+                        extended_g.edata["weight"][old_e:] = 1.0
+
+                    if t.numel() != new_e:
+                        t2 = torch.empty(new_e, device=device, dtype=t.dtype)
+                        t2[:old_e] = t
+                        t2[old_e:] = 0
+                        extended_g.edata["edge_type"] = t2
+                    else:
+                        extended_g.edata["edge_type"][old_e:] = 0
+
             extended_graphs.append(extended_g)
+            attr_matrices_all.append(filtered_attr)
 
     return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id
 
