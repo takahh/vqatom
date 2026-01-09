@@ -241,88 +241,133 @@ def collect_global_indices_compact(
 
     return masks_dict, atom_offset, mol_id
 
-def convert_to_dgl(adj_batch, attr_batch, logger=None, start_atom_id=0, start_mol_id=0):
+def convert_to_dgl(
+    adj_batch,
+    attr_batch,
+    logger=None,
+    start_atom_id=0,
+    start_mol_id=0,
+    device=None,
+    two_hop_w=0.5,
+    three_hop_w=0.3,
+):
+    import torch
+    import dgl
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+
     from collections import defaultdict
-    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(adj_batch, attr_batch, logger, start_atom_id, start_mol_id)   # ✅ unpack
-    # print("masks_dict.keys()")
-    # print(masks_dict.keys())
+
+    # NOTE: your collect_global_indices_compact probably expects CPU tensors.
+    # Keep it as-is unless you've already made it CUDA-safe.
+    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(
+        adj_batch, attr_batch, logger, start_atom_id, start_mol_id
+    )
+
     base_graphs = []
     extended_graphs = []
     attr_matrices_all = []
 
-    for i in range(len(adj_batch)):
-        args = get_args()
-        # both branches identical; keep one
-        adj_matrices  = adj_batch[i].view(-1, 100, 100)
-        attr_matrices = attr_batch[i].view(-1, 100, 79)
+    # ---- helpers (GPU k-hop via sparse) ----
+    def khop_from_edges(num_nodes, src, dst, k: int):
+        """
+        Return boolean adjacency (dense) for k-hop based on 1-hop edges.
+        Uses sparse matmul on GPU.
+        """
+        # A: sparse [N,N] with 1s on edges
+        val = torch.ones(src.numel(), device=device, dtype=torch.float32)
+        A = torch.sparse_coo_tensor(
+            torch.stack([src, dst], dim=0),
+            val,
+            size=(num_nodes, num_nodes),
+            device=device,
+        ).coalesce()
 
-        for j in range(len(attr_matrices)):
+        # compute Ak = A^k (boolean-ish)
+        Ak = A
+        for _ in range(k - 1):
+            Ak = torch.sparse.mm(Ak, A)
+            # clamp values to 1 to prevent growth
+            Ak = Ak.coalesce()
+            Ak = torch.sparse_coo_tensor(
+                Ak.indices(), Ak.values().clamp_(0, 1), Ak.size(), device=device
+            ).coalesce()
+
+        # convert to dense 0/1 (for edge typing + weight mixing)
+        return Ak.to_dense().bool()
+
+    # ---- main loop ----
+    B = len(adj_batch)
+    for i in range(B):
+        # move batch slice to GPU once
+        adj_matrices  = adj_batch[i].view(-1, 100, 100).to(device, non_blocking=True)
+        attr_matrices = attr_batch[i].view(-1, 100, 79).to(device, non_blocking=True)
+
+        for j in range(attr_matrices.shape[0]):
             adj_matrix  = adj_matrices[j]
             attr_matrix = attr_matrices[j]
 
             # ---- depad ----
-            nonzero_mask      = (attr_matrix.abs().sum(dim=1) > 0)
-            num_total_nodes   = int(nonzero_mask.sum().item())
-            filtered_attr     = attr_matrix[nonzero_mask]
-            filtered_adj      = adj_matrix[:num_total_nodes, :num_total_nodes]
+            nonzero_mask    = (attr_matrix.abs().sum(dim=1) > 0)
+            num_total_nodes = int(nonzero_mask.sum().item())
+            filtered_attr   = attr_matrix[nonzero_mask]  # [N,79]
+            filtered_adj    = adj_matrix[:num_total_nodes, :num_total_nodes].float()  # [N,N]
 
-            # ---- base graph (make it bidirected before khop) ----
-            src, dst = filtered_adj.nonzero(as_tuple=True)
-            # keep both directions to ensure khop works symmetrically
-            # (if filtered_adj is symmetric, this already includes both directions)
-            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes)
-            # ensure simple & bidirected
+            # ---- 1-hop edges from filtered_adj ----
+            src, dst = (filtered_adj > 0).nonzero(as_tuple=True)  # GPU indices
+
+            # ---- base graph on GPU ----
+            base_g = dgl.graph((src, dst), num_nodes=num_total_nodes, device=device)
+
+            # make bidirected + simple on GPU (works on recent DGL; if not, see note below)
             base_g = dgl.to_simple(dgl.to_bidirected(base_g))
-            base_g.ndata["feat"] = filtered_attr
-            base_g.edata["weight"] = filtered_adj[base_g.edges()[0], base_g.edges()[1]].float()
-            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), dtype=torch.int)
             base_g = dgl.add_self_loop(base_g)
+
+            base_g.ndata["feat"] = filtered_attr
+            bsrc, bdst = base_g.edges()
+            base_g.edata["weight"] = filtered_adj[bsrc, bdst]
+            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), device=device, dtype=torch.int32)
+
             base_graphs.append(base_g)
 
-            # ---- k-hop ----
-            adj_2hop = dgl.khop_adj(base_g, 2)  # [N,N], 0/1
-            adj_3hop = dgl.khop_adj(base_g, 3)
+            # ---- k-hop on GPU ----
+            # compute 2-hop and 3-hop adjacency (boolean dense)
+            adj_2hop_bool = khop_from_edges(num_total_nodes, src, dst, k=2)
+            adj_3hop_bool = khop_from_edges(num_total_nodes, src, dst, k=3)
 
-            # ---- combine ----
+            # ---- combine weighted dense adjacency on GPU ----
             full_adj = filtered_adj.clone()
-            full_adj += (adj_2hop * 0.5)
-            full_adj += (adj_3hop * 0.3)
-            torch.diagonal(full_adj).fill_(1.0)
+            full_adj = full_adj + adj_2hop_bool.float() * two_hop_w
+            full_adj = full_adj + adj_3hop_bool.float() * three_hop_w
+            full_adj.fill_diagonal_(1.0)
 
-            # ---- extended graph should come from full_adj ----
-            sf, df = full_adj.nonzero(as_tuple=True)                 # ✅ use full_adj
-            extended_g = dgl.graph((sf, df), num_nodes=num_total_nodes)
+            # ---- extended graph from full_adj (GPU) ----
+            sf, df = (full_adj > 0).nonzero(as_tuple=True)
+            extended_g = dgl.graph((sf, df), num_nodes=num_total_nodes, device=device)
+            extended_g = dgl.add_self_loop(extended_g)
+
             e_src, e_dst = extended_g.edges()
-            extended_g.edata["weight"] = full_adj[e_src, e_dst].float()  # ✅ use full_adj
+            extended_g.edata["weight"] = full_adj[e_src, e_dst]
 
-            # edge types: classify by source matrices
+            # edge types based on origin
             one_hop   = (filtered_adj[e_src, e_dst] > 0)
-            two_hop   = (adj_2hop[e_src, e_dst] > 0) & ~one_hop
-            three_hop = (adj_3hop[e_src, e_dst] > 0) & ~(one_hop | two_hop)
-            edge_types = torch.zeros_like(e_src, dtype=torch.int)
-            edge_types[one_hop]   = 1
-            edge_types[two_hop]   = 2
+            two_hop   = adj_2hop_bool[e_src, e_dst] & ~one_hop
+            three_hop = adj_3hop_bool[e_src, e_dst] & ~(one_hop | two_hop)
+
+            edge_types = torch.zeros(e_src.numel(), device=device, dtype=torch.int32)
+            edge_types[one_hop] = 1
+            edge_types[two_hop] = 2
             edge_types[three_hop] = 3
             extended_g.edata["edge_type"] = edge_types
 
             extended_g.ndata["feat"] = filtered_attr
-            extended_g = dgl.add_self_loop(extended_g)
 
-            # optional sanity check on padding tail
-            remaining_features = attr_matrix[num_total_nodes:]
-            # if remaining_features.numel() and not torch.all(remaining_features == 0):
-            #     # print("⚠️ WARNING: Non-zero values found in remaining features!")
-            #     nz = remaining_features[remaining_features != 0]
-            # else:
-            #     print("OK ===========")
-            #     # print(f"num_total_nodes {num_total_nodes}")
-            #     # print("Non-zero values:", nz[:20])
-            #     # print("Indices:", torch.nonzero(remaining_features)[:20])
-
-            attr_matrices_all.append(filtered_attr)  # store per-molecule attributes
+            attr_matrices_all.append(filtered_attr)
             extended_graphs.append(extended_g)
 
-    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id  # ✅ fixed
+    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id
 
 
 from torch.utils.data import Dataset
