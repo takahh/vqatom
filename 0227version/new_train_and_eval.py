@@ -409,7 +409,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
                 adj_batch, attr_batch, logger, start_atom_id, start_mol_id
             )  # 10000 molecules per glist
-
+            print("convert_to_dgl is done")
             all_attr.append(attr_matrices)
 
             # masks を集約
@@ -469,6 +469,7 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         flat_attr_list = [t for batch in all_attr for t in batch]
         all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
 
+        print("[KMEANS] all latents collected")
         # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
         print("[KMEANS] init_kmeans_final start")
         logger.info("[KMEANS] init_kmeans_final start")
