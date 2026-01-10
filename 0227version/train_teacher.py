@@ -163,6 +163,7 @@ def get_args():
     parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
     parser.add_argument("--learning_rate", type=float, default=0.00005) # default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=0.0005)
+    parser.add_argument("--conf_epochs", type=float, default=200)
     parser.add_argument(
         "--max_epoch", type=int, default=5, help="Evaluate once per how many epochs"
     )
@@ -308,6 +309,17 @@ def run(args):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     # criterion = torch.nn.NLLLoss()
     # evaluator = get_evaluator(conf["dataset"])
+    import math
+    from torch.optim.lr_scheduler import CosineAnnealingLR
+
+    T_max = conf["cosine_epochs"]  # 例: 50 or 100
+    eta_min = conf.get("min_lr", 5e-6)
+
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=T_max,
+        eta_min=eta_min
+    )
 
     """ Data split and run """
     loss_and_score = []
@@ -366,7 +378,7 @@ def run(args):
             conf,
             model,
             optimizer,
-            args.accumulation_steps,
+            scheduler,
             logger
         )
         # score_lst = [score_test_tran, score_test_ind]

@@ -397,7 +397,7 @@ def print_memory_usage(tag=""):
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
 
-def run_inductive(conf, model, optimizer, accumulation_steps, logger):
+def run_inductive(conf, model, optimizer, scheduler, logger):
     import gc, itertools, torch, os, copy
     from collections import Counter, defaultdict
     import numpy as np
@@ -756,6 +756,12 @@ def run_inductive(conf, model, optimizer, accumulation_steps, logger):
         cb_unique_num_list_test.clear()
         gc.collect()
         torch.cuda.empty_cache()
+
+        scheduler.step()
+
+        # （optional）LR ログ
+        lr = optimizer.param_groups[0]["lr"]
+        logger.info(f"[LR] epoch={epoch} lr={lr:.6e}")
 
     # 何か score を返したい場合はここで
     return test_total
