@@ -317,8 +317,8 @@ def run(args):
 
     scheduler = CosineAnnealingLR(
         optimizer,
-        T_max=25,
-        eta_min=conf['learning_rate'] * 0.1  # 0 にしない
+        T_max=T_max,
+        eta_min=eta_min
     )
     """ Data split and run """
     loss_and_score = []
