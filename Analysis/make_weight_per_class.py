@@ -33,13 +33,16 @@ def compute_weights_from_ke(cbdict, alpha=-0.5, normalize=True):
     for key, ke in cbdict.items():
         ke = max(int(ke), 1)  # safety
         w = ke ** alpha
-        weights[key] = w
+        # weights[key] = w
+        weights[key] = 1.0
+
         raw_list.append(w)
 
     if normalize and raw_list:
         mean_w = sum(raw_list) / len(raw_list)
         for k in weights:
-            weights[k] /= mean_w
+            # weights[k] /= mean_w
+            weights[k] /= 1.0
 
     return weights
 
