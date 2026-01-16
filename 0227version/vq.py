@@ -1238,7 +1238,6 @@ class EuclideanCodebook(nn.Module):
             return out_means, out_counts
 
         for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
-            print("kmeans loop 0")
             skey = str(raw_key)
             idx = get_idx(mask_dict, skey)
             if idx is None:
@@ -1254,17 +1253,14 @@ class EuclideanCodebook(nn.Module):
 
             K_run = min(K_req, N_i)
 
-            print("kmeans loop 1")
             means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
                 masked.unsqueeze(0).to(device),
                 num_clusters=K_run,
                 use_cosine_sim=use_cosine_sim,
             )
 
-            print("kmeans loop 2")
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-            print("kmeans loop 3")
             # embed
             safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
             if self.embed[safe].shape != (K_req, D):
@@ -1275,7 +1271,6 @@ class EuclideanCodebook(nn.Module):
             else:
                 self.embed[safe].data.copy_(means_kd)
 
-            print("kmeans loop 4")
             # cluster_size / embed_avg を必ず float32 で再構築（バッファ名は元キー）
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
@@ -1296,7 +1291,6 @@ class EuclideanCodebook(nn.Module):
             nz = int((counts_k > 0).sum().item())
             logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
-            print("kmeans loop 5")
     # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
     # ------------------------------------------------------------------

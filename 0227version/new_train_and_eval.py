@@ -438,7 +438,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     with torch.no_grad():
         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
             glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(
-                adj_batch, attr_batch, logger
+                adj_batch, attr_batch, logger, 0, 0,
             )
 
             for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
