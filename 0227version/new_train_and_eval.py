@@ -397,6 +397,94 @@ def print_memory_usage(tag=""):
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
 
+
+def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
+    import gc, itertools, torch, os
+    from torch.utils.data import DataLoader
+
+    # ----------------------------
+    # 0) RESTORE
+    # ----------------------------
+    device = next(model.parameters()).device
+    ckpt = torch.load(checkpoint_path, map_location=device)
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state = ckpt["state_dict"]
+    else:
+        state = ckpt
+
+    model.load_state_dict(state, strict=True)
+    model.eval()
+
+    # 念のため
+    if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
+        if hasattr(model.vq._codebook, "latent_size_sum"):
+            model.vq._codebook.latent_size_sum = 0
+
+    # ----------------------------
+    # 1) dataset and dataloader
+    # ----------------------------
+    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+
+    chunk_size = conf["chunk_size"]
+
+    all_embeddings = []
+
+    # ----------------------------
+    # 2) INFER only
+    # ----------------------------
+    with torch.no_grad():
+        for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+            glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(
+                adj_batch, attr_batch, logger
+            )
+
+            for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
+                chunk = glist[i:i + chunk_size]
+                batched_graph = dgl.batch(chunk).to(device)
+                batched_feats = batched_graph.ndata["feat"]
+
+                # evaluate の戻り値: (loss, embed, loss_list) だが loss は無視
+                _, emb, _ = evaluate(
+                    model,
+                    batched_graph,
+                    batched_feats,
+                    epoch=conf.get("epoch_for_logging", 0),
+                    mask_dict=masks_3,
+                    logger=logger,
+                    g_base=None,
+                    chunk_i=chunk_i_local,
+                    mode="infer",
+                    attr_chunk=attr_matrices_all[i:i + chunk_size],
+                )
+
+                all_embeddings.append(emb.detach().cpu())
+
+                del batched_graph, batched_feats, chunk, emb
+                gc.collect()
+                torch.cuda.empty_cache()
+
+            # cleanup per batch
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base, masks_3, attr_matrices_all
+            gc.collect()
+
+    # ----------------------------
+    # 3) RETURN
+    # ----------------------------
+    if len(all_embeddings) > 0:
+        return torch.cat(all_embeddings, dim=0)
+    else:
+        return None
+
+
 def run_inductive(conf, model, optimizer, scheduler, logger):
     import gc, itertools, torch, os, copy
     from collections import Counter, defaultdict
