@@ -470,7 +470,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                     g_base=None,
                     chunk_i=chunk_i_local,
                     mode="infer",
-                    attr_chunk=attr_matrices_all[i:i + chunk_size],
+                    attr_list=attr_matrices_all[i:i + chunk_size],
                 )
 
                 all_embeddings.append(emb.detach().cpu())
