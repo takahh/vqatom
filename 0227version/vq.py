@@ -1583,10 +1583,10 @@ class EuclideanCodebook(nn.Module):
         # --------------------------------------------------------------
         # 3. train / test / eval フェーズ
         # --------------------------------------------------------------
-        feat_flat = torch.cat(feature, dim=0)  # [N, 78]
-        feat_flat = feat_flat.contiguous().to(flatten.device)
-        assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
-        assert feat_flat.size(0) == flatten.size(1)
+        # feat_flat = torch.cat(feature, dim=0)  # [N, 78]
+        # feat_flat = feat_flat.contiguous().to(flatten.device)
+        # assert feat_flat.ndim == 2 and feat_flat.size(1) == 78
+        # assert feat_flat.size(0) == flatten.size(1)
 
         if not hasattr(self, "cb_dict"):
             self.cb_dict = {}

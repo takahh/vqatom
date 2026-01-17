@@ -447,6 +447,19 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 batched_feats = batched_graph.ndata["feat"]
 
                 # evaluate の戻り値: (loss, embed, loss_list) だが loss は無視
+                #
+                # test_loss, test_emb, loss_list_test = evaluate(
+                #     model,
+                #     batched_graph,
+                #     batched_feats,
+                #     epoch,
+                #     masks_3,
+                #     logger,
+                #     batched_graph_base,
+                #     chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
+                #     "test",
+                #     attr_chunk_test,
+                # )
                 _, emb, _ = evaluate(
                     model,
                     batched_graph,
