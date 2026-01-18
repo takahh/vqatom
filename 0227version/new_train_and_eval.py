@@ -79,27 +79,51 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
 
 # evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
 def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None, attr_list=None):
+    import torch
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     model.eval()
 
     with torch.no_grad():
         if mode == "init_kmeans_loop":
+            # returns latents
             latents = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return latents
-        elif mode == "init_kmeans_final":
+
+        if mode == "init_kmeans_final":
+            # just run once; side effects (init/dump) happen inside
             model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
             return 0
-        else:  # test
-            #  return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
-            outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
-            return outputs
 
-    # # Return only what’s needed
-    # return (
-    #     loss.detach(),                     # keep as tensor if you want
-    #     [l.item() if hasattr(l, 'item') else l for l in loss_list3]
-    # )
+        if mode == "infer":
+            # IMPORTANT: model forward should return (key_id_full, cluster_id_full, id2safe)
+            out = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
+
+            if not (isinstance(out, (tuple, list)) and len(out) == 3):
+                raise TypeError(
+                    f"[evaluate] mode='infer' expects 3-tuple (key_id_full, cluster_id_full, id2safe), got: {type(out)}"
+                )
+
+            key_id_full, cluster_id_full, id2safe = out
+
+            # minimal sanity checks
+            if not isinstance(key_id_full, torch.Tensor) or key_id_full.ndim != 1:
+                raise TypeError(f"[evaluate] key_id_full must be 1D Tensor, got {type(key_id_full)} shape={getattr(key_id_full,'shape',None)}")
+            if not isinstance(cluster_id_full, torch.Tensor) or cluster_id_full.ndim != 1:
+                raise TypeError(f"[evaluate] cluster_id_full must be 1D Tensor, got {type(cluster_id_full)} shape={getattr(cluster_id_full,'shape',None)}")
+            if key_id_full.shape[0] != cluster_id_full.shape[0]:
+                raise ValueError(f"[evaluate] key_id_full and cluster_id_full length mismatch: {key_id_full.shape} vs {cluster_id_full.shape}")
+
+            # Return a consistent "outputs" object for caller:
+            # (loss, embed, loss_list) style is not meaningful here,
+            # so we return (None, (key_id_full, cluster_id_full, id2safe), None)
+            return None, (key_id_full, cluster_id_full, id2safe), None
+
+        # default (train/test/eval)
+        # return loss, embed, loss_list
+        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
+        return outputs
 
 class MoleculeGraphDataset(Dataset):
     def __init__(self, adj_dir, attr_dir):
@@ -461,7 +485,6 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 if key is not None:
                     before = model.state_dict()[key].float().norm().item()
                     print("center norm before:", before)
-
                 _, emb, _ = evaluate(
                     model,
                     batched_graph,
