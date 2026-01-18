@@ -1418,7 +1418,7 @@ class EuclideanCodebook(nn.Module):
         #    （全データを一度に渡す or チャンクごとに渡す両方に対応）
         # --------------------------------------------------------------
         import torch
-        if mode == "init_kmeans_final":
+        if mode == "init_kmeans_final" or "infer":
             # outside the for-loop, once per call
             if not hasattr(self, "_kmeans_dump"):
                 self._kmeans_dump = {}  # per-run buffer
