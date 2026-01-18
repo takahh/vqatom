@@ -415,6 +415,10 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
 
     model.load_state_dict(state, strict=True)
     model.eval()
+    if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
+        cb = model.vq._codebook
+        if hasattr(cb, "initted"):
+            print("codebook initted =", bool(cb.initted.item() if cb.initted.numel() == 1 else cb.initted))
 
     # 念のため
     if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
@@ -446,20 +450,18 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 batched_graph = dgl.batch(chunk).to(device)
                 batched_feats = batched_graph.ndata["feat"]
 
-                # evaluate の戻り値: (loss, embed, loss_list) だが loss は無視
-                #
-                # test_loss, test_emb, loss_list_test = evaluate(
-                #     model,
-                #     batched_graph,
-                #     batched_feats,
-                #     epoch,
-                #     masks_3,
-                #     logger,
-                #     batched_graph_base,
-                #     chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
-                #     "test",
-                #     attr_chunk_test,
-                # )
+                def pick_one_center(model):
+                    for n, t in model.state_dict().items():
+                        if "vq._codebook.embed.k_" in n:
+                            return n
+                    return None
+
+                key = pick_one_center(model)
+                print("probe key:", key)
+                if key is not None:
+                    before = model.state_dict()[key].float().norm().item()
+                    print("center norm before:", before)
+
                 _, emb, _ = evaluate(
                     model,
                     batched_graph,
@@ -472,6 +474,10 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                     mode="infer",
                     attr_list=attr_matrices_all[i:i + chunk_size],
                 )
+
+                if key is not None:
+                    after = model.state_dict()[key].float().norm().item()
+                    print("center norm after :", after)
 
                 all_embeddings.append(emb.detach().cpu())
 
