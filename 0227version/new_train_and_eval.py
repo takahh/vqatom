@@ -423,7 +423,11 @@ def print_memory_usage(tag=""):
 
 
 def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
-    import gc, itertools, torch, os
+    import gc
+    import os
+    import time
+    import torch
+    import dgl
     from torch.utils.data import DataLoader
 
     # ----------------------------
@@ -431,42 +435,57 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     # ----------------------------
     device = next(model.parameters()).device
     ckpt = torch.load(checkpoint_path, map_location=device)
-
-    if isinstance(ckpt, dict) and "state_dict" in ckpt:
-        state = ckpt["state_dict"]
-    else:
-        state = ckpt
+    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
 
     model.load_state_dict(state, strict=True)
+    model.to(device)
     model.eval()
+
+    # optional: print codebook init status + reset latent_size_sum
     if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
         cb = model.vq._codebook
         if hasattr(cb, "initted"):
-            print("codebook initted =", bool(cb.initted.item() if cb.initted.numel() == 1 else cb.initted))
-
-    # 念のため
-    if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
-        if hasattr(model.vq._codebook, "latent_size_sum"):
-            model.vq._codebook.latent_size_sum = 0
+            try:
+                flag = bool(cb.initted.item() if hasattr(cb.initted, "numel") and cb.initted.numel() == 1 else cb.initted)
+            except Exception:
+                flag = cb.initted
+            print("codebook initted =", flag)
+        if hasattr(cb, "latent_size_sum"):
+            cb.latent_size_sum = 0
 
     # ----------------------------
     # 1) dataset and dataloader
     # ----------------------------
-    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    datapath = DATAPATH if conf.get("train_or_infer") in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
 
-    chunk_size = conf["chunk_size"]
+    chunk_size = int(conf["chunk_size"])
 
-    all_embeddings = []
+    # outputs
+    all_key_ids = []
+    all_cluster_ids = []
+    last_id2safe = None
 
     # ----------------------------
-    # 2) INFER only
+    # 2) probe center key once
+    # ----------------------------
+    def pick_one_center_key(m):
+        for n in m.state_dict().keys():
+            if "vq._codebook.embed.k_" in n:
+                return n
+        return None
+
+    probe_key = pick_one_center_key(model)
+    print("probe key:", probe_key)
+
+    # ----------------------------
+    # 3) INFER only
     # ----------------------------
     with torch.no_grad():
-        for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+        for batch_idx, (adj_batch, attr_batch) in enumerate(dataloader):
             glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(
-                adj_batch, attr_batch, logger, 0, 0,
+                adj_batch, attr_batch, logger, 0, 0
             )
 
             for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
@@ -474,21 +493,16 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 batched_graph = dgl.batch(chunk).to(device)
                 batched_feats = batched_graph.ndata["feat"]
 
-                def pick_one_center(model):
-                    for n, t in model.state_dict().items():
-                        if "vq._codebook.embed.k_" in n:
-                            return n
-                    return None
-
-                key = pick_one_center(model)
-                print("probe key:", key)
-                if key is not None:
-                    before = model.state_dict()[key].float().norm().item()
+                # optional: check that centers are not being updated during infer
+                if probe_key is not None:
+                    before = model.state_dict()[probe_key].float().norm().item()
                     print("center norm before:", before)
-                _, emb, _ = evaluate(
-                    model,
-                    batched_graph,
-                    batched_feats,
+
+                # infer returns: (None, (kid, cid, id2safe), None)
+                _, ids, _ = evaluate(
+                    model=model,
+                    g=batched_graph,
+                    feats=batched_feats,
                     epoch=conf.get("epoch_for_logging", 0),
                     mask_dict=masks_3,
                     logger=logger,
@@ -498,13 +512,24 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                     attr_list=attr_matrices_all[i:i + chunk_size],
                 )
 
-                if key is not None:
-                    after = model.state_dict()[key].float().norm().item()
+                kid, cid, id2safe = ids
+                last_id2safe = id2safe  # may grow over time
+
+                # debug prints (your A)
+                print(kid.shape, kid.dtype, kid.min().item(), kid.max().item())
+                print(cid.shape, cid.dtype, cid.min().item(), cid.max().item())
+                print("id2safe size:", len(id2safe))
+
+                if probe_key is not None:
+                    after = model.state_dict()[probe_key].float().norm().item()
                     print("center norm after :", after)
 
-                all_embeddings.append(emb.detach().cpu())
+                # accumulate on CPU
+                all_key_ids.append(kid.detach().cpu())
+                all_cluster_ids.append(cid.detach().cpu())
 
-                del batched_graph, batched_feats, chunk, emb
+                # cleanup per chunk
+                del batched_graph, batched_feats, chunk, ids, kid, cid
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -519,12 +544,29 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
             gc.collect()
 
     # ----------------------------
-    # 3) RETURN
+    # 4) PACK + ALWAYS SAVE + RETURN
     # ----------------------------
-    if len(all_embeddings) > 0:
-        return torch.cat(all_embeddings, dim=0)
-    else:
+    if len(all_key_ids) == 0:
         return None
+
+    key_id_all = torch.cat(all_key_ids, dim=0)
+    cluster_id_all = torch.cat(all_cluster_ids, dim=0)
+
+    out = {
+        "key_id": key_id_all,                 # [N_atoms_total]
+        "cluster_id": cluster_id_all,         # [N_atoms_total]
+        "id2safe": last_id2safe or {},        # dict[int,str]
+        "checkpoint_path": checkpoint_path,
+        "chunk_size": chunk_size,
+        "saved_at": time.strftime("%Y%m%d_%H%M%S"),
+    }
+
+    save_path = conf.get("infer_save_path", None) or "infer_token_ids.pt"
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    torch.save(out, save_path)
+    print("saved:", save_path)
+
+    return out
 
 
 def run_inductive(conf, model, optimizer, scheduler, logger):
