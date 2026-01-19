@@ -519,6 +519,10 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 print(kid.shape, kid.dtype, kid.min().item(), kid.max().item())
                 print(cid.shape, cid.dtype, cid.min().item(), cid.max().item())
                 print("id2safe size:", len(id2safe))
+                print("nodes:", batched_graph.num_nodes(),
+                      "kid:", kid.numel(),
+                      "cid:", cid.numel(),
+                      "graphs_in_chunk:", len(chunk))
 
                 if probe_key is not None:
                     after = model.state_dict()[probe_key].float().norm().item()
