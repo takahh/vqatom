@@ -1,17 +1,31 @@
 #!/usr/bin/env python3
-import os, glob, math, random, argparse
+import os, glob, math, random, argparse, json, time
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30):
+
+# ============================================================
+# MLM masking
+# ============================================================
+def mlm_mask_tokens(
+    input_ids: torch.Tensor,
+    base_vocab: int,
+    mask_prob: float = 0.30,
+    generator: Optional[torch.Generator] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
-    input_ids: (B, L) int64 with PAD included
+    input_ids: (B, L) int64 with PAD included (PAD_ID = base_vocab+0)
     returns:
       masked_input_ids: (B, L)
       labels: (B, L) where non-masked = -100
       vocab_size: base_vocab + 2  (PAD + MASK)
+    Notes:
+      - Mask positions are sampled randomly each call.
+      - If `generator` is provided, sampling becomes deterministic w.r.t that generator.
     """
     assert input_ids.dtype == torch.int64
 
@@ -25,37 +39,37 @@ def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30):
     is_pad = (input_ids == PAD_ID)
 
     # choose positions to predict
-    prob = torch.rand(input_ids.shape, device=input_ids.device)
+    prob = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
     mask_sel = (prob < mask_prob) & (~is_pad)
 
     labels[mask_sel] = input_ids[mask_sel]
 
-    # among selected:
-    # 80% -> MASK, 10% -> random, 10% -> keep
-    r = torch.rand(input_ids.shape, device=input_ids.device)
+    # among selected: 80% -> MASK, 10% -> random, 10% -> keep
+    r = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
 
-    # MASK
-    m_mask = mask_sel & (r < 0.80)
-    # RAND
-    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)
-    # KEEP is remaining
+    m_mask = mask_sel & (r < 0.80)                          # MASK
+    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)            # RAND
+    # KEEP is remaining selected positions
 
     masked = input_ids.clone()
     masked[m_mask] = MASK_ID
+
     if m_rand.any():
         masked[m_rand] = torch.randint(
-            low=0, high=base_vocab,
+            low=0,
+            high=base_vocab,
             size=(int(m_rand.sum().item()),),
             device=input_ids.device,
-            dtype=torch.int64
+            dtype=torch.int64,
+            generator=generator,
         )
 
     return masked, labels, vocab_size
 
 
-# ----------------------------
+# ============================================================
 # Dataset: molecule-level sampling from many batch files
-# ----------------------------
+# ============================================================
 class RaggedMolDataset(Dataset):
     """
     Loads pretrain_ragged_batchXXX.pt files and exposes each molecule as one item.
@@ -83,11 +97,10 @@ class RaggedMolDataset(Dataset):
             base_vocab_set.add(int(d["base_vocab"]))
 
         if len(base_vocab_set) != 1:
-            # たぶん同一 vocab のはずだが、念のためチェック
             raise RuntimeError(f"base_vocab differs across files: {sorted(base_vocab_set)}")
         self.base_vocab = base_vocab_set.pop()
 
-        # LRU-ish cache for speed (1 file at a time)
+        # simple cache: keep last loaded file in memory
         self._cache_fi = None
         self._cache_data = None
 
@@ -97,9 +110,8 @@ class RaggedMolDataset(Dataset):
     def _load_file(self, fi):
         if self._cache_fi == fi and self._cache_data is not None:
             return self._cache_data
-        fp, _offsets = self.file_meta[fi]
+        fp, _ = self.file_meta[fi]
         d = torch.load(fp, map_location="cpu")
-        # keep in memory
         self._cache_fi = fi
         self._cache_data = d
         return d
@@ -112,14 +124,17 @@ class RaggedMolDataset(Dataset):
 
         s = int(offsets[mi].item())
         e = int(offsets[mi + 1].item())
-        seq = tokens_flat[s:e].clone()  # (len,)
+        seq = tokens_flat[s:e].clone()
         return seq
 
 
 def collate_pad(batch, base_vocab: int):
     """
     batch: list of 1D LongTensor sequences (variable len)
-    returns padded input_ids (B,L), attn_mask (B,L) where True=keep, False=pad
+    returns:
+      input_ids (B,L) padded with PAD
+      attn_keep (B,L) bool where True=real token, False=pad
+      lens (B,)
     """
     PAD_ID = base_vocab + 0
     lens = torch.tensor([x.numel() for x in batch], dtype=torch.int64)
@@ -132,9 +147,9 @@ def collate_pad(batch, base_vocab: int):
     return input_ids, attn_keep, lens
 
 
-# ----------------------------
+# ============================================================
 # Simple Transformer MLM
-# ----------------------------
+# ============================================================
 class TransformerMLM(nn.Module):
     def __init__(self, vocab_size, d_model=256, nhead=8, num_layers=6, dim_ff=1024, dropout=0.1):
         super().__init__()
@@ -142,8 +157,12 @@ class TransformerMLM(nn.Module):
         self.tok = nn.Embedding(vocab_size, d_model)
 
         enc_layer = nn.TransformerEncoderLayer(
-            d_model=d_model, nhead=nhead, dim_feedforward=dim_ff,
-            dropout=dropout, batch_first=True, activation="gelu"
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_ff,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
         )
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
         self.lm_head = nn.Linear(d_model, vocab_size)
@@ -159,42 +178,90 @@ class TransformerMLM(nn.Module):
         return logits
 
 
-# ----------------------------
+# ============================================================
+# Utils: logging + seeding
+# ============================================================
+def set_all_seeds(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def make_log_writer(log_file: Optional[str]):
+    """
+    Returns a function write(rec: dict) -> None
+    that appends JSONL to log_file, or a no-op if None.
+    """
+    if not log_file:
+        def _noop(_rec):  # type: ignore
+            return
+        return _noop, None
+
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+    f = open(log_file, "a", buffering=1)  # line-buffered
+
+    def _write(rec: dict):
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    return _write, f
+
+
+# ============================================================
 # Train loop
-# ----------------------------
+# ============================================================
 def main():
     ap = argparse.ArgumentParser()
+
+    # data
     ap.add_argument("--data_dir", type=str, required=True)
+    ap.add_argument("--limit_files", type=int, default=None)
+
+    # training
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--mask_prob", type=float, default=0.30)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--weight_decay", type=float, default=0.01)
+    ap.add_argument("--num_workers", type=int, default=2)
+    ap.add_argument("--seed", type=int, default=0)
+
+    # model
     ap.add_argument("--d_model", type=int, default=256)
     ap.add_argument("--nhead", type=int, default=8)
     ap.add_argument("--layers", type=int, default=6)
     ap.add_argument("--dim_ff", type=int, default=1024)
     ap.add_argument("--dropout", type=float, default=0.1)
-    ap.add_argument("--num_workers", type=int, default=2)
-    ap.add_argument("--seed", type=int, default=0)
+
+    # io/log
     ap.add_argument("--save_dir", type=str, default="./mlm_ckpt")
     ap.add_argument("--log_every", type=int, default=50)
-    ap.add_argument("--limit_files", type=int, default=None)
+    ap.add_argument("--log_file", type=str, default=None, help="JSONL file path to append training logs")
+    ap.add_argument(
+        "--deterministic_masking",
+        action="store_true",
+        help="Make MLM masking deterministic per (epoch, step) given --seed (useful for debugging).",
+    )
+
     args = ap.parse_args()
 
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-
+    set_all_seeds(args.seed)
     os.makedirs(args.save_dir, exist_ok=True)
 
+    write_log, log_fh = make_log_writer(args.log_file)
+
+    # dataset
     ds = RaggedMolDataset(args.data_dir, limit_files=args.limit_files)
     base_vocab = ds.base_vocab
     PAD_ID = base_vocab + 0
     MASK_ID = base_vocab + 1
     vocab_size = base_vocab + 2
+
     print(f"Loaded {len(ds)} molecules from {args.data_dir}")
     print(f"base_vocab={base_vocab} PAD_ID={PAD_ID} MASK_ID={MASK_ID} vocab_size={vocab_size}")
+    if args.log_file:
+        print(f"logging to: {args.log_file}")
 
+    # dataloader
     dl = DataLoader(
         ds,
         batch_size=args.batch_size,
@@ -205,6 +272,7 @@ def main():
         drop_last=True,
     )
 
+    # device/model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TransformerMLM(
         vocab_size=vocab_size,
@@ -217,11 +285,11 @@ def main():
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # simple cosine schedule with warmup
+    # cosine schedule with warmup
     total_steps = args.epochs * len(dl)
     warmup = max(10, int(0.05 * total_steps))
 
-    def lr_factor(step):
+    def lr_factor(step: int) -> float:
         if step < warmup:
             return (step + 1) / warmup
         t = (step - warmup) / max(1, (total_steps - warmup))
@@ -229,6 +297,12 @@ def main():
 
     global_step = 0
     model.train()
+
+    # helper for deterministic masking
+    mask_gen = None
+    if args.deterministic_masking:
+        # We'll reseed this generator every step based on (seed, epoch, global_step)
+        mask_gen = torch.Generator(device=device)
 
     for ep in range(1, args.epochs + 1):
         running_loss = 0.0
@@ -238,24 +312,29 @@ def main():
             input_ids = input_ids.to(device, non_blocking=True)
             attn_keep = attn_keep.to(device, non_blocking=True)
 
-            # PyTorch transformer expects key_padding_mask True at PAD positions
+            # Transformer expects key_padding_mask True at PAD positions
             key_padding_mask = ~attn_keep
 
-            # apply MLM masking on padded batch
+            # deterministic masking option: reseed generator each step
+            if mask_gen is not None:
+                # stable mix: seed + epoch*1e6 + global_step
+                step_seed = int(args.seed + ep * 1_000_000 + global_step)
+                mask_gen.manual_seed(step_seed)
+
             masked_input, labels, vocab_size2 = mlm_mask_tokens(
-                input_ids, base_vocab=base_vocab, mask_prob=args.mask_prob
+                input_ids,
+                base_vocab=base_vocab,
+                mask_prob=args.mask_prob,
+                generator=mask_gen,
             )
             assert vocab_size2 == vocab_size
-
-            masked_input = masked_input.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
 
             logits = model(masked_input, key_padding_mask=key_padding_mask)  # (B,L,V)
 
             loss = F.cross_entropy(
                 logits.reshape(-1, vocab_size),
                 labels.reshape(-1),
-                ignore_index=-100
+                ignore_index=-100,
             )
 
             optim.zero_grad(set_to_none=True)
@@ -264,28 +343,49 @@ def main():
             optim.step()
 
             # lr schedule
+            lr_now = args.lr * lr_factor(global_step)
             for pg in optim.param_groups:
-                pg["lr"] = args.lr * lr_factor(global_step)
-
-            global_step += 1
+                pg["lr"] = lr_now
 
             # stats
             with torch.no_grad():
-                masked_positions = (labels != -100).sum().item()
+                masked_positions = int((labels != -100).sum().item())
+
             running_loss += float(loss.item()) * masked_positions
             running_tok += masked_positions
+
+            global_step += 1
 
             if global_step % args.log_every == 0:
                 avg_loss = running_loss / max(1, running_tok)
                 ppl = math.exp(min(20.0, avg_loss))
-                print(f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps} "
-                      f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={optim.param_groups[0]['lr']:.2e}")
+
+                msg = (f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps} "
+                       f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now:.2e} "
+                       f"masked_tokens={running_tok}")
+                print(msg)
+
+                write_log({
+                    "time": time.time(),
+                    "epoch": ep,
+                    "step": global_step,
+                    "total_steps": total_steps,
+                    "mlm_loss": avg_loss,
+                    "ppl": ppl,
+                    "lr": lr_now,
+                    "masked_tokens": running_tok,
+                    "batch_size": args.batch_size,
+                    "mask_prob": args.mask_prob,
+                    "deterministic_masking": bool(args.deterministic_masking),
+                })
+
                 running_loss, running_tok = 0.0, 0
 
         # save checkpoint each epoch
         ckpt_path = os.path.join(args.save_dir, f"mlm_ep{ep:02d}.pt")
         torch.save({
             "epoch": ep,
+            "global_step": global_step,
             "model": model.state_dict(),
             "base_vocab": base_vocab,
             "vocab_size": vocab_size,
@@ -293,7 +393,19 @@ def main():
         }, ckpt_path)
         print("saved", ckpt_path)
 
+        write_log({
+            "time": time.time(),
+            "event": "epoch_end",
+            "epoch": ep,
+            "step": global_step,
+            "ckpt_path": ckpt_path,
+        })
+
+    if log_fh is not None:
+        log_fh.close()
+
     print("DONE")
+
 
 if __name__ == "__main__":
     main()
