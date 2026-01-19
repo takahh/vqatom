@@ -106,6 +106,20 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
                 )
 
             key_id_full, cluster_id_full, id2safe = out
+            # --- HARDEN: force ids to be 1D ---
+            if torch.is_tensor(key_id_full):
+                key_id_full = key_id_full.reshape(-1)
+            else:
+                key_id_full = torch.as_tensor(key_id_full).reshape(-1)
+
+            if torch.is_tensor(cluster_id_full):
+                cluster_id_full = cluster_id_full.reshape(-1)
+            else:
+                cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1)
+
+            # (optional but recommended)
+            key_id_full = key_id_full.long()
+            cluster_id_full = cluster_id_full.long()
 
             # minimal sanity checks
             if not isinstance(key_id_full, torch.Tensor) or key_id_full.ndim != 1:
