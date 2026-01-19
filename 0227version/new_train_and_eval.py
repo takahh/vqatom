@@ -115,6 +115,16 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
             if key_id_full.shape[0] != cluster_id_full.shape[0]:
                 raise ValueError(f"[evaluate] key_id_full and cluster_id_full length mismatch: {key_id_full.shape} vs {cluster_id_full.shape}")
 
+            if torch.is_tensor(key_id_full):
+                key_id_full = key_id_full.reshape(-1).long()
+            else:
+                key_id_full = torch.as_tensor(key_id_full).reshape(-1).long()
+
+            if torch.is_tensor(cluster_id_full):
+                cluster_id_full = cluster_id_full.reshape(-1).long()
+            else:
+                cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1).long()
+
             # Return a consistent "outputs" object for caller:
             # (loss, embed, loss_list) style is not meaningful here,
             # so we return (None, (key_id_full, cluster_id_full, id2safe), None)
@@ -122,6 +132,7 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
 
         # default (train/test/eval)
         # return loss, embed, loss_list
+        # --- guarantee 1D ids (scalar -> [1], empty -> [0]) ---
         outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
         return outputs
 
