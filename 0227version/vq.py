@@ -2338,9 +2338,9 @@ class VectorQuantize(nn.Module):
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
 
-        if mode == "init_kmeans_final" or mode == "infer":
+        if mode == "init_kmeans_final":
             _ = self._codebook(
-                encoder_outputs,  # x
+                encoder_outputs,
                 feature=feature,
                 mask_dict=mask_dict,
                 logger=logger,
@@ -2348,8 +2348,40 @@ class VectorQuantize(nn.Module):
                 epoch=epoch,
                 mode=mode,
             )
+            # keep old behavior for kmeans init final
             z = torch.zeros((), device=device, dtype=dtype)
             return z, (z, z, z, z)
+
+        if mode == "infer":
+            out = self._codebook(
+                encoder_outputs,
+                feature=feature,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode=mode,
+            )
+
+            # Expect: (key_id_full, cluster_id_full, id2safe)
+            if not (isinstance(out, (tuple, list)) and len(out) == 3):
+                raise TypeError(
+                    f"[vq.forward] mode='infer' expects _codebook() -> (key_id_full, cluster_id_full, id2safe), "
+                    f"got {type(out)} with len={len(out) if isinstance(out, (tuple, list)) else 'NA'}"
+                )
+
+            key_id_full, cluster_id_full, id2safe = out
+
+            # shape/dtype guarantees
+            key_id_full = key_id_full.reshape(-1).long()
+            cluster_id_full = cluster_id_full.reshape(-1).long()
+
+            if key_id_full.numel() != cluster_id_full.numel():
+                raise ValueError(
+                    f"[vq.forward] infer length mismatch: key_id_full {key_id_full.shape} vs cluster_id_full {cluster_id_full.shape}"
+                )
+
+            return key_id_full, cluster_id_full, id2safe
 
         # --------------------------------------------------------------
         # 1.5) Debug: mask_dict の global index が chunk 範囲内か検査
