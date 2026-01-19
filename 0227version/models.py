@@ -517,6 +517,25 @@ class EquivariantThreeHopGINE(nn.Module):
             epoch,
             mode,
         )
+        # -------------------------
+        # INFER: return token IDs
+        # -------------------------
+        if mode == "infer":
+            # vq は infer のとき (key_id_full, cluster_id_full, id2safe) を返す設計にする
+            # ここで normalize は使わない（loss群とは別物なので）
+            if not (isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 3):
+                raise TypeError(
+                    f"[model.forward] mode='infer' expects vq() -> (key_id_full, cluster_id_full, id2safe), "
+                    f"got {type(quantize_output)} with len={len(quantize_output) if isinstance(quantize_output,(tuple,list)) else 'NA'}"
+                )
+
+            key_id_full, cluster_id_full, id2safe = quantize_output
+
+            # shape guarantee
+            key_id_full = key_id_full.reshape(-1).long()
+            cluster_id_full = cluster_id_full.reshape(-1).long()
+
+            return key_id_full, cluster_id_full, id2safe
 
         # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
         loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
