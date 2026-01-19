@@ -446,7 +446,6 @@ def print_memory_usage(tag=""):
     reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
     print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
 
-
 def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     import gc
     import os
@@ -466,7 +465,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     model.to(device)
     model.eval()
 
-    # optional: print codebook init status + reset latent_size_sum
+    # optional: print codebook init status + reset latent_size_sum (if exists)
     if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
         cb = model.vq._codebook
         if hasattr(cb, "initted"):
@@ -490,8 +489,10 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     # outputs
     all_key_ids = []
     all_cluster_ids = []
-    all_graph_ids = []        # 追加
-    all_local_node_ids = []   # 追加
+    all_graph_ids = []        # chunk内の何番目の分子か（0..len(chunk)-1）をノード数ぶん展開
+    all_local_node_ids = []   # 各分子内の原子index（0..num_nodes-1）をノード数ぶん展開
+    all_batch_ids = []        # dataloader batch_idx をノード数ぶん展開（元データ復元のヒント）
+    all_chunk_starts = []     # 各chunkの開始位置（元データ復元のヒント）
     last_id2safe = None
 
     # ----------------------------
@@ -525,7 +526,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                     before = model.state_dict()[probe_key].float().norm().item()
                     print("center norm before:", before)
 
-                # infer returns: (None, (kid, cid, id2safe), None)
+                # infer returns: (_, (kid, cid, id2safe), _)
                 _, ids, _ = evaluate(
                     model=model,
                     g=batched_graph,
@@ -542,7 +543,11 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 kid, cid, id2safe = ids
                 last_id2safe = id2safe  # may grow over time
 
-                # debug prints (your A)
+                # safety: ensure 1D / long
+                kid = kid.reshape(-1).long()
+                cid = cid.reshape(-1).long()
+
+                # debug prints
                 print(kid.shape, kid.dtype, kid.min().item(), kid.max().item())
                 print(cid.shape, cid.dtype, cid.min().item(), cid.max().item())
                 print("id2safe size:", len(id2safe))
@@ -554,33 +559,47 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 if probe_key is not None:
                     after = model.state_dict()[probe_key].float().norm().item()
                     print("center norm after :", after)
-                # --- build mapping for this chunk ---
+
+                # ----------------------------
+                # 3.5) build mapping for this chunk
+                # ----------------------------
                 num_nodes_per_g = [g.num_nodes() for g in chunk]
+                num_nodes_per_g_t = torch.tensor(num_nodes_per_g, device=device, dtype=torch.long)
 
+                # chunk内の graph id (0..len(chunk)-1) をノード数分だけ繰り返す
                 graph_ids = torch.repeat_interleave(
-                    torch.arange(len(chunk), device=device),
-                    torch.tensor(num_nodes_per_g, device=device)
-                ).long()
+                    torch.arange(len(chunk), device=device, dtype=torch.long),
+                    num_nodes_per_g_t
+                )
 
+                # 各graph内の local node id (0..n-1) を連結
                 local_node_ids = torch.cat(
-                    [torch.arange(n, device=device) for n in num_nodes_per_g],
+                    [torch.arange(n, device=device, dtype=torch.long) for n in num_nodes_per_g],
                     dim=0
-                ).long()
+                )
 
-                # sanity check
-                assert graph_ids.numel() == kid.numel()
-                assert local_node_ids.numel() == kid.numel()
+                # optional: provenance (batch_idx / chunk start index in glist)
+                batch_ids = torch.full((kid.numel(),), int(batch_idx), device=device, dtype=torch.long)
+                chunk_starts = torch.full((kid.numel(),), int(i), device=device, dtype=torch.long)
 
-                # move to CPU and store
+                # sanity
+                assert graph_ids.numel() == kid.numel(), f"graph_ids mismatch: {graph_ids.numel()} vs kid {kid.numel()}"
+                assert local_node_ids.numel() == kid.numel(), f"local_node_ids mismatch: {local_node_ids.numel()} vs kid {kid.numel()}"
+                assert cid.numel() == kid.numel(), f"cid mismatch: {cid.numel()} vs kid {kid.numel()}"
+
+                # store on CPU
                 all_graph_ids.append(graph_ids.detach().cpu())
                 all_local_node_ids.append(local_node_ids.detach().cpu())
+                all_batch_ids.append(batch_ids.detach().cpu())
+                all_chunk_starts.append(chunk_starts.detach().cpu())
 
-                # accumulate on CPU
+                # accumulate ids on CPU
                 all_key_ids.append(kid.detach().cpu())
                 all_cluster_ids.append(cid.detach().cpu())
 
                 # cleanup per chunk
                 del batched_graph, batched_feats, chunk, ids, kid, cid
+                del graph_ids, local_node_ids, batch_ids, chunk_starts, num_nodes_per_g_t
                 gc.collect()
                 torch.cuda.empty_cache()
 
@@ -600,13 +619,35 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     if len(all_key_ids) == 0:
         return None
 
-    key_id_all = torch.cat(all_key_ids, dim=0)
-    cluster_id_all = torch.cat(all_cluster_ids, dim=0)
+    key_id_all = torch.cat(all_key_ids, dim=0)            # [N_atoms_total]
+    cluster_id_all = torch.cat(all_cluster_ids, dim=0)    # [N_atoms_total]
+
+    graph_id_in_chunk_all = torch.cat(all_graph_ids, dim=0)        # [N_atoms_total]
+    local_node_id_all = torch.cat(all_local_node_ids, dim=0)       # [N_atoms_total]
+    batch_id_all = torch.cat(all_batch_ids, dim=0)                 # [N_atoms_total]
+    chunk_start_in_batch_all = torch.cat(all_chunk_starts, dim=0)  # [N_atoms_total]
+
+    # final sanity
+    n = key_id_all.numel()
+    assert cluster_id_all.numel() == n
+    assert graph_id_in_chunk_all.numel() == n
+    assert local_node_id_all.numel() == n
+    assert batch_id_all.numel() == n
+    assert chunk_start_in_batch_all.numel() == n
 
     out = {
-        "key_id": key_id_all,                 # [N_atoms_total]
-        "cluster_id": cluster_id_all,         # [N_atoms_total]
-        "id2safe": last_id2safe or {},        # dict[int,str]
+        # ids
+        "key_id": key_id_all,
+        "cluster_id": cluster_id_all,
+        "id2safe": last_id2safe or {},
+
+        # mapping / provenance
+        "graph_id_in_chunk": graph_id_in_chunk_all,
+        "local_node_id": local_node_id_all,
+        "batch_id": batch_id_all,
+        "chunk_start_in_batch": chunk_start_in_batch_all,
+
+        # meta
         "checkpoint_path": checkpoint_path,
         "chunk_size": chunk_size,
         "saved_at": time.strftime("%Y%m%d_%H%M%S"),
@@ -618,7 +659,6 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     print("saved:", save_path)
 
     return out
-
 
 def run_inductive(conf, model, optimizer, scheduler, logger):
     import gc, itertools, torch, os, copy
