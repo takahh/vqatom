@@ -490,6 +490,8 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     # outputs
     all_key_ids = []
     all_cluster_ids = []
+    all_graph_ids = []        # 追加
+    all_local_node_ids = []   # 追加
     last_id2safe = None
 
     # ----------------------------
@@ -552,6 +554,26 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 if probe_key is not None:
                     after = model.state_dict()[probe_key].float().norm().item()
                     print("center norm after :", after)
+                # --- build mapping for this chunk ---
+                num_nodes_per_g = [g.num_nodes() for g in chunk]
+
+                graph_ids = torch.repeat_interleave(
+                    torch.arange(len(chunk), device=device),
+                    torch.tensor(num_nodes_per_g, device=device)
+                ).long()
+
+                local_node_ids = torch.cat(
+                    [torch.arange(n, device=device) for n in num_nodes_per_g],
+                    dim=0
+                ).long()
+
+                # sanity check
+                assert graph_ids.numel() == kid.numel()
+                assert local_node_ids.numel() == kid.numel()
+
+                # move to CPU and store
+                all_graph_ids.append(graph_ids.detach().cpu())
+                all_local_node_ids.append(local_node_ids.detach().cpu())
 
                 # accumulate on CPU
                 all_key_ids.append(kid.detach().cpu())
