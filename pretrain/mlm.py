@@ -5,10 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-# ----------------------------
-# MLM masking (BERT-style)
-# ----------------------------
-def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30, generator=None):
+def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30):
     """
     input_ids: (B, L) int64 with PAD included
     returns:
@@ -17,8 +14,6 @@ def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30, generator=None):
       vocab_size: base_vocab + 2  (PAD + MASK)
     """
     assert input_ids.dtype == torch.int64
-    if generator is None:
-        generator = torch.default_generator
 
     PAD_ID  = base_vocab + 0
     MASK_ID = base_vocab + 1
@@ -30,14 +25,14 @@ def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30, generator=None):
     is_pad = (input_ids == PAD_ID)
 
     # choose positions to predict
-    prob = torch.rand_like(input_ids.float(), generator=generator)
+    prob = torch.rand(input_ids.shape, device=input_ids.device)
     mask_sel = (prob < mask_prob) & (~is_pad)
 
     labels[mask_sel] = input_ids[mask_sel]
 
     # among selected:
     # 80% -> MASK, 10% -> random, 10% -> keep
-    r = torch.rand_like(input_ids.float(), generator=generator)
+    r = torch.rand(input_ids.shape, device=input_ids.device)
 
     # MASK
     m_mask = mask_sel & (r < 0.80)
@@ -49,8 +44,10 @@ def mlm_mask_tokens(input_ids, base_vocab: int, mask_prob=0.30, generator=None):
     masked[m_mask] = MASK_ID
     if m_rand.any():
         masked[m_rand] = torch.randint(
-            low=0, high=base_vocab, size=(int(m_rand.sum().item()),),
-            generator=generator, device=input_ids.device, dtype=torch.int64
+            low=0, high=base_vocab,
+            size=(int(m_rand.sum().item()),),
+            device=input_ids.device,
+            dtype=torch.int64
         )
 
     return masked, labels, vocab_size
