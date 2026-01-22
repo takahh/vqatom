@@ -6,7 +6,7 @@ import dgl.dataloading
 from train_teacher import get_args
 from collections import Counter
 
-DATAPATH = "../data/both_mono"
+DATAPATH = "../data/discret_50k"
 DATAPATH_INFER = "../data/additional_data_for_analysis"
 
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
@@ -152,8 +152,8 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
 
 class MoleculeGraphDataset(Dataset):
     def __init__(self, adj_dir, attr_dir):
-        self.adj_files = sorted(glob.glob(f"{adj_dir}/concatenated_adj_batch_*.npy"))
-        self.attr_files = sorted(glob.glob(f"{attr_dir}/concatenated_attr_batch_*.npy"))
+        self.adj_files = sorted(glob.glob(f"{adj_dir}/adj_*.npy"))
+        self.attr_files = sorted(glob.glob(f"{attr_dir}/attr_*.npy"))
         assert len(self.adj_files) == len(self.attr_files), "Mismatch in adjacency and attribute files"
 
     def __len__(self):
