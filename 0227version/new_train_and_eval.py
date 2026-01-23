@@ -480,7 +480,8 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     # ----------------------------
     # 1) dataset and dataloader
     # ----------------------------
-    datapath = DATAPATH if conf.get("train_or_infer") in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    # datapath = DATAPATH if conf.get("train_or_infer") in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    datapath = DATAPATH
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
 
