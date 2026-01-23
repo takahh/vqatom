@@ -976,6 +976,90 @@ class EuclideanCodebook(nn.Module):
             s = "k_" + s
         return s
 
+    def ensure_from_state_dict(self, state_dict, prefix: str = ""):
+        """
+        state_dict に含まれる codebook 関連の buffer/parameter を事前に登録して、
+        load_state_dict(strict=True) が通るようにする。
+
+        prefix 例:
+          - model 側で呼ぶなら: prefix="vq._codebook."
+          - EuclideanCodebook 自身に渡すなら: prefix=""（推奨）
+        """
+        import torch
+        import re
+        from torch import nn
+
+        # 1) cluster_size_*, embed_avg_* から orig key を拾って buffers を作る
+        cs_pat = re.compile(rf"^{re.escape(prefix)}cluster_size_(.+)$")
+        ea_pat = re.compile(rf"^{re.escape(prefix)}embed_avg_(.+)$")
+
+        # まず embed_avg の D を拾いやすいので embed_avg を優先
+        for k, v in state_dict.items():
+            m = ea_pat.match(k)
+            if not m:
+                continue
+            orig = m.group(1)  # 例: "6_-1_3_0_0_0"
+            if not torch.is_tensor(v):
+                continue
+            K, D = int(v.shape[0]), int(v.shape[1])
+
+            # buffers (orig 名)
+            buf_cs = f"cluster_size_{orig}"
+            buf_ea = f"embed_avg_{orig}"
+
+            if not hasattr(self, buf_cs):
+                self.register_buffer(buf_cs, torch.zeros((K,), dtype=torch.float32))
+            if not hasattr(self, buf_ea):
+                self.register_buffer(buf_ea, torch.zeros((K, D), dtype=torch.float32))
+
+            # embed parameter (safe 名)
+            safe = self._get_or_create_safe_key(orig, K_e=K, D=D, device="cpu")
+            # ここで self.embed[safe] が無ければ作られる
+
+        # embed_avg が無いケース向けに cluster_size だけでも拾う
+        for k, v in state_dict.items():
+            m = cs_pat.match(k)
+            if not m:
+                continue
+            orig = m.group(1)
+            if not torch.is_tensor(v):
+                continue
+            K = int(v.shape[0])
+
+            buf_cs = f"cluster_size_{orig}"
+            if not hasattr(self, buf_cs):
+                self.register_buffer(buf_cs, torch.zeros((K,), dtype=torch.float32))
+
+            # embed_avg が state に無い場合、D が不明なので embed はここでは作らない
+            # （embed 側 key が state にあれば後段で作れる）
+
+        # 2) embed.<safe> から safe key を拾って足りない Parameter を作る
+        #    （orig が逆引きできない場合もあるので、とりあえず safe=orig 扱いで作る）
+        emb_pat = re.compile(rf"^{re.escape(prefix)}embed\.(.+)$")
+        for k, v in state_dict.items():
+            m = emb_pat.match(k)
+            if not m:
+                continue
+            safe = m.group(1)  # 例: "k_6__1_3_0_0_0"
+            if not torch.is_tensor(v):
+                continue
+
+            # v の shape は [K, D] を想定（あなたの実装）
+            if v.ndim != 2:
+                continue
+            K, D = int(v.shape[0]), int(v.shape[1])
+
+            # safe をすでに持っていなければ Parameter を作る
+            if safe not in self.embed:
+                init = torch.randn((K, D), device="cpu") * 0.01
+                self.embed[safe] = nn.Parameter(init, requires_grad=True)
+
+            # mapping も最低限埋める（orig が分からなければ safe を orig 扱いに）
+            if safe not in self.safe_to_key:
+                self.safe_to_key[safe] = safe
+            if self.safe_to_key[safe] not in self.key_to_safe:
+                self.key_to_safe[self.safe_to_key[safe]] = safe
+
     def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None) -> str:
         """
         original key (skey) から safe_key を取得。
