@@ -7,7 +7,7 @@ from train_teacher import get_args
 from collections import Counter
 
 DATAPATH = "../data/discret_50k"
-DATAPATH_INFER = "../data/additional_data_for_analysis"
+DATAPATH_INFER = "../data/pretrain_1M"
 
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
                chunk_size=None, attr=None):
@@ -607,8 +607,10 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
 
     # ------------------------------------------------------------
     # 2) dataset and dataloader
-    # ------------------------------------------------------------
-    datapath = DATAPATH
+    # ----------------------------
+    # 1) dataset and dataloader
+    # ----------------------------
+    datapath = DATAPATH if conf.get("train_or_infer") in ("hptune") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(
         dataset,
