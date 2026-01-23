@@ -2,7 +2,7 @@ import os, re, tarfile, io
 import numpy as np
 import torch
 
-path0 = "/Users/taka/Documents/npy.tar.gz"
+path0 = "/Users/taka/Documents/discret_50k.tar,gz"
 path1 = "/Users/taka/Documents/infer_token_ids.pt"
 out_dir = "/Users/taka/Documents/pretrain_ragged"
 os.makedirs(out_dir, exist_ok=True)
