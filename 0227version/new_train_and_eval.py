@@ -838,7 +838,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         logger.info("=== epoch {epoch} ==　initial kmeans start ....")
         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
-            if idx == 5:
+            if idx == 12:
                 break
 
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
@@ -942,7 +942,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
             logger.info("TRAIN ---------------")
             # dataloader は再利用可能（新しい iterator が作られる）
             for idx, (adj_batch, attr_batch) in enumerate(dataloader):
-                if idx == 5:
+                if idx == 12:
                     break
                 # print(f"[TRAIN] batch idx {idx}")
                 glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
