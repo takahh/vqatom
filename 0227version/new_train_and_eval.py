@@ -234,6 +234,15 @@ def collect_global_indices_compact(
 
         # just select intrinsic cols once
         A_sel = attr_np[..., [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]].astype(np.int32)
+        # after A_sel is created
+        Z_all = A_sel[..., 0].reshape(-1)
+        C_all = A_sel[..., 1].reshape(-1)
+
+        for z0 in (17, 35, 53):  # Cl, Br, I
+            mask = (Z_all == z0)
+            if mask.any():
+                uq = np.unique(C_all[mask])
+                logger.info(f"[charge summary] Z={z0} unique charges={uq[:20]} count={mask.sum()}")
 
         # node existence mask
         node_mask = (np.abs(attr_np).sum(axis=2) > 0)
