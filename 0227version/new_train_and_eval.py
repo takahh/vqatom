@@ -835,7 +835,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
 
         # if (epoch - 1) % 3 == 0:
         print("initial kmeans start ....")
-        logger.info("=== epoch {epoch} ==　initial kmeans start ....")
+        logger.info(f"=== epoch {epoch} ==　initial kmeans start ....")
         for idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
             if idx == 12:
