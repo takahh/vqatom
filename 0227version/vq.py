@@ -2296,13 +2296,6 @@ class VectorQuantize(nn.Module):
 
             e_star = cb[nn_idx]  # [N_i, D]
 
-            # ---------------
-            # クラスの重みゲット
-            # ---------------
-            from utils import WDICT
-            # class_weight = float(WDICT[str(k)])
-            class_weight = float(WDICT.get(str(k), 1.0))
-
             # -------------------------------
             # 3-6) commitment / codebook loss
             # -------------------------------
@@ -2310,8 +2303,8 @@ class VectorQuantize(nn.Module):
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
 
             total_latent += N_i
-            commit_num   = commit_num + commit_part * N_i * class_weight
-            codebk_num   = codebk_num + codebk_part * N_i * class_weight
+            commit_num   = commit_num + commit_part * N_i
+            codebk_num   = codebk_num + codebk_part * N_i
 
             # -------------------------------
             # 3-7) repel loss (contrastive)
@@ -2326,9 +2319,9 @@ class VectorQuantize(nn.Module):
             ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
             repel_val     = ret[0]
             cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            repel_num    = repel_num + repel_val * N_i * class_weight
+            repel_num    = repel_num + repel_val * N_i
             total_cb_count += K_e
-            cb_repel_num = cb_repel_num + cb_repel_val * K_e * class_weight
+            cb_repel_num = cb_repel_num + cb_repel_val * K_e
 
         # ---- 4. 集計 ----
         if total_latent == 0:
