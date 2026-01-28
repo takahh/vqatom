@@ -145,7 +145,6 @@ def kmeans(
     # device / shape
     # ----------------------------
     samples = samples.to("cuda", non_blocking=True)
-    print("kmeans is running...")
     H, N, D = samples.shape
     device, dtype = samples.device, samples.dtype
 

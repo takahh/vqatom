@@ -438,7 +438,6 @@ class EquivariantThreeHopGINE(nn.Module):
                 batched_graph_base=None, mode=None, attr_list=None):
         import torch
         dev = next(self.parameters()).device
-        print(f"mode is {mode} in model")
         if mode == "init_kmeans_final":
             if hasattr(data, "to"):
                 data = data.to(dev)
