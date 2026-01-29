@@ -674,7 +674,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 assert kid.min().item() >= 0
                 assert kid.max().item() < len(id2safe)
                 assert cid.min().item() >= 0
-                center = model.codebook.centers  # 例：対象パラメータ
+                center = model.state_dict()[probe_key].float().norm().item()  # 例：対象パラメータ
                 before = center.detach().clone()
                 # ... update ...
                 after = center.detach()
