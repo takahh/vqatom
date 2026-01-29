@@ -844,7 +844,6 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
             glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
                 adj_batch, attr_batch, logger, start_atom_id, start_mol_id
             )  # 10000 molecules per glist
-            print("convert_to_dgl is done")
             all_attr.append(attr_matrices)
 
             # masks を集約
@@ -887,7 +886,6 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
                 gc.collect()
                 torch.cuda.empty_cache()
 
-            print("latent output is done")
             # glist をクリーンアップ
             for g in glist:
                 g.ndata.clear()
