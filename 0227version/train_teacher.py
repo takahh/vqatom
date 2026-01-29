@@ -285,7 +285,7 @@ def run(args):
             logger
         )
     elif args.train_or_infer == "infer":
-        run_infer_only_after_restore(conf, model, logger, "model_epoch_10.pth")
+        run_infer_only_after_restore(conf, model, logger, "data/model_epoch_10.pth")
 
 def repeat_run(args):
     scores = []
