@@ -7,7 +7,7 @@ from train_teacher import get_args
 from collections import Counter
 
 DATAPATH = "../data/discret_final"
-DATAPATH_INFER = "../data/pretrain_final"
+DATAPATH_INFER = "../data/pretrain_no_id"
 
 def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
                chunk_size=None, attr=None):
