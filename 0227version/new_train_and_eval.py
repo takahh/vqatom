@@ -667,21 +667,28 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
 
                 kid, cid, id2safe = ids
                 last_id2safe = id2safe  # may grow over time
-
-                # enforce 1D long
                 kid = kid.reshape(-1).long()
                 cid = cid.reshape(-1).long()
                 assert kid.min().item() >= 0
                 assert kid.max().item() < len(id2safe)
                 assert cid.min().item() >= 0
-                center = model.state_dict()[probe_key].float().norm().item()  # 例：対象パラメータ
+
+                # --- FIX: do NOT .norm().item() into center ---
+                center = dict(model.named_parameters()).get(probe_key, None)
+                if center is None:
+                    center = dict(model.named_buffers()).get(probe_key, None)
+                if center is None:
+                    raise KeyError(f"probe_key not found: {probe_key}")
+
                 before = center.detach().clone()
                 # ... update ...
                 after = center.detach()
 
+                print("center norm before:", before.float().norm().item())
+                print("center norm after :", after.float().norm().item())
                 print("delta norm:", (after - before).norm().item())
-                print("grad norm:", None if center.grad is None else center.grad.norm().item())
-                print("requires_grad:", center.requires_grad)
+                print("grad norm:", None if getattr(center, "grad", None) is None else center.grad.norm().item())
+                print("requires_grad:", getattr(center, "requires_grad", None))
 
                 # debug
                 print("kid:", kid.shape, kid.dtype, int(kid.min().item()), int(kid.max().item()))
