@@ -671,6 +671,17 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 # enforce 1D long
                 kid = kid.reshape(-1).long()
                 cid = cid.reshape(-1).long()
+                assert kid.min().item() >= 0
+                assert kid.max().item() < len(id2safe)
+                assert cid.min().item() >= 0
+                center = model.codebook.centers  # 例：対象パラメータ
+                before = center.detach().clone()
+                # ... update ...
+                after = center.detach()
+
+                print("delta norm:", (after - before).norm().item())
+                print("grad norm:", None if center.grad is None else center.grad.norm().item())
+                print("requires_grad:", center.requires_grad)
 
                 # debug
                 print("kid:", kid.shape, kid.dtype, int(kid.min().item()), int(kid.max().item()))
