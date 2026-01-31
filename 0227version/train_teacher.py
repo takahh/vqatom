@@ -35,6 +35,21 @@ os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
 # Set thread affinity to improve data loading performance
 os.environ['KMP_AFFINITY'] = 'granularity=fine,compact,1,0'
 
+from models import EquivariantThreeHopGINE
+
+def build_model(conf):
+    """
+    Reconstruct the exact model architecture used in training
+    """
+    args = conf["args"]   # we pass your training args through conf
+
+    model = EquivariantThreeHopGINE(
+        in_feats=args.hidden_dim,
+        hidden_feats=args.hidden_dim,
+        out_feats=args.hidden_dim,
+        args=args,
+    )
+    return model
 
 def get_args():
     parser = argparse.ArgumentParser(description="PyTorch DGL implementation")

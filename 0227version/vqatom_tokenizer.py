@@ -1,218 +1,126 @@
-import torch
-from rdkit import Chem
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# あなたの既存コードを import
+import argparse
+import torch
+import dgl
+
 from smiles_to_npy import smiles_to_graph_with_labels
-# from
-# from your_pipeline import (
-#     smiles_to_graph_with_labels,
-#     convert_to_dgl_single,
-#     load_trained_model,     # model_epoch_xx.pth を読むやつ
-# )
-import torch
-def convert_to_dgl_single(
-    adj,
-    attr,
-    device=None,
-    two_hop_w=0.5,
-    three_hop_w=0.3,
-    make_base_bidirected=True,
-    add_self_loops=True,
-    depad_from_attr=True,
-):
+from models import EquivariantThreeHopGINE
+from your_convert_module import convert_to_dgl_single   # <-- change to your actual module
+from your_eval_module import evaluate                   # <-- or paste evaluate() into this file
+
+
+def ensure_codebook_keys_if_possible(model, state_dict):
     """
-    Convert ONE molecule (adj, attr) -> (base_g, extended_g, X, meta)
-
-    Inputs
-    ------
-    adj  : Tensor [100,100] or [N,N]
-    attr : Tensor [100,79]  or [N,79]
-        - depad_from_attr=True の場合、attr のゼロ行で N を推定して depad する
-
-    Returns
-    -------
-    base_g     : DGLGraph (1-hop edges)
-    extended_g : DGLGraph (1 + 2hop + 3hop weighted edges)
-    X          : Tensor [N,79] node features
-    meta       : dict (N, nonzero_mask, etc.)
+    If you use dynamic ParameterDict keys inside EuclideanCodebook, strict restore
+    can fail unless you pre-create keys. If you already have this helper in your
+    codebase, import and use it instead of this stub.
     """
-    import torch
-    import dgl
+    # If you already have the full implementation, call that one.
+    return
 
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device)
 
-    # move once
-    adj = adj.to(device, non_blocking=True)
-    attr = attr.to(device, non_blocking=True)
+def load_model_from_ckpt(ckpt_path: str, device: str = "cuda", strict: bool = True):
+    dev = torch.device(device if (device == "cuda" and torch.cuda.is_available()) else "cpu")
+    ckpt = torch.load(ckpt_path, map_location=dev)
 
-    # -------------------------
-    # depad
-    # -------------------------
-    if depad_from_attr:
-        nonzero_mask = (attr.abs().sum(dim=1) > 0)  # [100]
-        N = int(nonzero_mask.sum().item())
-        if N <= 0:
-            raise ValueError("No valid atoms found (all-zero attr rows).")
-        X = attr[nonzero_mask]          # [N,79]
-        W1 = adj[:N, :N].float()        # [N,N]
-    else:
-        # assume already [N,*]
-        N = int(attr.shape[0])
-        if N <= 0:
-            raise ValueError("attr has zero rows.")
-        nonzero_mask = None
-        X = attr
-        W1 = adj.float()
+    if not (isinstance(ckpt, dict) and "args" in ckpt):
+        raise KeyError("Checkpoint must contain ckpt['args'] to rebuild the model exactly.")
 
-    # bool adjacency for 1-hop
-    A1 = (W1 > 0)                       # [N,N] bool
+    train_args = ckpt["args"]
+    state = ckpt["state_dict"] if ("state_dict" in ckpt) else ckpt
 
-    if make_base_bidirected:
-        A1 = A1 | A1.T
+    model = EquivariantThreeHopGINE(
+        in_feats=train_args.hidden_dim,         # unused in your class; keep same as training
+        hidden_feats=train_args.hidden_dim,
+        out_feats=train_args.hidden_dim,
+        args=train_args,
+    ).to(dev)
 
-    if add_self_loops:
-        A1 = A1.clone()
-        A1.fill_diagonal_(True)
+    # optional: pre-create dynamic VQ codebook keys for strict restore
+    ensure_codebook_keys_if_possible(model, state)
 
-    # -------------------------
-    # base graph (1-hop)
-    # -------------------------
-    bsrc, bdst = A1.nonzero(as_tuple=True)
-    base_g = dgl.graph((bsrc, bdst), num_nodes=N, device=device)
-    base_g.ndata["feat"] = X
-
-    # base weights (diagonal=1 if self-loops)
-    if add_self_loops:
-        W1w = W1.clone()
-        W1w.fill_diagonal_(1.0)
-    else:
-        W1w = W1
-
-    es, ed = base_g.edges()
-    base_g.edata["weight"] = W1w[es, ed]
-    base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), device=device, dtype=torch.int32)
-
-    # -------------------------
-    # k-hop reachability (dense matmul)
-    # -------------------------
-    A1f = A1.to(torch.float32)
-    A2 = (A1f @ A1f) > 0
-    A3 = (A2.to(torch.float32) @ A1f) > 0
-
-    one_hop = A1
-    two_hop_only = A2 & ~one_hop
-    three_hop_only = A3 & ~(one_hop | A2)
-
-    # -------------------------
-    # extended weighted adjacency
-    # -------------------------
-    full_W = W1.clone()
-    full_W += two_hop_only.to(full_W.dtype) * float(two_hop_w)
-    full_W += three_hop_only.to(full_W.dtype) * float(three_hop_w)
-
-    if add_self_loops:
-        full_W.fill_diagonal_(1.0)
-
-    Afull = full_W > 0
-    if make_base_bidirected:
-        Afull = Afull | Afull.T
-    if add_self_loops:
-        Afull = Afull.clone()
-        Afull.fill_diagonal_(True)
-
-    sf, df = Afull.nonzero(as_tuple=True)
-    extended_g = dgl.graph((sf, df), num_nodes=N, device=device)
-    extended_g.ndata["feat"] = X
-
-    e_src, e_dst = extended_g.edges()
-    extended_g.edata["weight"] = full_W[e_src, e_dst]
-
-    # edge types:
-    # 1 = one-hop
-    # 2 = two-hop-only
-    # 3 = three-hop-only
-    # 0 = other (mostly self-loops)
-    et = torch.zeros(e_src.numel(), device=device, dtype=torch.int32)
-    et[one_hop[e_src, e_dst]] = 1
-    et[two_hop_only[e_src, e_dst]] = 2
-    et[three_hop_only[e_src, e_dst]] = 3
-    extended_g.edata["edge_type"] = et
-
-    meta = {
-        "N": N,
-        "nonzero_mask": nonzero_mask,
-    }
-    return base_g, extended_g, X, meta
-
-def load_trained_model(checkpoint_path: str, build_model_fn, conf: dict, device: str = "cuda"):
-    """
-    build_model_fn: アーキテクチャを作って model を返す関数（あなたの既存コードに合わせる）
-    conf: restore_strict などを持つ辞書
-    """
-    device = torch.device(device if torch.cuda.is_available() else "cpu")
-
-    # 1) build
-    model = build_model_fn(conf).to(device)
+    model.load_state_dict(state, strict=strict)
     model.eval()
+    return model, train_args, dev
 
-    # 2) restore (あなたのコード)
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
 
-    _ensure_codebook_keys_if_possible(model, state)
+@torch.no_grad()
+def infer_tokens_for_smiles(model, dev, smiles: str):
+    # 1) build adj/attr
+    adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
 
-    strict = bool(conf.get("restore_strict", True))
-    if strict:
-        model.load_state_dict(state, strict=True)
-    else:
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        print("restore(strict=False) missing:", missing[:20])
-        print("restore(strict=False) unexpected:", unexpected[:20])
+    # 2) build DGL graphs + node features
+    base_g, g, X, meta = convert_to_dgl_single(adj, attr, device=str(dev))
 
-    model.eval()
-    return model
+    # IMPORTANT:
+    # Your training infer pipeline batches `glist` and uses `batched_graph.ndata["feat"]`.
+    # So do the same: dgl.batch([g]).
+    batched_graph = dgl.batch([g]).to(dev)
+    feats = batched_graph.ndata["feat"]
 
-class VQAtomTokenizer:
-    def __init__(self, model_ckpt: str, device="cpu"):
-        self.device = device
-        self.model = load_trained_model(model_ckpt, device)
-        self.model.eval()
+    # 3) attr_list must be a LIST aligned with the graphs in this batch/chunk
+    # In your pipeline: attr_matrices_all[start:start+chunk_size] (a list).
+    # For single graph:
+    attr_list = [attr.to(dev)]
 
-        # --- CBDICT 順で offset を固定 ---
-        self.offset = {}
-        cur = 0
-        for key in self.model.vq._codebook.embed.keys():
-            K = self.model.vq._codebook.embed[key].shape[0]
-            self.offset[key] = cur
-            cur += K
-        self.vocab_size = cur
+    # 4) masks: in your infer loop you pass masks_3. If your vq/infer ignores it,
+    # you can pass None. To be maximally consistent, pass the real mask_dict if you have it.
+    mask_dict = None
 
-    @torch.no_grad()
-    def encode(self, smiles: str):
-        # 1) graph 構築
-        adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
-        g, g_base = convert_to_dgl_single(adj, attr)
+    # 5) call evaluate() exactly like your pipeline
+    _, (kid, cid, id2safe), _ = evaluate(
+        model=model,
+        g=batched_graph,
+        feats=feats,
+        epoch=0,
+        mask_dict=mask_dict,
+        logger=None,
+        g_base=None,
+        chunk_i=0,
+        mode="infer",
+        attr_list=attr_list,
+    )
 
-        feats = g.ndata["feat"].to(self.device)
+    kid = kid.cpu().tolist()
+    cid = cid.cpu().tolist()
 
-        # 2) GNN latent
-        latent = self.model.encoder(g, feats)
+    # 6) global token mapping: offsets from codebook key order
+    offsets = {}
+    cur = 0
+    for safe_key in model.vq._codebook.embed.keys():
+        K = int(model.vq._codebook.embed[safe_key].shape[0])
+        offsets[safe_key] = cur
+        cur += K
 
-        # 3) VQ infer
-        _, _, key_id, cluster_id, id2safe = self.model.vq(
-            latent, attr, mode="infer"
-        )
+    tokens = []
+    for k, c in zip(kid, cid):
+        safe = id2safe[int(k)]
+        tokens.append(offsets[safe] + int(c))
 
-        key_id = key_id.cpu().tolist()
-        cluster_id = cluster_id.cpu().tolist()
+    return tokens, kid, cid, id2safe
 
-        # 4) 1D token 化
-        tokens = []
-        for k, c in zip(key_id, cluster_id):
-            safe = id2safe[k]
-            tok = self.offset[safe] + c
-            tokens.append(int(tok))
 
-        return tokens
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", required=True, help="path to model_epoch_xx.pth")
+    ap.add_argument("--smiles", required=True)
+    ap.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    ap.add_argument("--strict", action="store_true", help="strict load_state_dict")
+    args = ap.parse_args()
+
+    model, train_args, dev = load_model_from_ckpt(args.ckpt, device=args.device, strict=args.strict)
+
+    tokens, kid, cid, id2safe = infer_tokens_for_smiles(model, dev, args.smiles)
+
+    print("SMILES:", args.smiles)
+    print("TOKENS:", tokens)
+    # optional debug:
+    print("kid (first 20):", kid[:20])
+    print("cid (first 20):", cid[:20])
+    print("id2safe size:", len(id2safe))
+
+
+if __name__ == "__main__":
+    main()
