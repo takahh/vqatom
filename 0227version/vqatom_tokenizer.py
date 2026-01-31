@@ -5,30 +5,19 @@ import argparse
 import torch
 import dgl
 
-# ✅ your existing functions
 from smiles_to_npy import smiles_to_graph_with_labels
 from models import EquivariantThreeHopGINE
 
-# CHANGE THESE TWO imports to match your project file names:
-from new_train_and_eval import evaluate          # <-- where your evaluate() lives
-from new_train_and_eval import convert_to_dgl    # <-- where your convert_to_dgl() lives
-
-
-def ensure_codebook_keys_if_possible(model, state_dict):
-    """
-    OPTIONAL. If you already have this exact helper in your codebase, import it and use it.
-    Otherwise, leave as no-op.
-    """
-    return
+# ✅ these are in /Users/taka/PycharmProjects/vqatom/0227version/new_train_and_eval.py
+from new_train_and_eval import evaluate, convert_to_dgl
 
 
 def load_model(ckpt_path: str, device: str = "cuda", strict: bool = True):
     dev = torch.device(device if (device == "cuda" and torch.cuda.is_available()) else "cpu")
     ckpt = torch.load(ckpt_path, map_location=dev)
 
-    # must have args to rebuild model
     if not (isinstance(ckpt, dict) and "args" in ckpt):
-        raise KeyError("Checkpoint must contain ckpt['args'].")
+        raise KeyError("Checkpoint must contain ckpt['args'] to rebuild EquivariantThreeHopGINE.")
 
     train_args = ckpt["args"]
     state = ckpt["state_dict"] if ("state_dict" in ckpt) else ckpt
@@ -40,7 +29,10 @@ def load_model(ckpt_path: str, device: str = "cuda", strict: bool = True):
         args=train_args,
     ).to(dev)
 
-    ensure_codebook_keys_if_possible(model, state)
+    # If your strict restore sometimes fails due to dynamic codebook keys,
+    # use the helper you already have in new_train_and_eval:
+    # from new_train_and_eval import _ensure_codebook_keys_if_possible
+    # _ensure_codebook_keys_if_possible(model, state)
 
     model.load_state_dict(state, strict=strict)
     model.eval()
@@ -52,9 +44,9 @@ def infer_one(model, dev, smiles: str):
     # 1) padded matrices [100,100] and [100,79]
     adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
 
-    # 2) convert_to_dgl expects a "batch" where each item can be .view(-1,100,100)
-    adj_batch = [adj.unsqueeze(0)]    # shape [1,100,100]
-    attr_batch = [attr.unsqueeze(0)]  # shape [1,100,79]
+    # 2) convert_to_dgl expects list elements that can .view(-1,100,100)/(..,100,79)
+    adj_batch = [adj.unsqueeze(0)]      # [1,100,100]
+    attr_batch = [attr.unsqueeze(0)]    # [1,100,79]
 
     base_graphs, extended_graphs, masks_dict, attr_matrices_all, _, _ = convert_to_dgl(
         adj_batch,
@@ -65,15 +57,15 @@ def infer_one(model, dev, smiles: str):
         device=str(dev),
     )
 
-    # for single smiles, take the first molecule
+    # single molecule
     g = extended_graphs[0]
     X = attr_matrices_all[0]     # de-padded [N,79]
 
-    # batch it (your pipeline always batches)
+    # pipeline always batches
     batched_graph = dgl.batch([g]).to(dev)
     feats = batched_graph.ndata["feat"]
 
-    # IMPORTANT: your pipeline passes attr_list as a list aligned to graphs in the chunk
+    # pipeline passes list aligned with graphs
     attr_list = [X.to(dev)]
 
     # call evaluate exactly like your infer loop
@@ -90,7 +82,7 @@ def infer_one(model, dev, smiles: str):
         attr_list=attr_list,
     )
 
-    # map (key_id, cluster_id) -> global token ids using offsets
+    # offsets for global token ids
     offsets = {}
     cur = 0
     for safe_key in model.vq._codebook.embed.keys():
