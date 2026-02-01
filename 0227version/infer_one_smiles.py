@@ -17,7 +17,7 @@ def load_model(ckpt_path, device="cuda", strict=True):
 
     # ---- MANUAL ARCH (same as training) ----
     model = EquivariantThreeHopGINE(
-        teacher="SAGE",
+        # teacher="SAGE",
         hidden_dim=16,  # DIM
         codebook_size=10000,  # CB
         chunk_size=1000,
