@@ -1,14 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+One-SMILES inference for VQ-Atom (0227version)
+
+Key points:
+- Some imported training modules call get_args()/parse_args() at import-time.
+  To avoid "unrecognized arguments" crashes, we parse our args FIRST, then wipe sys.argv
+  before importing those modules.
+- smiles_to_graph_with_labels() may return numpy arrays; we convert to torch tensors.
+- Checkpoint may be raw state_dict or dict with key "model".
+"""
+
 import argparse
 import sys
 from types import SimpleNamespace
+from typing import Any, Dict, Tuple, List
 
 
-def build_args_for_ckpt(hidden_dim: int, codebook_size: int,
-                        edge_emb_dim: int = 32, ema_decay: float = 0.8):
-    """Minimal args object needed by EquivariantThreeHopGINE / VectorQuantize."""
+# ---------------------------
+# Utilities
+# ---------------------------
+
+def build_args_for_ckpt(
+    hidden_dim: int,
+    codebook_size: int,
+    edge_emb_dim: int = 32,
+    ema_decay: float = 0.8,
+):
+    """Minimal args object expected by EquivariantThreeHopGINE / VectorQuantize."""
     return SimpleNamespace(
         hidden_dim=hidden_dim,
         codebook_size=codebook_size,
@@ -18,30 +38,87 @@ def build_args_for_ckpt(hidden_dim: int, codebook_size: int,
 
 
 def load_state_dict_any(ckpt_path: str, map_location):
-    """Supports either raw state_dict or dict with key 'model'."""
+    """
+    Supports:
+      - raw state_dict
+      - {"model": state_dict, ...}
+      - {"state_dict": ...} / {"model_state_dict": ...} (just in case)
+    """
     import torch
     ckpt = torch.load(ckpt_path, map_location=map_location)
-    if isinstance(ckpt, dict) and "model" in ckpt:
-        return ckpt["model"]
+
+    if isinstance(ckpt, dict):
+        if "model" in ckpt:
+            return ckpt["model"]
+        if "state_dict" in ckpt:
+            return ckpt["state_dict"]
+        if "model_state_dict" in ckpt:
+            return ckpt["model_state_dict"]
+
     return ckpt
 
 
-def load_model(ckpt_path: str, dev, *, hidden_dim: int, codebook_size: int,
-               strict: bool = False, hidden_feats: int | None = None,
-               edge_emb_dim: int = 32, ema_decay: float = 0.8):
+def compute_global_offsets(model) -> Dict[str, int]:
+    """
+    Compute global token offsets per safe_key by iterating codebook sizes.
+    """
+    offsets: Dict[str, int] = {}
+    cur = 0
+    for safe_key in model.vq._codebook.embed.keys():
+        K = int(model.vq._codebook.embed[safe_key].shape[0])
+        offsets[safe_key] = cur
+        cur += K
+    return offsets
+
+
+def as_torch(x, dtype=None, device=None):
+    """
+    Convert numpy -> torch if needed, optionally cast dtype and move device.
+    """
+    import numpy as np
     import torch
 
-    # IMPORTANT:
-    # Some imported training modules call get_args()/parse_args() at import-time.
-    # Wipe argv so they don't see our --ckpt/--smiles flags.
+    if isinstance(x, np.ndarray):
+        x = torch.from_numpy(x)
+    if dtype is not None:
+        x = x.to(dtype)
+    if device is not None:
+        x = x.to(device)
+    return x
+
+
+# ---------------------------
+# Model / inference
+# ---------------------------
+
+def load_model(
+    ckpt_path: str,
+    dev,
+    *,
+    hidden_dim: int,
+    codebook_size: int,
+    strict: bool = False,
+    hidden_feats: int | None = None,
+    edge_emb_dim: int = 32,
+    ema_decay: float = 0.8,
+):
+    """
+    Rebuild EquivariantThreeHopGINE from minimal args and load checkpoint weights.
+    """
+    # IMPORTANT: prevent imported training code from seeing our CLI flags
     sys.argv = [sys.argv[0]]
 
-    # Delayed imports (after argv sanitization)
+    import torch
     from models import EquivariantThreeHopGINE
 
-    args = build_args_for_ckpt(hidden_dim, codebook_size, edge_emb_dim=edge_emb_dim, ema_decay=ema_decay)
+    args = build_args_for_ckpt(
+        hidden_dim=hidden_dim,
+        codebook_size=codebook_size,
+        edge_emb_dim=edge_emb_dim,
+        ema_decay=ema_decay,
+    )
 
-    # GINE internal width. If you get size mismatch, try hidden_feats=128.
+    # Internal GINE width (if mismatch, try hidden_feats=128)
     hf = hidden_feats if hidden_feats is not None else args.hidden_dim
 
     in_feats = 64
@@ -60,22 +137,18 @@ def load_model(ckpt_path: str, dev, *, hidden_dim: int, codebook_size: int,
     return model
 
 
-def compute_global_offsets(model):
-    """Compute global token offsets per safe_key by iterating codebook sizes."""
-    offsets = {}
-    cur = 0
-    for safe_key in model.vq._codebook.embed.keys():
-        K = int(model.vq._codebook.embed[safe_key].shape[0])
-        offsets[safe_key] = cur
-        cur += K
-    return offsets
-
-
 def infer_one(model, dev, smiles: str):
+    """
+    Runs pipeline:
+      smiles -> padded (adj, attr) -> convert_to_dgl -> evaluate(mode="infer")
+      -> returns global token ids + kid/cid/id2safe for debugging.
+    """
+    # IMPORTANT: prevent imported training code from seeing our CLI flags
+    sys.argv = [sys.argv[0]]
+
     import torch
     import dgl
 
-    # Delayed imports (after argv sanitization)
     from smiles_to_npy import smiles_to_graph_with_labels
     from new_train_and_eval import evaluate, convert_to_dgl
 
@@ -83,7 +156,11 @@ def infer_one(model, dev, smiles: str):
         # 1) padded matrices [100,100] and [100,79]
         adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
 
-        # 2) convert_to_dgl expects list elements that can .view(-1,100,100)/(..,100,79)
+        # 1.5) numpy -> torch, fix dtype
+        adj = as_torch(adj, dtype=torch.float32)
+        attr = as_torch(attr, dtype=torch.float32)
+
+        # 2) convert_to_dgl expects list elements shaped like [B,100,100] and [B,100,79]
         adj_batch = [adj.unsqueeze(0)]    # [1,100,100]
         attr_batch = [attr.unsqueeze(0)]  # [1,100,79]
 
@@ -96,13 +173,16 @@ def infer_one(model, dev, smiles: str):
             device=str(dev),
         )
 
+        # single molecule
         g = extended_graphs[0]
-        X = attr_matrices_all[0]  # de-padded [N,79]
+        X = attr_matrices_all[0]  # de-padded [N,79] (torch tensor)
 
+        # pipeline always batches
         batched_graph = dgl.batch([g]).to(dev)
         feats = batched_graph.ndata["feat"]
         attr_list = [X.to(dev)]
 
+        # evaluate returns (kid, cid, id2safe) in your pipeline
         _, (kid, cid, id2safe), _ = evaluate(
             model=model,
             g=batched_graph,
@@ -118,16 +198,20 @@ def infer_one(model, dev, smiles: str):
 
         offsets = compute_global_offsets(model)
 
-        kid_list = kid.reshape(-1).cpu().tolist()
-        cid_list = cid.reshape(-1).cpu().tolist()
+        kid_list = kid.reshape(-1).detach().cpu().tolist()
+        cid_list = cid.reshape(-1).detach().cpu().tolist()
 
-        tokens = []
+        tokens: List[int] = []
         for k, c in zip(kid_list, cid_list):
             safe = id2safe[int(k)]
             tokens.append(offsets[safe] + int(c))
 
         return tokens, kid_list, cid_list, id2safe
 
+
+# ---------------------------
+# CLI
+# ---------------------------
 
 def main():
     ap = argparse.ArgumentParser()
@@ -143,7 +227,9 @@ def main():
     args = ap.parse_args()
 
     import torch
-    dev = torch.device(f"cuda:{args.device}" if args.device >= 0 and torch.cuda.is_available() else "cpu")
+    dev = torch.device(
+        f"cuda:{args.device}" if args.device >= 0 and torch.cuda.is_available() else "cpu"
+    )
 
     model = load_model(
         args.ckpt,
