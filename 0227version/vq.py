@@ -3,7 +3,7 @@ from einops import rearrange, repeat, pack, unpack
 from utils import CBDICT
 from torch import nn, einsum
 
-from train_teacher import get_args
+from args import get_args
 
 
 def exists(val):
