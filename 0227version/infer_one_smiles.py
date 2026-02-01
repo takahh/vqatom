@@ -125,7 +125,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True, help="path to model_epoch_xx.pth")
     ap.add_argument("--smiles", required=True, help="SMILES string")
-    ap.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    # ap.add_argument("--device", default="cuda", choices=["cpu", "cuda"])
+    ap.add_argument("--device", default=0, type=int, help="GPU index, -1=cpu")
     ap.add_argument("--strict", action="store_true", help="strict load_state_dict")
     args = ap.parse_args()
 
