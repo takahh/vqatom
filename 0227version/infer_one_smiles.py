@@ -11,29 +11,29 @@ from models import EquivariantThreeHopGINE
 # ✅ these are in /Users/taka/PycharmProjects/vqatom/0227version/new_train_and_eval.py
 from new_train_and_eval import evaluate, convert_to_dgl
 
-def load_model(ckpt_path: str, device: str = "cuda", strict: bool = True):
-    dev = torch.device(device if (device == "cuda" and torch.cuda.is_available()) else "cpu")
-    ckpt = torch.load(ckpt_path, map_location=dev)
 
-    if not (isinstance(ckpt, dict) and "args" in ckpt):
-        raise KeyError("Checkpoint must contain ckpt['args'] to rebuild EquivariantThreeHopGINE.")
+def load_model(ckpt_path, device="cuda", strict=True):
+    dev = torch.device(device)
 
-    train_args = ckpt["args"]
-    state = ckpt["state_dict"] if ("state_dict" in ckpt) else ckpt
-
+    # ---- MANUAL ARCH (same as training) ----
     model = EquivariantThreeHopGINE(
-        in_feats=train_args.hidden_dim,
-        hidden_feats=train_args.hidden_dim,
-        out_feats=train_args.hidden_dim,
-        args=train_args,
+        teacher="SAGE",
+        hidden_dim=16,  # DIM
+        codebook_size=10000,  # CB
+        chunk_size=1000,
+        chunk_size2=1000,
+        dynamic_threshold=True,
+        ss_max_total_latent_count=40000,
+        dataset="molecules",
     ).to(dev)
 
-    # If your strict restore sometimes fails due to dynamic codebook keys,
-    # use the helper you already have in new_train_and_eval:
-    # from new_train_and_eval import _ensure_codebook_keys_if_possible
-    # _ensure_codebook_keys_if_possible(model, state)
+    ckpt = torch.load(ckpt_path, map_location=dev)
 
-    model.load_state_dict(state, strict=strict)
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        model.load_state_dict(ckpt["model"], strict=strict)
+    else:
+        model.load_state_dict(ckpt, strict=strict)
+
     model.eval()
     return model, dev
 
