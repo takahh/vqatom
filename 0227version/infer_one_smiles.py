@@ -11,29 +11,50 @@ from models import EquivariantThreeHopGINE
 # ✅ these are in /Users/taka/PycharmProjects/vqatom/0227version/new_train_and_eval.py
 from new_train_and_eval import evaluate, convert_to_dgl
 
+from types import SimpleNamespace
+
+def build_args_for_ckpt():
+    # From your training command:
+    # --codebook_size $CB --hidden_dim $DIM
+    # plus any optional defaults used in the model definition
+    return SimpleNamespace(
+        hidden_dim=16,        # <-- DIM (set to your $DIM used in training)
+        codebook_size=10000,  # <-- CB  (set to your $CB used in training)
+        edge_emb_dim=32,      # default in model via getattr(args,"edge_emb_dim",32)
+        ema_decay=0.8,        # default in VectorQuantize via getattr(args,"ema_decay",0.8)
+    )
 
 def load_model(ckpt_path, device="cuda", strict=True):
+    import torch
+
     dev = torch.device(device)
 
-    # ---- MANUAL ARCH (same as training) ----
+    args = build_args_for_ckpt()
+
+    # hidden_feats is the GINE internal width (NOT args.hidden_dim).
+    # In your code, nn1 takes args.hidden_dim -> hidden_feats.
+    # Typical setting is hidden_feats == args.hidden_dim, but many runs use larger (e.g., 128).
+    # If you trained with DIM=16, you almost certainly kept hidden_feats=16 or 64.
+    hidden_feats = args.hidden_dim
+
+    # in_feats/out_feats are not actually used in __init__ beyond signature in this snippet,
+    # but keep them consistent.
+    in_feats = 64
+    out_feats = args.hidden_dim
+
     model = EquivariantThreeHopGINE(
-        # teacher="SAGE",
-        hidden_dim=16,  # DIM
-        codebook_size=10000,  # CB
-        chunk_size=1000,
-        chunk_size2=1000,
-        dynamic_threshold=True,
-        ss_max_total_latent_count=40000,
-        dataset="molecules",
+        in_feats=in_feats,
+        hidden_feats=hidden_feats,
+        out_feats=out_feats,
+        args=args,
     ).to(dev)
 
     ckpt = torch.load(ckpt_path, map_location=dev)
 
-    if isinstance(ckpt, dict) and "model" in ckpt:
-        model.load_state_dict(ckpt["model"], strict=strict)
-    else:
-        model.load_state_dict(ckpt, strict=strict)
+    # support both formats: raw state_dict or {"model": state_dict, ...}
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
 
+    model.load_state_dict(state, strict=strict)
     model.eval()
     return model, dev
 
