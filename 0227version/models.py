@@ -1,4 +1,4 @@
-from train_teacher import get_args
+from args import get_args
 import torch.nn as nn
 import torch
 

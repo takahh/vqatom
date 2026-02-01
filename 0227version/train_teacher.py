@@ -275,6 +275,7 @@ def run(args):
 
     """ Model init """
     from models import EquivariantThreeHopGINE
+    from args import get_args
     # in_feats, hidden_feats, out_feats, args
     model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
 
