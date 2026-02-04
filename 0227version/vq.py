@@ -2328,14 +2328,15 @@ class VectorQuantize(nn.Module):
 
     def commitment_loss(
             self,
-            encoder_outputs,  # [B, D]
+            encoder_outputs,
             mask_dict,
-            codebook,        # dict-like / ParameterDict / Tensor / Embedding / etc.
+            codebook,
             logger=None,
             chunk_start=None,
             beta=0.25,
-            temperature=None,  # 未使用
+            temperature=None,
             use_cosine=False,
+            embed_ind_dict=None,  # <-- add this
     ):
         """
         Per-element commitment + codebook + repel losses.
@@ -2480,19 +2481,29 @@ class VectorQuantize(nn.Module):
             assert Dk == D, f"latent D={D} != codebook D={Dk} for key={k}"
 
             # -------------------------------
-            # 3-5) 最近傍コードを選択（use_cosine で距離の定義を切り替え）
+            # 3-5) 最近傍コード index
+            #   - embed_ind_dict があればそれを使う（NN探索しない）
             # -------------------------------
-            if use_cosine:
-                z_norm  = F.normalize(z, dim=-1)
-                cb_norm = F.normalize(cb, dim=-1)
-                sim = torch.matmul(z_norm, cb_norm.t())  # [N_i, K_e]
-                nn_idx = torch.argmax(sim, dim=-1)
+            if embed_ind_dict is not None:
+                skey = str(k)
+                if skey not in embed_ind_dict:
+                    raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing key={skey}")
+                nn_idx = embed_ind_dict[skey].to(device=device, dtype=torch.long).reshape(-1)
+                if nn_idx.numel() != N_i:
+                    raise ValueError(
+                        f"[VQ_COMMIT] nn_idx length mismatch for key={skey}: nn_idx={nn_idx.numel()} vs N_i={N_i}"
+                    )
             else:
-                # L2 距離の 2 乗
-                z2   = (z ** 2).sum(dim=-1, keepdim=True)    # [N_i, 1]
-                e2   = (cb ** 2).sum(dim=-1).unsqueeze(0)    # [1, K_e]
-                dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [N_i, K_e]
-                nn_idx = torch.argmin(dist2, dim=-1)
+                if use_cosine:
+                    z_norm = F.normalize(z, dim=-1)
+                    cb_norm = F.normalize(cb, dim=-1)
+                    sim = torch.matmul(z_norm, cb_norm.t())  # [N_i, K_e]
+                    nn_idx = torch.argmax(sim, dim=-1)
+                else:
+                    z2 = (z ** 2).sum(dim=-1, keepdim=True)  # [N_i, 1]
+                    e2 = (cb ** 2).sum(dim=-1).unsqueeze(0)  # [1, K_e]
+                    dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [N_i, K_e]
+                    nn_idx = torch.argmin(dist2, dim=-1)
 
             e_star = cb[nn_idx]  # [N_i, D]
 
@@ -2745,18 +2756,19 @@ class VectorQuantize(nn.Module):
             #     temperature=getattr(self, "temperature", None),
             #     use_cosine=getattr(self, "use_cosine", False),
             # )
-            # commit_loss, codebook_loss, repel_loss, cb_repel_loss
+            # commit_loss, codebook_loss, repel_loss, cb_repel
             commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
-                quantize_st=quantize_st,
-                embed_ind_dict=embed_ind_dict,
                 mask_dict=mask_dict,
+                codebook=self.embed,  # or the correct container of centers (see note below)
                 logger=logger,
                 chunk_start=global_start,
                 beta=getattr(self, "beta", 0.25),
                 temperature=getattr(self, "temperature", None),
                 use_cosine=getattr(self, "use_cosine", False),
+                embed_ind_dict=embed_ind_dict,
             )
+
             # total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
             #
             # # commitment_loss 側が tuple を返す想定に合わせて受ける
