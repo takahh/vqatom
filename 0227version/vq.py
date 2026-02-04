@@ -2346,6 +2346,7 @@ class VectorQuantize(nn.Module):
             encoder_outputs,
             mask_dict,
             codebook,
+            codebook_mod=None,
             logger=None,
             chunk_start=None,
             beta=0.25,
@@ -2820,6 +2821,7 @@ class VectorQuantize(nn.Module):
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
                 codebook=_embed,  # or the correct container of centers (see note below)
+                codebook_mod=self._codebook,  # <-- ADD THIS
                 logger=logger,
                 chunk_start=global_start,
                 beta=getattr(self, "beta", 0.25),
