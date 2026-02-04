@@ -2552,6 +2552,7 @@ class VectorQuantize(nn.Module):
     import torch
     import torch.nn.functional as F
     from einops import rearrange
+
     @torch.amp.autocast("cuda", enabled=False)
     def forward(
             self,
@@ -2576,6 +2577,7 @@ class VectorQuantize(nn.Module):
         """
         import torch
         from einops import rearrange
+        import math
 
         # --------------------------------------------------------------
         # 0) グローバル latent オフセット管理
@@ -2716,6 +2718,7 @@ class VectorQuantize(nn.Module):
         codebook_loss = torch.zeros((), device=device, dtype=dtype)
         repel_loss = torch.zeros((), device=device, dtype=dtype)
         cb_repel_loss = torch.zeros((), device=device, dtype=dtype)
+        ent_loss = torch.zeros((), device=device, dtype=dtype)
 
         # --------------------------------------------------------------
         # 3) commitment_loss 計算（mask_dict があるときだけ）
