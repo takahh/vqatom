@@ -2506,6 +2506,22 @@ class VectorQuantize(nn.Module):
                     nn_idx = torch.argmin(dist2, dim=-1)
 
             e_star = cb[nn_idx]  # [N_i, D]
+            # DEBUG: catch OOB before GPU indexing
+            nn_idx_dbg = nn_idx
+            if nn_idx_dbg.dtype != torch.long:
+                nn_idx_dbg = nn_idx_dbg.long()
+
+            min_i = int(nn_idx_dbg.min().item())
+            max_i = int(nn_idx_dbg.max().item())
+            K_e = int(cb.shape[0])
+
+            if (min_i < 0) or (max_i >= K_e):
+                # move small info to CPU for safe logging
+                raise RuntimeError(
+                    f"[OOB] key={k} skey={str(k)} K_e={K_e} nn_idx range=[{min_i},{max_i}] "
+                    f"nn_idx dtype={nn_idx_dbg.dtype} device={nn_idx_dbg.device} "
+                    f"cb.shape={tuple(cb.shape)}"
+                )
 
             # -------------------------------
             # 3-6) commitment / codebook loss
