@@ -1598,7 +1598,7 @@ class EuclideanCodebook(nn.Module):
             B, D = int(flatten.shape[1]), int(flatten.shape[2])
 
             # init embed (kept as-is)
-            if mode == "init_kmeans_final":
+            if mode == "init_kmeans_final" and epoch == 1:
                 self.init_embed_(flatten, logger, mask_dict=mask_dict)
 
             global_start = int(self.latent_size_sum)
@@ -1938,7 +1938,7 @@ class EuclideanCodebook(nn.Module):
                             cooldown_steps = int(getattr(self, "split_cooldown_steps", 2000))
 
                             # call: embed=centers (K,D), ema_sum=ea (K,D), ema_count=cs (K,)
-                            _did = split_the_winner_ema(
+                            _did = self.split_the_winner_ema(
                                 embed=centers,
                                 ema_sum=ea,
                                 ema_count=cs,
