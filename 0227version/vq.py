@@ -1452,98 +1452,115 @@ class EuclideanCodebook(nn.Module):
         return best_idx
 
     import torch
-    import torch.nn.functional as F
-
     @torch.no_grad()
     def split_the_winner_ema(
             self,
-            embed,  # (K,D)
-            ema_sum,  # (K,D) or None
-            ema_count,  # (K,)  or None
-            usage_ema,  # (K,)  persistent buffer
-            batch_counts,  # (K,)  current step histogram (float)
+            embed,  # (K, D)  centers tensor (writeable view)
+            ema_sum,  # (K, D)  EMA sum of assigned latents (same shape as embed)
+            ema_count,  # (K,)    EMA count
+            usage_ema,  # (K,)    EMA usage (for split decision)
+            batch_counts,  # (K,)    batch histogram (float)
             *,
             split_thr=0.15,
-            prune_src_thr=0.005,  # choose donor among dead/low-usage codes
-            noise_scale=0.02,  # relative to latent std
-            cooldown=None,  # (K,) int buffer or None
+            prune_src_thr=0.005,  # prefer donor codes with p < this
+            noise_scale=0.02,
+            cooldown=None,  # (K,) int/long buffer
             cooldown_steps=2000,
             eps=1e-8,
     ):
         """
-        Strategy:
-          - update usage_ema
-          - if any winner p>split_thr:
-              pick one winner (max p)
-              pick one donor code (min usage_ema, preferably < prune_src_thr)
-              donor center becomes winner+noise
-              optionally share EMA stats
+        Split-the-winner:
+          - Track usage_ema (EMA of batch_counts)
+          - If any code has p_i > split_thr (and not in cooldown):
+              pick winner = argmax p_i
+              pick donor  = argmin p_i among low-usage codes if possible
+              donor.center = winner.center + small noise
+              split EMA stats (ema_sum/ema_count) between winner and donor (optional)
+              split usage_ema between winner and donor
+              apply cooldown to both
+
+        Returns:
+          True if a split happened, else False.
         """
         K, D = embed.shape
-        # Update usage EMA
-        # (use a high momentum; adjust to match your EMA time scale)
+        device = embed.device
+
+        # 0) cooldown tick (decrement every call)
+        if cooldown is not None:
+            # keep dtype stable (long recommended)
+            cooldown.sub_(1).clamp_(min=0)
+
+        # 1) update usage EMA from current batch histogram
         mom = 0.99
         usage_ema.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
 
-        # normalize to probabilities
-        p = usage_ema / (usage_ema.sum() + eps)
+        total = usage_ema.sum()
+        if float(total.item()) <= 0.0:
+            return False
 
-        # cooldown mask
+        p = usage_ema / (total + eps)
+
+        # 2) eligibility mask (respect cooldown)
         if cooldown is not None:
             eligible = (cooldown <= 0)
         else:
-            eligible = torch.ones(K, dtype=torch.bool, device=embed.device)
+            eligible = torch.ones(K, dtype=torch.bool, device=device)
 
-        # find winner
-        winner_mask = (p > split_thr) & eligible
-        if not torch.any(winner_mask):
-            # decrement cooldowns
-            if cooldown is not None:
-                cooldown.sub_(1).clamp_(min=0)
+        # 3) find winner among eligible
+        # mask ineligible to -inf so argmax ignores them
+        p_eligible = torch.where(eligible, p, torch.full_like(p, -float("inf")))
+        winner = int(torch.argmax(p_eligible).item())
+        winner_p = float(p[winner].item())
+
+        if not torch.isfinite(p_eligible[winner]) or winner_p <= split_thr:
             return False
 
-        winner = torch.argmax(torch.where(winner_mask, p, torch.tensor(-1.0, device=p.device)))
-        # choose donor (prefer very low usage)
-        donor_candidates = torch.argsort(p)  # ascending
-        donor = None
-        for idx in donor_candidates.tolist():
-            if idx == winner:
-                continue
-            if eligible[idx]:
-                donor = idx
-                break
-        if donor is None:
-            if cooldown is not None:
-                cooldown.sub_(1).clamp_(min=0)
-            return False
+        # 4) choose donor:
+        # prefer among eligible AND low-usage (p < prune_src_thr), excluding winner
+        low = (p < prune_src_thr) & eligible
+        low[winner] = False
 
-        # compute noise magnitude
-        # Use latent scale proxy: per-center norm or global std proxy. If you can pass latent std, better.
-        # Here: scale by average center norm / sqrt(D)
-        scale = embed[winner].norm() / (D ** 0.5 + eps)
-        noise = torch.randn(D, device=embed.device) * (noise_scale * scale)
+        if bool(low.any()):
+            # among "low", pick the minimum p (most dead)
+            p_low = torch.where(low, p, torch.full_like(p, float("inf")))
+            donor = int(torch.argmin(p_low).item())
+        else:
+            # fallback: pick the minimum p among eligible (excluding winner)
+            elig2 = eligible.clone()
+            elig2[winner] = False
+            if not bool(elig2.any()):
+                return False
+            p_elig2 = torch.where(elig2, p, torch.full_like(p, float("inf")))
+            donor = int(torch.argmin(p_elig2).item())
 
-        # duplicate center into donor slot
+        # 5) noise scale (stable)
+        # Use winner center RMS as scale proxy (more stable than norm)
+        # rms = sqrt(mean(c^2))
+        rms = torch.sqrt((embed[winner] * embed[winner]).mean() + eps)
+        noise = torch.randn(D, device=device) * (noise_scale * rms)
+
+        # 6) duplicate center into donor slot
         embed[donor].copy_(embed[winner] + noise)
 
-        # if EMA buffers exist, copy+split stats
-        if ema_sum is not None and ema_count is not None:
-            # split winner stats between winner and donor
-            ema_sum_d = ema_sum[winner].clone() * 0.5
-            ema_cnt_d = ema_count[winner].clone() * 0.5
+        # 7) split EMA buffers (recommended; keeps both alive)
+        if (ema_sum is not None) and (ema_count is not None):
+            # split stats 50/50 between winner and donor
+            ema_sum_d = ema_sum[winner].clone().mul_(0.5)
+            ema_cnt_d = ema_count[winner].clone().mul_(0.5)
             ema_sum[winner].mul_(0.5)
             ema_count[winner].mul_(0.5)
             ema_sum[donor].copy_(ema_sum_d)
             ema_count[donor].copy_(ema_cnt_d)
 
-        # reset donor usage_ema to something reasonable (half of winner)
-        usage_ema[donor] = usage_ema[winner]  # after halving above winner usage_ema not halved; ok
+        # 8) split usage_ema too (prevents donor instantly being "as popular" as winner)
+        usage_w = usage_ema[winner].clone()
+        usage_ema[winner].mul_(0.5)
+        usage_ema[donor] = usage_w * 0.5
 
-        # set cooldown on winner and donor
+        # 9) set cooldown
         if cooldown is not None:
-            cooldown[winner] = cooldown_steps
-            cooldown[donor] = cooldown_steps
-            cooldown.sub_(1).clamp_(min=0)
+            cooldown[winner] = int(cooldown_steps)
+            cooldown[donor] = int(cooldown_steps)
 
         return True
 
