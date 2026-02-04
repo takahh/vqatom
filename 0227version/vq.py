@@ -1451,6 +1451,102 @@ class EuclideanCodebook(nn.Module):
 
         return best_idx
 
+    import torch
+    import torch.nn.functional as F
+
+    @torch.no_grad()
+    def split_the_winner_ema(
+            self,
+            embed,  # (K,D)
+            ema_sum,  # (K,D) or None
+            ema_count,  # (K,)  or None
+            usage_ema,  # (K,)  persistent buffer
+            batch_counts,  # (K,)  current step histogram (float)
+            *,
+            split_thr=0.15,
+            prune_src_thr=0.005,  # choose donor among dead/low-usage codes
+            noise_scale=0.02,  # relative to latent std
+            cooldown=None,  # (K,) int buffer or None
+            cooldown_steps=2000,
+            eps=1e-8,
+    ):
+        """
+        Strategy:
+          - update usage_ema
+          - if any winner p>split_thr:
+              pick one winner (max p)
+              pick one donor code (min usage_ema, preferably < prune_src_thr)
+              donor center becomes winner+noise
+              optionally share EMA stats
+        """
+        K, D = embed.shape
+        # Update usage EMA
+        # (use a high momentum; adjust to match your EMA time scale)
+        mom = 0.99
+        usage_ema.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
+
+        # normalize to probabilities
+        p = usage_ema / (usage_ema.sum() + eps)
+
+        # cooldown mask
+        if cooldown is not None:
+            eligible = (cooldown <= 0)
+        else:
+            eligible = torch.ones(K, dtype=torch.bool, device=embed.device)
+
+        # find winner
+        winner_mask = (p > split_thr) & eligible
+        if not torch.any(winner_mask):
+            # decrement cooldowns
+            if cooldown is not None:
+                cooldown.sub_(1).clamp_(min=0)
+            return False
+
+        winner = torch.argmax(torch.where(winner_mask, p, torch.tensor(-1.0, device=p.device)))
+        # choose donor (prefer very low usage)
+        donor_candidates = torch.argsort(p)  # ascending
+        donor = None
+        for idx in donor_candidates.tolist():
+            if idx == winner:
+                continue
+            if eligible[idx]:
+                donor = idx
+                break
+        if donor is None:
+            if cooldown is not None:
+                cooldown.sub_(1).clamp_(min=0)
+            return False
+
+        # compute noise magnitude
+        # Use latent scale proxy: per-center norm or global std proxy. If you can pass latent std, better.
+        # Here: scale by average center norm / sqrt(D)
+        scale = embed[winner].norm() / (D ** 0.5 + eps)
+        noise = torch.randn(D, device=embed.device) * (noise_scale * scale)
+
+        # duplicate center into donor slot
+        embed[donor].copy_(embed[winner] + noise)
+
+        # if EMA buffers exist, copy+split stats
+        if ema_sum is not None and ema_count is not None:
+            # split winner stats between winner and donor
+            ema_sum_d = ema_sum[winner].clone() * 0.5
+            ema_cnt_d = ema_count[winner].clone() * 0.5
+            ema_sum[winner].mul_(0.5)
+            ema_count[winner].mul_(0.5)
+            ema_sum[donor].copy_(ema_sum_d)
+            ema_count[donor].copy_(ema_cnt_d)
+
+        # reset donor usage_ema to something reasonable (half of winner)
+        usage_ema[donor] = usage_ema[winner]  # after halving above winner usage_ema not halved; ok
+
+        # set cooldown on winner and donor
+        if cooldown is not None:
+            cooldown[winner] = cooldown_steps
+            cooldown[donor] = cooldown_steps
+            cooldown.sub_(1).clamp_(min=0)
+
+        return True
+
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
@@ -1757,22 +1853,31 @@ class EuclideanCodebook(nn.Module):
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-                # EMA update (train only)
                 if self.training and epoch is not None:
+
+                    # ------------------------------------------------------------
+                    # (A) Per-key EMA buffers (count=sum of assignments, avg=sum of latents)
+                    #     IMPORTANT: use `safe` in buffer names (NOT skey)
+                    # ------------------------------------------------------------
                     if code_param.ndim == 3:
                         K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
+                        centers = code_param.data.squeeze(0)  # (K,D)
                     else:
                         K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
+                        centers = code_param.data  # (K,D)
+
                     dev = code_param.device
                     self.cb_dict[skey] = int(K_e)
 
-                    buf_name_cs = f"cluster_size_{skey}"
-                    buf_name_ea = f"embed_avg_{skey}"
+                    buf_name_cs = f"cluster_size_{safe}"  # EMA count (K,)
+                    buf_name_ea = f"embed_avg_{safe}"  # EMA sum   (K,D)
+                    buf_name_ue = f"usage_ema_{safe}"  # usage EMA (K,)
+                    buf_name_cd = f"split_cd_{safe}"  # cooldown  (K,)
 
                     # cluster_size buffer
                     if hasattr(self, buf_name_cs):
                         cs = getattr(self, buf_name_cs)
-                        if cs.dtype != torch.float32 or cs.shape[0] != K_e:
+                        if cs.dtype != torch.float32 or cs.shape[0] != K_e or cs.device != dev:
                             cs = torch.zeros(K_e, device=dev, dtype=torch.float32)
                             setattr(self, buf_name_cs, cs)
                     else:
@@ -1782,13 +1887,36 @@ class EuclideanCodebook(nn.Module):
                     # embed_avg buffer
                     if hasattr(self, buf_name_ea):
                         ea = getattr(self, buf_name_ea)
-                        if ea.dtype != torch.float32 or ea.shape != (K_e, D_e):
+                        if ea.dtype != torch.float32 or ea.shape != (K_e, D_e) or ea.device != dev:
                             ea = torch.zeros(K_e, D_e, device=dev, dtype=torch.float32)
                             setattr(self, buf_name_ea, ea)
                     else:
                         ea = torch.zeros(K_e, D_e, device=dev, dtype=torch.float32)
                         self.register_buffer(buf_name_ea, ea)
 
+                    # usage_ema buffer (separate from cs; can reuse cs, but separate is cleaner)
+                    if hasattr(self, buf_name_ue):
+                        ue = getattr(self, buf_name_ue)
+                        if ue.dtype != torch.float32 or ue.shape[0] != K_e or ue.device != dev:
+                            ue = torch.zeros(K_e, device=dev, dtype=torch.float32)
+                            setattr(self, buf_name_ue, ue)
+                    else:
+                        ue = torch.zeros(K_e, device=dev, dtype=torch.float32)
+                        self.register_buffer(buf_name_ue, ue)
+
+                    # cooldown buffer
+                    if hasattr(self, buf_name_cd):
+                        cd = getattr(self, buf_name_cd)
+                        if cd.dtype != torch.long or cd.shape[0] != K_e or cd.device != dev:
+                            cd = torch.zeros(K_e, device=dev, dtype=torch.long)
+                            setattr(self, buf_name_cd, cd)
+                    else:
+                        cd = torch.zeros(K_e, device=dev, dtype=torch.long)
+                        self.register_buffer(buf_name_cd, cd)
+
+                    # ------------------------------------------------------------
+                    # (B) Build batch_counts and batch_embed_sum from idx_code
+                    # ------------------------------------------------------------
                     with torch.no_grad():
                         idx_code_long = idx_code.to(device=dev, dtype=torch.long)
 
@@ -1798,11 +1926,47 @@ class EuclideanCodebook(nn.Module):
                         batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
                         batch_embed_sum.index_add_(0, idx_code_long, masked_latents.to(device=dev, dtype=torch.float32))
 
+                        # ------------------------------------------------------------
+                        # (C) Split-the-winner (DO THIS BEFORE EMA update is fine)
+                        #     Use batch_counts to update ue (usage EMA) and decide split.
+                        # ------------------------------------------------------------
+                        do_split = bool(getattr(self, "do_split_the_winner", True))
+                        if do_split:
+                            # hyperparams (set these as self.* as you like)
+                            split_thr = float(getattr(self, "split_thr", 0.15))
+                            noise_scale = float(getattr(self, "split_noise_scale", 0.02))
+                            cooldown_steps = int(getattr(self, "split_cooldown_steps", 2000))
+
+                            # call: embed=centers (K,D), ema_sum=ea (K,D), ema_count=cs (K,)
+                            _did = split_the_winner_ema(
+                                embed=centers,
+                                ema_sum=ea,
+                                ema_count=cs,
+                                usage_ema=ue,
+                                batch_counts=batch_counts,
+                                split_thr=split_thr,
+                                noise_scale=noise_scale,
+                                cooldown=cd,
+                                cooldown_steps=cooldown_steps,
+                            )
+
+                            # if split changed centers (it did), no extra action needed because `centers`
+                            # points to code_param.data (view). We'll recompute means later anyway.
+
+                            # OPTIONAL: lightweight reporting
+                            if logger is not None and _did:
+                                p = (ue / (ue.sum() + 1e-8))
+                                mx, mx_i = float(p.max().item()), int(p.argmax().item())
+                                logger.info(f"[SPLIT] key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
+
+                        # ------------------------------------------------------------
+                        # (D) EMA update
+                        # ------------------------------------------------------------
                         decay = float(self.decay)
                         one_m = 1.0 - decay
 
-                        cs.mul_(decay).add_(batch_counts * one_m)
-                        ea.mul_(decay).add_(batch_embed_sum * one_m)
+                        cs.mul_(decay).add_(batch_counts, alpha=one_m)
+                        ea.mul_(decay).add_(batch_embed_sum, alpha=one_m)
 
                         means = ea / (cs.unsqueeze(-1) + float(self.eps))
 
