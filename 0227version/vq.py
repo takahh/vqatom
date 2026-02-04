@@ -2475,63 +2475,91 @@ class VectorQuantize(nn.Module):
 
             # -------------------------------
             # 3-4) この key 用コードブック取得 [K_e, D]
+            #      MUST be identical to _codebook safe-key mapping
             # -------------------------------
-            cb = _get_codebook_for_key(k, device=device, dtype=dtype)  # [K_e, D]
+            skey = str(k)
+
+            K_e_default = int(
+                getattr(self, "cb_dict", {}).get(
+                    skey,
+                    getattr(self, "codebook_size", 0)
+                )
+            )
+
+            # This MUST be identical to the call inside _codebook()
+            safe = self._get_or_create_safe_key(
+                skey,
+                K_e=K_e_default,
+                D=D,
+                device=device
+            )
+
+            if safe not in codebook:
+                raise KeyError(
+                    f"[VQ_COMMIT] safe-key '{safe}' not in codebook "
+                    f"(from skey='{skey}')."
+                )
+
+            cb_param = codebook[safe]
+            cb = cb_param.squeeze(0) if cb_param.ndim == 3 else cb_param  # [K_e, D]
+
             K_e, Dk = cb.shape
-            assert Dk == D, f"latent D={D} != codebook D={Dk} for key={k}"
+            if Dk != D:
+                raise RuntimeError(
+                    f"[VQ_COMMIT] D mismatch for skey={skey}: latent D={D} vs cb D={Dk}"
+                )
 
             # -------------------------------
             # 3-5) 最近傍コード index
-            #   - embed_ind_dict があればそれを使う（NN探索しない）
+            #      USE embed_ind_dict from _codebook (no NN recompute)
             # -------------------------------
-            if embed_ind_dict is not None:
-                skey = str(k)
-                if skey not in embed_ind_dict:
-                    raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing key={skey}")
-                nn_idx = embed_ind_dict[skey].to(device=device, dtype=torch.long).reshape(-1)
-                if nn_idx.numel() != N_i:
-                    raise ValueError(
-                        f"[VQ_COMMIT] nn_idx length mismatch for key={skey}: nn_idx={nn_idx.numel()} vs N_i={N_i}"
-                    )
-            else:
-                if use_cosine:
-                    z_norm = F.normalize(z, dim=-1)
-                    cb_norm = F.normalize(cb, dim=-1)
-                    sim = torch.matmul(z_norm, cb_norm.t())  # [N_i, K_e]
-                    nn_idx = torch.argmax(sim, dim=-1)
-                else:
-                    z2 = (z ** 2).sum(dim=-1, keepdim=True)  # [N_i, 1]
-                    e2 = (cb ** 2).sum(dim=-1).unsqueeze(0)  # [1, K_e]
-                    dist2 = z2 + e2 - 2.0 * torch.matmul(z, cb.t())  # [N_i, K_e]
-                    nn_idx = torch.argmin(dist2, dim=-1)
-
-            e_star = cb[nn_idx]  # [N_i, D]
-            # DEBUG: catch OOB before GPU indexing
-            nn_idx_dbg = nn_idx
-            if nn_idx_dbg.dtype != torch.long:
-                nn_idx_dbg = nn_idx_dbg.long()
-
-            min_i = int(nn_idx_dbg.min().item())
-            max_i = int(nn_idx_dbg.max().item())
-            K_e = int(cb.shape[0])
-
-            if (min_i < 0) or (max_i >= K_e):
-                # move small info to CPU for safe logging
+            if embed_ind_dict is None:
                 raise RuntimeError(
-                    f"[OOB] key={k} skey={str(k)} K_e={K_e} nn_idx range=[{min_i},{max_i}] "
-                    f"nn_idx dtype={nn_idx_dbg.dtype} device={nn_idx_dbg.device} "
+                    "[VQ_COMMIT] embed_ind_dict is required to keep "
+                    "assignments consistent with EMA / entropy / split"
+                )
+
+            if skey not in embed_ind_dict:
+                raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing skey={skey}")
+
+            nn_idx = embed_ind_dict[skey].to(device=device, dtype=torch.long).reshape(-1)
+
+            if nn_idx.numel() != N_i:
+                raise ValueError(
+                    f"[VQ_COMMIT] nn_idx length mismatch skey={skey}: "
+                    f"{nn_idx.numel()} vs {N_i}"
+                )
+
+            # ---- OOB guard BEFORE indexing (prevents CUDA device assert)
+            min_i = int(nn_idx.min().item())
+            max_i = int(nn_idx.max().item())
+            if (min_i < 0) or (max_i >= K_e):
+                raise RuntimeError(
+                    f"[VQ_COMMIT][OOB] skey={skey} safe={safe} "
+                    f"K_e={K_e} nn_idx range=[{min_i},{max_i}] "
                     f"cb.shape={tuple(cb.shape)}"
                 )
 
             # -------------------------------
-            # 3-6) commitment / codebook loss
+            # 3-6) gather codes and compute losses
             # -------------------------------
-            commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")  # β‖z - sg(e)‖²
-            codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")  # ‖sg(z) - e‖²
+            e_star = cb.index_select(0, nn_idx)  # [N_i, D]
+
+            commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")
+            codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
 
             total_latent += N_i
-            commit_num   = commit_num + commit_part * N_i
-            codebk_num   = codebk_num + codebk_part * N_i
+            commit_num = commit_num + commit_part * N_i
+            codebk_num = codebk_num + codebk_part * N_i
+
+            # repel loss (your existing API)
+            ret = self.compute_contrastive_loss(z, 0, logger, cb_param, k)
+            repel_val = ret[0]
+            cb_repel_val = ret[3]
+
+            repel_num = repel_num + repel_val * N_i
+            total_cb_count += K_e
+            cb_repel_num = cb_repel_num + cb_repel_val * K_e
 
             # -------------------------------
             # 3-7) repel loss (contrastive)
