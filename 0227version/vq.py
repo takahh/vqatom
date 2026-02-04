@@ -1940,6 +1940,22 @@ class EuclideanCodebook(nn.Module):
                         batch_counts = torch.zeros_like(cs, dtype=torch.float32)
                         batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
 
+                        # ------------------------------------------------------------
+                        # (E) Entropy loss for THIS KEY (very important)
+                        # ------------------------------------------------------------
+                        if not hasattr(self, "entropy_loss_accum"):
+                            self.entropy_loss_accum = 0.0
+
+                        ent_weight = float(getattr(self, "entropy_weight", 1e-3))
+
+                        # compute p over codes of THIS KEY
+                        p = batch_counts / (batch_counts.sum() + 1e-8)
+
+                        # negative entropy (minimize -> increase entropy)
+                        ent_loss_key = (p * (p + 1e-8).log()).sum()
+
+                        self.entropy_loss_accum = self.entropy_loss_accum + ent_weight * ent_loss_key
+
                         batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
                         batch_embed_sum.index_add_(0, idx_code_long, masked_latents.to(device=dev, dtype=torch.float32))
 
@@ -2044,7 +2060,10 @@ class EuclideanCodebook(nn.Module):
                 self.latent_size_sum = global_end
 
             torch.cuda.empty_cache()
-            return quantize_st, self.embed_ind_dict, self.embed
+            ent_loss_total = getattr(self, "entropy_loss_accum", 0.0)
+            self.entropy_loss_accum = 0.0  # reset for next call
+
+            return quantize_st, self.embed_ind_dict, self.embed, ent_loss_total
 
 
 class VectorQuantize(nn.Module):
