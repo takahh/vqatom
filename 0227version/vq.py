@@ -2501,9 +2501,10 @@ class VectorQuantize(nn.Module):
                     getattr(self, "codebook_size", 0)
                 )
             )
+            if codebook_mod is None:
+                raise RuntimeError("[VQ_COMMIT] codebook_mod is required (pass self._codebook).")
 
-            # This MUST be identical to the call inside _codebook()
-            safe = self._get_or_create_safe_key(
+            safe = codebook_mod._get_or_create_safe_key(
                 skey,
                 K_e=K_e_default,
                 D=D,
