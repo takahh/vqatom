@@ -2760,7 +2760,7 @@ class VectorQuantize(nn.Module):
             commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
-                codebook=self.embed,  # or the correct container of centers (see note below)
+                codebook=_embed,  # or the correct container of centers (see note below)
                 logger=logger,
                 chunk_start=global_start,
                 beta=getattr(self, "beta", 0.25),
