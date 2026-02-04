@@ -147,6 +147,7 @@ def repeat_run(args):
 
 
 def main():
+    from args import get_args
     args = get_args()
     if args.num_exp == 1:
         score = run(args)
