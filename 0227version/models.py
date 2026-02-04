@@ -109,12 +109,12 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
         raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
 
     loss, inner = qo
-    if len(inner) != 4:
-        raise TypeError(f"Expected inner tuple length 4: (commit, cb, rep, cb_rep), got {len(inner)}: {inner}")
+    if len(inner) != 5:
+        raise TypeError(f"Expected inner tuple length 5: (commit, cb, rep, cb_rep, ent), got {len(inner)}: {inner}")
 
-    commit, cb, rep, cb_rep = inner[0], inner[1], inner[2], inner[3]
+    commit, cb, rep, cb_rep, ent = inner[0], inner[1], inner[2], inner[3], inner[4]
 
-    _infer_device_dtype(loss, commit, cb, rep, cb_rep)
+    _infer_device_dtype(loss, commit, cb, rep, cb_rep, ent)
 
     embed = None  # qoにはembedが無い前提
     sil = None    # qoにはsilが無い前提（0で埋める）
@@ -127,6 +127,7 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
         _scalar_to_tensor(sil),      # silhouette_loss = 0
         _scalar_to_tensor(rep),
         _scalar_to_tensor(cb_rep),
+        _scalar_to_tensor(ent),
     )
 
 import torch.nn as nn
@@ -484,27 +485,6 @@ class EquivariantThreeHopGINE(nn.Module):
         # K-means 用のループ時は VQ を通さずにそのまま返す
         if mode == "init_kmeans_loop":
             return h_out
-        #
-        # # ----- VQ 部分 -----
-        # h_vq = self.pre_vq_ln(h_out)
-        #
-        # # 生の出力（tuple / dict / オブジェクトなど何でも）
-        # quantize_output = self.vq(
-        #     h_vq, attr_list, mask_dict, logger, chunk_i, epoch, mode
-        # )
-        #
-        # # ここで一気に正規化して 7 タプルにそろえる
-        # (loss,
-        #  embed,
-        #  commit_loss,
-        #  cb_loss,
-        #  sil_loss,
-        #  repel_loss,
-        #  cb_repel_loss) = _normalize_quantize_output(
-        #     quantize_output,
-        #     device=h_vq.device,
-        #     dtype=h_vq.dtype,
-        # )
         h_vq = self.pre_vq_ln(h_out)
 
         quantize_output = self.vq(
@@ -537,7 +517,7 @@ class EquivariantThreeHopGINE(nn.Module):
             return key_id_full, cluster_id_full, id2safe
 
         # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
-        loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss = _normalize_quantize_output(
+        loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss, ent_loss = _normalize_quantize_output(
             quantize_output, logger,
             device=h_vq.device if torch.is_tensor(h_vq) else None,
             dtype=getattr(h_vq, "dtype", None)
@@ -549,7 +529,7 @@ class EquivariantThreeHopGINE(nn.Module):
         # モデルが返すのは (total_loss, embed, loss_list)
         # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
         #         loss, cb, loss_list3 = outputs
-        return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss, ent_loss]
 
 
 class Model(nn.Module):

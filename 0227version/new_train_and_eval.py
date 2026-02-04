@@ -1116,34 +1116,39 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         # ---------------------------
         kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
         os.makedirs(kw, exist_ok=True)
-
-        # train logs   # loss_list_list_train = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        # commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss
         train_commit = safe_mean(loss_list_list_train[0])
         train_latrep = safe_mean(loss_list_list_train[2])
-        train_cbrep = safe_mean(loss_list_list_train[1])
+        train_cbrep = safe_mean(loss_list_list_train[3])
+        train_ent = safe_mean(loss_list_list_train[4])
         train_total = safe_mean(loss_list)
 
         print(f"train - commit_loss: {train_commit:.6f}, "
               f"train - lat_repel_loss: {train_latrep:.6f}, "
-              f"train - cb_repel_loss: {train_cbrep:.6f}")
+              f"train - cb_repel_loss: {train_cbrep:.6f}",
+              f"train - ent_loss: {train_ent:.6f}")
         logger.info(f"train - commit_loss: {train_commit:.6f}, "
                     f"train - lat_repel_loss: {train_latrep:.6f}, "
-                    f"train - cb_repel_loss: {train_cbrep:.6f}")
+                    f"train - cb_repel_loss: {train_cbrep:.6f}",
+                    f"train - ent_loss: {train_ent:.6f}")
         print(f"train - total_loss: {train_total:.6f}")
         logger.info(f"train - total_loss: {train_total:.6f}")
 
         # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         test_commit = safe_mean(loss_list_list_test[0])
         test_latrep = safe_mean(loss_list_list_test[2])
-        test_cbrep = safe_mean(loss_list_list_test[1])
+        test_cbrep = safe_mean(loss_list_list_test[3])
+        test_ent = safe_mean(loss_list_list_test[4])
         test_total = safe_mean(test_loss_list)
 
         print(f"test - commit_loss: {test_commit:.6f}, "
               f"test - lat_repel_loss: {test_latrep:.6f}, "
-              f"test - cb_repel_loss: {test_cbrep:.6f}")
+              f"test - cb_repel_loss: {test_cbrep:.6f}",
+              f"test - ent_loss: {test_ent:.6f}")
         logger.info(f"test - commit_loss: {test_commit:.6f}, "
                     f"test - lat_repel_loss: {test_latrep:.6f}, "
-                    f"test - cb_repel_loss: {test_cbrep:.6f}")
+                    f"test - cb_repel_loss: {test_cbrep:.6f}",
+                    f"test - ent_loss: {test_ent:.6f}")
         print(f"test - total_loss: {test_total:.6f}")
         logger.info(f"test - total_loss: {test_total:.6f}")
 

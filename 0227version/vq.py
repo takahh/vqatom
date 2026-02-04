@@ -2721,24 +2721,48 @@ class VectorQuantize(nn.Module):
         # 3) commitment_loss 計算（mask_dict があるときだけ）
         # --------------------------------------------------------------
         if (mask_dict is not None) and (B > 0):
-            out = self.commitment_loss(
-                encoder_outputs=encoder_outputs,
+            # まず codebook を回して「割当」と「更新」を発生させる
+            quantize_st, embed_ind_dict, _embed, ent_loss = self._codebook(
+                encoder_outputs,
+                feature=feature,
                 mask_dict=mask_dict,
-                codebook=self._codebook,  # あなたの実装に合わせる（dict or tensor/module）
                 logger=logger,
-                chunk_start=global_start,  # ★重要: global->local 変換の基準
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode="train",
+            )
+
+            # out = self.commitment_loss(
+            #     encoder_outputs=encoder_outputs,
+            #     mask_dict=mask_dict,
+            #     codebook=self._codebook,  # あなたの実装に合わせる（dict or tensor/module）
+            #     logger=logger,
+            #     chunk_start=global_start,  # ★重要: global->local 変換の基準
+            #     beta=getattr(self, "beta", 0.25),
+            #     temperature=getattr(self, "temperature", None),
+            #     use_cosine=getattr(self, "use_cosine", False),
+            # )
+            # commit_loss, codebook_loss, repel_loss, cb_repel_loss
+            commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
+                encoder_outputs=encoder_outputs,
+                quantize_st=quantize_st,
+                embed_ind_dict=embed_ind_dict,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_start=global_start,
                 beta=getattr(self, "beta", 0.25),
                 temperature=getattr(self, "temperature", None),
                 use_cosine=getattr(self, "use_cosine", False),
             )
-
-            # commitment_loss 側が tuple を返す想定に合わせて受ける
-            # 期待: (commit, cb, rep, cb_rep)
-            if isinstance(out, (tuple, list)) and len(out) == 4:
-                commit_loss, codebook_loss, repel_loss, cb_repel_loss = out
-            else:
-                # 想定外の返り値は落とす（静かに壊れるより良い）
-                raise TypeError(f"commitment_loss must return 4-tuple, got {type(out)}: {out}")
+            # total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
+            #
+            # # commitment_loss 側が tuple を返す想定に合わせて受ける
+            # # 期待: (commit, cb, rep, cb_rep)
+            # if isinstance(out, (tuple, list)) and len(out) == 4:
+            #     commit_loss, codebook_loss, repel_loss, cb_repel_loss = out
+            # else:
+            #     # 想定外の返り値は落とす（静かに壊れるより良い）
+            #     raise TypeError(f"commitment_loss must return 4-tuple, got {type(out)}: {out}")
 
         # --------------------------------------------------------------
         # 4) loss の “型/デバイス/次元” を揃える（0-dim Tensor）
@@ -2769,5 +2793,6 @@ class VectorQuantize(nn.Module):
         # --------------------------------------------------------------
         # 6) return
         # --------------------------------------------------------------
-        total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss
-        return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss)
+        total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
+        # now the mode is train
+        return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
