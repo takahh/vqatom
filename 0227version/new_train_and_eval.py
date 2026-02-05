@@ -841,7 +841,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         cb_unique_num_list_test = []
 
         # ------------------------------------------
-        # 1) K-means 用 latent / attr 収集
+        # init_kmeans_loop : collect latents
         # ------------------------------------------
         all_latents = []
         all_attr = []
@@ -927,7 +927,9 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         print("[KMEANS] init_kmeans_final start")
         logger.info("[KMEANS] init_kmeans_final start")
 
-        # if epoch == 1:
+        # ---------------------------------------------
+        # init_kmeans_final : run kmeans and calc. SS
+        # ---------------------------------------------
         # first_batch_feat は CPU に戻してあるので GPU へ
         first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
         evaluate(
@@ -1132,7 +1134,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
             train_commit, train_latrep, train_cbrep, train_ent
         )
         print(f"train - total_loss: {train_total:.6f}")
-        logger.info(f"train - total_loss: %.6f")
+        logger.info("train - total_loss: %.6f", train_total)
 
         # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         test_commit = safe_mean(loss_list_list_test[0])
