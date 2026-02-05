@@ -1341,6 +1341,29 @@ class EuclideanCodebook(nn.Module):
                 num_clusters=K_run,
                 use_cosine_sim=use_cosine_sim,
             )
+            # --- after kmeans() inside init_embed_() ---
+            # you need labels per point; in your init_embed_ you currently don't keep them.
+            # If your kmeans() returns assignments (e.g., labels), use it.
+            # If it doesn't, you can recompute assignment by nearest center:
+
+            with torch.no_grad():
+                # means_kd is (K_req, D) after padding; but SS should use K_run (actual used centers)
+                # So use the unpadded centers for assignment
+                centers = means_1kd[0]  # (K_run, D)
+                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)  # (N_i,)
+
+            # optional subsample to keep SS cheap
+            max_n = int(getattr(self, "ss_max_n", 20000))
+            if labels.numel() > max_n:
+                perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
+                X_ss = masked[perm]
+                y_ss = labels[perm]
+            else:
+                X_ss = masked
+                y_ss = labels
+
+            ss = self.silhouette_score_torch(X_ss, y_ss, row_block=8192, device=masked.device)
+            logger.info(f"[SS][init_embed_] key={skey} N={N_i} K_run={K_run} SS={ss:.4f}")
 
             means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
