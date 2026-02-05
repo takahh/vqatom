@@ -2651,6 +2651,10 @@ class VectorQuantize(nn.Module):
         from einops import rearrange
         import math
 
+        # 例：コードブックサイズ K が取れる場所で
+        K = self.codebook_size  # or self.embed.shape[0] など
+        batch_counts = torch.zeros(K, device=device, dtype=torch.float32)
+
         # --------------------------------------------------------------
         # 0) グローバル latent オフセット管理
         # --------------------------------------------------------------
