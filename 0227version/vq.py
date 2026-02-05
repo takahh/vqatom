@@ -1898,7 +1898,7 @@ class EuclideanCodebook(nn.Module):
                         ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * ent_key
                         last_p = p
 
-                        if logger is not None and epoch is not None and (epoch % 50 == 0):
+                        if logger is not None and epoch is not None:
                             entropy = -(p * (p + 1e-12).log()).sum()
                             topk = torch.topk(p, k=min(5, p.numel()))
                             logger.info(
