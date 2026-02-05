@@ -2653,7 +2653,7 @@ class VectorQuantize(nn.Module):
 
         # 例：コードブックサイズ K が取れる場所で
         K = self.codebook_size  # or self.embed.shape[0] など
-        batch_counts = torch.zeros(K, device=device, dtype=torch.float32)
+        batch_counts = torch.zeros(K, device=x.device, dtype=torch.float32)
 
         # --------------------------------------------------------------
         # 0) グローバル latent オフセット管理
