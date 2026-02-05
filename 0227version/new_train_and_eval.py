@@ -1038,78 +1038,78 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
             state = copy.deepcopy(model.state_dict())
             torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
             model.load_state_dict(state)
-
-        # ---------------------------
-        # 4) TEST
-        # ---------------------------
-        print("TEST ---------------")
-        logger.info("TEST ---------------")
-        ind_counts = Counter()
-
-        if conf['train_or_infer'] == "hptune":
-            start_num, end_num = 5, 6
-        elif conf['train_or_infer'] == "analysis":
-            dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
-            start_num, end_num = 0, 1
-        else:  # infer
-            start_num, end_num = 6, 10
-        for idx, (adj_batch, attr_batch) in enumerate(
-                itertools.islice(dataloader, start_num, end_num),
-                start=start_num
-        ):
-            print(f"[TEST] batch idx {idx}")
-            glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
-                adj_batch, attr_batch, logger
-            )
-            chunk_size = conf["chunk_size"]
-
-            # ★ ここ：バッチ内のチャンク番号を 0,1,2,... で作る
-            for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
-                chunk = glist[i:i + chunk_size]
-                chunk_base = glist_base[i:i + chunk_size]
-
-                batched_graph = dgl.batch(chunk).to(device)
-                batched_graph_base = dgl.batch(chunk_base).to(device)
-                attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
-
-                # feats取得に no_grad は不要（evaluate 側が no_grad なので）
-                batched_feats = batched_graph.ndata["feat"]
-
-                # return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
-                test_loss, test_emb, loss_list_test = evaluate(
-                    model,
-                    batched_graph,
-                    batched_feats,
-                    epoch,
-                    masks_3,
-                    logger,
-                    batched_graph_base,
-                    chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
-                    "test",
-                    attr_chunk_test,
-                )
-
-                # record scalar losses
-                clean_losses = [to_scalar(l) for l in loss_list_test]
-                for j, val in enumerate(clean_losses):
-                    loss_list_list_test[j].append(val)
-                test_loss_list.append(to_scalar(test_loss))
-
-                # cleanup
-                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
-                del test_loss, test_emb, loss_list_test, attr_chunk_test
-                gc.collect()
-                torch.cuda.empty_cache()
-
-            # cleanup graphs after idx
-            for g in glist:
-                g.ndata.clear()
-                g.edata.clear()
-            for g in glist_base:
-                g.ndata.clear()
-                g.edata.clear()
-            del glist, glist_base, masks_3, attr_matrices_all_test
-            gc.collect()
+        #
+        # # ---------------------------
+        # # 4) TEST
+        # # ---------------------------
+        # print("TEST ---------------")
+        # logger.info("TEST ---------------")
+        # ind_counts = Counter()
+        #
+        # if conf['train_or_infer'] == "hptune":
+        #     start_num, end_num = 5, 6
+        # elif conf['train_or_infer'] == "analysis":
+        #     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+        #     start_num, end_num = 0, 1
+        # else:  # infer
+        #     start_num, end_num = 6, 10
+        # for idx, (adj_batch, attr_batch) in enumerate(
+        #         itertools.islice(dataloader, start_num, end_num),
+        #         start=start_num
+        # ):
+        #     print(f"[TEST] batch idx {idx}")
+        #     glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
+        #         adj_batch, attr_batch, logger
+        #     )
+        #     chunk_size = conf["chunk_size"]
+        #
+        #     # ★ ここ：バッチ内のチャンク番号を 0,1,2,... で作る
+        #     for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
+        #         chunk = glist[i:i + chunk_size]
+        #         chunk_base = glist_base[i:i + chunk_size]
+        #
+        #         batched_graph = dgl.batch(chunk).to(device)
+        #         batched_graph_base = dgl.batch(chunk_base).to(device)
+        #         attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
+        #
+        #         # feats取得に no_grad は不要（evaluate 側が no_grad なので）
+        #         batched_feats = batched_graph.ndata["feat"]
+        #
+        #         # return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        #         test_loss, test_emb, loss_list_test = evaluate(
+        #             model,
+        #             batched_graph,
+        #             batched_feats,
+        #             epoch,
+        #             masks_3,
+        #             logger,
+        #             batched_graph_base,
+        #             chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
+        #             "test",
+        #             attr_chunk_test,
+        #         )
+        #
+        #         # record scalar losses
+        #         clean_losses = [to_scalar(l) for l in loss_list_test]
+        #         for j, val in enumerate(clean_losses):
+        #             loss_list_list_test[j].append(val)
+        #         test_loss_list.append(to_scalar(test_loss))
+        #
+        #         # cleanup
+        #         del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
+        #         del test_loss, test_emb, loss_list_test, attr_chunk_test
+        #         gc.collect()
+        #         torch.cuda.empty_cache()
+        #
+        #     # cleanup graphs after idx
+        #     for g in glist:
+        #         g.ndata.clear()
+        #         g.edata.clear()
+        #     for g in glist_base:
+        #         g.ndata.clear()
+        #         g.edata.clear()
+        #     del glist, glist_base, masks_3, attr_matrices_all_test
+        #     gc.collect()
 
         # ---------------------------
         # 5) stats and save
@@ -1141,16 +1141,16 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         test_ent = safe_mean(loss_list_list_test[4])
         test_total = safe_mean(test_loss_list)
 
-        print(f"test - commit_loss: {test_commit:.6f}, "
-              f"test - lat_repel_loss: {test_latrep:.6f}, "
-              f"test - cb_repel_loss: {test_cbrep:.6f}",
-              f"test - ent_loss: {test_ent:.6f}")
-        logger.info(f"test - commit_loss: {test_commit:.6f}, "
-                    f"test - lat_repel_loss: {test_latrep:.6f}, "
-                    f"test - cb_repel_loss: {test_cbrep:.6f}",
-                    f"test - ent_loss: {test_ent:.6f}")
-        print(f"test - total_loss: {test_total:.6f}")
-        logger.info(f"test - total_loss: {test_total:.6f}")
+        # print(f"test - commit_loss: {test_commit:.6f}, "
+        #       f"test - lat_repel_loss: {test_latrep:.6f}, "
+        #       f"test - cb_repel_loss: {test_cbrep:.6f}",
+        #       f"test - ent_loss: {test_ent:.6f}")
+        # logger.info(f"test - commit_loss: {test_commit:.6f}, "
+        #             f"test - lat_repel_loss: {test_latrep:.6f}, "
+        #             f"test - cb_repel_loss: {test_cbrep:.6f}",
+        #             f"test - ent_loss: {test_ent:.6f}")
+        # print(f"test - total_loss: {test_total:.6f}")
+        # logger.info(f"test - total_loss: {test_total:.6f}")
 
         model.vq._codebook.latent_size_sum = 0
 
@@ -1170,6 +1170,6 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         logger.info(f"[LR] epoch={epoch} lr={lr:.6e}")
 
     # 何か score を返したい場合はここで
-    return test_total
+    # return test_total
 
 
