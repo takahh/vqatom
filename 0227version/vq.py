@@ -1596,7 +1596,8 @@ class EuclideanCodebook(nn.Module):
     #          optional per-key logging.
     # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
-    def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
+    def forward(self, x, feature=None, mask_dict=None, logger=None,
+                chunk_i=None, epoch=None, mode=None, is_last_batch: bool = False):
         """
         Per-element vector quantization codebook forward.
 
@@ -1608,6 +1609,8 @@ class EuclideanCodebook(nn.Module):
               * "init_kmeans_final": collect dump for scatter/SS and save to disk
               * "infer": assign IDs only, return (key_id_full, cluster_id_full, id2safe)
               * otherwise: train/eval path, return (quantize_st, embed_ind_dict, embed, ent_metric_total)
+          - is_last_batch: (Option A) set True only for the last minibatch of an epoch
+                          so split happens at most once per epoch per key.
 
         Returns:
           - mode=="infer":
@@ -1654,7 +1657,7 @@ class EuclideanCodebook(nn.Module):
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
 
         if logger is not None:
-            logger.info(f"[CODEBOOK] mode={mode}")
+            logger.info(f"[CODEBOOK] mode={mode} is_last_batch={is_last_batch}")
 
         # -----------------------------
         # 2) safe-key <-> int id mapping
@@ -1805,15 +1808,13 @@ class EuclideanCodebook(nn.Module):
         # -----------------------------
         # 5) train/eval: quantize + EMA
         # -----------------------------
-        # entropy metric accumulator (Tensor, on GPU)
         ent_metric_total = torch.zeros((), device=flatten.device, dtype=torch.float32)
 
-        # optional: only update EMA when actually training
+        # update EMA only when actually training
         do_ema = bool(self.training and (mode == "train") and (epoch is not None))
 
-        # We will keep the last processed key for optional "last_key" logging
         last_skey = None
-        last_p = None  # Optional[Tensor]
+        last_p = None
 
         for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
             if idx_global is None or idx_global.numel() == 0:
@@ -1837,7 +1838,7 @@ class EuclideanCodebook(nn.Module):
             code_param = self.embed[safe]  # (1,K,D) or (K,D)
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
 
-            # --- hard assignment (no-grad is fine; EMA updates below are also no-grad)
+            # hard assignment
             with torch.no_grad():
                 idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)  # (Ni,)
             quantize = code.index_select(0, idx_code)
@@ -1846,24 +1847,22 @@ class EuclideanCodebook(nn.Module):
             self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
             if do_ema:
-                # Shapes
+                # Shapes / writable view of centers
                 if code_param.ndim == 3:
                     K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
-                    centers = code_param.data.squeeze(0)  # view (K,D)
+                    centers = code_param.data.squeeze(0)  # (K,D)
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
-                    centers = code_param.data  # view (K,D)
+                    centers = code_param.data  # (K,D)
 
                 dev = code_param.device
                 self.cb_dict[skey] = int(K_e)
 
-                # Buffer names use safe (important)
                 buf_name_cs = f"cluster_size_{safe}"
                 buf_name_ea = f"embed_avg_{safe}"
                 buf_name_ue = f"usage_ema_{safe}"
                 buf_name_cd = f"split_cd_{safe}"
 
-                # Helper: ensure buffer exists & correct
                 def _get_buf(name, shape, dtype):
                     if hasattr(self, name):
                         t = getattr(self, name)
@@ -1895,12 +1894,10 @@ class EuclideanCodebook(nn.Module):
                     denom = batch_counts.sum()
                     if denom.item() > 0:
                         p = batch_counts / (denom + 1e-8)
-                        # negative entropy (for metric; more negative = higher entropy)
                         ent_key = (p * (p + 1e-8).log()).sum()
                         ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * ent_key
-                        last_p = p  # for optional last-key logging
+                        last_p = p
 
-                        # per-key logging (recommended place)
                         if logger is not None and epoch is not None and (epoch % 50 == 0):
                             entropy = -(p * (p + 1e-12).log()).sum()
                             topk = torch.topk(p, k=min(5, p.numel()))
@@ -1911,29 +1908,30 @@ class EuclideanCodebook(nn.Module):
                                 f"top_p={[round(v, 4) for v in topk.values.tolist()]}"
                             )
 
-                    # ---- split-the-winner (uses batch_counts + usage_ema)
-                    if bool(getattr(self, "do_split_the_winner", True)):
-                        split_thr = float(getattr(self, "split_thr", 0.15))
-                        noise_scale = float(getattr(self, "split_noise_scale", 0.02))
-                        cooldown_steps = int(getattr(self, "split_cooldown_steps", 2000))
+                    # ---- Option A: update usage_ema each minibatch, but split only at epoch end
+                    # cooldown tick is handled in the split function, but usage_ema update is here
+                    mom = 0.99
+                    ue.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
 
-                        did = self.split_the_winner_ema(
+                    if is_last_batch and bool(getattr(self, "do_split_the_winner", True)):
+                        did = self.split_the_winner_from_usage_ema_(
                             embed=centers,
                             ema_sum=ea,
                             ema_count=cs,
                             usage_ema=ue,
-                            batch_counts=batch_counts,
-                            split_thr=split_thr,
-                            noise_scale=noise_scale,
+                            split_thr=float(getattr(self, "split_thr", 0.15)),
+                            prune_src_thr=float(getattr(self, "prune_src_thr", 0.005)),
+                            noise_scale=float(getattr(self, "split_noise_scale", 0.02)),
                             cooldown=cd,
-                            cooldown_steps=cooldown_steps,
+                            cooldown_steps=int(getattr(self, "split_cooldown_steps", 2000)),
+                            eps=float(getattr(self, "eps", 1e-8)),
                         )
                         if logger is not None and did:
                             pp = ue / (ue.sum() + 1e-8)
                             mx, mx_i = float(pp.max().item()), int(pp.argmax().item())
-                            logger.info(f"[SPLIT] key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
+                            logger.info(f"[SPLIT][EPOCH] key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
 
-                    # ---- EMA update
+                    # ---- EMA update of centers
                     decay = float(self.decay)
                     one_m = 1.0 - decay
                     cs.mul_(decay).add_(batch_counts, alpha=one_m)
@@ -1975,8 +1973,10 @@ class EuclideanCodebook(nn.Module):
                 if in_chunk.numel() > 0:
                     all_local.append(in_chunk - global_start)
 
-        used = torch.unique(torch.cat(all_local, dim=0)) if len(all_local) > 0 else torch.tensor([], dtype=torch.long,
-                                                                                                 device=flatten.device)
+        used = (torch.unique(torch.cat(all_local, dim=0))
+                if len(all_local) > 0
+                else torch.tensor([], dtype=torch.long, device=flatten.device))
+
         unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
         if used.numel() > 0:
             unused[used] = False
@@ -1993,7 +1993,6 @@ class EuclideanCodebook(nn.Module):
 
         torch.cuda.empty_cache()
 
-        # optional: "last_key" logging (only if you *really* want it)
         if logger is not None and epoch is not None and (epoch % 50 == 0) and (last_skey is not None) and (
                 last_p is not None):
             entropy = -(last_p * (last_p + 1e-12).log()).sum()
