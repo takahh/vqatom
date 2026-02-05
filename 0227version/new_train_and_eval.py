@@ -1127,12 +1127,12 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
               f"train - lat_repel_loss: {train_latrep:.6f}, "
               f"train - cb_repel_loss: {train_cbrep:.6f}",
               f"train - ent_loss: {train_ent:.6f}")
-        logger.info(f"train - commit_loss: {train_commit:.6f}, "
-                    f"train - lat_repel_loss: {train_latrep:.6f}, "
-                    f"train - cb_repel_loss: {train_cbrep:.6f}",
-                    f"train - ent_loss: {train_ent:.6f}")
+        logger.info(
+            "train - commit_loss: %.6f, lat_repel_loss: %.6f, cb_repel_loss: %.6f, ent_loss: %.6f",
+            train_commit, train_latrep, train_cbrep, train_ent
+        )
         print(f"train - total_loss: {train_total:.6f}")
-        logger.info(f"train - total_loss: {train_total:.6f}")
+        logger.info(f"train - total_loss: %.6f")
 
         # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
         test_commit = safe_mean(loss_list_list_test[0])
