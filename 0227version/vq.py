@@ -1567,6 +1567,11 @@ class EuclideanCodebook(nn.Module):
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Forward: dtype-safe, safe-key buffers, no crash on empty masks,
+    #          entropy as METRIC (not differentiable in hard-argmin EMA),
+    #          optional per-key logging.
+    # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
     def forward(self, x, feature=None, mask_dict=None, logger=None, chunk_i=None, epoch=None, mode=None):
         """
@@ -1577,45 +1582,41 @@ class EuclideanCodebook(nn.Module):
           - mask_dict: dict[key -> global atom indices] from collect_global_indices_compact
           - chunk_i: local chunk index within a batch (0,1,2,...) used to reset global offset
           - mode:
-              * "init_kmeans_final": (optional) collect dump for scatter/SS and save to disk
+              * "init_kmeans_final": collect dump for scatter/SS and save to disk
               * "infer": assign IDs only, return (key_id_full, cluster_id_full, id2safe)
-              * otherwise: train/eval path, return (quantize_st, embed_ind_dict, embed)
+              * otherwise: train/eval path, return (quantize_st, embed_ind_dict, embed, ent_metric_total)
 
         Returns:
           - mode=="infer":
               (key_id_full, cluster_id_full, id2safe)
-              where key_id_full and cluster_id_full are int32 tensors of shape [B]
-              aligned to the original atom order in this mini-batch chunk.
           - mode=="init_kmeans_final":
-              returns 0 (as before) after saving dump (if mask_dict is provided)
+              0
           - otherwise:
-              (quantize_st, embed_ind_dict, embed)
+              (quantize_st, embed_ind_dict, embed, ent_metric_total)
+            NOTE: ent_metric_total is a metric (not backprop) under hard assignments + EMA.
         """
-        import os, time, math
+        import os, time
         import torch
         from einops import rearrange
-        batch_counts = None
 
-        # --------------------------------------------------------------
-        # 0) global offset management (for global indices in mask_dict)
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 0) global offset management
+        # -----------------------------
         if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
-
-        # reset at start of chunk stream
         if chunk_i is not None and chunk_i == 0:
             self.latent_size_sum = 0
 
-        # --------------------------------------------------------------
-        # 1) input reshape -> flatten: (1, B, D)
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 1) reshape -> flatten (1,B,D)
+        # -----------------------------
         x = x.float()
         if x.ndim < 4:
             x = rearrange(x, "... -> 1 ...")
-        flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1, B, D)
+        flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1,B,D)
         B, D = int(flatten.shape[1]), int(flatten.shape[2])
 
-        # init embed (kept as-is)
+        # init embed (kept)
         if mode == "init_kmeans_final" and epoch == 1:
             self.init_embed_(flatten, logger, mask_dict=mask_dict)
 
@@ -1632,23 +1633,23 @@ class EuclideanCodebook(nn.Module):
         if logger is not None:
             logger.info(f"[CODEBOOK] mode={mode}")
 
-        # --------------------------------------------------------------
-        # 2) helpers: safe-key <-> int id mapping (for infer outputs)
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 2) safe-key <-> int id mapping
+        # -----------------------------
         if not hasattr(self, "_safe2id"):
             self._safe2id = {}
         if not hasattr(self, "_id2safe"):
             self._id2safe = {}
 
+        # cb_dict (key->K_e) exists?
+        if not hasattr(self, "cb_dict"):
+            self.cb_dict = {}
+
         def _get_safe_and_code(skey: str):
-            # cb_dict exists?
-            if not hasattr(self, "cb_dict"):
-                self.cb_dict = {}
             K_e = int(self.cb_dict.get(skey, self.codebook_size))
             safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
-
-            code_param = self.embed[safe]
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # [K_e, D]
+            code_param = self.embed[safe]  # (1,K,D) or (K,D)
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
             return safe, code_param, code
 
         def _safe_id(safe: str) -> int:
@@ -1659,9 +1660,9 @@ class EuclideanCodebook(nn.Module):
                 self._id2safe[sid] = safe
             return sid
 
-        # --------------------------------------------------------------
-        # 3) mode == "infer": assign IDs ONLY (key_id, cluster_id)
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 3) infer: IDs only
+        # -----------------------------
         if mode == "infer":
             if mask_dict is None:
                 raise ValueError("mode='infer' requires mask_dict (global indices).")
@@ -1672,13 +1673,12 @@ class EuclideanCodebook(nn.Module):
             for key, idx_global in mask_dict.items():
                 if idx_global is None or idx_global.numel() == 0:
                     continue
-
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not bool(gmask.any()):
                     continue
 
                 idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
+                masked_latents = flatten[0].index_select(0, idx_local)  # (Ni,D)
                 if masked_latents.numel() == 0:
                     continue
 
@@ -1689,30 +1689,24 @@ class EuclideanCodebook(nn.Module):
                 with torch.no_grad():
                     idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024).to(torch.int32)
 
-                # fill (key_id, cluster_id) aligned to atom order
                 key_id_full.index_copy_(
-                    0,
-                    idx_local,
+                    0, idx_local,
                     torch.full((idx_local.numel(),), sid, device=flatten.device, dtype=torch.int32),
                 )
                 cluster_id_full.index_copy_(0, idx_local, idx_code)
 
-                # keep per-key dicts too (optional)
+                # optional per-key
                 self.embed_ind_dict[skey] = idx_code
 
                 del masked_latents, code, idx_code
 
-            # advance offset for next chunk (global indices remain consistent)
             self.latent_size_sum = global_end
             torch.cuda.empty_cache()
-
-            # return mapping so you can decode key_id -> safe-key later
-            # (store this once outside, or keep from model._id2safe)
             return key_id_full, cluster_id_full, dict(self._id2safe)
 
-        # --------------------------------------------------------------
-        # 4) mode == "init_kmeans_final": (optional) dump + save (kept)
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 4) init_kmeans_final: dump
+        # -----------------------------
         if mode == "init_kmeans_final":
             if mask_dict is None:
                 return 0
@@ -1723,13 +1717,12 @@ class EuclideanCodebook(nn.Module):
             for key, idx_global in mask_dict.items():
                 if idx_global is None or idx_global.numel() == 0:
                     continue
-
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not bool(gmask.any()):
                     continue
 
                 idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-                masked_latents = flatten[0].index_select(0, idx_local)  # [Ni, D]
+                masked_latents = flatten[0].index_select(0, idx_local)
                 if masked_latents.numel() == 0:
                     continue
 
@@ -1743,55 +1736,8 @@ class EuclideanCodebook(nn.Module):
                 self.quantize_dict[skey] = quantize
                 self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-                # ---- silhouette (optional) ----
-                try:
-                    X_cpu = masked_latents.detach().to("cpu", dtype=torch.float32)
-                    labels_cpu = idx_code.detach().to("cpu", dtype=torch.long)
-
-                    uniq, counts = labels_cpu.unique(return_counts=True)
-                    max_per_cluster = int(getattr(self, "ss_max_per_cluster", 200))
-                    max_total = int(getattr(self, "ss_max_total_latent_count", 20000))
-
-                    idx_list = []
-                    for lbl, cnt in zip(uniq, counts):
-                        c = int(cnt.item())
-                        if c < 2:
-                            continue
-                        m = (labels_cpu == lbl).nonzero(as_tuple=True)[0]
-                        if c > max_per_cluster:
-                            perm = torch.randperm(c)[:max_per_cluster]
-                            m = m[perm]
-                        idx_list.append(m)
-
-                    if len(idx_list) > 1:
-                        idx_sub = torch.cat(idx_list, dim=0)
-                        if idx_sub.numel() > max_total:
-                            perm = torch.randperm(idx_sub.numel())[:max_total]
-                            idx_sub = idx_sub[perm]
-                        xs = X_cpu.index_select(0, idx_sub)
-                        ys = labels_cpu.index_select(0, idx_sub)
-
-                        sil = self.silhouette_score_torch(xs, ys, row_block=2048)
-                        msg = (
-                            f"Silhouette Score (subsample): {key} {sil:.4f}, "
-                            f"sample size {masked_latents.shape[0]}, "
-                            f"used_for_SS {xs.shape[0]}, K_e {code.shape[0]}"
-                        )
-                        if logger is not None:
-                            logger.info(msg)
-                    else:
-                        if logger is not None:
-                            logger.info(f"[Silhouette] skip key={key}: not enough clusters/points.")
-                except Exception as e:
-                    if logger is not None:
-                        logger.warning(f"Silhouette failed for {key}: {e}")
-
                 # ---- store dump (CPU) ----
-                save_latents = True
-                save_centers = True
-                save_assign = True
-                save_quantized = False
-
+                save_latents, save_centers, save_assign, save_quantized = True, True, True, False
                 lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16) if save_latents else None
                 ctr_cpu = code.detach().to("cpu", dtype=torch.float16) if save_centers else None
                 asg_cpu = idx_code.detach().to("cpu") if save_assign else None
@@ -1813,11 +1759,9 @@ class EuclideanCodebook(nn.Module):
 
                 del masked_latents, code, idx_code, quantize
 
-            # advance offset
             self.latent_size_sum = global_end
             torch.cuda.empty_cache()
 
-            # pack and save once per call
             out = {}
             for k, v in self._kmeans_dump.items():
                 out[k] = {
@@ -1832,15 +1776,21 @@ class EuclideanCodebook(nn.Module):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             torch.save(out, path)
 
-            # clear dump to avoid growth across calls
             self._kmeans_dump = {}
             return 0
 
-        # --------------------------------------------------------------
-        # 5) train / test / eval: quantize + EMA update
-        # --------------------------------------------------------------
-        if not hasattr(self, "cb_dict"):
-            self.cb_dict = {}
+        # -----------------------------
+        # 5) train/eval: quantize + EMA
+        # -----------------------------
+        # entropy metric accumulator (Tensor, on GPU)
+        ent_metric_total = torch.zeros((), device=flatten.device, dtype=torch.float32)
+
+        # optional: only update EMA when actually training
+        do_ema = bool(self.training and (mode == "train") and (epoch is not None))
+
+        # We will keep the last processed key for optional "last_key" logging
+        last_skey = None
+        last_p = None  # Optional[Tensor]
 
         for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
             if idx_global is None or idx_global.numel() == 0:
@@ -1851,128 +1801,100 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
-            masked_latents = flatten[0].index_select(0, idx_local)
+            masked_latents = flatten[0].index_select(0, idx_local)  # (Ni,D)
             if masked_latents.numel() == 0:
                 continue
 
             skey = str(key)
+            last_skey = skey
+
             K_e_default = int(self.cb_dict.get(skey, self.codebook_size))
             safe = self._get_or_create_safe_key(skey, K_e_default, D, device=flatten.device)
 
-            code_param = self.embed[safe]
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
+            code_param = self.embed[safe]  # (1,K,D) or (K,D)
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
 
+            # --- hard assignment (no-grad is fine; EMA updates below are also no-grad)
             with torch.no_grad():
-                dist = torch.cdist(masked_latents, code, p=2).pow(2)
-                idx_code = dist.argmin(dim=-1)
-                del dist
+                idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)  # (Ni,)
             quantize = code.index_select(0, idx_code)
 
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code.to(torch.int32)
 
-            if self.training and epoch is not None:
-
-                # ------------------------------------------------------------
-                # (A) Per-key EMA buffers (count=sum of assignments, avg=sum of latents)
-                #     IMPORTANT: use `safe` in buffer names (NOT skey)
-                # ------------------------------------------------------------
+            if do_ema:
+                # Shapes
                 if code_param.ndim == 3:
                     K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
-                    centers = code_param.data.squeeze(0)  # (K,D)
+                    centers = code_param.data.squeeze(0)  # view (K,D)
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
-                    centers = code_param.data  # (K,D)
+                    centers = code_param.data  # view (K,D)
 
                 dev = code_param.device
                 self.cb_dict[skey] = int(K_e)
 
-                buf_name_cs = f"cluster_size_{safe}"  # EMA count (K,)
-                buf_name_ea = f"embed_avg_{safe}"  # EMA sum   (K,D)
-                buf_name_ue = f"usage_ema_{safe}"  # usage EMA (K,)
-                buf_name_cd = f"split_cd_{safe}"  # cooldown  (K,)
+                # Buffer names use safe (important)
+                buf_name_cs = f"cluster_size_{safe}"
+                buf_name_ea = f"embed_avg_{safe}"
+                buf_name_ue = f"usage_ema_{safe}"
+                buf_name_cd = f"split_cd_{safe}"
 
-                # cluster_size buffer
-                if hasattr(self, buf_name_cs):
-                    cs = getattr(self, buf_name_cs)
-                    if cs.dtype != torch.float32 or cs.shape[0] != K_e or cs.device != dev:
-                        cs = torch.zeros(K_e, device=dev, dtype=torch.float32)
-                        setattr(self, buf_name_cs, cs)
-                else:
-                    cs = torch.zeros(K_e, device=dev, dtype=torch.float32)
-                    self.register_buffer(buf_name_cs, cs)
+                # Helper: ensure buffer exists & correct
+                def _get_buf(name, shape, dtype):
+                    if hasattr(self, name):
+                        t = getattr(self, name)
+                        if t.dtype != dtype or t.shape != shape or t.device != dev:
+                            t = torch.zeros(*shape, device=dev, dtype=dtype)
+                            setattr(self, name, t)
+                        return t
+                    t = torch.zeros(*shape, device=dev, dtype=dtype)
+                    self.register_buffer(name, t)
+                    return t
 
-                # embed_avg buffer
-                if hasattr(self, buf_name_ea):
-                    ea = getattr(self, buf_name_ea)
-                    if ea.dtype != torch.float32 or ea.shape != (K_e, D_e) or ea.device != dev:
-                        ea = torch.zeros(K_e, D_e, device=dev, dtype=torch.float32)
-                        setattr(self, buf_name_ea, ea)
-                else:
-                    ea = torch.zeros(K_e, D_e, device=dev, dtype=torch.float32)
-                    self.register_buffer(buf_name_ea, ea)
+                cs = _get_buf(buf_name_cs, (K_e,), torch.float32)
+                ea = _get_buf(buf_name_ea, (K_e, D_e), torch.float32)
+                ue = _get_buf(buf_name_ue, (K_e,), torch.float32)
+                cd = _get_buf(buf_name_cd, (K_e,), torch.long)
 
-                # usage_ema buffer (separate from cs; can reuse cs, but separate is cleaner)
-                if hasattr(self, buf_name_ue):
-                    ue = getattr(self, buf_name_ue)
-                    if ue.dtype != torch.float32 or ue.shape[0] != K_e or ue.device != dev:
-                        ue = torch.zeros(K_e, device=dev, dtype=torch.float32)
-                        setattr(self, buf_name_ue, ue)
-                else:
-                    ue = torch.zeros(K_e, device=dev, dtype=torch.float32)
-                    self.register_buffer(buf_name_ue, ue)
-
-                # cooldown buffer
-                if hasattr(self, buf_name_cd):
-                    cd = getattr(self, buf_name_cd)
-                    if cd.dtype != torch.long or cd.shape[0] != K_e or cd.device != dev:
-                        cd = torch.zeros(K_e, device=dev, dtype=torch.long)
-                        setattr(self, buf_name_cd, cd)
-                else:
-                    cd = torch.zeros(K_e, device=dev, dtype=torch.long)
-                    self.register_buffer(buf_name_cd, cd)
-
-                # ------------------------------------------------------------
-                # (B) Build batch_counts and batch_embed_sum from idx_code
-                # ------------------------------------------------------------
                 with torch.no_grad():
                     idx_code_long = idx_code.to(device=dev, dtype=torch.long)
 
+                    # batch_counts (K,)
                     batch_counts = torch.zeros_like(cs, dtype=torch.float32)
                     batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
 
-                    # ------------------------------------------------------------
-                    # (E) Entropy loss for THIS KEY (very important)
-                    # ------------------------------------------------------------
-                    if not hasattr(self, "entropy_loss_accum"):
-                        self.entropy_loss_accum = 0.0
-
-                    ent_weight = float(getattr(self, "entropy_weight", 1e-3))
-
-                    # compute p over codes of THIS KEY
-                    p = batch_counts / (batch_counts.sum() + 1e-8)
-
-                    # negative entropy (minimize -> increase entropy)
-                    ent_loss_key = (p * (p + 1e-8).log()).sum()
-
-                    self.entropy_loss_accum = self.entropy_loss_accum + ent_weight * ent_loss_key
-
+                    # batch_embed_sum (K,D)
                     batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
                     batch_embed_sum.index_add_(0, idx_code_long, masked_latents.to(device=dev, dtype=torch.float32))
 
-                    # ------------------------------------------------------------
-                    # (C) Split-the-winner (DO THIS BEFORE EMA update is fine)
-                    #     Use batch_counts to update ue (usage EMA) and decide split.
-                    # ------------------------------------------------------------
-                    do_split = bool(getattr(self, "do_split_the_winner", True))
-                    if do_split:
-                        # hyperparams (set these as self.* as you like)
+                    # ---- entropy metric (per-key)
+                    denom = batch_counts.sum()
+                    if denom.item() > 0:
+                        p = batch_counts / (denom + 1e-8)
+                        # negative entropy (for metric; more negative = higher entropy)
+                        ent_key = (p * (p + 1e-8).log()).sum()
+                        ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * ent_key
+                        last_p = p  # for optional last-key logging
+
+                        # per-key logging (recommended place)
+                        if logger is not None and epoch is not None and (epoch % 50 == 0):
+                            entropy = -(p * (p + 1e-12).log()).sum()
+                            topk = torch.topk(p, k=min(5, p.numel()))
+                            logger.info(
+                                f"[VQ][{skey}] entropy={entropy.item():.4f} "
+                                f"max_p={p.max().item():.3f} "
+                                f"top_ids={topk.indices.tolist()} "
+                                f"top_p={[round(v, 4) for v in topk.values.tolist()]}"
+                            )
+
+                    # ---- split-the-winner (uses batch_counts + usage_ema)
+                    if bool(getattr(self, "do_split_the_winner", True)):
                         split_thr = float(getattr(self, "split_thr", 0.15))
                         noise_scale = float(getattr(self, "split_noise_scale", 0.02))
                         cooldown_steps = int(getattr(self, "split_cooldown_steps", 2000))
 
-                        # call: embed=centers (K,D), ema_sum=ea (K,D), ema_count=cs (K,)
-                        _did = self.split_the_winner_ema(
+                        did = self.split_the_winner_ema(
                             embed=centers,
                             ema_sum=ea,
                             ema_count=cs,
@@ -1983,27 +1905,18 @@ class EuclideanCodebook(nn.Module):
                             cooldown=cd,
                             cooldown_steps=cooldown_steps,
                         )
-
-                        # if split changed centers (it did), no extra action needed because `centers`
-                        # points to code_param.data (view). We'll recompute means later anyway.
-
-                        # OPTIONAL: lightweight reporting
-                        if logger is not None and _did:
-                            p = (ue / (ue.sum() + 1e-8))
-                            mx, mx_i = float(p.max().item()), int(p.argmax().item())
+                        if logger is not None and did:
+                            pp = ue / (ue.sum() + 1e-8)
+                            mx, mx_i = float(pp.max().item()), int(pp.argmax().item())
                             logger.info(f"[SPLIT] key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
 
-                    # ------------------------------------------------------------
-                    # (D) EMA update
-                    # ------------------------------------------------------------
+                    # ---- EMA update
                     decay = float(self.decay)
                     one_m = 1.0 - decay
-
                     cs.mul_(decay).add_(batch_counts, alpha=one_m)
                     ea.mul_(decay).add_(batch_embed_sum, alpha=one_m)
 
                     means = ea / (cs.unsqueeze(-1) + float(self.eps))
-
                     if code_param.ndim == 3:
                         code_param.data.copy_(means.unsqueeze(0))
                     else:
@@ -2011,7 +1924,9 @@ class EuclideanCodebook(nn.Module):
 
             del masked_latents, code, idx_code, quantize
 
-        # build full quantized tensor in original atom order
+        # -----------------------------
+        # 6) rebuild quantized tensor in original atom order
+        # -----------------------------
         quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
 
         if mask_dict is not None:
@@ -2019,15 +1934,11 @@ class EuclideanCodebook(nn.Module):
                 skey = str(key)
                 if skey not in self.quantize_dict:
                     continue
-
                 gmask = (idx_global >= global_start) & (idx_global < global_end)
                 if not bool(gmask.any()):
                     continue
-
-                idx_in_chunk = idx_global[gmask]
-                idx_local = (idx_in_chunk - global_start).to(device=quantize_full.device, dtype=torch.long)
+                idx_local = (idx_global[gmask] - global_start).to(device=quantize_full.device, dtype=torch.long)
                 qk = self.quantize_dict[skey].to(device=quantize_full.device, dtype=quantize_full.dtype)
-
                 if idx_local.numel() > 0:
                     quantize_full.index_copy_(0, idx_local, qk)
 
@@ -2041,11 +1952,8 @@ class EuclideanCodebook(nn.Module):
                 if in_chunk.numel() > 0:
                     all_local.append(in_chunk - global_start)
 
-        if len(all_local) > 0:
-            used = torch.unique(torch.cat(all_local, dim=0))
-        else:
-            used = torch.tensor([], dtype=torch.long, device=flatten.device)
-
+        used = torch.unique(torch.cat(all_local, dim=0)) if len(all_local) > 0 else torch.tensor([], dtype=torch.long,
+                                                                                                 device=flatten.device)
         unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
         if used.numel() > 0:
             unused[used] = False
@@ -2061,25 +1969,14 @@ class EuclideanCodebook(nn.Module):
             self.latent_size_sum = global_end
 
         torch.cuda.empty_cache()
-        ent_loss_total = getattr(self, "entropy_loss_accum", 0.0)
-        self.entropy_loss_accum = 0.0  # reset for next call
 
-        # ---------------------------------------------------------
-        # Entropy & distribution logging (VERY IMPORTANT PLACE)
-        # ---------------------------------------------------------
-        p = batch_counts / (batch_counts.sum() + 1e-8)
-        entropy = -(p * (p + 1e-12).log()).sum()
+        # optional: "last_key" logging (only if you *really* want it)
+        if logger is not None and epoch is not None and (epoch % 50 == 0) and (last_skey is not None) and (
+                last_p is not None):
+            entropy = -(last_p * (last_p + 1e-12).log()).sum()
+            logger.info(f"[VQ][last_key={last_skey}] entropy={entropy.item():.4f} max_p={last_p.max().item():.3f}")
 
-        if logger is not None and (epoch is not None) and (epoch % 50 == 0):
-            topk = torch.topk(p, k=min(5, p.numel()))
-            logger.info(
-                f"[VQ][{skey}] entropy={entropy.item():.4f} "
-                f"max_p={p.max().item():.3f} "
-                f"top_ids={topk.indices.tolist()} "
-                f"top_p={[round(v, 4) for v in topk.values.tolist()]}"
-            )
-
-        return quantize_st, self.embed_ind_dict, self.embed, ent_loss_total
+        return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
 
 
 class VectorQuantize(nn.Module):
