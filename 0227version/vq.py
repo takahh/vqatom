@@ -1594,6 +1594,7 @@ class EuclideanCodebook(nn.Module):
         import os, time, math
         import torch
         from einops import rearrange
+        batch_counts = None
 
         # --------------------------------------------------------------
         # 0) global offset management (for global indices in mask_dict)
