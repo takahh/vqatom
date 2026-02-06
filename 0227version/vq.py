@@ -1264,7 +1264,7 @@ class EuclideanCodebook(nn.Module):
         return float(sil_sum / max(processed, 1))
 
     @torch.jit.ignore
-    def init_embed_(self, data, logger, mask_dict=None, use_cosine_sim: bool = False):
+    def init_embed_(self, data, logger, epoch, mask_dict=None, use_cosine_sim: bool = False):
         """
         Initialize per-element codebooks using absolute K from self.cb_dict.
         data: [1, N, D]
@@ -1325,6 +1325,7 @@ class EuclideanCodebook(nn.Module):
             idx = get_idx(mask_dict, skey)
             if idx is None:
                 continue
+
             masked = data[0][idx]  # (N_i, D)
             N_i = masked.shape[0]
             if N_i == 0:
@@ -1333,69 +1334,89 @@ class EuclideanCodebook(nn.Module):
             K_req = get_absK(self.cb_dict, skey)
             if K_req is None or K_req <= 0:
                 K_req = 1
-
             K_run = min(K_req, N_i)
 
-            means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
-                masked.unsqueeze(0).to(device),
-                num_clusters=K_run,
-                use_cosine_sim=use_cosine_sim,
-            )
-            # --- after kmeans() inside init_embed_() ---
-            # you need labels per point; in your init_embed_ you currently don't keep them.
-            # If your kmeans() returns assignments (e.g., labels), use it.
-            # If it doesn't, you can recompute assignment by nearest center:
-
-            with torch.no_grad():
-                # means_kd is (K_req, D) after padding; but SS should use K_run (actual used centers)
-                # So use the unpadded centers for assignment
-                centers = means_1kd[0]  # (K_run, D)
-                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)  # (N_i,)
-
-            # optional subsample to keep SS cheap
-            max_n = int(getattr(self, "ss_max_n", 20000))
-            if labels.numel() > max_n:
-                perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
-                X_ss = masked[perm]
-                y_ss = labels[perm]
-            else:
-                X_ss = masked
-                y_ss = labels
-
-            ss = self.silhouette_score_torch(X_ss, y_ss, row_block=8192, device=masked.device)
-            logger.info(f"[SS][init_embed_] key={skey} N={N_i} K_run={K_run} SS={ss:.4f}")
-
-            means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
-
-            # embed
             safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
-            if self.embed[safe].shape != (K_req, D):
-                self.embed[safe] = nn.Parameter(
-                    means_kd.detach().to(device=device, dtype=means_kd.dtype),
-                    requires_grad=True,
-                )
-            else:
-                self.embed[safe].data.copy_(means_kd)
 
-            # cluster_size / embed_avg を必ず float32 で再構築（バッファ名は元キー）
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
 
-            # cs = torch.zeros(K_req, device=device, dtype=torch.float32)
-            # ea = means_kd.detach().to(device=device, dtype=torch.float32) * counts_k.view(-1, 1)
+            # -------------------------
+            # 1) (Re)initialize ONLY at epoch 1 (or if missing)
+            # -------------------------
+            need_init = (epoch == 1) or (safe not in self.embed) or (not hasattr(self, buf_name_cs)) or (
+                not hasattr(self, buf_name_ea))
 
-            cs = counts_k.to(device=device, dtype=torch.float32)
-            ea = means_kd.detach().to(device=device, dtype=torch.float32) * cs.view(-1, 1)
-            if hasattr(self, buf_name_cs):
-                delattr(self, buf_name_cs)
-            if hasattr(self, buf_name_ea):
-                delattr(self, buf_name_ea)
+            if need_init:
+                means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
+                    masked.unsqueeze(0).to(device),
+                    num_clusters=K_run,
+                    use_cosine_sim=use_cosine_sim,
+                )
 
-            self.register_buffer(buf_name_cs, cs)
-            self.register_buffer(buf_name_ea, ea)
+                # pad to K_req for storage
+                means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-            nz = int((counts_k > 0).sum().item())
-            logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+                # init embed parameter
+                if self.embed[safe].shape != (K_req, D):
+                    self.embed[safe] = nn.Parameter(
+                        means_kd.detach().to(device=device, dtype=means_kd.dtype),
+                        requires_grad=True,
+                    )
+                else:
+                    self.embed[safe].data.copy_(means_kd)
+
+                # init EMA buffers (float32)
+                cs = counts_k.to(device=device, dtype=torch.float32)  # (K_req,)
+                ea = means_kd.detach().to(device=device, dtype=torch.float32) * cs.view(-1, 1)  # (K_req, D)
+
+                # replace buffers safely
+                if hasattr(self, buf_name_cs):
+                    delattr(self, buf_name_cs)
+                if hasattr(self, buf_name_ea):
+                    delattr(self, buf_name_ea)
+                self.register_buffer(buf_name_cs, cs)
+                self.register_buffer(buf_name_ea, ea)
+
+                nz = int((cs > 0).sum().item())
+                logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+
+            # -------------------------
+            # 2) SS every epoch (no kmeans)
+            # -------------------------
+            with torch.no_grad():
+                # current centers (K_req, D)
+                centers_all = self.embed[safe].detach()
+
+                # optionally drop dead codes for SS stability
+                if hasattr(self, buf_name_cs):
+                    cs_now = getattr(self, buf_name_cs)
+                    active = (cs_now > 0)
+                else:
+                    active = None
+
+                if active is not None and active.any():
+                    centers = centers_all[active]  # (K_active, D)
+                else:
+                    # fallback: at least 1 center
+                    centers = centers_all[:1]
+
+                # labels via nearest center (N_i,)
+                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
+
+                # optional subsample to keep SS cheap
+                max_n = int(getattr(self, "ss_max_n", 20000))
+                if labels.numel() > max_n:
+                    perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
+                    X_ss = masked[perm]
+                    y_ss = labels[perm]
+                else:
+                    X_ss = masked
+                    y_ss = labels
+
+                ss = self.silhouette_score_torch(X_ss, y_ss, row_block=8192, device=masked.device)
+
+            logger.info(f"[SS][epoch={epoch}] key={skey} N={N_i} K_eff={int(centers.shape[0])} SS={ss:.4f}")
 
     # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
@@ -1643,8 +1664,8 @@ class EuclideanCodebook(nn.Module):
         B, D = int(flatten.shape[1]), int(flatten.shape[2])
 
         # init embed (kept)
-        if mode == "init_kmeans_final" and epoch == 1:
-            self.init_embed_(flatten, logger, mask_dict=mask_dict)
+        if mode == "init_kmeans_final":
+            self.init_embed_(flatten, logger, epoch, mask_dict=mask_dict)
 
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
