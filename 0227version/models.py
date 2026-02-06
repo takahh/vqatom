@@ -232,143 +232,146 @@ class AtomEmbedding(nn.Module):
 
     def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
         """
-        atom_inputs: Tensor [N, 79] を想定
+        Encode per-atom features into a dense embedding.
 
-        0 : Z
-        1 : degree
-        2 : charge
-        3 : hyb
-        4 : arom
-        5 : ring
-        6 : hcount
-        7-24  : func_flags (18)
-        25    : H-donor flag
-        26    : H-acceptor flag
-        27    : ringSize (0,3,4,5,6,7,8,...)
-        28    : #aromatic neighbors
-        29    : fused ring id (0..7)
-        30    : het27 (0..26)
-        31-78 : bond_env_raw (48)  ← sum+max bond features
+        Parameters
+        ----------
+        atom_inputs : torch.Tensor
+            Shape [N, 79].
+
+            0 : Z
+            1 : degree
+            2 : charge
+            3 : hyb
+            4 : arom
+            5 : ring
+            6 : hcount
+            7-24  : func_flags (18)
+            25    : H-donor flag
+            26    : H-acceptor flag
+            27    : ringSize (0,3,4,5,6,7,8,...)
+            28    : #aromatic neighbors
+            29    : fused ring id (0..7)
+            30    : het27 (0..26)
+            31-78 : bond_env_raw (48)  float
+        Returns
+        -------
+        out : torch.Tensor
+            Shape [N, 64] = disc_emb(48) + bond_env_emb(16)
         """
         device = next(self.parameters()).device
-        atom_inputs = atom_inputs.to(device, non_blocking=True)
+        x = atom_inputs.to(device=device, non_blocking=True)
 
-        # 0: element (Z)
-        z_raw = atom_inputs[:, 0].long()
-        max_z = self.element_lut.shape[0] - 1
-        mask = (z_raw >= 0) & (z_raw <= max_z)
-        z = torch.where(mask, z_raw, torch.zeros_like(z_raw))
-        idx0 = self.element_lut[z]
-        idx0 = idx0.clamp(0, self.element_embed.num_embeddings - 1)
+        if x.ndim != 2 or x.size(1) != 79:
+            raise ValueError(f"atom_inputs must be [N,79], got {tuple(x.shape)}")
+
+        # ----------------------------
+        # helpers
+        # ----------------------------
+        def clamp_idx(col: int, n_embed: int, lo: int = 0) -> torch.Tensor:
+            """Read integer column and clamp to valid embedding range."""
+            return x[:, col].long().clamp(lo, n_embed - 1)
+
+        def flag01(col: int) -> torch.Tensor:
+            """Read 0/1 flag column."""
+            return x[:, col].long().clamp(0, 1)
+
+        # ----------------------------
+        # core discrete features
+        # ----------------------------
+
+        # 0: Z -> element_lut -> element_embed
+        z_raw = x[:, 0].long()
+        max_z = int(self.element_lut.shape[0] - 1)
+        z_safe = torch.where((0 <= z_raw) & (z_raw <= max_z), z_raw, torch.zeros_like(z_raw))
+        idx0 = self.element_lut[z_safe].clamp(0, self.element_embed.num_embeddings - 1)
         x0 = self.element_embed(idx0)
 
         # 1: degree
-        idx1 = atom_inputs[:, 1].long().clamp(0, self.degree_embed.num_embeddings - 1)
-        x1 = self.degree_embed(idx1)
+        x1 = self.degree_embed(clamp_idx(1, self.degree_embed.num_embeddings))
 
-        # 2: ring_embed 用スカラー（ここでは ring flag + 1）
-        val_raw = atom_inputs[:, 5].long() + 1
-        val_idx = val_raw.clamp(0, self.ring_embed.num_embeddings - 1)
-        x2 = self.ring_embed(val_idx)
+        # 2: ring flag (+1) for ring_embed (0..)
+        ring_plus1 = (x[:, 5].long() + 1).clamp(0, self.ring_embed.num_embeddings - 1)
+        x2 = self.ring_embed(ring_plus1)
 
         # 3: charge
-        chg_raw = atom_inputs[:, 2].long()
-        chg_idx = chg_raw.clamp(0, self.charge_embed.num_embeddings - 1)
-        x3 = self.charge_embed(chg_idx)
+        x3 = self.charge_embed(clamp_idx(2, self.charge_embed.num_embeddings))
 
         # 4: aromatic (0/1)
-        arom_idx = atom_inputs[:, 4].long().clamp(0, self.aromatic_embed.num_embeddings - 1)
-        x4 = self.aromatic_embed(arom_idx)
+        x4 = self.aromatic_embed(clamp_idx(4, self.aromatic_embed.num_embeddings))
 
         # 5: hybrid
-        hyb_idx = atom_inputs[:, 3].long().clamp(0, self.hybrid_embed.num_embeddings - 1)
-        x5 = self.hybrid_embed(hyb_idx)
+        x5 = self.hybrid_embed(clamp_idx(3, self.hybrid_embed.num_embeddings))
 
         # 6: #hydrogens
-        h_idx = atom_inputs[:, 6].long().clamp(0, self.hydrogen_embed.num_embeddings - 1)
-        x6 = self.hydrogen_embed(h_idx)
+        x6 = self.hydrogen_embed(clamp_idx(6, self.hydrogen_embed.num_embeddings))
 
-        # ---- functional flags (7～24) / H-don / H-acc を 0/1 に clamp ----
-        def flag_idx(col: int) -> torch.Tensor:
-            return atom_inputs[:, col].long().clamp(0, 1)
-
-        # 7–24: 18 functional flags
-        x7  = self.func_embed_0(flag_idx(7))
-        x8  = self.func_embed_1(flag_idx(8))
-        x9  = self.func_embed_2(flag_idx(9))
-        x10 = self.func_embed_3(flag_idx(10))
-        x11 = self.func_embed_4(flag_idx(11))
-        x12 = self.func_embed_5(flag_idx(12))
-        x13 = self.func_embed_6(flag_idx(13))
-        x14 = self.func_embed_7(flag_idx(14))
-        x15 = self.func_embed_8(flag_idx(15))
-        x16 = self.func_embed_9(flag_idx(16))
-        x17 = self.func_embed_10(flag_idx(17))
-        x18 = self.func_embed_11(flag_idx(18))
-        x19 = self.func_embed_12(flag_idx(19))
-        x20 = self.func_embed_13(flag_idx(20))
-        x21 = self.func_embed_14(flag_idx(21))
-        x22 = self.func_embed_15(flag_idx(22))
-        x23 = self.func_embed_16(flag_idx(23))
-        x24 = self.func_embed_17(flag_idx(24))
-
-        # merge functional flags: 18 flags * 2 dim = 36 dim → 4 dim
-        flags = torch.cat(
-            [x7, x8, x9, x10, x11, x12, x13, x14, x15,
-             x16, x17, x18, x19, x20, x21, x22, x23, x24],
-            dim=-1
-        )  # [N, 36]
+        # ----------------------------
+        # functional flags (7..24): 18 flags -> per-flag embed -> reduce
+        # ----------------------------
+        # assumes each func_embed_i is an Embedding(2, d_flag) (you used 2 dims each before)
+        func_embeds = [
+            self.func_embed_0,  self.func_embed_1,  self.func_embed_2,  self.func_embed_3,
+            self.func_embed_4,  self.func_embed_5,  self.func_embed_6,  self.func_embed_7,
+            self.func_embed_8,  self.func_embed_9,  self.func_embed_10, self.func_embed_11,
+            self.func_embed_12, self.func_embed_13, self.func_embed_14, self.func_embed_15,
+            self.func_embed_16, self.func_embed_17,
+        ]
+        flags = torch.cat([emb(flag01(7 + i)) for i, emb in enumerate(func_embeds)], dim=-1)  # [N, 18*d_flag]
         flags4 = self.func_reduce(flags)  # [N, 4]
 
-        # 25, 26: H-bond donor / acceptor
-        x25 = self.h_don_embed(flag_idx(25))
-        x26 = self.h_acc_embed(flag_idx(26))
+        # 25,26: H-bond donor/acceptor flags
+        x25 = self.h_don_embed(flag01(25))
+        x26 = self.h_acc_embed(flag01(26))
 
-        # 27: ringSize (0,3,4,5,6,7,8 → 0..6 に写像)
-        raw27 = atom_inputs[:, 27].long()
+        # ----------------------------
+        # ring size mapping (27)
+        # ----------------------------
+        raw27 = x[:, 27].long()
+
+        # default: last index = "other/unknown"
         mapped27 = torch.full_like(raw27, fill_value=self.ringsize_embed.num_embeddings - 1)
+
+        # map known values via dict {value:int_index}
+        # NOTE: this loop is small (few keys), so it's fine
         for v, idx in self.ring_value_to_index.items():
-            mapped27[raw27 == v] = idx
+            mapped27[raw27 == int(v)] = int(idx)
+
         mapped27 = mapped27.clamp(0, self.ringsize_embed.num_embeddings - 1)
         x27 = self.ringsize_embed(mapped27)
 
         # 28: #aromatic neighbors
-        raw28 = atom_inputs[:, 28].long()
-        idx28 = raw28.clamp(0, self.aroma_num_embed.num_embeddings - 1)
-        x28 = self.aroma_num_embed(idx28)
+        x28 = self.aroma_num_embed(clamp_idx(28, self.aroma_num_embed.num_embeddings))
 
         # 29: fused ring id
-        raw29 = atom_inputs[:, 29].long()
-        idx29 = raw29.clamp(0, self.fused_if_embed.num_embeddings - 1)
-        x29 = self.fused_if_embed(idx29)
+        x29 = self.fused_if_embed(clamp_idx(29, self.fused_if_embed.num_embeddings))
 
-        # 30: het27 (0..26)
-        raw30 = atom_inputs[:, 30].long()
-        idx30 = raw30.clamp(0, self.het27_embed.num_embeddings - 1)
-        x30 = self.het27_embed(idx30)
+        # 30: het27
+        x30 = self.het27_embed(clamp_idx(30, self.het27_embed.num_embeddings))
 
-        # 31-78: bond_env_raw (48 dims, float)
-        bond_env = atom_inputs[:, 31:].to(torch.float32)  # [N, 48]
-        bond_env_emb = self.bond_env_proj(bond_env)       # [N, 16]
+        # ----------------------------
+        # bond_env_raw (31..78): 48 floats -> proj -> 16
+        # ----------------------------
+        bond_env = x[:, 31:].to(dtype=torch.float32)
+        if bond_env.size(1) != 48:
+            raise ValueError(f"bond_env_raw must be 48 dims, got {bond_env.size(1)}")
+        bond_env_emb = self.bond_env_proj(bond_env)  # [N, 16]
 
-        # ----- 離散部分まとめて 52→48 に圧縮 -----
+        # ----------------------------
+        # concatenate discrete, project, then concat with bond env
+        # ----------------------------
         disc_cat = torch.cat(
             [
-                x0, x1, x2, x3, x4, x5, x6,   # 7*4 = 28
-                flags4,                       # 4
-                x25, x26,                     # 2+2 = 4
-                x27, x28, x29, x30,           # 4*4 = 16
+                x0, x1, x2, x3, x4, x5, x6,   # base discrete embeds
+                flags4,                       # [N,4]
+                x25, x26,                     # donor/acceptor
+                x27, x28, x29, x30,           # ringSize, aromNbrs, fusedId, het27
             ],
             dim=-1,
-        )  # [N, 52]
+        )  # expected [N, 52] in your original design
 
-        disc_emb = self.disc_proj(disc_cat)   # [N, 48]
-
-        # 離散 48 + bond_env 16 = 64
-        out = torch.cat(
-            [disc_emb, bond_env_emb],
-            dim=-1,
-        )
+        disc_emb = self.disc_proj(disc_cat)          # [N, 48]
+        out = torch.cat([disc_emb, bond_env_emb], dim=-1)  # [N, 64]
         return out
 
 class EquivariantThreeHopGINE(nn.Module):
