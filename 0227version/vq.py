@@ -1960,7 +1960,7 @@ class EuclideanCodebook(nn.Module):
                     ue.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
 
                     if is_last_batch and bool(getattr(self, "do_split_the_winner", True)):
-                        did = self.split_the_winner_from_usage_ema_(
+                        did = self.split_the_winner_ema(
                             embed=centers,
                             ema_sum=ea,
                             ema_count=cs,
