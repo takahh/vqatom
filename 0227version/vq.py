@@ -1412,25 +1412,33 @@ class EuclideanCodebook(nn.Module):
                 logger.info(
                     f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
 
-                # --------------------------------------------------------------------------------
-                #  For Debug Delete Soon
-                # --------------------------------------------------------------------------------
+                # debug diag (optional)
                 with torch.no_grad():
-                    # after centers computed
                     def _diag(x, y, centers, tag=""):
-                        import torch
                         u = torch.unique(y)
                         print(f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
                               f"finite_centers={torch.isfinite(centers).all().item()} "
-                              f"x_var={x.float().var(dim=0).mean().item():.3e} "
-                              f"c_var={centers.float().var(dim=0).mean().item():.3e} "
+                              f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
+                              f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
                               f"n_unique_labels={len(u)}")
 
                     _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
 
-                # --------------------------------------------------------------------------------
-                # --------------------------------------------------------------------------------
-                ss = self.silhouette_score_torch(X_ss, y_ss, row_block=8192, device=masked.device)
+                # ---- singleton filter (safe + fast) ----
+                y = y_ss.long()
+                _, y = torch.unique(y, return_inverse=True)  # compress labels to 0..nuniq-1
+
+                bc = torch.bincount(y)
+                keep = (bc[y] >= 2)
+
+                X2 = X_ss[keep]
+                y2 = y[keep]
+
+                u2 = torch.unique(y2).numel()
+                if X2.shape[0] < 200 or u2 < 2:
+                    ss = float("nan")
+                else:
+                    ss = self.silhouette_score_torch(X2, y2, row_block=8192, device=masked.device)
 
             logger.info(f"[SS][epoch={epoch}] key={skey} N={N_i} K_eff={int(centers.shape[0])} SS={ss:.4f}")
 
