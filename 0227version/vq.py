@@ -1399,7 +1399,24 @@ class EuclideanCodebook(nn.Module):
                 else:
                     X_ss = masked
                     y_ss = labels
+                # --------------------------------------------------------------------------------
+                #  For Debug Delete Soon
+                # --------------------------------------------------------------------------------
+                with torch.no_grad():
+                    # after centers computed
+                    def _diag(x, y, centers, tag=""):
+                        import torch
+                        u = torch.unique(y)
+                        print(f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
+                              f"finite_centers={torch.isfinite(centers).all().item()} "
+                              f"x_var={x.float().var(dim=0).mean().item():.3e} "
+                              f"c_var={centers.float().var(dim=0).mean().item():.3e} "
+                              f"n_unique_labels={len(u)}")
 
+                    _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
+
+                # --------------------------------------------------------------------------------
+                # --------------------------------------------------------------------------------
                 ss = self.silhouette_score_torch(X_ss, y_ss, row_block=8192, device=masked.device)
 
             logger.info(f"[SS][epoch={epoch}] key={skey} N={N_i} K_eff={int(centers.shape[0])} SS={ss:.4f}")
