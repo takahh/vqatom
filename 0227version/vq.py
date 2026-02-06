@@ -1923,6 +1923,15 @@ class EuclideanCodebook(nn.Module):
                         last_p = p
 
                         if logger is not None and epoch is not None and skey == "6_0_3_1_1_0" and chunk_i == 0:
+                            y = y_ss.long()
+                            u = torch.unique(y).numel()
+                            bc = torch.bincount(y)
+                            singletons = (bc == 1).sum().item()
+                            nz = (bc > 0).sum().item()
+                            mx = (bc.max().float() / y.numel()).item()
+                            logger.info(
+                                f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
+
                             entropy = -(p * (p + 1e-12).log()).sum()
                             topk = torch.topk(p, k=min(5, p.numel()))
                             logger.info(
