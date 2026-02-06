@@ -1643,9 +1643,9 @@ class EuclideanCodebook(nn.Module):
 
         # normalize mask_dict to LongTensor on device (global indices)
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
-
-        if logger is not None:
-            logger.info(f"[CODEBOOK] mode={mode} is_last_batch={is_last_batch}")
+        #
+        # if logger is not None:
+        #     logger.info(f"[CODEBOOK] mode={mode} is_last_batch={is_last_batch}")
 
         # -----------------------------
         # 2) safe-key <-> int id mapping
@@ -1886,7 +1886,7 @@ class EuclideanCodebook(nn.Module):
                         ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * ent_key
                         last_p = p
 
-                        if logger is not None and epoch is not None and chunk_i == 0:
+                        if logger is not None and epoch is not None and skey == "6_0_3_1_1_0":
                             entropy = -(p * (p + 1e-12).log()).sum()
                             topk = torch.topk(p, k=min(5, p.numel()))
                             logger.info(
@@ -1981,10 +1981,10 @@ class EuclideanCodebook(nn.Module):
 
         torch.cuda.empty_cache()
 
-        if logger is not None and epoch is not None and (epoch % 50 == 0) and (last_skey is not None) and (
-                last_p is not None):
-            entropy = -(last_p * (last_p + 1e-12).log()).sum()
-            logger.info(f"[VQ][last_key={last_skey}] entropy={entropy.item():.4f} max_p={last_p.max().item():.3f}")
+        # if logger is not None and epoch is not None and (epoch % 3 == 1) and (last_skey is not None) and (
+        #         last_p is not None):
+        #     entropy = -(last_p * (last_p + 1e-12).log()).sum()
+        #     logger.info(f"[VQ][last_key={last_skey}] entropy={entropy.item():.4f} max_p={last_p.max().item():.3f}")
 
         return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
 
@@ -2295,8 +2295,8 @@ class VectorQuantize(nn.Module):
         # ---- 1. mask_dict が空なら全部 0 (勾配付き) を返す ----
         if mask_dict is None or len(mask_dict) == 0:
             zero = encoder_outputs.sum() * 0.0  # graph に繋がった 0
-            if logger is not None:
-                logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
+            # if logger is not None:
+            #     logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
             return zero, zero, zero, zero
 
         def _get_codebook_for_key(key, *, device, dtype):
