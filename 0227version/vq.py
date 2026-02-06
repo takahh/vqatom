@@ -2539,12 +2539,12 @@ class VectorQuantize(nn.Module):
         else:
             cb_repel_loss = cb_repel_num * 0.0  # guard
 
-        if logger is not None:
-            logger.info(
-                f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
-                f"total_latent={int(total_latent)}, "
-                f"commit_loss={commit_loss.item():.6f}"
-            )
+        # if logger is not None:
+        #     logger.info(
+        #         f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
+        #         f"total_latent={int(total_latent)}, "
+        #         f"commit_loss={commit_loss.item():.6f}"
+        #     )
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
