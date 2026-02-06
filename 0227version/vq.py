@@ -1294,6 +1294,25 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             masked = data[0][idx]  # (N_i, D)
+            # ---------------------------
+            # save latents for UMAP
+            # ---------------------------
+            import os, torch
+
+            if skey == "6_0_3_1_1_0":
+                os.makedirs("dumps", exist_ok=True)
+                path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
+
+                payload = {
+                    "epoch": int(epoch) if epoch is not None else None,
+                    "key": skey,
+                    "masked_latents": masked.detach().to("cpu", dtype=torch.float16),
+                    # optional:
+                    "N": int(masked.shape[0]),
+                    "D": int(masked.shape[1]),
+                }
+                torch.save(payload, path)
+
             N_i = masked.shape[0]
             if N_i == 0:
                 continue
