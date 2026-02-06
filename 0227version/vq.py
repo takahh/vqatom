@@ -1858,8 +1858,16 @@ class EuclideanCodebook(nn.Module):
         # update EMA only when actually training
         do_ema = bool(self.training and (mode == "train") and (epoch is not None))
 
-        last_skey = None
-        last_p = None
+        # ---- per-epoch split gate (key-wise at most once) ----
+        if do_ema:
+            if not hasattr(self, "_split_epoch"):
+                self._split_epoch = None
+            if not hasattr(self, "_split_done_epoch"):
+                self._split_done_epoch = set()
+
+            if self._split_epoch != int(epoch):
+                self._split_epoch = int(epoch)
+                self._split_done_epoch.clear()
 
         for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
             if idx_global is None or idx_global.numel() == 0:
@@ -1959,7 +1967,7 @@ class EuclideanCodebook(nn.Module):
                     mom = 0.99
                     ue.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
 
-                    if is_last_batch and bool(getattr(self, "do_split_the_winner", True)):
+                    if bool(getattr(self, "do_split_the_winner", True)) and (skey not in self._split_done_epoch):
                         did = self.split_the_winner_ema(
                             embed=centers,
                             ema_sum=ea,
@@ -1972,10 +1980,15 @@ class EuclideanCodebook(nn.Module):
                             cooldown_steps=int(getattr(self, "split_cooldown_steps", 2000)),
                             eps=float(getattr(self, "eps", 1e-8)),
                         )
+
+                        # “その epoch のその key はもう二度と split しない”
+                        self._split_done_epoch.add(skey)
+
                         if logger is not None and did:
                             pp = ue / (ue.sum() + 1e-8)
                             mx, mx_i = float(pp.max().item()), int(pp.argmax().item())
-                            logger.info(f"[SPLIT][EPOCH] key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
+                            logger.info(
+                                f"[SPLIT][KEY-ONCE] epoch={epoch} key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
 
                     # ---- EMA update of centers
                     decay = float(self.decay)
