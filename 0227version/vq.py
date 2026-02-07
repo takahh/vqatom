@@ -1399,6 +1399,9 @@ class EuclideanCodebook(nn.Module):
                 else:
                     X_ss = masked
                     y_ss = labels
+                # init_embed_ の冒頭あたり（masked / X_ss を作った直後など）
+                keep = None
+                keep_ratio = None
 
                 # --------------------------------------------------------------------------------
                 #  For Debug Delete Soon
@@ -1409,7 +1412,12 @@ class EuclideanCodebook(nn.Module):
                 singletons = (bc == 1).sum().item()
                 nz = (bc > 0).sum().item()
                 mx = (bc.max().float() / y.numel()).item()
-                keep_ratio = keep.float().mean().item()
+                if keep is not None:
+                    keep_ratio = keep.float().mean().item()
+                else:
+                    keep_ratio = 1.0  # あるいは logger しない
+
+                # keep_ratio = keep.float().mean().item()
                 logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
 
                 logger.info(
