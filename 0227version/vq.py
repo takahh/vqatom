@@ -1968,11 +1968,28 @@ class EuclideanCodebook(nn.Module):
                     ue.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
 
                     if bool(getattr(self, "do_split_the_winner", True)) and (skey not in self._split_done_epoch):
+                        #
+                        #   `     self,
+                        #         embed,  # (K, D)  centers tensor (writeable view)
+                        #         ema_sum,  # (K, D)  EMA sum of assigned latents (same shape as embed)
+                        #         ema_count,  # (K,)    EMA count
+                        #         usage_ema,  # (K,)    EMA usage (for split decision)
+                        #         batch_counts,  # (K,)    batch histogram (float)
+                        #         *,
+                        #         split_thr=0.15,
+                        #         prune_src_thr=0.005,  # prefer donor codes with p < this
+                        #         noise_scale=0.02,
+                        #         cooldown=None,  # (K,) int/long buffer
+                        #         cooldown_steps=2000,
+                        #         eps=1e-8,
+                        # ):`
                         did = self.split_the_winner_ema(
                             embed=centers,
                             ema_sum=ea,
                             ema_count=cs,
                             usage_ema=ue,
+                            batch_counts=batch_counts,
+                            batch_counts2=batch_counts,
                             split_thr=float(getattr(self, "split_thr", 0.15)),
                             prune_src_thr=float(getattr(self, "prune_src_thr", 0.005)),
                             noise_scale=float(getattr(self, "split_noise_scale", 0.02)),
