@@ -1528,7 +1528,7 @@ class EuclideanCodebook(nn.Module):
             ema_count,  # (K,)    EMA count
             usage_ema,  # (K,)    EMA usage (for split decision)
             batch_counts,  # (K,)    batch histogram (float)
-            *,
+            batch_counts2,
             split_thr=0.15,
             prune_src_thr=0.005,  # prefer donor codes with p < this
             noise_scale=0.02,
