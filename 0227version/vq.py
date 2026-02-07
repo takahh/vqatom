@@ -1400,29 +1400,32 @@ class EuclideanCodebook(nn.Module):
                     X_ss = masked
                     y_ss = labels
 
-                # # --------------------------------------------------------------------------------
-                # #  For Debug Delete Soon
-                # # --------------------------------------------------------------------------------
-                # y = y_ss.long()
-                # u = torch.unique(y).numel()
-                # bc = torch.bincount(y)
-                # singletons = (bc == 1).sum().item()
-                # nz = (bc > 0).sum().item()
-                # mx = (bc.max().float() / y.numel()).item()
-                # logger.info(
-                #     f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
-                #
-                # # debug diag (optional)
-                # with torch.no_grad():
-                #     def _diag(x, y, centers, tag=""):
-                #         u = torch.unique(y)
-                #         print(f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
-                #               f"finite_centers={torch.isfinite(centers).all().item()} "
-                #               f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                #               f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                #               f"n_unique_labels={len(u)}")
-                #
-                #     _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
+                # --------------------------------------------------------------------------------
+                #  For Debug Delete Soon
+                # --------------------------------------------------------------------------------
+                y = y_ss.long()
+                u = torch.unique(y).numel()
+                bc = torch.bincount(y)
+                singletons = (bc == 1).sum().item()
+                nz = (bc > 0).sum().item()
+                mx = (bc.max().float() / y.numel()).item()
+                keep_ratio = keep.float().mean().item()
+                logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
+
+                logger.info(
+                    f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
+
+                # debug diag (optional)
+                with torch.no_grad():
+                    def _diag(x, y, centers, tag=""):
+                        u = torch.unique(y)
+                        print(f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
+                              f"finite_centers={torch.isfinite(centers).all().item()} "
+                              f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
+                              f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
+                              f"n_unique_labels={len(u)}")
+
+                    _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
 
                 # ---- singleton filter (safe + fast) ----
                 y = y_ss.long()
@@ -1435,8 +1438,8 @@ class EuclideanCodebook(nn.Module):
                 y2 = y[keep]
 
                 u2 = torch.unique(y2).numel()
-                if X2.shape[0] < 200 or u2 < 2:
-                    ss = float("nan")
+                if X2.shape[0] < 50 or u2 < 2:
+                    ss = 0.0
                 else:
                     ss = self.silhouette_score_torch(X2, y2, row_block=8192, device=masked.device)
 
