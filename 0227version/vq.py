@@ -1384,8 +1384,7 @@ class EuclideanCodebook(nn.Module):
                 if active is not None and active.any():
                     centers = centers_all[active]  # (K_active, D)
                 else:
-                    # fallback: at least 1 center
-                    centers = centers_all[:1]
+                    centers = centers_all[:1]  # fallback: at least 1 center
 
                 # labels via nearest center (N_i,)
                 labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
@@ -1399,54 +1398,41 @@ class EuclideanCodebook(nn.Module):
                 else:
                     X_ss = masked
                     y_ss = labels
-                # init_embed_ の冒頭あたり（masked / X_ss を作った直後など）
-                keep = None
-                keep_ratio = None
 
-                # --------------------------------------------------------------------------------
-                #  For Debug Delete Soon
-                # --------------------------------------------------------------------------------
+                # ---- debug diag (optional) ----
+                def _diag(x, y, centers, tag=""):
+                    u = torch.unique(y)
+                    print(
+                        f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
+                        f"finite_centers={torch.isfinite(centers).all().item()} "
+                        f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
+                        f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
+                        f"n_unique_labels={len(u)}"
+                    )
+
+                _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
+
+                # ---- singleton filter (safe + consistent labels) ----
+                # IMPORTANT: compress labels FIRST, then bincount/keep/y2
                 y = y_ss.long()
-                u = torch.unique(y).numel()
-                bc = torch.bincount(y)
-                singletons = (bc == 1).sum().item()
-                nz = (bc > 0).sum().item()
-                mx = (bc.max().float() / y.numel()).item()
-                if keep is not None:
-                    keep_ratio = keep.float().mean().item()
-                else:
-                    keep_ratio = 1.0  # あるいは logger しない
+                _, y = torch.unique(y, return_inverse=True)  # 0..nuniq-1
 
+                u = int(torch.unique(y).numel())
                 bc = torch.bincount(y)
+                singletons = int((bc == 1).sum().item())
+                nz = int((bc > 0).sum().item())
+                mx = float((bc.max().float() / max(1, y.numel())).item())
+
                 keep = (bc[y] >= 2)
-
                 X2 = X_ss[keep]
                 y2 = y[keep]
+                u2 = int(torch.unique(y2).numel()) if y2.numel() > 0 else 0
 
-                # debug diag (optional)
-                with torch.no_grad():
-                    def _diag(x, y, centers, tag=""):
-                        u = torch.unique(y)
-                        print(f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
-                              f"finite_centers={torch.isfinite(centers).all().item()} "
-                              f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                              f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                              f"n_unique_labels={len(u)}")
+                # correct keep_ratio: shape-based is safest
+                keep_ratio = float(X2.shape[0] / max(1, X_ss.shape[0]))
 
-                    _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
-
-                # ---- singleton filter (safe + fast) ----
-                y = y_ss.long()
-                _, y = torch.unique(y, return_inverse=True)  # compress labels to 0..nuniq-1
-
-
-                u2 = torch.unique(y2).numel()
-
-                # keep_ratio = keep.float().mean().item()
                 logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
-
-                logger.info(
-                    f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
+                logger.info(f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
 
                 if X2.shape[0] < 50 or u2 < 2:
                     ss = 0.0
