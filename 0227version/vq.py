@@ -1417,6 +1417,12 @@ class EuclideanCodebook(nn.Module):
                 else:
                     keep_ratio = 1.0  # あるいは logger しない
 
+                bc = torch.bincount(y)
+                keep = (bc[y] >= 2)
+
+                X2 = X_ss[keep]
+                y2 = y[keep]
+
                 # keep_ratio = keep.float().mean().item()
                 logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
 
@@ -1439,11 +1445,6 @@ class EuclideanCodebook(nn.Module):
                 y = y_ss.long()
                 _, y = torch.unique(y, return_inverse=True)  # compress labels to 0..nuniq-1
 
-                bc = torch.bincount(y)
-                keep = (bc[y] >= 2)
-
-                X2 = X_ss[keep]
-                y2 = y[keep]
 
                 u2 = torch.unique(y2).numel()
                 if X2.shape[0] < 50 or u2 < 2:
