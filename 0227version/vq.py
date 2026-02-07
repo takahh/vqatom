@@ -1423,12 +1423,6 @@ class EuclideanCodebook(nn.Module):
                 X2 = X_ss[keep]
                 y2 = y[keep]
 
-                # keep_ratio = keep.float().mean().item()
-                logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
-
-                logger.info(
-                    f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
-
                 # debug diag (optional)
                 with torch.no_grad():
                     def _diag(x, y, centers, tag=""):
@@ -1447,6 +1441,13 @@ class EuclideanCodebook(nn.Module):
 
 
                 u2 = torch.unique(y2).numel()
+
+                # keep_ratio = keep.float().mean().item()
+                logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
+
+                logger.info(
+                    f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
+
                 if X2.shape[0] < 50 or u2 < 2:
                     ss = 0.0
                 else:
