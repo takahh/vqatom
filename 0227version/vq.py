@@ -1749,8 +1749,17 @@ class EuclideanCodebook(nn.Module):
     #          optional per-key logging.
     # ------------------------------------------------------------------
     @torch.amp.autocast("cuda", enabled=False)
-    def forward(self, x, feature=None, mask_dict=None, logger=None,
-                chunk_i=None, epoch=None, mode=None, is_last_batch: bool = False):
+    def forward(
+        self,
+        x,
+        feature=None,
+        mask_dict=None,
+        logger=None,
+        chunk_i=None,
+        epoch=None,
+        mode=None,
+        is_last_batch: bool = False,
+    ):
         """
         Per-element vector quantization codebook forward.
 
@@ -1772,38 +1781,74 @@ class EuclideanCodebook(nn.Module):
               0
           - otherwise:
               (quantize_st, embed_ind_dict, embed, ent_metric_total)
-            NOTE: ent_metric_total is a metric (not backprop) under hard assignments + EMA.
         """
         import os, time
         import torch
         from einops import rearrange
+
+        # -----------------------------
+        # small helpers
+        # -----------------------------
         def _safe_l2norm(t: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
-            # row-wise L2 normalize with eps + NaN guard
             den = t.norm(dim=-1, keepdim=True).clamp_min(eps)
             t = t / den
             return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
 
-        def _clst_diag(x: torch.Tensor, centers: torch.Tensor, skey: str, safe: str, epoch: int, mode: str,
-                       tag: str = ""):
-            with torch.no_grad():
-                x_norm = x.norm(dim=-1)
-                c_norm = centers.norm(dim=-1)
+        def _log(msg: str):
+            if logger is not None:
+                logger.info(msg)
+            else:
+                print(msg)
 
-                x_finite = torch.isfinite(x).all().item()
-                c_finite = torch.isfinite(centers).all().item()
+        def _stat_vec(t: torch.Tensor):
+            tf = t.float()
+            if tf.numel() == 0:
+                return {
+                    "finite": True,
+                    "min": float("nan"),
+                    "max": float("nan"),
+                    "var_mean": float("nan"),
+                    "nrm_min": float("nan"),
+                    "nrm_mean": float("nan"),
+                    "nrm_max": float("nan"),
+                }
+            nrm = tf.norm(dim=-1)
+            return {
+                "finite": bool(torch.isfinite(tf).all().item()),
+                "min": float(tf.min().item()),
+                "max": float(tf.max().item()),
+                "var_mean": float(tf.var(dim=0, unbiased=False).mean().item()),
+                "nrm_min": float(nrm.min().item()),
+                "nrm_mean": float(nrm.mean().item()),
+                "nrm_max": float(nrm.max().item()),
+            }
 
-                x_var = x.float().var(dim=0).mean().item() if x.numel() else 0.0
-                c_var = centers.float().var(dim=0).mean().item() if centers.numel() else 0.0
+        def _diag(tag: str, x_: torch.Tensor, c_: torch.Tensor, skey: str, safe: str, epoch_: int):
+            xs = _stat_vec(x_)
+            cs = _stat_vec(c_)
+            _log(
+                f"[CLST-DIAG]{tag} epoch={epoch_} key={skey} safe={safe} "
+                f"x_finite={xs['finite']} c_finite={cs['finite']} "
+                f"x_minmax=({xs['min']:.3e},{xs['max']:.3e}) "
+                f"c_minmax=({cs['min']:.3e},{cs['max']:.3e}) "
+                f"x_var={xs['var_mean']:.3e} c_var={cs['var_mean']:.3e} "
+                f"x_nrm(min/mean/max)=({xs['nrm_min']:.3e},{xs['nrm_mean']:.3e},{xs['nrm_max']:.3e}) "
+                f"c_nrm(min/mean/max)=({cs['nrm_min']:.3e},{cs['nrm_mean']:.3e},{cs['nrm_max']:.3e}) "
+                f"K={int(c_.shape[0])}"
+            )
 
-                # “全部同じ中心”の検出（丸めてユニーク数）
-                c_unique_norms = torch.unique(c_norm.round(decimals=6)).numel() if centers.numel() else 0
+        # Choose ONE assignment rule for EVERYTHING.
+        # True: normalize (cosine-ish); False: raw L2
+        use_norm_assign = bool(getattr(self, "use_norm_assign", True))
+        k_block = int(getattr(self, "assign_k_block", 1024))
 
-                print(
-                    f"[CLST-DIAG]{tag} mode={mode} epoch={epoch} skey={skey} safe={safe} "
-                    f"| x: finite={x_finite} norm=[{x_norm.min().item():.3e},{x_norm.max().item():.3e}] var={x_var:.3e} "
-                    f"| c: finite={c_finite} norm=[{c_norm.min().item():.3e},{c_norm.max().item():.3e}] var={c_var:.3e} "
-                    f"unique_norms={c_unique_norms} K={centers.shape[0]}"
-                )
+        # Split policy
+        do_split = bool(getattr(self, "do_split_the_winner", True))
+        split_once_per_epoch = True  # your "Option A"
+        split_only_last_batch = True  # IMPORTANT for Option A
+
+        # usage_ema momentum
+        usage_mom = float(getattr(self, "usage_ema_mom", 0.99))
 
         # -----------------------------
         # 0) global offset management
@@ -1835,9 +1880,6 @@ class EuclideanCodebook(nn.Module):
 
         # normalize mask_dict to LongTensor on device (global indices)
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
-        #
-        # if logger is not None:
-        #     logger.info(f"[CODEBOOK] mode={mode} is_last_batch={is_last_batch}")
 
         # -----------------------------
         # 2) safe-key <-> int id mapping
@@ -1847,16 +1889,8 @@ class EuclideanCodebook(nn.Module):
         if not hasattr(self, "_id2safe"):
             self._id2safe = {}
 
-        # cb_dict (key->K_e) exists?
         if not hasattr(self, "cb_dict"):
             self.cb_dict = {}
-
-        def _get_safe_and_code(skey: str):
-            K_e = int(self.cb_dict.get(skey, self.codebook_size))
-            safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
-            code_param = self.embed[safe]  # (1,K,D) or (K,D)
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
-            return safe, code_param, code
 
         def _safe_id(safe: str) -> int:
             sid = self._safe2id.get(safe)
@@ -1865,6 +1899,22 @@ class EuclideanCodebook(nn.Module):
                 self._safe2id[safe] = sid
                 self._id2safe[sid] = safe
             return sid
+
+        def _get_safe_and_code(skey: str):
+            K_e = int(self.cb_dict.get(skey, self.codebook_size))
+            safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
+            code_param = self.embed[safe]  # (1,K,D) or (K,D)
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
+            return safe, code_param, code
+
+        def _assign(masked_latents: torch.Tensor, code: torch.Tensor) -> torch.Tensor:
+            # Returns idx_code: (Ni,) long on device
+            if use_norm_assign:
+                ml = _safe_l2norm(masked_latents)
+                cc = _safe_l2norm(code)
+                return self.argmin_dist_blockwise_l2(ml, cc, k_block=k_block)
+            else:
+                return self.argmin_dist_blockwise_l2(masked_latents, code, k_block=k_block)
 
         # -----------------------------
         # 3) infer: IDs only
@@ -1892,31 +1942,17 @@ class EuclideanCodebook(nn.Module):
                 safe, _code_param, code = _get_safe_and_code(skey)
                 sid = _safe_id(safe)
 
-                # --- CLST直前（infer） ---
-                # 正規化は “試しに” まず距離計算用だけにかける（embed自体はまだ変えない）
-                ml = masked_latents
-                cc = code
-
-                # 診断ログ（必要なら key 限定してもOK）
-                # if skey == "6_0_3_1_1_0" and chunk_i == 0:
-                #     _clst_diag(ml, cc, skey, safe, int(epoch or -1), str(mode), tag=" infer pre")
-
-                ml_n = _safe_l2norm(ml)
-                cc_n = _safe_l2norm(cc)
-
                 with torch.no_grad():
-                    idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024).to(torch.int32)
+                    idx_code = _assign(masked_latents, code).to(dtype=torch.int32)
 
                 key_id_full.index_copy_(
-                    0, idx_local,
+                    0,
+                    idx_local,
                     torch.full((idx_local.numel(),), sid, device=flatten.device, dtype=torch.int32),
                 )
                 cluster_id_full.index_copy_(0, idx_local, idx_code)
 
-                # optional per-key
                 self.embed_ind_dict[skey] = idx_code
-
-                del masked_latents, code, idx_code
 
             self.latent_size_sum = global_end
             torch.cuda.empty_cache()
@@ -1948,25 +1984,10 @@ class EuclideanCodebook(nn.Module):
                 safe, _code_param, code = _get_safe_and_code(skey)
 
                 with torch.no_grad():
+                    idx_code = _assign(masked_latents, code)
+                    quantize = code.index_select(0, idx_code)
 
-                    ml = masked_latents
-                    cc = code
-
-                    # _clst_diag(ml, cc, skey, safe, int(epoch or -1), str(mode), tag=" dump pre")
-
-                    ml_n = _safe_l2norm(ml)
-                    cc_n = _safe_l2norm(cc)
-
-                    with torch.no_grad():
-                        idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024)
-
-                    idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)
-                quantize = code.index_select(0, idx_code)
-
-                self.quantize_dict[skey] = quantize
-                self.embed_ind_dict[skey] = idx_code.to(torch.int32)
-
-                # ---- store dump (CPU) ----
+                # store dump (CPU)
                 save_latents, save_centers, save_assign, save_quantized = True, True, True, False
                 lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16) if save_latents else None
                 ctr_cpu = code.detach().to("cpu", dtype=torch.float16) if save_centers else None
@@ -1986,8 +2007,6 @@ class EuclideanCodebook(nn.Module):
                     entry["quantize"].append(qnt_cpu)
                 if save_centers and entry["centers"] is None:
                     entry["centers"] = ctr_cpu
-
-                del masked_latents, code, idx_code, quantize
 
             self.latent_size_sum = global_end
             torch.cuda.empty_cache()
@@ -2014,16 +2033,14 @@ class EuclideanCodebook(nn.Module):
         # -----------------------------
         ent_metric_total = torch.zeros((), device=flatten.device, dtype=torch.float32)
 
-        # update EMA only when actually training
         do_ema = bool(self.training and (mode == "train") and (epoch is not None))
 
         # ---- per-epoch split gate (key-wise at most once) ----
-        if do_ema:
+        if do_ema and split_once_per_epoch:
             if not hasattr(self, "_split_epoch"):
                 self._split_epoch = None
             if not hasattr(self, "_split_done_epoch"):
                 self._split_done_epoch = set()
-
             if self._split_epoch != int(epoch):
                 self._split_epoch = int(epoch)
                 self._split_done_epoch.clear()
@@ -2042,103 +2059,43 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             skey = str(key)
-            last_skey = skey
+            safe, code_param, code = _get_safe_and_code(skey)
 
-            K_e_default = int(self.cb_dict.get(skey, self.codebook_size))
-            safe = self._get_or_create_safe_key(skey, K_e_default, D, device=flatten.device)
+            # (optional) diag for specific keys
+            if (epoch is not None) and (chunk_i == 0) and (skey in set(getattr(self, "diag_keys", []))):
+                _diag(tag=" pre-assign", x_=masked_latents, c_=code, skey=skey, safe=safe, epoch_=int(epoch))
 
-            # after safe created
-            if (epoch == 2) and (chunk_i == 0) and (skey in ("6_0_3_1_1_0", "6_0_4_0_0_0", "7_0_3_0_0_0")):
-                # code_param はこの後に取るので、まず safe と K の予定だけ
-                print(f"[SAFE-CHECK] epoch={epoch} skey={skey} K_e_default={K_e_default} safe={safe}")
-
-            code_param = self.embed[safe]  # (1,K,D) or (K,D)
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
-
-            def _stat_vec(t: torch.Tensor):
-                # t: (N,D) or (K,D)
-                tf = t.float()
-                nrm = tf.norm(dim=-1)
-                return {
-                    "finite": bool(torch.isfinite(tf).all().item()),
-                    "min": float(tf.min().item()) if tf.numel() else float("nan"),
-                    "max": float(tf.max().item()) if tf.numel() else float("nan"),
-                    "mean": float(tf.mean().item()) if tf.numel() else float("nan"),
-                    "var_mean": float(tf.var(dim=0, unbiased=False).mean().item()) if tf.numel() else float("nan"),
-                    "nrm_min": float(nrm.min().item()) if nrm.numel() else float("nan"),
-                    "nrm_max": float(nrm.max().item()) if nrm.numel() else float("nan"),
-                    "nrm_mean": float(nrm.mean().item()) if nrm.numel() else float("nan"),
-                }
-
-            def _log_stats(tag: str, x: torch.Tensor, c: torch.Tensor):
-                xs = _stat_vec(x)
-                cs = _stat_vec(c)
-                msg = (
-                    f"[CLST-DIAG]{tag} "
-                    f"x_finite={xs['finite']} c_finite={cs['finite']} "
-                    f"x_minmax=({xs['min']:.3e},{xs['max']:.3e}) "
-                    f"c_minmax=({cs['min']:.3e},{cs['max']:.3e}) "
-                    f"x_var={xs['var_mean']:.3e} c_var={cs['var_mean']:.3e} "
-                    f"x_nrm(min/mean/max)=({xs['nrm_min']:.3e},{xs['nrm_mean']:.3e},{xs['nrm_max']:.3e}) "
-                    f"c_nrm(min/mean/max)=({cs['nrm_min']:.3e},{cs['nrm_mean']:.3e},{cs['nrm_max']:.3e})"
-                )
-                if logger is not None:
-                    logger.info(msg)
-                else:
-                    print(msg)
-
-            # --- insert here: right after code is defined ---
+            # hard assignment (ONE rule only)
             with torch.no_grad():
-                # masked_latents: (Ni,D), code: (K,D)
-                _log_stats(tag=f" epoch={epoch} key={skey} pre-assign", x=masked_latents, c=code)
+                idx_code = _assign(masked_latents, code)
+                idx_code_long = idx_code.to(dtype=torch.long)
 
-            # hard assignment
-            with torch.no_grad():
-                ml = masked_latents
-                cc = code
-
-                # “blackhole になったキー”だけ出すのが現実的
-                # 例: でかいキーだけ or epoch==2 の最初だけ
-                if logger is None:
-                    # print版
-                    if epoch == 2 and chunk_i == 0 and skey in ("6_0_3_1_1_0", "6_0_4_0_0_0", "7_0_3_0_0_0"):
-                        _clst_diag(ml, cc, skey, safe, int(epoch), str(mode), tag=" train pre")
-                else:
-                    # logger版にしたければ print を logger.info に変える（まずはprint推奨）
-                    pass
-
-                ml_n = _safe_l2norm(ml)
-                cc_n = _safe_l2norm(cc)
-
-                with torch.no_grad():
-                    idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024)  # (Ni,)
-
-            with torch.no_grad():
-                idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)
-                bc = torch.bincount(idx_code, minlength=code.shape[0]).float()
+                # quick post-assign stats
+                bc = torch.bincount(idx_code_long, minlength=code.shape[0]).float()
                 denom = bc.sum().clamp_min(1.0)
                 p = bc / denom
                 mx, mx_i = float(p.max().item()), int(p.argmax().item())
-                msg = f"[CLST-DIAG] epoch={epoch} key={skey} post-assign max_p={mx:.4f} argmax={mx_i} nonzeroK={(bc > 0).sum().item()}"
-                (logger.info(msg) if logger is not None else print(msg))
+                nonzeroK = int((bc > 0).sum().item())
+                _log(f"[CLST-DIAG] epoch={epoch} key={skey} post-assign max_p={mx:.4f} argmax={mx_i} nonzeroK={nonzeroK}")
 
-            quantize = code.index_select(0, idx_code)
-
+            quantize = code.index_select(0, idx_code_long)
             self.quantize_dict[skey] = quantize
-            self.embed_ind_dict[skey] = idx_code.to(torch.int32)
+            self.embed_ind_dict[skey] = idx_code_long.to(torch.int32)
 
+            # -------------------------
+            # EMA + (Option A) split
+            # -------------------------
             if do_ema:
-                # Shapes / writable view of centers
+                dev = code_param.device
+
+                # writable view of centers (but we will write from "means" below)
                 if code_param.ndim == 3:
                     K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
-                    centers = code_param.data.squeeze(0)  # (K,D)
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
-                    centers = code_param.data  # (K,D)
-
-                dev = code_param.device
                 self.cb_dict[skey] = int(K_e)
 
+                # IMPORTANT: use SAFE consistently for buffer names
                 buf_name_cs = f"cluster_size_{safe}"
                 buf_name_ea = f"embed_avg_{safe}"
                 buf_name_ue = f"usage_ema_{safe}"
@@ -2147,7 +2104,7 @@ class EuclideanCodebook(nn.Module):
                 def _get_buf(name, shape, dtype):
                     if hasattr(self, name):
                         t = getattr(self, name)
-                        if t.dtype != dtype or t.shape != shape or t.device != dev:
+                        if t.dtype != dtype or tuple(t.shape) != tuple(shape) or t.device != dev:
                             t = torch.zeros(*shape, device=dev, dtype=dtype)
                             setattr(self, name, t)
                         return t
@@ -2161,27 +2118,22 @@ class EuclideanCodebook(nn.Module):
                 cd = _get_buf(buf_name_cd, (K_e,), torch.long)
 
                 with torch.no_grad():
-                    idx_code_long = idx_code.to(device=dev, dtype=torch.long)
-
                     # batch_counts (K,)
-                    batch_counts = torch.zeros_like(cs, dtype=torch.float32)
-                    batch_counts.index_add_(0, idx_code_long, torch.ones_like(idx_code_long, dtype=torch.float32))
+                    batch_counts = torch.zeros((K_e,), device=dev, dtype=torch.float32)
+                    batch_counts.index_add_(0, idx_code_long.to(dev), torch.ones_like(idx_code_long, device=dev, dtype=torch.float32))
 
                     # batch_embed_sum (K,D)
-                    batch_embed_sum = torch.zeros_like(ea, dtype=torch.float32)
-                    batch_embed_sum.index_add_(0, idx_code_long, masked_latents.to(device=dev, dtype=torch.float32))
+                    batch_embed_sum = torch.zeros((K_e, D_e), device=dev, dtype=torch.float32)
+                    batch_embed_sum.index_add_(0, idx_code_long.to(dev), masked_latents.to(device=dev, dtype=torch.float32))
 
-                    # ---- entropy metric (per-key)
+                    # ---- metric: entropy (per-key)
                     denom = batch_counts.sum()
-                    if denom.item() > 0:
+                    if float(denom.item()) > 0.0:
                         p = batch_counts / (denom + 1e-8)
-                        ent_key = (p * (p + 1e-8).log()).sum()
-                        ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * ent_key
-                        last_p = p
+                        entropy = -(p * (p + 1e-12).log()).sum()
+                        ent_metric_total = ent_metric_total + float(getattr(self, "entropy_weight", 1e-3)) * (-(entropy))  # same sign as you used earlier
 
-                        if logger is not None and epoch is not None and skey == "6_0_3_1_1_0" and chunk_i == 0:
-
-                            entropy = -(p * (p + 1e-12).log()).sum()
+                        if logger is not None and epoch is not None and (skey in set(getattr(self, "entropy_keys", ["6_0_3_1_1_0"]))) and (chunk_i == 0):
                             topk = torch.topk(p, k=min(5, p.numel()))
                             logger.info(
                                 f"[VQ][{skey}] entropy={entropy.item():.4f} "
@@ -2190,24 +2142,30 @@ class EuclideanCodebook(nn.Module):
                                 f"top_p={[round(v, 4) for v in topk.values.tolist()]}"
                             )
 
-                    # ---- Option A: update usage_ema each minibatch, but split only at epoch end
-                    # cooldown tick is handled in the split function, but usage_ema update is here
-                    mom = 0.99
-                    ue.mul_(mom).add_(batch_counts, alpha=(1.0 - mom))
+                    # ---- update usage_ema each minibatch
+                    ue.mul_(usage_mom).add_(batch_counts, alpha=(1.0 - usage_mom))
 
-                    if bool(getattr(self, "do_split_the_winner", True)) and (skey not in self._split_done_epoch):
+                    # ---- EMA update (sums/counts)
+                    decay = float(self.decay)
+                    one_m = 1.0 - decay
+                    cs.mul_(decay).add_(batch_counts, alpha=one_m)
+                    ea.mul_(decay).add_(batch_embed_sum, alpha=one_m)
+
+                    # ---- compute means (centers)
+                    means = ea / (cs.unsqueeze(-1) + float(self.eps))  # (K,D)
+
+                    # ---- Option A: split only at epoch-end (last minibatch), at most once per key per epoch
+                    can_split_now = do_split and (not split_only_last_batch or bool(is_last_batch))
+                    if can_split_now and (not split_once_per_epoch or (skey not in self._split_done_epoch)):
                         did = self.split_the_winner_ema(
-                            embed=centers,
+                            embed=means,      # IMPORTANT: split on means so it's persistent
                             ema_sum=ea,
                             ema_count=cs,
-                            usage_ema=ue,  # ここは既に forward で更新済みの ue を渡す
+                            usage_ema=ue,
                             batch_counts=batch_counts,
                             batch_counts2=batch_counts,
-
-                            # --- PCA split 用 ---
                             X_batch=masked_latents.to(device=dev, dtype=torch.float32),
-                            assign=idx_code_long,  # (Ni,) in [0..K_e-1]
-
+                            assign=idx_code_long.to(device=dev, dtype=torch.long),
                             split_thr=float(getattr(self, "split_thr", 0.15)),
                             prune_src_thr=float(getattr(self, "prune_src_thr", 0.005)),
                             cooldown=cd,
@@ -2215,27 +2173,24 @@ class EuclideanCodebook(nn.Module):
                             eps=float(getattr(self, "eps", 1e-8)),
                         )
 
-                        # “その epoch のその key はもう二度と split しない”
-                        self._split_done_epoch.add(skey)
+                        if split_once_per_epoch:
+                            self._split_done_epoch.add(skey)
 
                         if logger is not None and did:
                             pp = ue / (ue.sum() + 1e-8)
-                            mx, mx_i = float(pp.max().item()), int(pp.argmax().item())
-                            logger.info(
-                                f"[SPLIT][KEY-ONCE] epoch={epoch} key={skey} did_split=True max_p={mx:.3f} winner={mx_i} K={K_e}")
+                            mx2, mx_i2 = float(pp.max().item()), int(pp.argmax().item())
+                            logger.info(f"[SPLIT][KEY-ONCE] epoch={epoch} key={skey} did_split=True max_p={mx2:.3f} winner={mx_i2} K={K_e}")
 
-                    # ---- EMA update of centers
-                    decay = float(self.decay)
-                    one_m = 1.0 - decay
-                    cs.mul_(decay).add_(batch_counts, alpha=one_m)
-                    ea.mul_(decay).add_(batch_embed_sum, alpha=one_m)
+                        # Re-sync ea to the moved means (prevents “split gets erased next line”)
+                        ea.copy_(means * (cs.unsqueeze(-1) + float(self.eps)))
 
-                    means = ea / (cs.unsqueeze(-1) + float(self.eps))
+                    # ---- finally write centers into parameter
                     if code_param.ndim == 3:
                         code_param.data.copy_(means.unsqueeze(0))
                     else:
                         code_param.data.copy_(means)
 
+            # clean per-key tensors
             del masked_latents, code, idx_code, quantize
 
         # -----------------------------
@@ -2266,10 +2221,7 @@ class EuclideanCodebook(nn.Module):
                 if in_chunk.numel() > 0:
                     all_local.append(in_chunk - global_start)
 
-        used = (torch.unique(torch.cat(all_local, dim=0))
-                if len(all_local) > 0
-                else torch.tensor([], dtype=torch.long, device=flatten.device))
-
+        used = torch.unique(torch.cat(all_local, dim=0)) if len(all_local) > 0 else torch.tensor([], dtype=torch.long, device=flatten.device)
         unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
         if used.numel() > 0:
             unused[used] = False
@@ -2285,14 +2237,7 @@ class EuclideanCodebook(nn.Module):
             self.latent_size_sum = global_end
 
         torch.cuda.empty_cache()
-
-        # if logger is not None and epoch is not None and (epoch % 3 == 1) and (last_skey is not None) and (
-        #         last_p is not None):
-        #     entropy = -(last_p * (last_p + 1e-12).log()).sum()
-        #     logger.info(f"[VQ][last_key={last_skey}] entropy={entropy.item():.4f} max_p={last_p.max().item():.3f}")
-
         return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
-
 
 class VectorQuantize(nn.Module):
     def __init__(
