@@ -1777,6 +1777,33 @@ class EuclideanCodebook(nn.Module):
         import os, time
         import torch
         from einops import rearrange
+        def _safe_l2norm(t: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+            # row-wise L2 normalize with eps + NaN guard
+            den = t.norm(dim=-1, keepdim=True).clamp_min(eps)
+            t = t / den
+            return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+
+        def _clst_diag(x: torch.Tensor, centers: torch.Tensor, skey: str, safe: str, epoch: int, mode: str,
+                       tag: str = ""):
+            with torch.no_grad():
+                x_norm = x.norm(dim=-1)
+                c_norm = centers.norm(dim=-1)
+
+                x_finite = torch.isfinite(x).all().item()
+                c_finite = torch.isfinite(centers).all().item()
+
+                x_var = x.float().var(dim=0).mean().item() if x.numel() else 0.0
+                c_var = centers.float().var(dim=0).mean().item() if centers.numel() else 0.0
+
+                # “全部同じ中心”の検出（丸めてユニーク数）
+                c_unique_norms = torch.unique(c_norm.round(decimals=6)).numel() if centers.numel() else 0
+
+                print(
+                    f"[CLST-DIAG]{tag} mode={mode} epoch={epoch} skey={skey} safe={safe} "
+                    f"| x: finite={x_finite} norm=[{x_norm.min().item():.3e},{x_norm.max().item():.3e}] var={x_var:.3e} "
+                    f"| c: finite={c_finite} norm=[{c_norm.min().item():.3e},{c_norm.max().item():.3e}] var={c_var:.3e} "
+                    f"unique_norms={c_unique_norms} K={centers.shape[0]}"
+                )
 
         # -----------------------------
         # 0) global offset management
@@ -1865,8 +1892,20 @@ class EuclideanCodebook(nn.Module):
                 safe, _code_param, code = _get_safe_and_code(skey)
                 sid = _safe_id(safe)
 
+                # --- CLST直前（infer） ---
+                # 正規化は “試しに” まず距離計算用だけにかける（embed自体はまだ変えない）
+                ml = masked_latents
+                cc = code
+
+                # 診断ログ（必要なら key 限定してもOK）
+                # if skey == "6_0_3_1_1_0" and chunk_i == 0:
+                #     _clst_diag(ml, cc, skey, safe, int(epoch or -1), str(mode), tag=" infer pre")
+
+                ml_n = _safe_l2norm(ml)
+                cc_n = _safe_l2norm(cc)
+
                 with torch.no_grad():
-                    idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024).to(torch.int32)
+                    idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024).to(torch.int32)
 
                 key_id_full.index_copy_(
                     0, idx_local,
@@ -1909,6 +1948,18 @@ class EuclideanCodebook(nn.Module):
                 safe, _code_param, code = _get_safe_and_code(skey)
 
                 with torch.no_grad():
+
+                    ml = masked_latents
+                    cc = code
+
+                    # _clst_diag(ml, cc, skey, safe, int(epoch or -1), str(mode), tag=" dump pre")
+
+                    ml_n = _safe_l2norm(ml)
+                    cc_n = _safe_l2norm(cc)
+
+                    with torch.no_grad():
+                        idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024)
+
                     idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)
                 quantize = code.index_select(0, idx_code)
 
@@ -1996,11 +2047,35 @@ class EuclideanCodebook(nn.Module):
             K_e_default = int(self.cb_dict.get(skey, self.codebook_size))
             safe = self._get_or_create_safe_key(skey, K_e_default, D, device=flatten.device)
 
+            # after safe created
+            if (epoch == 2) and (chunk_i == 0) and (skey in ("6_0_3_1_1_0", "6_0_4_0_0_0", "7_0_3_0_0_0")):
+                # code_param はこの後に取るので、まず safe と K の予定だけ
+                print(f"[SAFE-CHECK] epoch={epoch} skey={skey} K_e_default={K_e_default} safe={safe}")
+
             code_param = self.embed[safe]  # (1,K,D) or (K,D)
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
 
             # hard assignment
             with torch.no_grad():
+                ml = masked_latents
+                cc = code
+
+                # “blackhole になったキー”だけ出すのが現実的
+                # 例: でかいキーだけ or epoch==2 の最初だけ
+                if logger is None:
+                    # print版
+                    if epoch == 2 and chunk_i == 0 and skey in ("6_0_3_1_1_0", "6_0_4_0_0_0", "7_0_3_0_0_0"):
+                        _clst_diag(ml, cc, skey, safe, int(epoch), str(mode), tag=" train pre")
+                else:
+                    # logger版にしたければ print を logger.info に変える（まずはprint推奨）
+                    pass
+
+                ml_n = _safe_l2norm(ml)
+                cc_n = _safe_l2norm(cc)
+
+                with torch.no_grad():
+                    idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024)  # (Ni,)
+
                 idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)  # (Ni,)
             quantize = code.index_select(0, idx_code)
 
