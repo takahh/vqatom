@@ -1580,8 +1580,6 @@ class EuclideanCodebook(nn.Module):
 
     import torch
 
-    import torch
-
     @torch.no_grad()
     def split_the_winner_ema(
             self,
