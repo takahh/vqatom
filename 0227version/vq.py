@@ -2048,6 +2048,21 @@ class EuclideanCodebook(nn.Module):
         ent_metric_total = torch.zeros((), device=flatten.device, dtype=torch.float32)
 
         do_ema = bool(self.training and (mode == "train") and (epoch is not None))
+        # ---- epoch-wise max_p distribution collector ----
+        if not hasattr(self, "_mp_epoch"):
+            self._mp_epoch = None
+        if not hasattr(self, "_mp_list"):
+            self._mp_list = []
+        if not hasattr(self, "_mp_list_keys"):
+            self._mp_list_keys = []
+
+        # epochが変わったらリセット
+        if epoch is not None:
+            ep = int(epoch)
+            if self._mp_epoch != ep:
+                self._mp_epoch = ep
+                self._mp_list = []
+                self._mp_list_keys = []
 
         # ---- per-epoch split gate (key-wise at most once) ----
         if do_ema and split_once_per_epoch:
@@ -2088,8 +2103,8 @@ class EuclideanCodebook(nn.Module):
                 nonzeroK = int((bc > 0).sum().item())
 
                 # optional log
-                _log(
-                    f"[CLST-DIAG] epoch={epoch} key={skey} post-assign max_p={mx:.4f} argmax={mx_i} nonzeroK={nonzeroK}")
+                # _log(
+                #     f"[CLST-DIAG] epoch={epoch} key={skey} post-assign max_p={mx:.4f} argmax={mx_i} nonzeroK={nonzeroK}")
 
             quantize = code.index_select(0, idx_code_long)
             self.quantize_dict[skey] = quantize
@@ -2217,6 +2232,17 @@ class EuclideanCodebook(nn.Module):
                                 # IMPORTANT: keep ea consistent with modified means
                                 ea.copy_(means * (cs.unsqueeze(-1) + eps))
 
+                    # usage_ema 分布の max_p を計算（keyごと）
+                    total_u = ue.sum().clamp_min(1e-8)
+                    p_u = ue / total_u
+                    max_p_u = float(p_u.max().item())
+
+                    # 収集（epoch内に溜める）
+                    self._mp_list.append(max_p_u)
+                    # どのキーが悪いか後で分かるように (key, N_key, K)
+                    N_key = int(cs.sum().item())
+                    self._mp_list_keys.append((skey, max_p_u, N_key, int(K_e)))
+
                     # ---- finally write centers into parameter
                     if code_param.ndim == 3:
                         code_param.data.copy_(means.unsqueeze(0))
@@ -2269,6 +2295,37 @@ class EuclideanCodebook(nn.Module):
         # advance offset
         if chunk_i is not None:
             self.latent_size_sum = global_end
+
+        # ---- end-of-epoch report (only on last batch) ----
+        if (epoch is not None) and bool(is_last_batch) and (logger is not None):
+            if len(self._mp_list) > 0:
+                mp = torch.tensor(self._mp_list, dtype=torch.float32)
+                # 分位点
+                qs = torch.quantile(mp, torch.tensor([0.5, 0.75, 0.9, 0.95, 0.99]))
+                logger.info(
+                    f"[MAXP][epoch={int(epoch)}] "
+                    f"n_keys={len(self._mp_list)} "
+                    f"mean={mp.mean().item():.4f} std={mp.std(unbiased=False).item():.4f} "
+                    f"p50={qs[0].item():.4f} p75={qs[1].item():.4f} "
+                    f"p90={qs[2].item():.4f} p95={qs[3].item():.4f} p99={qs[4].item():.4f} "
+                    f"max={mp.max().item():.4f}"
+                )
+
+                # “どのキーが悪いか” topK を表示
+                topK = int(getattr(self, "maxp_report_topK", 20))
+                worst = sorted(self._mp_list_keys, key=lambda t: t[1], reverse=True)[:topK]
+                for (k, v, nkey, Ke) in worst:
+                    logger.info(f"[MAXP-WORST][epoch={int(epoch)}] key={k} max_p={v:.4f} N~{nkey} K={Ke}")
+
+                # 保存（任意）
+                if bool(getattr(self, "save_maxp_each_epoch", True)):
+                    os.makedirs("dumps", exist_ok=True)
+                    out = {
+                        "epoch": int(epoch),
+                        "maxp_list": self._mp_list,
+                        "detail": self._mp_list_keys,  # (key, max_p, N_key, K)
+                    }
+                    torch.save(out, f"dumps/maxp_epoch_{int(epoch):04d}.pt")
 
         torch.cuda.empty_cache()
         return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
