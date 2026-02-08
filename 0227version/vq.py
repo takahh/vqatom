@@ -1586,74 +1586,76 @@ class EuclideanCodebook(nn.Module):
     def split_the_winner_ema(
             self,
             *,
-            embed,  # (K, D) centers (writable view)
-            ema_sum,  # (K, D) EMA sum buffer (same shape as embed_avg)
-            ema_count,  # (K,)   EMA count buffer (cluster_size)
-            usage_ema,  # (K,)   EMA usage buffer (ALREADY updated outside; DO NOT update here)
-            batch_counts,  # (K,)   current batch histogram (float)
-            batch_counts2=None,  # unused (kept for signature compatibility)
+            embed,  # (K,D)  <-- IMPORTANT: this is MEANS (centers), writable view
+            ema_sum,  # (K,D)  <-- EMA SUM buffer (embed_avg_*), writable
+            ema_count,  # (K,)   <-- EMA COUNT buffer (cluster_size_*), writable
+            usage_ema,  # (K,)   <-- usage EMA (already updated outside), writable
+            batch_counts,  # (K,)   <-- current minibatch histogram (float)
+            batch_counts2=None,  # unused
 
-            # ---- PCA-guided split inputs (PER-KEY) ----
-            X_batch=None,  # (N_i, D) latents of THIS key in THIS minibatch (masked_latents)
-            assign=None,  # (N_i,) hard assignment in [0..K-1] for THIS key (idx_code_long)
+            # PCA-guided split inputs (per-key, per-minibatch)
+            X_batch=None,  # (N_i, D) latents for THIS key in THIS minibatch
+            assign=None,  # (N_i,) hard assignment in [0..K-1] for THIS key
 
             split_thr=0.15,
             prune_src_thr=0.005,
             noise_scale=0.02,
-            cooldown=None,  # (K,) long buffer
+            cooldown=None,  # (K,) long
             cooldown_steps=2000,
             eps=1e-8,
-            min_points=8,  # minimum points in winner cluster in this minibatch to do PCA
-            pca_power=0.5,  # how far to move donor along top-PC (scaled by std)
-            fallback_to_noise=True,  # if PCA not possible, use winner+noise
+            min_points=32,  # PCA needs some points; raise from 8 to be safer
+            pca_power=0.5,  # step ~ pca_power * std along top PC
+            fallback_to_noise=True,
     ):
         """
-        Split-the-winner (PCA-guided):
+        Split-the-winner (PCA-guided) that **persists** under EMA recomputation.
 
-        - Decide winner/donor based on usage_ema distribution p = usage_ema / sum.
-          (IMPORTANT: usage_ema MUST be updated outside this function; we do NOT update it here)
+        Contract:
+          - `embed` is interpreted as MEANS (centers): embed[k] = ema_sum[k] / (ema_count[k] + eps)
+          - This function will update BOTH:
+              (A) embed[winner], embed[donor]  (means)
+              (B) ema_sum / ema_count          so that next `means = ema_sum/ema_count` preserves the split
+              (C) usage_ema                    split 50/50 so donor doesn't inherit full popularity
+              (D) cooldown (optional)
 
-        - Winner: argmax p among eligible (cooldown==0)
-          Trigger: winner_p > split_thr
-
-        - Donor: argmin p among (p < prune_src_thr) & eligible & != winner; else argmin among eligible
-
-        - Donor center init:
-            Prefer PCA-guided split using current minibatch latents X_batch for the winner cluster:
-              donor = winner + v * (pca_power * std_along_v)
-              winner = winner - v * (pca_power * std_along_v)
-            where v is the top principal direction of (X_w - mean).
-
-          If PCA is not feasible (too few points, degenerate variance), fallback to:
-              donor = winner + small noise
-
-        - EMA buffers:
-            We split ema_sum/ema_count 50/50 between winner and donor (recommended),
-            and split usage_ema 50/50 so donor doesn't instantly inherit full popularity.
-
-        - Cooldown applied to both.
+        Winner selection is based on usage_ema distribution p = usage_ema / sum(usage_ema).
+        Donor is chosen among low-usage codes if possible.
         """
+
+        import torch
+
         K, D = embed.shape
         device = embed.device
 
+        # -------------------------
         # 0) cooldown tick
+        # -------------------------
         if cooldown is not None:
             cooldown.sub_(1).clamp_(min=0)
 
-        # 1) compute p from usage_ema (NO UPDATE HERE)
+        # -------------------------
+        # 1) compute p from usage_ema
+        # -------------------------
         total = usage_ema.sum()
         if float(total.item()) <= 0.0:
             return False
 
-        p = usage_ema / (total + eps)
+        p = usage_ema / (total + float(eps))
 
-        # 2) eligibility
+        # -------------------------
+        # 2) eligibility mask
+        # -------------------------
         if cooldown is not None:
             eligible = (cooldown <= 0)
         else:
             eligible = torch.ones(K, dtype=torch.bool, device=device)
 
-        # 3) winner among eligible
+        if not bool(eligible.any()):
+            return False
+
+        # -------------------------
+        # 3) pick winner among eligible
+        # -------------------------
         p_eligible = torch.where(eligible, p, torch.full_like(p, -float("inf")))
         winner = int(torch.argmax(p_eligible).item())
         winner_p = float(p[winner].item())
@@ -1661,7 +1663,10 @@ class EuclideanCodebook(nn.Module):
         if (not torch.isfinite(p_eligible[winner])) or (winner_p <= float(split_thr)):
             return False
 
-        # 4) donor selection
+        # -------------------------
+        # 4) pick donor
+        #     prefer low-usage among eligible and != winner
+        # -------------------------
         low = (p < float(prune_src_thr)) & eligible
         low[winner] = False
 
@@ -1676,64 +1681,92 @@ class EuclideanCodebook(nn.Module):
             p_elig2 = torch.where(elig2, p, torch.full_like(p, float("inf")))
             donor = int(torch.argmin(p_elig2).item())
 
-        # 5) init donor center (PCA-guided if possible)
+        if donor == winner:
+            return False
+
+        # -------------------------
+        # 5) determine split direction (PCA if possible)
+        # -------------------------
         did_pca = False
 
+        cw = embed[winner].clone()  # current winner center (mean)
+
         if (X_batch is not None) and (assign is not None):
-            # ensure shapes
             if X_batch.ndim == 2 and assign.ndim == 1 and X_batch.shape[0] == assign.shape[0]:
-                # pick winner points within this minibatch
                 aw = (assign == int(winner))
                 n_w = int(aw.sum().item())
                 if n_w >= int(min_points):
                     Xw = X_batch[aw].to(device=device, dtype=torch.float32)  # (n_w, D)
-                    # center
                     mu = Xw.mean(dim=0, keepdim=True)
                     Y = Xw - mu
-                    # compute top PC using SVD on (n_w, D)
-                    # If n_w < D it's still fine.
-                    try:
-                        # torch.linalg.svd is stable
-                        # Y = U S Vh, top direction is Vh[0]
-                        U, S, Vh = torch.linalg.svd(Y, full_matrices=False)
-                        v = Vh[0]  # (D,)
-                        # scale by std along v (so step matches cluster spread)
-                        proj = (Y @ v)  # (n_w,)
-                        std = proj.std(unbiased=False) + eps
-                        step = float(pca_power) * std
 
-                        # avoid degenerate
-                        if torch.isfinite(step) and float(step.item()) > 0.0 and torch.isfinite(v).all():
-                            # move winner & donor in opposite directions along v
-                            # winner center around current embed[winner]
-                            c = embed[winner]
-                            embed[winner].copy_(c - v * step)
-                            embed[donor].copy_(c + v * step)
-                            did_pca = True
-                    except Exception:
-                        did_pca = False
+                    # guard: if variance is almost zero, PCA is meaningless
+                    if torch.isfinite(Y).all() and float(Y.var(dim=0, unbiased=False).mean().item()) > 1e-12:
+                        try:
+                            # top principal direction via SVD
+                            U, S, Vh = torch.linalg.svd(Y, full_matrices=False)
+                            v = Vh[0]  # (D,)
+                            proj = (Y @ v)  # (n_w,)
+                            std = proj.std(unbiased=False) + float(eps)
+                            step = float(pca_power) * std
 
+                            if torch.isfinite(v).all() and torch.isfinite(step) and float(step.item()) > 0.0:
+                                # move winner and donor in opposite directions
+                                embed[winner].copy_(cw - v * step)
+                                embed[donor].copy_(cw + v * step)
+                                did_pca = True
+                        except Exception:
+                            did_pca = False
+
+        # fallback: winner + small noise
         if (not did_pca) and fallback_to_noise:
-            # noise fallback: donor = winner + noise
-            rms = torch.sqrt((embed[winner] * embed[winner]).mean() + eps)
-            noise = torch.randn(D, device=device) * (float(noise_scale) * rms)
-            embed[donor].copy_(embed[winner] + noise)
+            # scale noise by center RMS so it is neither tiny nor huge
+            rms = torch.sqrt((cw * cw).mean() + float(eps))
+            noise = torch.randn(D, device=device, dtype=torch.float32) * (float(noise_scale) * rms)
+            embed[winner].copy_(cw)  # keep winner as-is
+            embed[donor].copy_(cw + noise)
 
-        # 6) split EMA buffers 50/50 (keeps donor alive)
+        # -------------------------
+        # 6) split EMA buffers so split persists
+        # -------------------------
         if (ema_sum is not None) and (ema_count is not None):
-            ema_sum_d = ema_sum[winner].clone().mul_(0.5)
-            ema_cnt_d = ema_count[winner].clone().mul_(0.5)
-            ema_sum[winner].mul_(0.5)
-            ema_count[winner].mul_(0.5)
-            ema_sum[donor].copy_(ema_sum_d)
-            ema_count[donor].copy_(ema_cnt_d)
+            # ensure types
+            if ema_sum.dtype != torch.float32:
+                ema_sum = ema_sum.float()
+            if ema_count.dtype != torch.float32:
+                ema_count = ema_count.float()
 
-        # 7) split usage_ema too
+            # if winner has ~0 count, splitting counts is pointless; still seed donor with small count
+            cw_cnt = float(ema_count[winner].item())
+            if cw_cnt <= 0.0:
+                # seed a tiny mass so the new donor isn't erased instantly by division
+                seed = 1.0
+                ema_count[winner] = seed
+                ema_sum[winner].copy_(embed[winner] * seed)
+                cw_cnt = seed
+
+            # 50/50 split counts
+            cnt_w_new = ema_count[winner] * 0.5
+            cnt_d_new = ema_count[winner] - cnt_w_new  # keep exact sum
+
+            ema_count[winner] = cnt_w_new
+            ema_count[donor] = cnt_d_new
+
+            # reconstruct sums from the NEW means so consistency is exact:
+            # ema_sum[k] should equal embed[k] * ema_count[k] (approximately)
+            ema_sum[winner].copy_(embed[winner] * ema_count[winner].unsqueeze(0))
+            ema_sum[donor].copy_(embed[donor] * ema_count[donor].unsqueeze(0))
+
+        # -------------------------
+        # 7) split usage_ema too (so donor survives)
+        # -------------------------
         usage_w = usage_ema[winner].clone()
         usage_ema[winner].mul_(0.5)
         usage_ema[donor] = usage_w * 0.5
 
-        # 8) cooldown
+        # -------------------------
+        # 8) cooldown both
+        # -------------------------
         if cooldown is not None:
             cooldown[winner] = int(cooldown_steps)
             cooldown[donor] = int(cooldown_steps)
