@@ -1230,6 +1230,85 @@ class EuclideanCodebook(nn.Module):
 
         return float(sil_sum / max(processed, 1))
 
+    import math
+    import torch
+
+    @torch.jit.ignore
+    def compute_cluster_metrics(self, y: torch.Tensor, K_req: int = None, topk: int = 5):
+        """
+        y: int64 labels, shape [N] (already compressed to 0..nuniq-1 recommended)
+        Returns:
+          N, K_req, K_eff, max_frac, topk_frac, entropy, perplexity,
+          singleton_ratio (clusters), singleton_point_ratio (points)
+        """
+        # y must be 1D long
+        if y is None or y.numel() == 0:
+            return {
+                "N": 0,
+                "K_req": int(K_req) if K_req is not None else None,
+                "K_eff": 0,
+                "max_frac": 0.0,
+                "topk_frac": 0.0,
+                "entropy": 0.0,
+                "perplexity": 1.0,
+                "singleton_ratio": 0.0,
+                "singleton_point_ratio": 0.0,
+            }
+
+        y = y.long().view(-1)
+        N = int(y.numel())
+
+        # compress labels to 0..nuniq-1 (robust even if already compressed)
+        _, y = torch.unique(y, return_inverse=True)
+
+        bc = torch.bincount(y)  # shape [nuniq]
+        nz_mask = (bc > 0)
+        bc_nz = bc[nz_mask]
+        K_eff = int(bc_nz.numel())
+
+        # fractions
+        bc_float = bc_nz.float()
+        denom = float(max(1, N))
+        p = (bc_float / denom).clamp_min(0.0)  # sum to 1 over active clusters
+
+        # max_frac
+        max_frac = float(p.max().item()) if K_eff > 0 else 0.0
+
+        # topk_frac
+        k = int(min(max(1, topk), K_eff)) if K_eff > 0 else 1
+        if K_eff > 0:
+            topk_vals = torch.topk(p, k=k, largest=True).values
+            topk_frac = float(topk_vals.sum().item())
+        else:
+            topk_frac = 0.0
+
+        # entropy (natural log) and perplexity
+        # H = -sum p log p
+        # perplexity = exp(H)
+        if K_eff > 0:
+            H = float((-(p * torch.log(p.clamp_min(1e-12))).sum()).item())
+            ppl = float(math.exp(H))
+        else:
+            H, ppl = 0.0, 1.0
+
+        # singleton ratios
+        singletons = (bc_nz == 1).sum()
+        singleton_ratio = float((singletons.float() / max(1.0, float(K_eff))).item())  # clusters
+        singleton_point_ratio = float((bc_nz[bc_nz == 1].sum().float() / denom).item())  # points
+
+        out = {
+            "N": N,
+            "K_req": int(K_req) if K_req is not None else None,
+            "K_eff": K_eff,
+            "max_frac": max_frac,
+            "topk_frac": topk_frac,
+            "entropy": H,
+            "perplexity": ppl,
+            "singleton_ratio": singleton_ratio,
+            "singleton_point_ratio": singleton_point_ratio,
+        }
+        return out
+
     @torch.jit.ignore
     def init_embed_(self, data, logger, epoch, mask_dict=None, use_cosine_sim: bool = False):
         """
@@ -1278,9 +1357,7 @@ class EuclideanCodebook(nn.Module):
 
             if data_stats is not None:
                 mu, sigma = data_stats
-                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (
-                    0.01 * sigma + 1e-6
-                )
+                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
                 out_means[K_run:] = mu + noise
             else:
                 out_means[K_run:] = 0
@@ -1294,20 +1371,18 @@ class EuclideanCodebook(nn.Module):
                 continue
 
             masked = data[0][idx]  # (N_i, D)
+
             # ---------------------------
-            # save latents for UMAP
+            # save latents for UMAP (optional)
             # ---------------------------
             import os, torch
-
             if skey == "6_0_3_1_1_0":
                 os.makedirs("dumps", exist_ok=True)
                 path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
-
                 payload = {
                     "epoch": int(epoch) if epoch is not None else None,
                     "key": skey,
                     "masked_latents": masked.detach().to("cpu", dtype=torch.float16),
-                    # optional:
                     "N": int(masked.shape[0]),
                     "D": int(masked.shape[1]),
                 }
@@ -1331,7 +1406,8 @@ class EuclideanCodebook(nn.Module):
             # 1) (Re)initialize ONLY at epoch 1 (or if missing)
             # -------------------------
             need_init = (epoch == 1) or (safe not in self.embed) or (not hasattr(self, buf_name_cs)) or (
-                not hasattr(self, buf_name_ea))
+                not hasattr(self, buf_name_ea)
+            )
 
             if need_init:
                 means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
@@ -1368,13 +1444,12 @@ class EuclideanCodebook(nn.Module):
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
             # -------------------------
-            # 2) SS every epoch (no kmeans)
+            # 2) Cluster metrics every epoch (NO SS)
             # -------------------------
             with torch.no_grad():
-                # current centers (K_req, D)
                 centers_all = self.embed[safe].detach()
 
-                # optionally drop dead codes for SS stability
+                # drop dead codes for a more meaningful distribution view
                 if hasattr(self, buf_name_cs):
                     cs_now = getattr(self, buf_name_cs)
                     active = (cs_now > 0)
@@ -1384,62 +1459,29 @@ class EuclideanCodebook(nn.Module):
                 if active is not None and active.any():
                     centers = centers_all[active]  # (K_active, D)
                 else:
-                    centers = centers_all[:1]  # fallback: at least 1 center
+                    centers = centers_all[:1]  # fallback
 
                 # labels via nearest center (N_i,)
                 labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
 
-                # optional subsample to keep SS cheap
-                max_n = int(getattr(self, "ss_max_n", 20000))
+                # optional subsample for cheaper metrics (not necessary, but keeps logs consistent)
+                max_n = int(getattr(self, "clst_max_n", 20000))
                 if labels.numel() > max_n:
                     perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
-                    X_ss = masked[perm]
-                    y_ss = labels[perm]
+                    y_eval = labels[perm]
                 else:
-                    X_ss = masked
-                    y_ss = labels
+                    y_eval = labels
 
-                # ---- debug diag (optional) ----
-                def _diag(x, y, centers, tag=""):
-                    u = torch.unique(y)
-                    print(
-                        f"[SS-DIAG]{tag} finite_masked={torch.isfinite(x).all().item()} "
-                        f"finite_centers={torch.isfinite(centers).all().item()} "
-                        f"x_var={x.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                        f"c_var={centers.float().var(dim=0, unbiased=False).mean().item():.3e} "
-                        f"n_unique_labels={len(u)}"
-                    )
+                metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
 
-                _diag(X_ss, y_ss, centers, tag=f" epoch={epoch} key={skey}")
-
-                # ---- singleton filter (safe + consistent labels) ----
-                # IMPORTANT: compress labels FIRST, then bincount/keep/y2
-                y = y_ss.long()
-                _, y = torch.unique(y, return_inverse=True)  # 0..nuniq-1
-
-                u = int(torch.unique(y).numel())
-                bc = torch.bincount(y)
-                singletons = int((bc == 1).sum().item())
-                nz = int((bc > 0).sum().item())
-                mx = float((bc.max().float() / max(1, y.numel())).item())
-
-                keep = (bc[y] >= 2)
-                X2 = X_ss[keep]
-                y2 = y[keep]
-                u2 = int(torch.unique(y2).numel()) if y2.numel() > 0 else 0
-
-                # correct keep_ratio: shape-based is safest
-                keep_ratio = float(X2.shape[0] / max(1, X_ss.shape[0]))
-
-                logger.info(f"[SS-KEEP] key={skey} keep_ratio={keep_ratio:.4f} X2={X2.shape[0]} u2={u2}")
-                logger.info(f"[SS-CHK] key={skey} n={y.numel()} uniq={u} nz={nz} singletons={singletons} max_frac={mx:.4f}")
-
-                if X2.shape[0] < 50 or u2 < 2:
-                    ss = 0.0
-                else:
-                    ss = self.silhouette_score_torch(X2, y2, row_block=8192, device=masked.device)
-
-            logger.info(f"[SS][epoch={epoch}] key={skey} N={N_i} K_eff={int(centers.shape[0])} SS={ss:.4f}")
+                logger.info(
+                    f"[CLST] key={skey} epoch={epoch} "
+                    f"N={metrics['N']} K_req={metrics['K_req']} K_eff={metrics['K_eff']} "
+                    f"max_frac={metrics['max_frac']:.4f} top5_frac={metrics['topk_frac']:.4f} "
+                    f"H={metrics['entropy']:.4f} ppl={metrics['perplexity']:.2f} "
+                    f"singleton_ratio={metrics['singleton_ratio']:.4f} "
+                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f}"
+                )
 
     # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
