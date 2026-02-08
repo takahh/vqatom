@@ -2055,6 +2055,43 @@ class EuclideanCodebook(nn.Module):
             code_param = self.embed[safe]  # (1,K,D) or (K,D)
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
 
+            def _stat_vec(t: torch.Tensor):
+                # t: (N,D) or (K,D)
+                tf = t.float()
+                nrm = tf.norm(dim=-1)
+                return {
+                    "finite": bool(torch.isfinite(tf).all().item()),
+                    "min": float(tf.min().item()) if tf.numel() else float("nan"),
+                    "max": float(tf.max().item()) if tf.numel() else float("nan"),
+                    "mean": float(tf.mean().item()) if tf.numel() else float("nan"),
+                    "var_mean": float(tf.var(dim=0, unbiased=False).mean().item()) if tf.numel() else float("nan"),
+                    "nrm_min": float(nrm.min().item()) if nrm.numel() else float("nan"),
+                    "nrm_max": float(nrm.max().item()) if nrm.numel() else float("nan"),
+                    "nrm_mean": float(nrm.mean().item()) if nrm.numel() else float("nan"),
+                }
+
+            def _log_stats(tag: str, x: torch.Tensor, c: torch.Tensor):
+                xs = _stat_vec(x)
+                cs = _stat_vec(c)
+                msg = (
+                    f"[CLST-DIAG]{tag} "
+                    f"x_finite={xs['finite']} c_finite={cs['finite']} "
+                    f"x_minmax=({xs['min']:.3e},{xs['max']:.3e}) "
+                    f"c_minmax=({cs['min']:.3e},{cs['max']:.3e}) "
+                    f"x_var={xs['var_mean']:.3e} c_var={cs['var_mean']:.3e} "
+                    f"x_nrm(min/mean/max)=({xs['nrm_min']:.3e},{xs['nrm_mean']:.3e},{xs['nrm_max']:.3e}) "
+                    f"c_nrm(min/mean/max)=({cs['nrm_min']:.3e},{cs['nrm_mean']:.3e},{cs['nrm_max']:.3e})"
+                )
+                if logger is not None:
+                    logger.info(msg)
+                else:
+                    print(msg)
+
+            # --- insert here: right after code is defined ---
+            with torch.no_grad():
+                # masked_latents: (Ni,D), code: (K,D)
+                _log_stats(tag=f" epoch={epoch} key={skey} pre-assign", x=masked_latents, c=code)
+
             # hard assignment
             with torch.no_grad():
                 ml = masked_latents
@@ -2076,7 +2113,15 @@ class EuclideanCodebook(nn.Module):
                 with torch.no_grad():
                     idx_code = self.argmin_dist_blockwise_l2(ml_n, cc_n, k_block=1024)  # (Ni,)
 
-                idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)  # (Ni,)
+            with torch.no_grad():
+                idx_code = self.argmin_dist_blockwise_l2(masked_latents, code, k_block=1024)
+                bc = torch.bincount(idx_code, minlength=code.shape[0]).float()
+                denom = bc.sum().clamp_min(1.0)
+                p = bc / denom
+                mx, mx_i = float(p.max().item()), int(p.argmax().item())
+                msg = f"[CLST-DIAG] epoch={epoch} key={skey} post-assign max_p={mx:.4f} argmax={mx_i} nonzeroK={(bc > 0).sum().item()}"
+                (logger.info(msg) if logger is not None else print(msg))
+
             quantize = code.index_select(0, idx_code)
 
             self.quantize_dict[skey] = quantize
