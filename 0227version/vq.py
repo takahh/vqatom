@@ -1285,6 +1285,7 @@ class EuclideanCodebook(nn.Module):
         # entropy (natural log) and perplexity
         # H = -sum p log p
         # perplexity = exp(H)
+        import math
         if K_eff > 0:
             H = float((-(p * torch.log(p.clamp_min(1e-12))).sum()).item())
             ppl = float(math.exp(H))
