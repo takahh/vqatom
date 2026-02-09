@@ -1447,6 +1447,19 @@ class EuclideanCodebook(nn.Module):
             missing_param = (safe not in self.embed)
             missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
             need_init = (epoch == 1)
+            missing_param = (safe not in self.embed)
+            missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
+
+            if (epoch == 1):
+                need_init = True
+            else:
+                # epoch>1 で missing が起きたら、静かに進まずに即気づけるようにする
+                if missing_param or missing_bufs:
+                    raise RuntimeError(
+                        f"[init_embed_] missing at epoch={epoch} key={skey} "
+                        f"missing_param={missing_param} missing_bufs={missing_bufs} safe={safe}"
+                    )
+                need_init = False
 
             if need_init:
                 means_1kd, counts_1k, *_ = kmeans(
