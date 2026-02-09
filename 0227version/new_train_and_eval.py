@@ -805,15 +805,23 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
     from collections import Counter, defaultdict
     import numpy as np
 
-    def freeze_encoder(model):
-        for p in model.encoder.parameters():
+    def freeze_except_vq(model):
+        # freeze all
+        for p in model.parameters():
             p.requires_grad = False
+        # unfreeze only vq
+        for p in model.vq.parameters():
+            p.requires_grad = True
+
+    def unfreeze_all(model):
+        for p in model.parameters():
+            p.requires_grad = True
 
     def unfreeze_encoder(model):
         for p in model.encoder.parameters():
             p.requires_grad = True
 
-    freeze_encoder(model)
+    freeze_except_vq(model)
 
     # ----------------------------
     # helpers
