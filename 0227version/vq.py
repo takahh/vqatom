@@ -1446,7 +1446,7 @@ class EuclideanCodebook(nn.Module):
             # -------------------------
             missing_param = (safe not in self.embed)
             missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
-            need_init = (epoch == 1) or missing_param or missing_bufs
+            need_init = (epoch == 1)
 
             if need_init:
                 means_1kd, counts_1k, *_ = kmeans(
