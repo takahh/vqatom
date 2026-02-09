@@ -1316,19 +1316,17 @@ class EuclideanCodebook(nn.Module):
     @torch.jit.ignore
     def init_embed_(self, data, logger, epoch, mask_dict=None, use_cosine_sim: bool = False):
         """
-        Initialize per-element codebooks using absolute K from self.cb_dict.
-        Args:
-          data: Tensor [1, N, D]
-          epoch: int or None
-          mask_dict: dict[key -> LongTensor indices] from collect_global_indices_compact
+        Initialize per-element codebooks (absolute K from self.cb_dict).
+
+        - kmeans init happens ONLY at epoch==1 (or if missing tensors/buffers)
+        - cluster metrics computed every epoch
+        - for metrics / argmin, we prefer ACTIVE centers only (cs>0). If none active, fallback to 1 center.
         """
         import os
         import torch
         import torch.nn as nn
 
         assert mask_dict is not None, "mask_dict is required"
-        print("++++++++++++++++ RUNNING init_embed (ABS K, NO FINAL CAP) +++++++++++++")
-
         device = data.device
         D = int(data.shape[-1])
 
@@ -1336,7 +1334,6 @@ class EuclideanCodebook(nn.Module):
         # helpers
         # -------------------------
         def _get_from_dict(d, k):
-            """Try both raw key and str(key)."""
             if k in d:
                 return d[k]
             sk = str(k)
@@ -1347,7 +1344,6 @@ class EuclideanCodebook(nn.Module):
             return None if v is None else int(v)
 
         def _stats(x_nd):
-            """Return (mu[D], sigma_scalar) where sigma is median distance-to-mean."""
             if x_nd.numel() == 0:
                 return None
             mu = x_nd.mean(dim=0)
@@ -1380,7 +1376,6 @@ class EuclideanCodebook(nn.Module):
             out_means[:K_run].copy_(means_kd)
             out_counts[:K_run].copy_(counts_k)
 
-            # init padded centers near mu (+ small noise) if stats are available
             if data_stats is not None:
                 mu, sigma = data_stats
                 noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
@@ -1390,6 +1385,19 @@ class EuclideanCodebook(nn.Module):
 
             return out_means, out_counts
 
+        def _ensure_param(safe, shape):
+            """Make sure self.embed[safe] exists and has given shape container-wise (we'll overwrite data later)."""
+            if safe not in self.embed:
+                self.embed[safe] = nn.Parameter(
+                    torch.zeros(shape, device=device, dtype=torch.float32),
+                    requires_grad=True,
+                )
+            elif tuple(self.embed[safe].shape) != tuple(shape):
+                self.embed[safe] = nn.Parameter(
+                    torch.zeros(shape, device=device, dtype=torch.float32),
+                    requires_grad=True,
+                )
+
         # -------------------------
         # main loop
         # -------------------------
@@ -1398,7 +1406,6 @@ class EuclideanCodebook(nn.Module):
 
             idx = _get_from_dict(mask_dict, raw_key)
             if idx is None:
-                # (念のため) 文字列キーでもう一回
                 idx = _get_from_dict(mask_dict, skey)
             if idx is None:
                 continue
@@ -1408,9 +1415,7 @@ class EuclideanCodebook(nn.Module):
             if N_i == 0:
                 continue
 
-            # ---------------------------
-            # optional dump for UMAP
-            # ---------------------------
+            # optional dump for UMAP/debug
             if skey == "6_0_3_1_1_0":
                 os.makedirs("dumps", exist_ok=True)
                 path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
@@ -1425,28 +1430,26 @@ class EuclideanCodebook(nn.Module):
                     path,
                 )
 
+            # K settings
             K_req = _get_absK(self.cb_dict, skey)
             if K_req is None or K_req <= 0:
                 K_req = 1
             K_run = min(K_req, N_i)
 
+            # safe key and buffer names
             safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
-
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
 
             # -------------------------
-            # 1) (Re)initialize ONLY at epoch 1 (or if missing)
+            # 1) Initialize ONLY at epoch 1 (or if missing)
             # -------------------------
-            need_init = (
-                    (epoch == 1)
-                    or (safe not in self.embed)
-                    or (not hasattr(self, buf_name_cs))
-                    or (not hasattr(self, buf_name_ea))
-            )
+            # missing_param = (safe not in self.embed)
+            # missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
+            need_init = (epoch == 1)
 
             if need_init:
-                means_1kd, counts_1k, used_per_head, used_per_label = kmeans(
+                means_1kd, counts_1k, *_ = kmeans(
                     masked.unsqueeze(0).to(device),
                     num_clusters=K_run,
                     use_cosine_sim=use_cosine_sim,
@@ -1454,14 +1457,9 @@ class EuclideanCodebook(nn.Module):
 
                 means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-                # init embed parameter (K_req, D)
-                if self.embed[safe].shape != (K_req, D):
-                    self.embed[safe] = nn.Parameter(
-                        means_kd.detach().to(device=device, dtype=means_kd.dtype),
-                        requires_grad=True,
-                    )
-                else:
-                    self.embed[safe].data.copy_(means_kd)
+                # ensure parameter exists with correct shape, then copy
+                _ensure_param(safe, (K_req, D))
+                self.embed[safe].data.copy_(means_kd.detach().to(device=device, dtype=self.embed[safe].dtype))
 
                 # init EMA buffers (float32)
                 cs = counts_k.to(device=device, dtype=torch.float32)  # (K_req,)
@@ -1473,49 +1471,9 @@ class EuclideanCodebook(nn.Module):
                 if hasattr(self, buf_name_ea):
                     delattr(self, buf_name_ea)
                 self.register_buffer(buf_name_cs, cs)
-                self.register_buffer(buf_name_ea, ea)
+                self.register_buffer(buf_name_ea, _
 
-                nz = int((cs > 0).sum().item())
-                logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
-
-            # -------------------------
-            # 2) Cluster metrics every epoch (NO SS)
-            # -------------------------
-            with torch.no_grad():
-                centers_all = self.embed[safe].detach()
-
-                # drop dead codes for more meaningful distribution view
-                cs_now = getattr(self, buf_name_cs, None)
-                active = (cs_now > 0) if cs_now is not None else None
-
-                # if active is not None and active.any():
-                #     centers = centers_all[active]  # (K_active, D)
-                # else:
-                centers = centers_all  # fallback
-
-                # labels via nearest center (N_i,)
-                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
-
-                # optional subsample for cheaper metrics
-                max_n = int(getattr(self, "clst_max_n", 20000))
-                if labels.numel() > max_n:
-                    perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
-                    y_eval = labels[perm]
-                else:
-                    y_eval = labels
-
-                metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
-
-                logger.info(
-                    f"[CLST] key={skey} epoch={epoch} "
-                    f"N={metrics['N']} K_req={metrics['K_req']} K_eff={metrics['K_eff']} "
-                    f"max_frac={metrics['max_frac']:.4f} top5_frac={metrics['topk_frac']:.4f} "
-                    f"H={metrics['entropy']:.4f} ppl={metrics['perplexity']:.2f} "
-                    f"singleton_ratio={metrics['singleton_ratio']:.4f} "
-                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f}"
-                )
-
-    # ------------------------------------------------------------------
+                # ------------------------------------------------------------------
     # 補助関数群（normalize mask, index 変換など）
     # ------------------------------------------------------------------
     def _normalize_mask_dict(self, mask_dict, device=None):
