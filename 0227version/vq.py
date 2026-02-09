@@ -1488,10 +1488,10 @@ class EuclideanCodebook(nn.Module):
                 cs_now = getattr(self, buf_name_cs, None)
                 active = (cs_now > 0) if cs_now is not None else None
 
-                if active is not None and active.any():
-                    centers = centers_all[active]  # (K_active, D)
-                else:
-                    centers = centers_all[:1]  # fallback
+                # if active is not None and active.any():
+                #     centers = centers_all[active]  # (K_active, D)
+                # else:
+                centers = centers_all  # fallback
 
                 # labels via nearest center (N_i,)
                 labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
@@ -1538,12 +1538,19 @@ class EuclideanCodebook(nn.Module):
         return norm
 
     import torch
+
     @torch.no_grad()
     def argmin_dist_blockwise_l2(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024):
-        import torch
-
         x_f = x.float()
         c_f = code.float()
+
+        # 早期診断（必要ならコメントアウト）
+        if not torch.isfinite(x_f).all():
+            bad = (~torch.isfinite(x_f)).sum().item()
+            print(f"[argmin] non-finite x: {bad}")
+        if not torch.isfinite(c_f).all():
+            bad = (~torch.isfinite(c_f)).sum().item()
+            print(f"[argmin] non-finite code: {bad}")
 
         x2 = (x_f * x_f).sum(dim=1, keepdim=True)  # [N,1]
 
@@ -1557,14 +1564,23 @@ class EuclideanCodebook(nn.Module):
             c2 = (ck * ck).sum(dim=1).unsqueeze(0)  # [1,kb]
 
             xc = x_f @ ck.t()  # [N,kb]
-            d2 = (x2 + c2 - 2.0 * xc).clamp_min_(0.0)
+            d2 = x2 + c2 - 2.0 * xc
+
+            # ★ NaN/Inf を潰す（ここが本命）
+            d2 = torch.nan_to_num(d2, nan=float("inf"), posinf=float("inf"), neginf=float("inf"))
+            d2.clamp_min_(0.0)
 
             vals, idxs = d2.min(dim=1)
+
+            # vals が inf の点は更新されないので、そのままだと0固定になり得る
             update = vals < best_val
             best_val = torch.where(update, vals, best_val)
             best_idx = torch.where(update, idxs + k0, best_idx)
 
-            del ck, c2, xc, d2, vals, idxs, update
+        # 追加の診断：一度も更新できてない点があるなら warning
+        if torch.isinf(best_val).any():
+            n_bad = torch.isinf(best_val).sum().item()
+            print(f"[argmin] WARNING: {n_bad} points never updated (all distances non-finite).")
 
         return best_idx
 
