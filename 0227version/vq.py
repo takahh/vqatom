@@ -1317,24 +1317,37 @@ class EuclideanCodebook(nn.Module):
     def init_embed_(self, data, logger, epoch, mask_dict=None, use_cosine_sim: bool = False):
         """
         Initialize per-element codebooks using absolute K from self.cb_dict.
-        data: [1, N, D]
+        Args:
+          data: Tensor [1, N, D]
+          epoch: int or None
+          mask_dict: dict[key -> LongTensor indices] from collect_global_indices_compact
         """
+        import os
+        import torch
+        import torch.nn as nn
+
         assert mask_dict is not None, "mask_dict is required"
         print("++++++++++++++++ RUNNING init_embed (ABS K, NO FINAL CAP) +++++++++++++")
 
         device = data.device
-        D = data.shape[-1]
+        D = int(data.shape[-1])
 
-        def get_idx(md, k):
-            return md.get(k, md.get(str(k), md.get(str(k))))
+        # -------------------------
+        # helpers
+        # -------------------------
+        def _get_from_dict(d, k):
+            """Try both raw key and str(key)."""
+            if k in d:
+                return d[k]
+            sk = str(k)
+            return d.get(sk, None)
 
-        def get_absK(d, k):
-            v = d.get(k, d.get(str(k), d.get(str(k))))
-            if v is None:
-                return None
-            return int(v)
+        def _get_absK(d, k):
+            v = _get_from_dict(d, k)
+            return None if v is None else int(v)
 
         def _stats(x_nd):
+            """Return (mu[D], sigma_scalar) where sigma is median distance-to-mean."""
             if x_nd.numel() == 0:
                 return None
             mu = x_nd.mean(dim=0)
@@ -1344,8 +1357,16 @@ class EuclideanCodebook(nn.Module):
             return mu, sigma
 
         def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
+            """
+            means_1kd: [1, K_run, D]
+            counts_1k: [1, K_run]
+            return:
+              means_kd: [K_req, D]
+              counts_k: [K_req]
+            """
             H, K_run, Dd = means_1kd.shape
             assert H == 1 and Dd == D
+
             means_kd = means_1kd[0]
             counts_k = counts_1k[0]
 
@@ -1359,44 +1380,52 @@ class EuclideanCodebook(nn.Module):
             out_means[:K_run].copy_(means_kd)
             out_counts[:K_run].copy_(counts_k)
 
+            # init padded centers near mu (+ small noise) if stats are available
             if data_stats is not None:
                 mu, sigma = data_stats
                 noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
                 out_means[K_run:] = mu + noise
             else:
-                out_means[K_run:] = 0
+                out_means[K_run:].zero_()
 
             return out_means, out_counts
 
+        # -------------------------
+        # main loop
+        # -------------------------
         for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
             skey = str(raw_key)
-            idx = get_idx(mask_dict, skey)
+
+            idx = _get_from_dict(mask_dict, raw_key)
+            if idx is None:
+                # (念のため) 文字列キーでもう一回
+                idx = _get_from_dict(mask_dict, skey)
             if idx is None:
                 continue
 
             masked = data[0][idx]  # (N_i, D)
-
-            # ---------------------------
-            # save latents for UMAP (optional)
-            # ---------------------------
-            import os, torch
-            if skey == "6_0_3_1_1_0":
-                os.makedirs("dumps", exist_ok=True)
-                path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
-                payload = {
-                    "epoch": int(epoch) if epoch is not None else None,
-                    "key": skey,
-                    "masked_latents": masked.detach().to("cpu", dtype=torch.float16),
-                    "N": int(masked.shape[0]),
-                    "D": int(masked.shape[1]),
-                }
-                torch.save(payload, path)
-
-            N_i = masked.shape[0]
+            N_i = int(masked.shape[0])
             if N_i == 0:
                 continue
 
-            K_req = get_absK(self.cb_dict, skey)
+            # ---------------------------
+            # optional dump for UMAP
+            # ---------------------------
+            if skey == "6_0_3_1_1_0":
+                os.makedirs("dumps", exist_ok=True)
+                path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
+                torch.save(
+                    {
+                        "epoch": int(epoch) if epoch is not None else None,
+                        "key": skey,
+                        "masked_latents": masked.detach().to("cpu", dtype=torch.float16),
+                        "N": int(masked.shape[0]),
+                        "D": int(masked.shape[1]),
+                    },
+                    path,
+                )
+
+            K_req = _get_absK(self.cb_dict, skey)
             if K_req is None or K_req <= 0:
                 K_req = 1
             K_run = min(K_req, N_i)
@@ -1409,8 +1438,11 @@ class EuclideanCodebook(nn.Module):
             # -------------------------
             # 1) (Re)initialize ONLY at epoch 1 (or if missing)
             # -------------------------
-            need_init = (epoch == 1) or (safe not in self.embed) or (not hasattr(self, buf_name_cs)) or (
-                not hasattr(self, buf_name_ea)
+            need_init = (
+                    (epoch == 1)
+                    or (safe not in self.embed)
+                    or (not hasattr(self, buf_name_cs))
+                    or (not hasattr(self, buf_name_ea))
             )
 
             if need_init:
@@ -1420,10 +1452,9 @@ class EuclideanCodebook(nn.Module):
                     use_cosine_sim=use_cosine_sim,
                 )
 
-                # pad to K_req for storage
                 means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
 
-                # init embed parameter
+                # init embed parameter (K_req, D)
                 if self.embed[safe].shape != (K_req, D):
                     self.embed[safe] = nn.Parameter(
                         means_kd.detach().to(device=device, dtype=means_kd.dtype),
@@ -1453,12 +1484,9 @@ class EuclideanCodebook(nn.Module):
             with torch.no_grad():
                 centers_all = self.embed[safe].detach()
 
-                # drop dead codes for a more meaningful distribution view
-                if hasattr(self, buf_name_cs):
-                    cs_now = getattr(self, buf_name_cs)
-                    active = (cs_now > 0)
-                else:
-                    active = None
+                # drop dead codes for more meaningful distribution view
+                cs_now = getattr(self, buf_name_cs, None)
+                active = (cs_now > 0) if cs_now is not None else None
 
                 if active is not None and active.any():
                     centers = centers_all[active]  # (K_active, D)
@@ -1468,7 +1496,7 @@ class EuclideanCodebook(nn.Module):
                 # labels via nearest center (N_i,)
                 labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
 
-                # optional subsample for cheaper metrics (not necessary, but keeps logs consistent)
+                # optional subsample for cheaper metrics
                 max_n = int(getattr(self, "clst_max_n", 20000))
                 if labels.numel() > max_n:
                     perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
