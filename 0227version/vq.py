@@ -1862,7 +1862,7 @@ class EuclideanCodebook(nn.Module):
         # split policy (Option A)
         do_split = bool(getattr(self, "do_split_the_winner", True))
         split_once_per_epoch = True
-        split_only_last_batch = True
+        split_only_last_batch = False
 
         # usage_ema momentum
         usage_mom = float(getattr(self, "usage_ema_mom", 0.99))
