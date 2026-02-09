@@ -1440,20 +1440,16 @@ class EuclideanCodebook(nn.Module):
             safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
-
             # -------------------------
-            # 1) Initialize ONLY at epoch 1 (or if missing)
+            # 1) Initialize ONLY at epoch 1
+            #    (epoch>1 で missing が起きたら即エラー)
             # -------------------------
             missing_param = (safe not in self.embed)
             missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
-            need_init = (epoch == 1)
-            missing_param = (safe not in self.embed)
-            missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
 
-            if (epoch == 1):
+            if epoch == 1:
                 need_init = True
             else:
-                # epoch>1 で missing が起きたら、静かに進まずに即気づけるようにする
                 if missing_param or missing_bufs:
                     raise RuntimeError(
                         f"[init_embed_] missing at epoch={epoch} key={skey} "
