@@ -661,6 +661,9 @@ class ContrastiveLoss(nn.Module):
             import torch
             import torch.utils.checkpoint as cp
 
+            if (not z_in.requires_grad) or (not z_in.is_leaf and z_in.grad_fn is None):
+                # encoder freeze / no_grad / detach のときは、この損失は意味がないので 0 にする
+                return z_in.new_zeros(())
             assert not (use_checkpoint and stream_backward), \
                 "checkpoint と streaming backward は同時に使えません。"
 
