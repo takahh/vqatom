@@ -1444,9 +1444,9 @@ class EuclideanCodebook(nn.Module):
             # -------------------------
             # 1) Initialize ONLY at epoch 1 (or if missing)
             # -------------------------
-            # missing_param = (safe not in self.embed)
-            # missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
-            need_init = (epoch == 1)
+            missing_param = (safe not in self.embed)
+            missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
+            need_init = (epoch == 1) or missing_param or missing_bufs
 
             if need_init:
                 means_1kd, counts_1k, *_ = kmeans(
@@ -1471,11 +1471,46 @@ class EuclideanCodebook(nn.Module):
                 if hasattr(self, buf_name_ea):
                     delattr(self, buf_name_ea)
                 self.register_buffer(buf_name_cs, cs)
-                self.register_buffer(buf_name_ea, _
+                self.register_buffer(buf_name_ea, ea)
 
-                # ------------------------------------------------------------------
-    # 補助関数群（normalize mask, index 変換など）
-    # ------------------------------------------------------------------
+                nz = int((cs > 0).sum().item())
+                logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+
+            # -------------------------
+            # 2) Cluster metrics every epoch (NO SS)
+            # -------------------------
+            with torch.no_grad():
+                centers_all = self.embed[safe].detach()  # (K_req, D)
+
+                cs_now = getattr(self, buf_name_cs, None)
+                active = (cs_now > 0) if cs_now is not None else None
+
+                # prefer active centers only; if none active, fallback to 1 center (not ALL)
+                if active is not None and bool(active.any()):
+                    centers = centers_all[active]  # (K_active, D)
+                else:
+                    centers = centers_all[:1]  # (1, D) safe fallback
+
+                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
+
+                max_n = int(getattr(self, "clst_max_n", 20000))
+                if labels.numel() > max_n:
+                    perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
+                    y_eval = labels[perm]
+                else:
+                    y_eval = labels
+
+                metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
+
+                logger.info(
+                    f"[CLST] key={skey} epoch={epoch} "
+                    f"N={metrics['N']} K_req={metrics['K_req']} K_eff={metrics['K_eff']} "
+                    f"max_frac={metrics['max_frac']:.4f} top5_frac={metrics['topk_frac']:.4f} "
+                    f"H={metrics['entropy']:.4f} ppl={metrics['perplexity']:.2f} "
+                    f"singleton_ratio={metrics['singleton_ratio']:.4f} "
+                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f}"
+                )
+
     def _normalize_mask_dict(self, mask_dict, device=None):
         import numpy as np
 
