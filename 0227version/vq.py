@@ -1683,6 +1683,17 @@ class EuclideanCodebook(nn.Module):
 
         if donor == winner:
             return False
+        # -------------------------
+        # 4.5) guard: too few points for a meaningful split
+        # -------------------------
+        if (X_batch is None) or (assign is None):
+            return False  # ← X_batch 無しで split させたくないならこう
+        # ここでの N_eff は「この key のミニバッチ中の点数」
+        N_eff = int(X_batch.shape[0])
+        K_eff = int(K)  # embed.shape[0]
+
+        if N_eff < max(8, 2 * K_eff):
+            return False
 
         # -------------------------
         # 5) determine split direction (PCA if possible)
