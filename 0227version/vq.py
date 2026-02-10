@@ -2195,6 +2195,10 @@ class EuclideanCodebook(nn.Module):
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code_long.to(torch.int32)
 
+            if chunk_i == 0:
+                _log(
+                    f"[DO_EMA] training={self.training} mode={mode} epoch={epoch} do_ema={do_ema} diag_n={len(diag_keys)}")
+
             # -------------------------
             # EMA + split (Option A): EMA in normalized space
             # -------------------------
