@@ -1484,6 +1484,7 @@ class EuclideanCodebook(nn.Module):
 
                 nz = int((cs > 0).sum().item())
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+
             # -------------------------
             # 2) Cluster metrics every epoch (NO SS)
             # -------------------------
