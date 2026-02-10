@@ -1484,41 +1484,48 @@ class EuclideanCodebook(nn.Module):
 
                 nz = int((cs > 0).sum().item())
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
-
             # -------------------------
             # 2) Cluster metrics every epoch (NO SS)
             # -------------------------
             with torch.no_grad():
-                centers_all = self.embed[safe].detach()  # (K_req, D)
+                # full codebook centers (evaluate distribution over ALL slots; do NOT filter by "active")
+                centers_clst = self.embed[safe].detach()  # (K_req, D)
 
+                # active count is just for logging/diagnostics
                 cs_now = getattr(self, buf_name_cs, None)
                 active = (cs_now > 0) if cs_now is not None else None
                 K_active = int(active.sum().item()) if active is not None else -1
 
                 max_n = int(getattr(self, "clst_max_n", 20000))
 
-                # --- subsample X FIRST (avoid full argmin on huge N) ---
+                # subsample X first (avoid full argmin on huge N)
                 if masked.shape[0] > max_n:
                     perm = torch.randperm(masked.shape[0], device=masked.device)[:max_n]
                     x_eval = masked[perm]
                 else:
                     x_eval = masked
 
-                # --- CLST/EVAL should NOT use active centers ---
-                centers_clst = centers_all  # (K_req, D)  ← active無視
+                # optional diagnostics (call only when needed)
+                def diag(tag: str, X, centers):
+                    import torch
+                    print(
+                        f"[DIAG]{tag} "
+                        f"X shape={tuple(X.shape)} centers shape={tuple(centers.shape)} "
+                        f"X finite={torch.isfinite(X).all().item()} "
+                        f"C finite={torch.isfinite(centers).all().item()} "
+                        f"X var={X.float().var(dim=0).mean().item():.3e} "
+                        f"C var={centers.float().var(dim=0).mean().item():.3e} "
+                        f"C mean-norm={centers.float().norm(dim=-1).mean().item():.3e} "
+                        f"C std-norm={centers.float().norm(dim=-1).std().item():.3e}"
+                    )
+
+                diag(" clst", x_eval, centers_clst)
+
+                # assign labels using ALL centers (K_req)
                 y_eval = self.argmin_dist_blockwise_l2(x_eval, centers_clst, k_block=1024)
 
+                # compute metrics from labels only
                 metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
-
-                def diag(tag, X, centers):
-                    import torch
-                    print(f"[DIAG]{tag} X shape={tuple(X.shape)} centers shape={tuple(centers.shape)} "
-                          f"X finite={torch.isfinite(X).all().item()} "
-                          f"C finite={torch.isfinite(centers).all().item()} "
-                          f"X var={X.float().var(dim=0).mean().item():.3e} "
-                          f"C var={centers.float().var(dim=0).mean().item():.3e} "
-                          f"C mean-norm={centers.float().norm(dim=-1).mean().item():.3e} "
-                          f"C std-norm={centers.float().norm(dim=-1).std().item():.3e}")
 
                 logger.info(
                     f"[CLST] key={skey} epoch={epoch} "
