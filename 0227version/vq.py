@@ -2203,9 +2203,6 @@ class EuclideanCodebook(nn.Module):
             # EMA + split (Option A): EMA in normalized space
             # -------------------------
             if do_ema:
-                _log(
-                    f"[SAFE] skey={skey} safe={safe} K_e={K_e} dev={dev} has_cs={hasattr(self, f'cluster_size_{safe}')}")
-
                 def _hist_sig(idx: torch.Tensor, K: int):
                     bc = torch.bincount(idx.long(), minlength=K).float()
                     tot = bc.sum().clamp_min(1.0)
@@ -2221,6 +2218,9 @@ class EuclideanCodebook(nn.Module):
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
                 self.cb_dict[skey] = int(K_e)
+
+                _log(
+                    f"[SAFE] skey={skey} safe={safe} K_e={K_e} dev={dev} has_cs={hasattr(self, f'cluster_size_{safe}')}")
 
                 buf_name_cs = f"cluster_size_{safe}"
                 buf_name_ea = f"embed_avg_{safe}"
