@@ -2225,10 +2225,6 @@ class EuclideanCodebook(nn.Module):
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code_long.to(torch.int32)
 
-            if chunk_i == 0:
-                _log(
-                    f"[DO_EMA] training={self.training} mode={mode} epoch={epoch} do_ema={do_ema} diag_n={len(diag_keys)}")
-
             # -------------------------
             # EMA + split (Option A): EMA in normalized space
             # -------------------------
@@ -2248,9 +2244,6 @@ class EuclideanCodebook(nn.Module):
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
                 self.cb_dict[skey] = int(K_e)
-
-                _log(
-                    f"[SAFE] skey={skey} safe={safe} K_e={K_e} dev={dev} has_cs={hasattr(self, f'cluster_size_{safe}')}")
 
                 buf_name_cs = f"cluster_size_{safe}"
                 buf_name_ea = f"embed_avg_{safe}"
@@ -2278,19 +2271,6 @@ class EuclideanCodebook(nn.Module):
 
                 with torch.no_grad():
                     idx_dev = idx_code_long.to(device=dev)
-
-                    # >>> INSERT HERE (EMA pre-check: is EMA buffer empty? are current centers kmeans-like?)
-                    if (epoch == 1) and (chunk_i == 0):
-                        C_pre = code_param.detach()
-                        C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
-                        C_pre = _safe_l2norm(C_pre.float())
-                        cs_sum_pre = float(cs.sum().item())
-                        # ea/cs only meaningful if cs has mass
-                        ea_mean_norm_pre = float(
-                            (ea / (cs.unsqueeze(-1) + eps)).norm(dim=1).mean().item()) if cs_sum_pre > 0 else -1.0
-                        _log(
-                            f"[EMA-PRE] ep={epoch} key={skey} cs_sum={cs_sum_pre:.3f} ea_mean_norm={ea_mean_norm_pre:.3f} C_pre_mean_norm={C_pre.norm(dim=1).mean().item():.3f}")
-                    # <<< INSERT END
 
                     # batch_counts (K,)
                     batch_counts = torch.zeros((K_e,), device=dev, dtype=torch.float32)
