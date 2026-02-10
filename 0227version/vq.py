@@ -1677,7 +1677,6 @@ class EuclideanCodebook(nn.Module):
             # PCA-guided split inputs (per-key, per-minibatch)
             X_batch=None,  # (N_i, D) latents for THIS key in THIS minibatch
             assign=None,  # (N_i,) hard assignment in [0..K-1] for THIS key
-            *,
             split_thr=0.15,
             prune_src_thr=0.005,
             noise_scale=0.02,
