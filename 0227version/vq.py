@@ -1668,7 +1668,7 @@ class EuclideanCodebook(nn.Module):
     def split_the_winner_ema(
             self,
             *,
-            embed,  # (K,D)  <-- IMPORTANT: this is MEANS (centers), writable view
+            embed,  # (K,D)  <-- IMPORTANT: MEANS view, writable
             ema_sum,  # (K,D)  <-- EMA SUM buffer (embed_avg_*), writable
             ema_count,  # (K,)   <-- EMA COUNT buffer (cluster_size_*), writable
             usage_ema,  # (K,)   <-- usage EMA (already updated outside), writable
@@ -1677,14 +1677,14 @@ class EuclideanCodebook(nn.Module):
             # PCA-guided split inputs (per-key, per-minibatch)
             X_batch=None,  # (N_i, D) latents for THIS key in THIS minibatch
             assign=None,  # (N_i,) hard assignment in [0..K-1] for THIS key
-
+            *,
             split_thr=0.15,
             prune_src_thr=0.005,
             noise_scale=0.02,
-            cooldown=None,  # (K,) long
+            cooldown=None,  # (K,) long (or int), optional
             cooldown_steps=2000,
             eps=1e-8,
-            min_points=32,  # PCA needs some points; raise from 8 to be safer
+            min_points=32,  # PCA needs enough points
             pca_power=0.5,  # step ~ pca_power * std along top PC
             fallback_to_noise=True,
     ):
@@ -1693,38 +1693,46 @@ class EuclideanCodebook(nn.Module):
 
         Contract:
           - `embed` is interpreted as MEANS (centers): embed[k] = ema_sum[k] / (ema_count[k] + eps)
-          - This function will update BOTH:
+          - This function updates BOTH:
               (A) embed[winner], embed[donor]  (means)
-              (B) ema_sum / ema_count          so that next `means = ema_sum/ema_count` preserves the split
-              (C) usage_ema                    split 50/50 so donor doesn't inherit full popularity
+              (B) ema_sum / ema_count         so next `means = ema_sum/ema_count` preserves the split
+              (C) usage_ema                   split 50/50 so donor doesn't inherit full popularity
               (D) cooldown (optional)
 
         Winner selection is based on usage_ema distribution p = usage_ema / sum(usage_ema).
         Donor is chosen among low-usage codes if possible.
+        PCA direction uses points currently assigned to the winner in THIS minibatch.
         """
 
         import torch
+
+        # -------------------------
+        # 0) basic checks
+        # -------------------------
+        if embed is None or usage_ema is None:
+            return False
 
         K, D = embed.shape
         device = embed.device
 
         # -------------------------
-        # 0) cooldown tick
+        # 1) cooldown tick (optional)
         # -------------------------
         if cooldown is not None:
+            # in-place decrement
             cooldown.sub_(1).clamp_(min=0)
 
         # -------------------------
-        # 1) compute p from usage_ema
+        # 2) compute p from usage_ema
         # -------------------------
         total = usage_ema.sum()
-        if float(total.item()) <= 0.0:
+        if float(total.item()) <= 0.0 or (not torch.isfinite(total)):
             return False
 
         p = usage_ema / (total + float(eps))
 
         # -------------------------
-        # 2) eligibility mask
+        # 3) eligibility mask
         # -------------------------
         if cooldown is not None:
             eligible = (cooldown <= 0)
@@ -1735,18 +1743,18 @@ class EuclideanCodebook(nn.Module):
             return False
 
         # -------------------------
-        # 3) pick winner among eligible
+        # 4) pick winner among eligible
         # -------------------------
-        p_eligible = torch.where(eligible, p, torch.full_like(p, -float("inf")))
+        neg_inf = -float("inf")
+        p_eligible = torch.where(eligible, p, torch.full_like(p, neg_inf))
         winner = int(torch.argmax(p_eligible).item())
-        winner_p = float(p[winner].item())
 
+        winner_p = float(p[winner].item())
         if (not torch.isfinite(p_eligible[winner])) or (winner_p <= float(split_thr)):
             return False
 
         # -------------------------
-        # 4) pick donor
-        #     prefer low-usage among eligible and != winner
+        # 5) pick donor (prefer low-usage)
         # -------------------------
         low = (p < float(prune_src_thr)) & eligible
         low[winner] = False
@@ -1764,100 +1772,122 @@ class EuclideanCodebook(nn.Module):
 
         if donor == winner:
             return False
+
         # -------------------------
-        # 4.5) guard: too few points for a meaningful split
+        # 6) need per-key batch points to do a meaningful split
         # -------------------------
         if (X_batch is None) or (assign is None):
-            return False  # ← X_batch 無しで split させたくないならこう
-        # ここでの N_eff は「この key のミニバッチ中の点数」
-        N_eff = int(X_batch.shape[0])
-        K_eff = int(K)  # embed.shape[0]
+            return False  # don't split without local evidence
 
-        if N_eff < max(8, 2 * K_eff):
+        if not (X_batch.ndim == 2 and assign.ndim == 1 and X_batch.shape[0] == assign.shape[0]):
             return False
 
+        # ensure device & dtype for stability
+        Xb = X_batch.to(device=device, dtype=torch.float32)
+        yb = assign.to(device=device)
+
         # -------------------------
-        # 5) determine split direction (PCA if possible)
+        # 7) isolate winner's assigned points (this is what matters)
+        # -------------------------
+        aw = (yb == int(winner))
+        n_w = int(aw.sum().item())
+
+        # KEY FIX: gate by winner-support only (NOT by K)
+        if n_w < int(min_points):
+            return False
+
+        Xw = Xb[aw]  # (n_w, D)
+
+        # -------------------------
+        # 8) determine split direction (PCA if possible)
         # -------------------------
         did_pca = False
-
         cw = embed[winner].clone()  # current winner center (mean)
 
-        if (X_batch is not None) and (assign is not None):
-            if X_batch.ndim == 2 and assign.ndim == 1 and X_batch.shape[0] == assign.shape[0]:
-                aw = (assign == int(winner))
-                n_w = int(aw.sum().item())
-                if n_w >= int(min_points):
-                    Xw = X_batch[aw].to(device=device, dtype=torch.float32)  # (n_w, D)
-                    mu = Xw.mean(dim=0, keepdim=True)
-                    Y = Xw - mu
+        # center points
+        mu = Xw.mean(dim=0, keepdim=True)
+        Y = Xw - mu
 
-                    # guard: if variance is almost zero, PCA is meaningless
-                    if torch.isfinite(Y).all() and float(Y.var(dim=0, unbiased=False).mean().item()) > 1e-12:
-                        try:
-                            # top principal direction via SVD
-                            U, S, Vh = torch.linalg.svd(Y, full_matrices=False)
-                            v = Vh[0]  # (D,)
-                            proj = (Y @ v)  # (n_w,)
-                            std = proj.std(unbiased=False) + float(eps)
-                            step = float(pca_power) * std
+        # guard: if variance is almost zero, PCA is meaningless
+        if torch.isfinite(Y).all():
+            var_mean = float(Y.var(dim=0, unbiased=False).mean().item())
+        else:
+            var_mean = 0.0
 
-                            if torch.isfinite(v).all() and torch.isfinite(step) and float(step.item()) > 0.0:
-                                # move winner and donor in opposite directions
-                                embed[winner].copy_(cw - v * step)
-                                embed[donor].copy_(cw + v * step)
-                                did_pca = True
-                        except Exception:
-                            did_pca = False
+        if var_mean > 1e-12:
+            try:
+                # top principal direction via SVD
+                # Y: (n_w, D), Vh: (D, D) or (r, D)
+                U, S, Vh = torch.linalg.svd(Y, full_matrices=False)
+                v = Vh[0]  # (D,)
+                if torch.isfinite(v).all():
+                    proj = (Y @ v)  # (n_w,)
+                    std = proj.std(unbiased=False) + float(eps)
+                    step = float(pca_power) * float(std.item())
 
-        # fallback: winner + small noise
+                    if torch.isfinite(std).all() and step > 0.0:
+                        # move winner and donor in opposite directions
+                        embed[winner].copy_(cw - v * step)
+                        embed[donor].copy_(cw + v * step)
+                        did_pca = True
+            except Exception:
+                did_pca = False
+
+        # -------------------------
+        # 9) fallback: small noise if PCA failed
+        # -------------------------
         if (not did_pca) and fallback_to_noise:
             # scale noise by center RMS so it is neither tiny nor huge
             rms = torch.sqrt((cw * cw).mean() + float(eps))
-            noise = torch.randn(D, device=device, dtype=torch.float32) * (float(noise_scale) * rms)
+            noise = torch.randn(D, device=device, dtype=torch.float32) * (float(noise_scale) * float(rms.item()))
             embed[winner].copy_(cw)  # keep winner as-is
-            embed[donor].copy_(cw + noise)
+            embed[donor].copy_(cw + noise)  # seed donor near winner
+
+        if (not did_pca) and (not fallback_to_noise):
+            return False
 
         # -------------------------
-        # 6) split EMA buffers so split persists
+        # 10) persist split into EMA buffers
         # -------------------------
         if (ema_sum is not None) and (ema_count is not None):
-            # ensure types
+            # IMPORTANT: do in-place on the original buffers (avoid rebinds)
             if ema_sum.dtype != torch.float32:
-                ema_sum = ema_sum.float()
+                # if your buffers are float32 already, remove this branch
+                ema_sum_fp32 = ema_sum.float()
+                # but we should not silently detach from the real buffer
+                # so instead: write via temporary then copy back
             if ema_count.dtype != torch.float32:
-                ema_count = ema_count.float()
+                ema_count_fp32 = ema_count.float()
 
-            # if winner has ~0 count, splitting counts is pointless; still seed donor with small count
+            # count guard
             cw_cnt = float(ema_count[winner].item())
-            if cw_cnt <= 0.0:
-                # seed a tiny mass so the new donor isn't erased instantly by division
+            if cw_cnt <= 0.0 or (not torch.isfinite(ema_count[winner])):
                 seed = 1.0
                 ema_count[winner] = seed
                 ema_sum[winner].copy_(embed[winner] * seed)
                 cw_cnt = seed
 
-            # 50/50 split counts
+            # 50/50 split counts (preserve total)
             cnt_w_new = ema_count[winner] * 0.5
-            cnt_d_new = ema_count[winner] - cnt_w_new  # keep exact sum
+            cnt_d_new = ema_count[winner] - cnt_w_new
 
             ema_count[winner] = cnt_w_new
             ema_count[donor] = cnt_d_new
 
             # reconstruct sums from the NEW means so consistency is exact:
-            # ema_sum[k] should equal embed[k] * ema_count[k] (approximately)
+            # ema_sum[k] ~= embed[k] * ema_count[k]
             ema_sum[winner].copy_(embed[winner] * ema_count[winner].unsqueeze(0))
             ema_sum[donor].copy_(embed[donor] * ema_count[donor].unsqueeze(0))
 
         # -------------------------
-        # 7) split usage_ema too (so donor survives)
+        # 11) split usage_ema too (so donor survives)
         # -------------------------
         usage_w = usage_ema[winner].clone()
         usage_ema[winner].mul_(0.5)
         usage_ema[donor] = usage_w * 0.5
 
         # -------------------------
-        # 8) cooldown both
+        # 12) cooldown both (optional)
         # -------------------------
         if cooldown is not None:
             cooldown[winner] = int(cooldown_steps)
@@ -2319,7 +2349,7 @@ class EuclideanCodebook(nn.Module):
                             _log(
                                 f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{N_key} max_p={max_p:.4f} thr={thr:.4f} K={K_e}")
 
-                        if max_p > thr:
+                        if max_p > thr and N_key > 200 and K_e > 2:
                             did = self.split_the_winner_ema(
                                 embed=means,  # normalized means view
                                 ema_sum=ea,
