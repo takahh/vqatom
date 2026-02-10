@@ -2178,7 +2178,7 @@ class EuclideanCodebook(nn.Module):
                 idx_code = _assign_l2norm(masked_latents, code, k_block=k_block)
                 idx_code_long = idx_code.to(dtype=torch.long)
 
-            if (epoch == 1) and (chunk_i == 0) and (skey in getattr(self, "_kmeans_sig", {})) and (skey in diag_keys):
+            if (epoch == 1) and (chunk_i == 0) and (skey in getattr(self, "_kmeans_sig", {})):
                 with torch.no_grad():
                     C = _safe_l2norm(code.detach().float())
                     bc = torch.bincount(idx_code_long, minlength=C.shape[0]).float()
@@ -2244,7 +2244,7 @@ class EuclideanCodebook(nn.Module):
                     idx_dev = idx_code_long.to(device=dev)
 
                     # >>> INSERT HERE (EMA pre-check: is EMA buffer empty? are current centers kmeans-like?)
-                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                    if (epoch == 1) and (chunk_i == 0):
                         C_pre = code_param.detach()
                         C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
                         C_pre = _safe_l2norm(C_pre.float())
@@ -2292,7 +2292,7 @@ class EuclideanCodebook(nn.Module):
                     ea.copy_(means * (cs.unsqueeze(-1) + eps))  # <-- Option A change #3
 
                     # >>> INSERT HERE (EMA post-mean)
-                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                    if (epoch == 1) and (chunk_i == 0):
                         used_u, maxc_u, maxp_u = _hist_sig(idx_dev, K_e)
                         _log(
                             f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum().item()):.1f} used={used_u} maxp_batch={maxp_u:.4f} means_mean_norm={means.norm(dim=1).mean().item():.3f}")
@@ -2309,7 +2309,7 @@ class EuclideanCodebook(nn.Module):
                         N_key = int(cs.sum().item())
                         thr = _target_max_p(N_key)
 
-                        if skey in diag_keys and (chunk_i == 0):
+                        if chunk_i == 0:
                             _log(
                                 f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{N_key} max_p={max_p:.4f} thr={thr:.4f} K={K_e}")
 
@@ -2363,7 +2363,7 @@ class EuclideanCodebook(nn.Module):
                     else:
                         code_param.data.copy_(means)
                     # >>> INSERT HERE (write-back drift)
-                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                    if (epoch == 1) and (chunk_i == 0):
                         C_post = code_param.detach()
                         C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
                         C_post = _safe_l2norm(C_post.float())
