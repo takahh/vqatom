@@ -2069,6 +2069,23 @@ class EuclideanCodebook(nn.Module):
                     idx_code = _assign_l2norm(masked_latents, code, k_block=k_block)
                     quantize = code.index_select(0, idx_code)
 
+                with torch.no_grad():
+                    # centers used for assignment in init_kmeans_final
+                    C0 = _safe_l2norm(code.detach().float())
+                    # assignment histogram signature
+                    bc0 = torch.bincount(idx_code.long(), minlength=C0.shape[0]).float()
+                    sig0 = torch.stack([
+                        bc0.sum(),  # Ni
+                        (bc0 > 0).sum().float(),  # used clusters
+                        bc0.max(),  # max count
+                        (bc0 / bc0.sum().clamp_min(1)).max()  # max_p
+                    ])
+                    self._kmeans_sig = getattr(self, "_kmeans_sig", {})
+                    self._kmeans_sig[skey] = {
+                        "C_norm_mean": C0.norm(dim=1).mean().item(),
+                        "sig": sig0.cpu(),
+                    }
+
                 save_latents, save_centers, save_assign, save_quantized = True, True, True, False
                 lat_cpu = masked_latents.detach().to("cpu", dtype=torch.float16) if save_latents else None
                 ctr_cpu = code.detach().to("cpu", dtype=torch.float16) if save_centers else None
@@ -2161,6 +2178,19 @@ class EuclideanCodebook(nn.Module):
                 idx_code = _assign_l2norm(masked_latents, code, k_block=k_block)
                 idx_code_long = idx_code.to(dtype=torch.long)
 
+            if (epoch == 1) and (chunk_i == 0) and (skey in getattr(self, "_kmeans_sig", {})) and (skey in diag_keys):
+                with torch.no_grad():
+                    C = _safe_l2norm(code.detach().float())
+                    bc = torch.bincount(idx_code_long, minlength=C.shape[0]).float()
+                    sig = torch.stack([
+                        bc.sum(),
+                        (bc > 0).sum().float(),
+                        bc.max(),
+                        (bc / bc.sum().clamp_min(1)).max()
+                    ]).cpu()
+                    sig0 = self._kmeans_sig[skey]["sig"]
+                    _log(f"[KMEANS-CHECK] key={skey} sig_init={sig0.tolist()} sig_train={sig.tolist()}")
+
             quantize = code.index_select(0, idx_code_long)
             self.quantize_dict[skey] = quantize
             self.embed_ind_dict[skey] = idx_code_long.to(torch.int32)
@@ -2169,6 +2199,14 @@ class EuclideanCodebook(nn.Module):
             # EMA + split (Option A): EMA in normalized space
             # -------------------------
             if do_ema:
+                def _hist_sig(idx: torch.Tensor, K: int):
+                    bc = torch.bincount(idx.long(), minlength=K).float()
+                    tot = bc.sum().clamp_min(1.0)
+                    used = (bc > 0).sum().item()
+                    maxc = bc.max().item()
+                    maxp = (bc / tot).max().item()
+                    return used, maxc, maxp
+
                 dev = code_param.device
 
                 if code_param.ndim == 3:
@@ -2200,6 +2238,19 @@ class EuclideanCodebook(nn.Module):
 
                 with torch.no_grad():
                     idx_dev = idx_code_long.to(device=dev)
+
+                    # >>> INSERT HERE (EMA pre-check: is EMA buffer empty? are current centers kmeans-like?)
+                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                        C_pre = code_param.detach()
+                        C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
+                        C_pre = _safe_l2norm(C_pre.float())
+                        cs_sum_pre = float(cs.sum().item())
+                        # ea/cs only meaningful if cs has mass
+                        ea_mean_norm_pre = float(
+                            (ea / (cs.unsqueeze(-1) + eps)).norm(dim=1).mean().item()) if cs_sum_pre > 0 else -1.0
+                        _log(
+                            f"[EMA-PRE] ep={epoch} key={skey} cs_sum={cs_sum_pre:.3f} ea_mean_norm={ea_mean_norm_pre:.3f} C_pre_mean_norm={C_pre.norm(dim=1).mean().item():.3f}")
+                    # <<< INSERT END
 
                     # batch_counts (K,)
                     batch_counts = torch.zeros((K_e,), device=dev, dtype=torch.float32)
@@ -2235,6 +2286,13 @@ class EuclideanCodebook(nn.Module):
                     # keep ea consistent with normalized means (optional but recommended)
                     # (so next means=ea/cs also stays on unit sphere)
                     ea.copy_(means * (cs.unsqueeze(-1) + eps))  # <-- Option A change #3
+
+                    # >>> INSERT HERE (EMA post-mean)
+                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                        used_u, maxc_u, maxp_u = _hist_sig(idx_dev, K_e)
+                        _log(
+                            f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum().item()):.1f} used={used_u} maxp_batch={maxp_u:.4f} means_mean_norm={means.norm(dim=1).mean().item():.3f}")
+                    # <<< INSERT END
 
                     # =========================================================
                     # N-dependent split policy (uses usage_ema distribution)
@@ -2300,6 +2358,14 @@ class EuclideanCodebook(nn.Module):
                         code_param.data.copy_(means.unsqueeze(0))
                     else:
                         code_param.data.copy_(means)
+                    # >>> INSERT HERE (write-back drift)
+                    if (epoch == 1) and (chunk_i == 0) and (skey in diag_keys):
+                        C_post = code_param.detach()
+                        C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
+                        C_post = _safe_l2norm(C_post.float())
+                        delta = (C_post - C_pre).abs().mean().item() if 'C_pre' in locals() else float('nan')
+                        _log(f"[EMA-WRITE] ep={epoch} key={skey} mean_abs_delta={delta:.3e}")
+                    # <<< INSERT END
 
             del masked_latents, code, idx_code, quantize
 
