@@ -1510,6 +1510,16 @@ class EuclideanCodebook(nn.Module):
 
                 metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
 
+                def diag(tag, X, centers):
+                    import torch
+                    print(f"[DIAG]{tag} X shape={tuple(X.shape)} centers shape={tuple(centers.shape)} "
+                          f"X finite={torch.isfinite(X).all().item()} "
+                          f"C finite={torch.isfinite(centers).all().item()} "
+                          f"X var={X.float().var(dim=0).mean().item():.3e} "
+                          f"C var={centers.float().var(dim=0).mean().item():.3e} "
+                          f"C mean-norm={centers.float().norm(dim=-1).mean().item():.3e} "
+                          f"C std-norm={centers.float().norm(dim=-1).std().item():.3e}")
+
                 logger.info(
                     f"[CLST] key={skey} epoch={epoch} "
                     f"N={metrics['N']} K_req={metrics['K_req']} K_eff={metrics['K_eff']} "
