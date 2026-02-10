@@ -1484,7 +1484,6 @@ class EuclideanCodebook(nn.Module):
 
                 nz = int((cs > 0).sum().item())
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
-
             # -------------------------
             # 2) Cluster metrics every epoch (NO SS)
             # -------------------------
@@ -1493,21 +1492,20 @@ class EuclideanCodebook(nn.Module):
 
                 cs_now = getattr(self, buf_name_cs, None)
                 active = (cs_now > 0) if cs_now is not None else None
-
-                # prefer active centers only; if none active, fallback to 1 center (not ALL)
-                if active is not None and bool(active.any()):
-                    centers = centers_all[active]  # (K_active, D)
-                else:
-                    centers = centers_all[:1]  # (1, D) safe fallback
-
-                labels = self.argmin_dist_blockwise_l2(masked, centers, k_block=1024)
+                K_active = int(active.sum().item()) if active is not None else -1
 
                 max_n = int(getattr(self, "clst_max_n", 20000))
-                if labels.numel() > max_n:
-                    perm = torch.randperm(labels.numel(), device=labels.device)[:max_n]
-                    y_eval = labels[perm]
+
+                # --- subsample X FIRST (avoid full argmin on huge N) ---
+                if masked.shape[0] > max_n:
+                    perm = torch.randperm(masked.shape[0], device=masked.device)[:max_n]
+                    x_eval = masked[perm]
                 else:
-                    y_eval = labels
+                    x_eval = masked
+
+                # --- CLST/EVAL should NOT use active centers ---
+                centers_clst = centers_all  # (K_req, D)  ← active無視
+                y_eval = self.argmin_dist_blockwise_l2(x_eval, centers_clst, k_block=1024)
 
                 metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
 
@@ -1517,7 +1515,8 @@ class EuclideanCodebook(nn.Module):
                     f"max_frac={metrics['max_frac']:.4f} top5_frac={metrics['topk_frac']:.4f} "
                     f"H={metrics['entropy']:.4f} ppl={metrics['perplexity']:.2f} "
                     f"singleton_ratio={metrics['singleton_ratio']:.4f} "
-                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f}"
+                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f} "
+                    f"(K_active={K_active})"
                 )
 
     def _normalize_mask_dict(self, mask_dict, device=None):
