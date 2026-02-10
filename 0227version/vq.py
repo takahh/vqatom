@@ -2203,6 +2203,9 @@ class EuclideanCodebook(nn.Module):
             # EMA + split (Option A): EMA in normalized space
             # -------------------------
             if do_ema:
+                _log(
+                    f"[SAFE] skey={skey} safe={safe} K_e={K_e} dev={dev} has_cs={hasattr(self, f'cluster_size_{safe}')}")
+
                 def _hist_sig(idx: torch.Tensor, K: int):
                     bc = torch.bincount(idx.long(), minlength=K).float()
                     tot = bc.sum().clamp_min(1.0)
@@ -2225,12 +2228,15 @@ class EuclideanCodebook(nn.Module):
                 buf_name_cd = f"split_cd_{safe}"
 
                 def _get_buf(name, shape, dtype):
+                    shape = tuple(shape)
                     if hasattr(self, name):
                         t = getattr(self, name)
-                        if t.dtype != dtype or tuple(t.shape) != tuple(shape) or t.device != dev:
-                            t = torch.zeros(*shape, device=dev, dtype=dtype)
-                            setattr(self, name, t)
-                        return t
+                        if t.dtype == dtype and tuple(t.shape) == shape and t.device == dev:
+                            return t
+                        # 作り直すなら register_buffer で置き換える
+                        new_t = torch.zeros(*shape, device=dev, dtype=dtype)
+                        self.register_buffer(name, new_t)  # ←ここが重要
+                        return new_t
                     t = torch.zeros(*shape, device=dev, dtype=dtype)
                     self.register_buffer(name, t)
                     return t
