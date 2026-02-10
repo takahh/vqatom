@@ -1318,9 +1318,12 @@ class EuclideanCodebook(nn.Module):
         """
         Initialize per-element codebooks (absolute K from self.cb_dict).
 
-        - kmeans init happens ONLY at epoch==1 (or if missing tensors/buffers)
-        - cluster metrics computed every epoch
-        - for metrics / argmin, we prefer ACTIVE centers only (cs>0). If none active, fallback to 1 center.
+        Guarantees:
+          - kmeans init happens ONLY at epoch==1
+            (epoch>1: if params/buffers missing -> raise error immediately)
+          - cluster metrics computed every epoch
+          - metrics/argmin are computed over ALL K_req centers (no active filtering)
+          - DIAG stats never produce NaN due to N==1 (uses correction=0 / guarded std)
         """
         import os
         import torch
@@ -1336,21 +1339,22 @@ class EuclideanCodebook(nn.Module):
         def _get_from_dict(d, k):
             if k in d:
                 return d[k]
-            sk = str(k)
-            return d.get(sk, None)
+            return d.get(str(k), None)
 
         def _get_absK(d, k):
             v = _get_from_dict(d, k)
             return None if v is None else int(v)
 
-        def _stats(x_nd):
-            if x_nd.numel() == 0:
+        def _stats(x_nd: torch.Tensor):
+            """Robust data stats for padding. Returns (mu, sigma) or None."""
+            if x_nd is None or x_nd.numel() == 0:
                 return None
             mu = x_nd.mean(dim=0)
             with torch.no_grad():
+                # robust "radius" median
                 dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
                 sigma = torch.quantile(dev, 0.5)
-            return mu, sigma
+            return (mu, sigma)
 
         def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
             """
@@ -1363,8 +1367,8 @@ class EuclideanCodebook(nn.Module):
             H, K_run, Dd = means_1kd.shape
             assert H == 1 and Dd == D
 
-            means_kd = means_1kd[0]
-            counts_k = counts_1k[0]
+            means_kd = means_1kd[0]  # (K_run, D)
+            counts_k = counts_1k[0]  # (K_run,)
 
             if K_req <= K_run:
                 return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
@@ -1378,6 +1382,7 @@ class EuclideanCodebook(nn.Module):
 
             if data_stats is not None:
                 mu, sigma = data_stats
+                # small noise around mu (sigma can be 0 for tiny sets)
                 noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
                 out_means[K_run:] = mu + noise
             else:
@@ -1385,18 +1390,29 @@ class EuclideanCodebook(nn.Module):
 
             return out_means, out_counts
 
-        def _ensure_param(safe, shape):
-            """Make sure self.embed[safe] exists and has given shape container-wise (we'll overwrite data later)."""
-            if safe not in self.embed:
+        def _ensure_param(safe: str, shape):
+            """Ensure self.embed[safe] exists with exact shape (recreate if mismatch)."""
+            if (safe not in self.embed) or (tuple(self.embed[safe].shape) != tuple(shape)):
                 self.embed[safe] = nn.Parameter(
                     torch.zeros(shape, device=device, dtype=torch.float32),
                     requires_grad=True,
                 )
-            elif tuple(self.embed[safe].shape) != tuple(shape):
-                self.embed[safe] = nn.Parameter(
-                    torch.zeros(shape, device=device, dtype=torch.float32),
-                    requires_grad=True,
-                )
+
+        def _safe_var_mean(x: torch.Tensor):
+            """Mean variance over dim=0, never NaN for N==1."""
+            if x is None or x.numel() == 0:
+                return float("nan")
+            if x.shape[0] < 2:
+                return 0.0
+            return x.float().var(dim=0, correction=0).mean().item()
+
+        def _safe_std(x: torch.Tensor):
+            """Std over a 1D tensor, never NaN for len==1."""
+            if x is None or x.numel() == 0:
+                return float("nan")
+            if x.numel() < 2:
+                return 0.0
+            return x.float().std(correction=0).item()
 
         # -------------------------
         # main loop
@@ -1440,9 +1456,10 @@ class EuclideanCodebook(nn.Module):
             safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
             buf_name_cs = f"cluster_size_{skey}"
             buf_name_ea = f"embed_avg_{skey}"
+
             # -------------------------
             # 1) Initialize ONLY at epoch 1
-            #    (epoch>1 で missing が起きたら即エラー)
+            #    epoch>1: if missing -> hard error
             # -------------------------
             missing_param = (safe not in self.embed)
             missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
@@ -1464,7 +1481,8 @@ class EuclideanCodebook(nn.Module):
                     use_cosine_sim=use_cosine_sim,
                 )
 
-                means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=_stats(masked))
+                ds = _stats(masked)
+                means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=ds)
 
                 # ensure parameter exists with correct shape, then copy
                 _ensure_param(safe, (K_req, D))
@@ -1484,11 +1502,11 @@ class EuclideanCodebook(nn.Module):
 
                 nz = int((cs > 0).sum().item())
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+
             # -------------------------
             # 2) Cluster metrics every epoch (NO SS)
             # -------------------------
             with torch.no_grad():
-                # full codebook centers (evaluate distribution over ALL slots; do NOT filter by "active")
                 centers_clst = self.embed[safe].detach()  # (K_req, D)
 
                 # active count is just for logging/diagnostics
@@ -1505,18 +1523,18 @@ class EuclideanCodebook(nn.Module):
                 else:
                     x_eval = masked
 
-                # optional diagnostics (call only when needed)
-                def diag(tag: str, X, centers):
-                    import torch
+                # optional diagnostics (safe stats; never NaN from N==1)
+                def diag(tag: str, X: torch.Tensor, centers: torch.Tensor):
+                    cn = centers.float().norm(dim=-1)
                     print(
                         f"[DIAG]{tag} "
                         f"X shape={tuple(X.shape)} centers shape={tuple(centers.shape)} "
                         f"X finite={torch.isfinite(X).all().item()} "
                         f"C finite={torch.isfinite(centers).all().item()} "
-                        f"X var={X.float().var(dim=0).mean().item():.3e} "
-                        f"C var={centers.float().var(dim=0).mean().item():.3e} "
-                        f"C mean-norm={centers.float().norm(dim=-1).mean().item():.3e} "
-                        f"C std-norm={centers.float().norm(dim=-1).std().item():.3e}"
+                        f"X var={_safe_var_mean(X):.3e} "
+                        f"C var={_safe_var_mean(centers):.3e} "
+                        f"C mean-norm={cn.mean().item():.3e} "
+                        f"C std-norm={_safe_std(cn):.3e}"
                     )
 
                 diag(" clst", x_eval, centers_clst)
