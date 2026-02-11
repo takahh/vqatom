@@ -2289,20 +2289,32 @@ class EuclideanCodebook(nn.Module):
                     ea.mul_(decay).add_(batch_embed_sum, alpha=one_m)
 
                     # ---- compute means SAFELY ----
-                    den = cs.unsqueeze(-1).clamp_min(1e-5)  # ← epsより強い止血
+                    den = cs.unsqueeze(-1).clamp_min(1e-5)
                     means = ea / den
                     means = _safe_l2norm(means, eps=1e-12)
 
-                    # keep ea consistent (optional)
-                    ea.copy_(means * den)
+                    # ======= ここが超重要：未使用クラスタをゼロで上書きしない =======
+                    active = (cs > 0.0)  # 使われたことのあるクラスタだけ更新
+                    if active.any():
+                        # C_pre はすでに作ってある前提（あなたの版は作ってる）
+                        means[~active] = C_pre[~active]  # 未使用は前の中心を維持
+                        # ea も整合させる（任意だけど推奨）
+                        ea[~active] = (C_pre[~active] * den[~active])
+                    else:
+                        # もし全部 inactive なら丸ごと維持
+                        means.copy_(C_pre)
+                        ea.copy_(C_pre * den)
+                    # =============================================================
 
-                    # ---- EMA-MEANS log (あなたの挿したかったやつ)
+                    # keep ea consistent（activeな部分だけでもOK）
+                    ea[active] = means[active] * den[active]
+
+                    # log: mean norm は active のみで見る
                     if (epoch == 1) and (chunk_i == 0):
+                        mn = means[active].norm(dim=1).mean().item() if active.any() else float("nan")
                         used_u, maxc_u, maxp_u = _hist_sig(idx_dev, K_e)
-                        _log(
-                            f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum().item()):.1f} "
-                            f"used={used_u} maxp_batch={maxp_u:.4f} means_mean_norm={means.norm(dim=1).mean().item():.3f}"
-                        )
+                        _log(f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum()):.1f} "
+                             f"used={used_u} maxp_batch={maxp_u:.4f} means_mean_norm(active)={mn:.3f}")
 
                     # =========================================================
                     # N-dependent split policy (uses usage_ema distribution)
