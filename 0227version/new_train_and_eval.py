@@ -821,7 +821,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         for p in model.encoder.parameters():
             p.requires_grad = True
 
-    freeze_except_vq(model)
+    # freeze_except_vq(model)
 
     # ----------------------------
     # helpers
