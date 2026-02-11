@@ -1974,7 +1974,7 @@ class EuclideanCodebook(nn.Module):
         split_only_last_batch = False
 
         usage_mom = float(getattr(self, "usage_ema_mom", 0.99))
-        decay = float(getattr(self, "decay", 0.1))
+        decay = float(getattr(self, "decay", 0.99))
         eps = float(getattr(self, "eps", 1e-8))
         prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
 
