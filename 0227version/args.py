@@ -125,7 +125,7 @@ def get_args():
     )
     """Optimization"""
     parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
-    parser.add_argument("--learning_rate", type=float, default=0.00005) # default=0.0001)
+    parser.add_argument("--learning_rate", type=float, default=0.0003) # default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=0.0005)
     parser.add_argument("--cosine_epochs", type=float, default=200)
     parser.add_argument(
