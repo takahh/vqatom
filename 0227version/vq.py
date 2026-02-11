@@ -1475,6 +1475,12 @@ class EuclideanCodebook(nn.Module):
                 need_init = False
 
             if need_init:
+                samples = masked.unsqueeze(0).to(device)
+                print(f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
+                      f"samples_norm_mean={samples.float().norm(dim=-1).mean().item():.4f} "
+                      f"samples_norm_std={samples.float().norm(dim=-1).std().item():.4f} "
+                      f"samples_var={samples.float().var(dim=-1).mean().item():.4e}")
+
                 means_1kd, counts_1k, *_ = kmeans(
                     masked.unsqueeze(0).to(device),
                     num_clusters=K_run,
@@ -1618,30 +1624,6 @@ class EuclideanCodebook(nn.Module):
         if torch.isinf(best_val).any():
             n_bad = torch.isinf(best_val).sum().item()
             print(f"[argmin] WARNING: {n_bad} points never updated (all distances non-finite).")
-
-        return best_idx
-
-    @torch.no_grad()
-    def argmax_sim_blockwise_cos(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 2048, eps: float = 1e-12):
-        """
-        cosine similarity argmax without allocating [N,K]
-        """
-        x_f = torch.nn.functional.normalize(x.float(), p=2, dim=1, eps=eps)
-        c_f = torch.nn.functional.normalize(code.float(), p=2, dim=1, eps=eps)
-
-        best_val = torch.full((x_f.size(0),), -float("inf"), device=x.device, dtype=torch.float32)
-        best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
-
-        K = c_f.size(0)
-        for k0 in range(0, K, k_block):
-            k1 = min(k0 + k_block, K)
-            ck = c_f[k0:k1]  # [kb,D]
-            sims = x_f @ ck.t()  # [N,kb]
-            vals, idxs = sims.max(dim=1)
-            update = vals > best_val
-            best_val = torch.where(update, vals, best_val)
-            best_idx = torch.where(update, idxs + k0, best_idx)
-            del ck, sims, vals, idxs, update
 
         return best_idx
 
