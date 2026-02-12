@@ -1476,8 +1476,14 @@ class EuclideanCodebook(nn.Module):
                 need_init = False
 
             if need_init:
-                samples = masked.unsqueeze(0).to(device)
-                norms = samples.float().norm(dim=-1)
+                samples = masked.to(device).float()
+                samples = torch.nn.functional.normalize(samples, dim=-1)  # <-- force L2=1
+                norms = samples.norm(dim=-1)
+                print("post_norm mean/std:", norms.mean().item(), norms.std().item())
+
+                # and pass samples.unsqueeze(0) into kmeans
+                means_1kd, counts_1k, *_ = kmeans(samples.unsqueeze(0), num_clusters=K_run, ...)
+
                 print(
                     f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
                     f"samples_norm_mean={norms.mean().item():.4f} "
