@@ -3197,61 +3197,49 @@ class VectorQuantize(nn.Module):
             mode=None,
     ):
         """
-        Forward pass with per-element quantization and EMA update (commitment_loss 版).
+        Forward pass with per-element quantization + EMA update + commitment loss.
 
-        - encoder_outputs は必ず [B_total, D] に flatten される
-        - mask_dict は collect_global_indices_compact 由来の「グローバル index」
-        - chunk_start (= global_start) を commitment_loss に渡し、
-          commitment_loss 内で global->local (global - chunk_start) 変換する前提
-
-        Debug:
-          self.debug_index = True のとき、mask_dict の index がこの chunk 範囲に入っているか検査。
+        Contract (IMPORTANT):
+          - _codebook() must return embed_ind_dict such that:
+                embed_ind_dict[skey] = {"ind": LongTensor(N_i), "safe": str}
+            (If your _codebook currently returns only LongTensor, update _codebook first.)
+          - commitment_loss will use safe from embed_ind_dict to index the codebook container.
         """
         import torch
         from einops import rearrange
         import math
 
-        # 例：コードブックサイズ K が取れる場所で
-        K = self.codebook_size  # or self.embed.shape[0] など
-        batch_counts = torch.zeros(K, device=x.device, dtype=torch.float32)
-
-        # --------------------------------------------------------------
-        # 0) グローバル latent オフセット管理
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 0) Global latent offset
+        # -----------------------------
         if not hasattr(self, "latent_size_sum"):
             self.latent_size_sum = 0
 
-        # eval/test/init は毎回 0 始まりにする（chunk_i が渡らないケースでも安全）
         if mode in ("eval", "test", "init_kmeans_final"):
             self.latent_size_sum = 0
         elif chunk_i is not None and chunk_i == 0:
             self.latent_size_sum = 0
 
-        # --------------------------------------------------------------
-        # 1) 入力整形: encoder_outputs を [B_total, D] にする
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 1) Flatten encoder outputs -> [B_total, D]
+        # -----------------------------
         x = x.float()
 
         if getattr(self, "accept_image_fmap", False) and x.ndim == 4:
-            # (B, C, H, W) → (B*H*W, C)
             encoder_outputs = rearrange(x, "b c h w -> (b h w) c")
         else:
-            # (B, D) / (1, B, D) / (B, N, D) / その他 → (B_total, D)
-            if x.ndim == 2:
-                encoder_outputs = x
-            elif x.ndim == 3:
-                encoder_outputs = x.reshape(-1, x.size(-1))
-            else:
-                encoder_outputs = x.reshape(-1, x.size(-1))
+            encoder_outputs = x.reshape(-1, x.size(-1))
 
         B = int(encoder_outputs.size(0))
         device = encoder_outputs.device
         dtype = encoder_outputs.dtype
 
-        # このチャンクのグローバル index 範囲
         global_start = int(self.latent_size_sum)
         global_end = global_start + B
 
+        # -----------------------------
+        # 2) Special modes: init_kmeans_final / infer
+        # -----------------------------
         if mode == "init_kmeans_final":
             _ = self._codebook(
                 encoder_outputs,
@@ -3262,7 +3250,6 @@ class VectorQuantize(nn.Module):
                 epoch=epoch,
                 mode=mode,
             )
-            # keep old behavior for kmeans init final
             z = torch.zeros((), device=device, dtype=dtype)
             return z, (z, z, z, z)
 
@@ -3276,64 +3263,34 @@ class VectorQuantize(nn.Module):
                 epoch=epoch,
                 mode=mode,
             )
-
-            # Expect: (key_id_full, cluster_id_full, id2safe)
             if not (isinstance(out, (tuple, list)) and len(out) == 3):
                 raise TypeError(
-                    f"[vq.forward] mode='infer' expects _codebook() -> (key_id_full, cluster_id_full, id2safe), "
-                    f"got {type(out)} with len={len(out) if isinstance(out, (tuple, list)) else 'NA'}"
+                    "[vq.forward] mode='infer' expects _codebook() -> (key_id_full, cluster_id_full, id2safe)"
                 )
-
             key_id_full, cluster_id_full, id2safe = out
-
-            # shape/dtype guarantees
             key_id_full = key_id_full.reshape(-1).long()
             cluster_id_full = cluster_id_full.reshape(-1).long()
-
             if key_id_full.numel() != cluster_id_full.numel():
-                raise ValueError(
-                    f"[vq.forward] infer length mismatch: key_id_full {key_id_full.shape} vs cluster_id_full {cluster_id_full.shape}"
-                )
-
+                raise ValueError("[vq.forward] infer length mismatch")
             return key_id_full, cluster_id_full, id2safe
 
-        # --------------------------------------------------------------
-        # 1.5) Debug: mask_dict の global index が chunk 範囲内か検査
-        # --------------------------------------------------------------
-        if getattr(self, "debug_index", False) and chunk_i == 0 and B > 0:
-            # 最初の1原子だけ確認
-            k = next(iter(mask_dict))
-            gi = mask_dict[k][0]  # global index
-            li = gi - global_start  # local index
-
-            z_norm = encoder_outputs[li].norm().item()
-            assert z_norm > 0 and not math.isnan(z_norm), \
-                f"latent invalid at global_id={gi}, local_id={li}"
-
+        # -----------------------------
+        # 3) Debug index sanity (optional)
+        # -----------------------------
         if getattr(self, "debug_index", False) and (mask_dict is not None) and (B > 0):
-            # 先頭 chunk なら global_start は 0 のはず（設計通りなら）
             if mode in ("eval", "test", "init_kmeans_final") or (chunk_i == 0):
                 assert global_start == 0, f"[INDEX_MISMATCH] chunk head but global_start={global_start}"
 
-            n_checked = 0
-            n_oob = 0
-
+            n_checked, n_oob = 0, 0
             for k, idxs in mask_dict.items():
                 if idxs is None:
                     continue
-                if isinstance(idxs, torch.Tensor):
-                    gi = idxs.to(device=device)
-                else:
-                    gi = torch.as_tensor(idxs, device=device)
-
+                gi = idxs.to(device=device) if isinstance(idxs, torch.Tensor) else torch.as_tensor(idxs, device=device)
                 if gi.numel() == 0:
                     continue
-
                 gi = gi.reshape(-1)
-                # 重くしないように最大 256 だけ見る
                 if gi.numel() > 256:
                     gi = gi[:256]
-
                 in_chunk = (gi >= global_start) & (gi < global_end)
                 n_oob += int((~in_chunk).sum().item())
                 n_checked += int(gi.numel())
@@ -3342,26 +3299,35 @@ class VectorQuantize(nn.Module):
 
             assert n_oob == 0, (
                 f"[INDEX_MISMATCH] mask_dict contains out-of-chunk indices. "
-                f"global_range=[{global_start},{global_end}), checked={n_checked}, oob={n_oob}. "
-                f"Likely: start_atom_id/atom_offset chaining or chunk_start mismatch or ordering mismatch."
+                f"global_range=[{global_start},{global_end}), checked={n_checked}, oob={n_oob}."
             )
 
-        # --------------------------------------------------------------
-        # 2) loss 初期化（“新しい Tensor を作る”のではなく、必要なら 0 を作る）
-        #    ※ requires_grad は commit_loss の計算結果が持つはずなので、ここは0でOK
-        # --------------------------------------------------------------
-        commit_loss = torch.zeros((), device=device, dtype=dtype)
-        codebook_loss = torch.zeros((), device=device, dtype=dtype)
-        repel_loss = torch.zeros((), device=device, dtype=dtype)
-        cb_repel_loss = torch.zeros((), device=device, dtype=dtype)
-        ent_loss = torch.zeros((), device=device, dtype=dtype)
+            # quick latent check (cheap)
+            k0 = next(iter(mask_dict.keys()), None)
+            if k0 is not None:
+                gi0 = mask_dict[k0][0] if isinstance(mask_dict[k0], (list, tuple)) else mask_dict[k0].reshape(-1)[
+                    0].item()
+                li0 = int(gi0) - global_start
+                if 0 <= li0 < B:
+                    z_norm = float(encoder_outputs[li0].norm().item())
+                    assert (z_norm > 0) and (
+                        not math.isnan(z_norm)), f"latent invalid at global_id={gi0}, local_id={li0}"
 
-        # --------------------------------------------------------------
-        # 3) commitment_loss 計算（mask_dict があるときだけ）
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 4) Default losses (0-dim tensors)
+        # -----------------------------
+        z0 = torch.zeros((), device=device, dtype=dtype)
+        commit_loss = z0
+        codebook_loss = z0
+        repel_loss = z0
+        cb_repel_loss = z0
+        ent_loss = z0
+
+        # -----------------------------
+        # 5) Train path: run _codebook first (assign + EMA + entropy)
+        # -----------------------------
         if (mask_dict is not None) and (B > 0):
-            # まず codebook を回して「割当」と「更新」を発生させる
-            quantize_st, embed_ind_dict, _embed, ent_loss = self._codebook(
+            quantize_st, embed_ind_dict, codebook_container, ent_loss = self._codebook(
                 encoder_outputs,
                 feature=feature,
                 mask_dict=mask_dict,
@@ -3371,70 +3337,42 @@ class VectorQuantize(nn.Module):
                 mode="train",
             )
 
-            # out = self.commitment_loss(
-            #     encoder_outputs=encoder_outputs,
-            #     mask_dict=mask_dict,
-            #     codebook=self._codebook,  # あなたの実装に合わせる（dict or tensor/module）
-            #     logger=logger,
-            #     chunk_start=global_start,  # ★重要: global->local 変換の基準
-            #     beta=getattr(self, "beta", 0.25),
-            #     temperature=getattr(self, "temperature", None),
-            #     use_cosine=getattr(self, "use_cosine", False),
-            # )
-            # commit_loss, codebook_loss, repel_loss, cb_repel
+            # ---- HARD REQUIRE: embed_ind_dict contains {"ind","safe"} per skey
+            # This prevents "Could not resolve existing safe key..."
+            # and keeps commitment aligned with EMA/split assignment.
+            if not isinstance(embed_ind_dict, dict):
+                raise TypeError("[vq.forward] embed_ind_dict must be dict")
+            # (light check only)
+            for _k, _v in list(embed_ind_dict.items())[:3]:
+                if not (isinstance(_v, dict) and ("ind" in _v) and ("safe" in _v)):
+                    raise RuntimeError(
+                        "[vq.forward] embed_ind_dict must store {'ind':..., 'safe':...} per skey. "
+                        "Fix _codebook() to return that structure."
+                    )
+
+            # ---- commitment loss uses assignments from embed_ind_dict
             commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
-                codebook=_embed,  # or the correct container of centers (see note below)
-                codebook_mod=self._codebook,  # <-- ADD THIS
+                codebook=codebook_container,  # <-- IMPORTANT: must support codebook[safe]
+                codebook_mod=self._codebook,  # ok to keep for helpers/logging
                 logger=logger,
                 chunk_start=global_start,
                 beta=getattr(self, "beta", 0.25),
                 temperature=getattr(self, "temperature", None),
                 use_cosine=getattr(self, "use_cosine", False),
-                embed_ind_dict=embed_ind_dict,
+                embed_ind_dict=embed_ind_dict,  # contains safe + ind
             )
 
-            # total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
-            #
-            # # commitment_loss 側が tuple を返す想定に合わせて受ける
-            # # 期待: (commit, cb, rep, cb_rep)
-            # if isinstance(out, (tuple, list)) and len(out) == 4:
-            #     commit_loss, codebook_loss, repel_loss, cb_repel_loss = out
-            # else:
-            #     # 想定外の返り値は落とす（静かに壊れるより良い）
-            #     raise TypeError(f"commitment_loss must return 4-tuple, got {type(out)}: {out}")
-
-        # --------------------------------------------------------------
-        # 4) loss の “型/デバイス/次元” を揃える（0-dim Tensor）
-        #    - 既存 Tensor はラップしない（detach もしない）
-        #    - scalar/None だけ Tensor 化
-        # --------------------------------------------------------------
-        def _loss0(x):
-            if isinstance(x, torch.Tensor):
-                # 0次元に揃える（値のコピーは発生し得るが、wrap ではない）
-                return x.to(device=device, dtype=dtype).reshape(())
-            if x is None:
-                return torch.zeros((), device=device, dtype=dtype)
-            if isinstance(x, (float, int)):
-                return torch.tensor(float(x), device=device, dtype=dtype)
-            raise TypeError(f"_loss0: unsupported loss type {type(x)}")
-
-        commit_loss = _loss0(commit_loss)
-        codebook_loss = _loss0(codebook_loss)
-        repel_loss = _loss0(repel_loss)
-        cb_repel_loss = _loss0(cb_repel_loss)
-
-        # --------------------------------------------------------------
-        # 5) グローバル offset 更新（学習時のみ）
-        # --------------------------------------------------------------
+        # -----------------------------
+        # 6) Update global offset (train only)
+        # -----------------------------
         if mode not in ("eval", "test", "init_kmeans_final"):
             self.latent_size_sum = global_end
 
-        # --------------------------------------------------------------
-        # 6) return
-        # --------------------------------------------------------------
-        # total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
+        # -----------------------------
+        # 7) Return
+        # -----------------------------
+        # (あなたの今の return に合わせて: total_loss = commit + ent)
         total_loss = commit_loss + ent_loss
-        # now the mode is train
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
