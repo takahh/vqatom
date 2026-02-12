@@ -1482,8 +1482,6 @@ class EuclideanCodebook(nn.Module):
                 print("post_norm mean/std:", norms.mean().item(), norms.std().item())
 
                 # and pass samples.unsqueeze(0) into kmeans
-                means_1kd, counts_1k, *_ = kmeans(samples.unsqueeze(0), num_clusters=K_run, ...)
-
                 print(
                     f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
                     f"samples_norm_mean={norms.mean().item():.4f} "
