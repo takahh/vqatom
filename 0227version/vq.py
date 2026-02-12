@@ -1937,15 +1937,10 @@ class EuclideanCodebook(nn.Module):
           - assignment uses Xn (normalized latents) vs C (already normalized centers)
           - EMA uses Xn, and writes back normalized means
 
-        Max_p stabilization "all-in" pack:
-          (1) split trigger uses p_mix = mix(p_cs, p_ue) rather than ue-only (more responsive, less sticky)
-          (2) split can happen multiple times per epoch, regulated by cooldown (no "wait until next epoch")
-          (3) split triggers not only on max_p>thr but also on growth (max_p increased by delta)
-          (4) after split, re-sync ea to means * cs and keep centers normalized
-          (5) optional "revive" (very conservative) to prevent effective K shrinking over many minibatches
-              - does NOT fight your "dead is ok" stance; it's off by default
-
-        Note: dead/near-dead logs remain as diagnostics; not treated as an error.
+        IMPORTANT OUTPUT CONTRACT (for commitment_loss consistency):
+          - embed_ind_dict[skey] MUST be a dict: {"ind": LongTensor(Ni), "safe": str}
+            where "safe" is the *exact* safe-key used to index self.embed[...] for that skey in this forward.
+          - This holds for both mode="infer" and mode="train"/"eval" paths.
         """
         import os, time
         import torch
@@ -1989,7 +1984,7 @@ class EuclideanCodebook(nn.Module):
 
         do_split = bool(getattr(self, "do_split_the_winner", True))
 
-        # --- IMPORTANT: allow multiple splits per epoch; cooldown will regulate
+        # allow multiple splits per epoch; cooldown regulates
         split_once_per_epoch = bool(getattr(self, "split_once_per_epoch", False))
         split_only_last_batch = bool(getattr(self, "split_only_last_batch", False))
 
@@ -2000,21 +1995,19 @@ class EuclideanCodebook(nn.Module):
 
         # policy mix: max_p computed on mix(cs_dist, ue_dist)
         maxp_mix_alpha = float(getattr(self, "maxp_mix_alpha", 0.5))  # 0->cs only, 1->ue only
-        maxp_growth_delta = float(getattr(self, "maxp_growth_delta", 0.02))  # trigger if max_p grows by this
+        maxp_growth_delta = float(getattr(self, "maxp_growth_delta", 0.02))
         min_points_for_split = int(getattr(self, "split_min_points", 32))
         min_N_for_split = int(getattr(self, "split_min_N", 200))
 
-        # Optional: strict invariant check (cheap). Default False.
         debug_center_norm = bool(getattr(self, "debug_center_norm", False))
 
         # Optional: prevent effective-K shrink (OFF by default)
         revive_dead = bool(getattr(self, "revive_dead", False))
         revive_k = int(getattr(self, "revive_k", 4))
-        revive_thr = float(getattr(self, "revive_thr", 1e-3))  # cs < this is considered dead
+        revive_thr = float(getattr(self, "revive_thr", 1e-3))  # cs < this is dead
         revive_noise = float(getattr(self, "revive_noise", 0.02))
-        revive_use_batch = bool(getattr(self, "revive_use_batch", True))  # use batch winners to seed
-        revive_every_steps = int(getattr(self, "revive_every_steps", 0))  # 0 disables step-based gating
-        # NOTE: revive_dead=False keeps behavior close to your current philosophy.
+        revive_use_batch = bool(getattr(self, "revive_use_batch", True))
+        revive_every_steps = int(getattr(self, "revive_every_steps", 0))  # 0 disables step-gate
 
         # ------------------------------------------------------------------
         # 0) global offset management
@@ -2037,6 +2030,7 @@ class EuclideanCodebook(nn.Module):
         global_end = global_start + B
 
         self.quantize_dict = {}
+        # IMPORTANT: embed_ind_dict must store {"ind","safe"}
         self.embed_ind_dict = {}
 
         mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
@@ -2060,6 +2054,7 @@ class EuclideanCodebook(nn.Module):
             return sid
 
         def _get_safe_and_code(skey: str):
+            # NOTE: K_e is stored per skey; safe is resolved from that.
             K_e = int(self.cb_dict.get(skey, self.codebook_size))
             safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
             code_param = self.embed[safe]  # (1,K,D) or (K,D)
@@ -2094,14 +2089,16 @@ class EuclideanCodebook(nn.Module):
 
                 with torch.no_grad():
                     Xn = _safe_l2norm(X)  # normalize X once
-                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.int32)
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
 
                 key_id_full.index_copy_(
                     0, idx_local,
                     torch.full((idx_local.numel(),), sid, device=flatten.device, dtype=torch.int32),
                 )
-                cluster_id_full.index_copy_(0, idx_local, idx_code)
-                self.embed_ind_dict[skey] = idx_code
+                cluster_id_full.index_copy_(0, idx_local, idx_code.to(dtype=torch.int32))
+
+                # IMPORTANT: store {"ind","safe"} even in infer
+                self.embed_ind_dict[skey] = {"ind": idx_code, "safe": safe}
 
             self.latent_size_sum = global_end
             return key_id_full, cluster_id_full, dict(self._id2safe)
@@ -2138,8 +2135,8 @@ class EuclideanCodebook(nn.Module):
 
                 with torch.no_grad():
                     Xn = _safe_l2norm(X)
-                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block)
-                    bc0 = torch.bincount(idx_code.long(), minlength=C.shape[0]).float()
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
+                    bc0 = torch.bincount(idx_code, minlength=C.shape[0]).float()
                     sig0 = torch.stack([
                         bc0.sum(),
                         (bc0 > 0).sum().float(),
@@ -2147,23 +2144,26 @@ class EuclideanCodebook(nn.Module):
                         (bc0 / bc0.sum().clamp_min(1)).max()
                     ])
                     self._kmeans_sig[skey] = {
+                        "safe": safe,
                         "C_norm_mean": C.detach().float().norm(dim=1).mean().item(),
                         "sig": sig0.cpu(),
                     }
 
                 entry = self._kmeans_dump.get(skey)
                 if entry is None:
-                    entry = {"latents": [], "centers": None, "assign": []}
+                    entry = {"latents": [], "centers": None, "assign": [], "safe": safe}
                     self._kmeans_dump[skey] = entry
 
                 entry["latents"].append(X.detach().to("cpu", dtype=torch.float16))
                 entry["assign"].append(idx_code.detach().to("cpu"))
+                entry["safe"] = safe
                 if entry["centers"] is None:
                     entry["centers"] = C.detach().to("cpu", dtype=torch.float16)
 
             out = {}
             for k, v in self._kmeans_dump.items():
                 out[k] = {
+                    "safe": v.get("safe", None),
                     "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,
                     "centers": v["centers"],
                     "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
@@ -2255,29 +2255,21 @@ class EuclideanCodebook(nn.Module):
             if n_dead <= 0:
                 return False
 
-            # revive at most revive_k per call
             k = min(int(revive_k), n_dead)
-            dead_idx = torch.nonzero(dead, as_tuple=False).flatten()
-            dead_idx = dead_idx[:k]
+            dead_idx = torch.nonzero(dead, as_tuple=False).flatten()[:k]
 
-            # pick seeds: either from batch dominant clusters (split pressure), or random X
             if revive_use_batch and (idx_dev.numel() > 0):
                 bc = torch.bincount(idx_dev, minlength=K).float()
                 winners = torch.argsort(bc, descending=True)
-                # choose top winners as sources for seeds
                 src = winners[:k]
-                # seed near winner center with small noise
                 seeds = means.index_select(0, src).clone()
             else:
-                # random X points as seeds
                 perm = torch.randperm(Xn_dev.shape[0], device=Xn_dev.device)[:k]
                 seeds = Xn_dev.index_select(0, perm).clone()
 
             seeds = _safe_l2norm(seeds + revive_noise * torch.randn_like(seeds))
             means.index_copy_(0, dead_idx, seeds)
 
-            # sync buffers minimally
-            # set small counts so they can start competing, but not explode
             cs.index_fill_(0, dead_idx, float(min_points_for_split))
             ue.index_fill_(0, dead_idx, float(min_points_for_split))
             den = cs.unsqueeze(-1).clamp_min(1e-5)
@@ -2300,7 +2292,6 @@ class EuclideanCodebook(nn.Module):
             skey = str(key)
             safe, code_param, C = _get_safe_and_code(skey)
 
-            # (Optional) sanity check: centers should be unit-norm
             if debug_center_norm and (epoch == 1) and (chunk_i == 0):
                 with torch.no_grad():
                     cn = C.detach().float().norm(dim=1)
@@ -2311,12 +2302,14 @@ class EuclideanCodebook(nn.Module):
 
             # ---- hard assignment (Option A): C assumed normalized
             with torch.no_grad():
-                idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block)
+                idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block)  # (Ni,)
                 idx_code_long = idx_code.to(dtype=torch.long)
 
             Q = C.index_select(0, idx_code_long)
             self.quantize_dict[skey] = Q
-            self.embed_ind_dict[skey] = idx_code_long.to(torch.int32)
+
+            # IMPORTANT: store {"ind","safe"} (this is the key fix for commitment_loss)
+            self.embed_ind_dict[skey] = {"ind": idx_code_long, "safe": safe}
 
             # -------------------------
             # EMA + split (Option A)
@@ -2328,6 +2321,7 @@ class EuclideanCodebook(nn.Module):
                 else:
                     K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
 
+                # keep per-skey K in cb_dict (for safe resolution on future calls)
                 self.cb_dict[skey] = int(K_e)
 
                 buf_name_cs = f"cluster_size_{safe}"
@@ -2379,10 +2373,9 @@ class EuclideanCodebook(nn.Module):
                     den = cs.unsqueeze(-1).clamp_min(1e-5)
                     means = _safe_l2norm(ea / den, eps=1e-12)
 
-                    # IMPORTANT: do NOT overwrite inactive clusters with zeros
+                    # keep inactive as previous center
                     active = (cs > 0.0)
                     if active.any():
-                        # keep inactive as previous center (already unit-ish)
                         means[~active] = _safe_l2norm(C_pre[~active])
                     else:
                         means.copy_(_safe_l2norm(C_pre))
@@ -2390,7 +2383,6 @@ class EuclideanCodebook(nn.Module):
                     # keep ea consistent with means, always
                     ea.copy_(means * den)
 
-                    # debug logs
                     if (epoch == 1) and (chunk_i == 0):
                         mn = means[active].norm(dim=1).mean().item() if active.any() else float("nan")
                         used_u, _maxc_u, maxp_u_batch = _hist_sig(idx_dev, K_e)
@@ -2417,9 +2409,6 @@ class EuclideanCodebook(nn.Module):
                     N_key = int(cs.sum().item())
                     thr = _target_max_p(N_key)
 
-                    # ---------------------------------------------------------
-                    # Split trigger: threshold OR growth
-                    # ---------------------------------------------------------
                     prev = float(self._prev_maxp.get(skey, 0.0))
                     grew = (max_p > prev + float(maxp_growth_delta))
                     self._prev_maxp[skey] = max_p
@@ -2436,7 +2425,7 @@ class EuclideanCodebook(nn.Module):
                         do_it = ((max_p > thr) or bool(grew)) and (N_key >= min_N_for_split) and (K_e > 2)
                         if do_it:
                             did = self.split_the_winner_ema(
-                                embed=means,  # normalized means view (K,D)
+                                embed=means,
                                 ema_sum=ea,
                                 ema_count=cs,
                                 usage_ema=ue,
@@ -2459,12 +2448,10 @@ class EuclideanCodebook(nn.Module):
                                 self._split_done_epoch.add(skey)
 
                             if did:
-                                # enforce norm + re-sync ea exactly to cs
                                 means.copy_(_safe_l2norm(means))
                                 den2 = cs.unsqueeze(-1).clamp_min(1e-5)
                                 ea.copy_(means * den2)
 
-                                # recompute post-split max_p on mix
                                 total_cs2 = cs.sum().clamp_min(1e-8)
                                 p_cs2 = cs / total_cs2
                                 max_p_cs2 = float(p_cs2.max().item())
@@ -2481,12 +2468,8 @@ class EuclideanCodebook(nn.Module):
                                     f"N~{N_key} thr={thr:.4f} max_p_before={max_p:.4f} "
                                     f"max_p_after={max_p_after:.4f} (cs={max_p_cs2:.4f}, ue={max_p_u2:.4f})"
                                 )
-                                # update prev tracker to avoid immediate re-trigger on same value
                                 self._prev_maxp[skey] = max_p_after
 
-                    # ---------------------------------------------------------
-                    # Optional revive (prevent effective-K shrink)
-                    # ---------------------------------------------------------
                     revived = _revive_dead_centers_if_needed(
                         means=means,
                         ea=ea,
@@ -2499,9 +2482,6 @@ class EuclideanCodebook(nn.Module):
                     if revived and (chunk_i == 0):
                         _log(f"[REVIVE] epoch={epoch} key={skey} revived_some_dead_centers=True")
 
-                    # ---------------------------------------------------------
-                    # Collect max_p for reports (use mix)
-                    # ---------------------------------------------------------
                     total_csR = cs.sum().clamp_min(1e-8)
                     p_csR = cs / total_csR
                     total_uR = ue.sum().clamp_min(1e-8)
@@ -2509,7 +2489,6 @@ class EuclideanCodebook(nn.Module):
                     p_mixR = (1.0 - a) * p_csR + a * p_uR
                     max_p_R = float(p_mixR.max().item())
 
-                    # ---- dead / near-dead stats ----
                     dead_mask = (cs < 1e-3)
                     near_dead_mask = (cs < 0.1)
                     n_dead = int(dead_mask.sum().item())
@@ -2534,7 +2513,6 @@ class EuclideanCodebook(nn.Module):
                     else:
                         code_param.data.copy_(means.to(dtype=code_param.dtype))
 
-                    # EMA-WRITE drift log
                     if (epoch == 1) and (chunk_i == 0):
                         C_post = code_param.detach()
                         C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
@@ -2617,6 +2595,11 @@ class EuclideanCodebook(nn.Module):
                     out = {"epoch": int(epoch), "maxp_list": self._mp_list, "detail": self._mp_list_keys}
                     torch.save(out, f"dumps/maxp_epoch_{int(epoch):04d}.pt")
 
+        # RETURN CONTRACT:
+        # - quantize_st: (1,B,D)
+        # - embed_ind_dict: skey -> {"ind": (Ni,), "safe": str}
+        # - embed: your ParameterDict/Module holding centers
+        # - ent_metric_total: scalar float32
         return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
 
 
