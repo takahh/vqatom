@@ -1994,7 +1994,7 @@ class EuclideanCodebook(nn.Module):
         split_only_last_batch = bool(getattr(self, "split_only_last_batch", False))
 
         usage_mom = float(getattr(self, "usage_ema_mom", 0.97))
-        decay = float(getattr(self, "decay", 0.99))
+        decay = float(getattr(self, "decay", 0.9))
         eps = float(getattr(self, "eps", 1e-8))
         prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
 
@@ -3413,6 +3413,7 @@ class VectorQuantize(nn.Module):
         # --------------------------------------------------------------
         # 6) return
         # --------------------------------------------------------------
-        total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
+        # total_loss = commit_loss + codebook_loss + repel_loss + cb_repel_loss + ent_loss
+        total_loss = commit_loss + ent_loss
         # now the mode is train
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
