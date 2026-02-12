@@ -2891,29 +2891,33 @@ class VectorQuantize(nn.Module):
             beta=0.25,
             temperature=None,
             use_cosine=False,
-            embed_ind_dict=None,  # <-- add this
+            embed_ind_dict=None,
     ):
         """
-        Per-element commitment + codebook + repel losses.
+        Per-element commitment + codebook + repel losses (assignment-consistent).
 
-        戻り値:
+        Returns:
             commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
-        - encoder_outputs : [B, D] （このチャンクに含まれる latent）
-        - mask_dict       : { key -> グローバル index or bool mask }
-        - codebook        :
-            * Tensor [K, D]              … 全 key で共通
-            * dict / nn.ParameterDict    … key ごとに [K_e, D]
-            * None                       … self._codebook を使う
-        - chunk_start     : このチャンクの global start index
-        - beta            : commitment loss の係数
-        - use_cosine      : True のときは cosine 距離で最も近いコードを選ぶ
+        Assumptions / fixes vs your version:
+          ✅ embed_ind_dict provides assignments consistent with VQ forward (EMA/entropy/split).
+             - Most commonly: embed_ind_dict[skey] is length-B (the whole chunk) and aligned to encoder_outputs
+             - Sometimes: embed_ind_dict[skey] is already length-N_i (masked-only). We support both.
+          ✅ repel losses are computed ONCE (your code double-counted them).
+          ✅ safe-key is resolved WITHOUT creating new keys in this loss function:
+             - Prefer (safe, indices) packed in embed_ind_dict[skey] if you provide it
+             - Else try to find an existing safe key in `codebook` by matching tensor shape
+             - If not found, raise (so you don’t accidentally create new clusters during loss)
+
+        Notes:
+          - temperature/use_cosine are kept in signature for compatibility; assignment is taken from embed_ind_dict.
+          - codebook is expected to be dict/ParameterDict-like where codebook[safe] gives [K_e, D] or [1,K_e,D].
         """
         import torch
-        import torch.nn as nn
         import torch.nn.functional as F
+        import torch.nn as nn
 
-        # ---- 0. encoder_outputs 形状そろえ ----
+        # ---- 0) shape normalize ----
         encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
         device = encoder_outputs.device
         B, D = encoder_outputs.shape
@@ -2923,97 +2927,140 @@ class VectorQuantize(nn.Module):
             chunk_start = 0
         chunk_end = chunk_start + B
 
-        # ---- 1. mask_dict が空なら全部 0 (勾配付き) を返す ----
+        # ---- 1) empty mask_dict => return graph-connected zeros ----
         if mask_dict is None or len(mask_dict) == 0:
-            zero = encoder_outputs.sum() * 0.0  # graph に繋がった 0
-            # if logger is not None:
-            #     logger.info(f"[VQ_COMMIT] mask_dict is empty → skip in chunk [{chunk_start},{chunk_end})")
+            zero = encoder_outputs.sum() * 0.0
             return zero, zero, zero, zero
 
-        def _get_codebook_for_key(key, *, device, dtype):
-            """
-            `codebook` / `self._codebook` が以下のいずれでも動くように統一:
-              - 単一 Tensor / Parameter / Embedding
-              - dict[str -> Tensor/Parameter]
-              - nn.ParameterDict (サブコードブック束ね)
-              - dict[str -> nn.ParameterDict]（多段）
-            戻り値は必ず [K, D] の Tensor。
-            """
-            cb_src = codebook if codebook is not None else getattr(self, "_codebook", None)
-            if cb_src is None:
-                raise RuntimeError("Codebook is not initialized (both `codebook` and `self._codebook` are None).")
-
-            import torch
-            import torch.nn as nn
-
-            # ---------- dict / ModuleDict / ParameterDict 系 ----------
-            if isinstance(cb_src, (dict, nn.ModuleDict, nn.ParameterDict)):
-                t = None
-
-                # 1) 完全一致
-                if key in cb_src:
-                    t = self._cb_to_tensor(cb_src[key])
-
-                # 2) "k_..." をざっくり上位キーにマッピング
-                if t is None and isinstance(key, str) and key.startswith("k_"):
-                    head = key.split("_")[1]  # 例: k_6_0_3_1_1_... → "6"
-                    if head in cb_src:
-                        t = self._cb_to_tensor(cb_src[head])
-
-                # 3) それでも無ければ「全部まとめて」連結して使う
-                if t is None:
-                    t = self._cb_to_tensor(cb_src)
-
+        # ---- 2) helpers ----
+        def _log(msg: str):
+            if logger is not None:
+                logger.info(msg)
             else:
-                # ---------- 単一 Tensor / Parameter / Embedding 等 ----------
-                t = self._cb_to_tensor(cb_src)
+                # comment out if noisy
+                # print(msg)
+                pass
 
-            # 念のため device/dtype をそろえる
-            t = t.to(device=device, dtype=dtype)
+        def _as_long_index(x):
+            if isinstance(x, (list, tuple)):
+                if len(x) == 0:
+                    return None
+                x = torch.as_tensor(x, device=device)
+            elif not isinstance(x, torch.Tensor):
+                try:
+                    x = torch.as_tensor(x, device=device)
+                except Exception as e:
+                    raise TypeError(f"mask_dict entry has unsupported type {type(x)}") from e
+            else:
+                x = x.to(device)
+
+            if x.numel() == 0:
+                return None
+            if x.dtype == torch.bool:
+                x = torch.nonzero(x, as_tuple=False).view(-1)
+                if x.numel() == 0:
+                    return None
+            return x.long()
+
+        def _unwrap_codebook_tensor(cb_param):
+            # cb_param: [K,D] or [1,K,D] or nn.Embedding etc.
+            if hasattr(self, "_cb_to_tensor"):
+                t = self._cb_to_tensor(cb_param)
+            else:
+                # minimal fallback
+                if isinstance(cb_param, nn.Embedding):
+                    t = cb_param.weight
+                else:
+                    t = cb_param
+            if t.ndim == 3 and t.shape[0] == 1:
+                t = t.squeeze(0)
             return t
 
-        # ---- 2. 累積器: Ni, K_e で重み付け平均する ----
+        def _find_existing_safe_key(skey: str, K_e: int, D: int):
+            """
+            Try to find an existing safe key in `codebook` whose tensor shape matches (K_e, D).
+            This avoids calling _get_or_create_safe_key() inside loss.
+            """
+            if not isinstance(codebook, (dict, nn.ModuleDict, nn.ParameterDict)):
+                return None
+
+            candidates = []
+            for kk in codebook.keys():
+                try:
+                    t = _unwrap_codebook_tensor(codebook[kk])
+                    if t.ndim == 2 and t.shape[0] == K_e and t.shape[1] == D:
+                        # weak string match: safe keys usually contain skey
+                        if skey in str(kk):
+                            candidates.append(kk)
+                except Exception:
+                    continue
+
+            if len(candidates) == 1:
+                return candidates[0]
+
+            # fallback: if exact skey exists and matches shape
+            if skey in codebook:
+                t = _unwrap_codebook_tensor(codebook[skey])
+                if t.ndim == 2 and t.shape[0] == K_e and t.shape[1] == D:
+                    return skey
+
+            return None
+
+        def _extract_assign_and_safe(skey: str):
+            """
+            Supports multiple embed_ind_dict formats:
+              A) embed_ind_dict[skey] = LongTensor of shape (B,)  (aligned with encoder_outputs)
+              B) embed_ind_dict[skey] = LongTensor of shape (N_i,) (already masked-only)
+              C) embed_ind_dict[skey] = {"ind": LongTensor, "safe": <safe_key_string>}
+              D) embed_ind_dict[skey] = (LongTensor, safe_key_string)
+            Returns: (nn_all_or_nn_masked, safe_from_dict_or_None)
+            """
+            if embed_ind_dict is None:
+                raise RuntimeError(
+                    "[VQ_COMMIT] embed_ind_dict is required to keep assignments consistent with EMA/entropy/split."
+                )
+            if skey not in embed_ind_dict:
+                raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing skey={skey}")
+
+            obj = embed_ind_dict[skey]
+
+            safe_from_dict = None
+            nn_obj = None
+
+            if isinstance(obj, dict):
+                # common keys: "ind", "idx", "nn_idx", "safe"
+                for key in ("ind", "idx", "nn_idx", "assign"):
+                    if key in obj:
+                        nn_obj = obj[key]
+                        break
+                safe_from_dict = obj.get("safe", None)
+            elif isinstance(obj, (tuple, list)) and len(obj) == 2:
+                nn_obj, safe_from_dict = obj[0], obj[1]
+            else:
+                nn_obj = obj
+
+            if not isinstance(nn_obj, torch.Tensor):
+                nn_obj = torch.as_tensor(nn_obj, device=device)
+            nn_obj = nn_obj.to(device=device, dtype=torch.long).reshape(-1)
+
+            return nn_obj, safe_from_dict
+
+        # ---- 3) accumulators ----
         total_latent = 0
         total_cb_count = 0
 
-        commit_num   = encoder_outputs.new_zeros(())
-        codebk_num   = encoder_outputs.new_zeros(())
-        repel_num    = encoder_outputs.new_zeros(())
+        commit_num = encoder_outputs.new_zeros(())
+        codebk_num = encoder_outputs.new_zeros(())
+        repel_num = encoder_outputs.new_zeros(())
         cb_repel_num = encoder_outputs.new_zeros(())
 
-        # ---- 3. main loop over mask_dict keys ----
+        # ---- 4) main loop over keys ----
         for k, g_idx in mask_dict.items():
-            # -------------------------------
-            # 3-1) list / numpy / tensor → Tensor に正規化
-            # -------------------------------
-            if isinstance(g_idx, (list, tuple)):
-                if len(g_idx) == 0:
-                    continue
-                g_idx = torch.as_tensor(g_idx, device=device)
-            elif not isinstance(g_idx, torch.Tensor):
-                try:
-                    g_idx = torch.as_tensor(g_idx, device=device)
-                except Exception as e:
-                    raise TypeError(f"mask_dict[{k}] has unsupported type {type(g_idx)}") from e
-            else:
-                g_idx = g_idx.to(device)
-
-            if g_idx.numel() == 0:
+            g_idx = _as_long_index(g_idx)
+            if g_idx is None:
                 continue
 
-            # -------------------------------
-            # 3-2) bool mask → index に変換
-            # -------------------------------
-            if g_idx.dtype == torch.bool:
-                g_idx = torch.nonzero(g_idx, as_tuple=False).view(-1)
-
-            g_idx = g_idx.long()
-            if g_idx.numel() == 0:
-                continue
-
-            # -------------------------------
-            # 3-3) このチャンク [chunk_start, chunk_end) に属する index だけ抜き出し
-            # -------------------------------
+            # select indices that fall within this chunk
             in_chunk = (g_idx >= chunk_start) & (g_idx < chunk_end)
             if not torch.any(in_chunk):
                 continue
@@ -3022,141 +3069,115 @@ class VectorQuantize(nn.Module):
             if local_idx.numel() == 0:
                 continue
 
-            # 対象 latent: z ∈ R^{N_i × D}
-            z = encoder_outputs[local_idx]  # [N_i, D]
+            z = encoder_outputs.index_select(0, local_idx)  # [N_i, D]
             N_i = z.shape[0]
             if N_i == 0:
                 continue
 
-            # -------------------------------
-            # 3-4) この key 用コードブック取得 [K_e, D]
-            #      MUST be identical to _codebook safe-key mapping
-            # -------------------------------
             skey = str(k)
 
+            # determine desired K_e (requested size)
             K_e_default = int(
                 getattr(self, "cb_dict", {}).get(
                     skey,
                     getattr(self, "codebook_size", 0)
                 )
             )
-            if codebook_mod is None:
-                raise RuntimeError("[VQ_COMMIT] codebook_mod is required (pass self._codebook).")
+            if K_e_default <= 0:
+                raise RuntimeError(f"[VQ_COMMIT] invalid K_e_default for skey={skey}: {K_e_default}")
 
-            safe = codebook_mod._get_or_create_safe_key(
-                skey,
-                K_e=K_e_default,
-                D=D,
-                device=device
-            )
+            # get assignment tensor (either length-B or length-N_i) and optional safe key
+            nn_all_or_masked, safe_from_dict = _extract_assign_and_safe(skey)
+
+            # resolve safe key WITHOUT creating anything
+            safe = None
+            if safe_from_dict is not None:
+                safe = safe_from_dict
+            else:
+                safe = _find_existing_safe_key(skey, K_e_default, D)
+
+            if safe is None:
+                raise RuntimeError(
+                    f"[VQ_COMMIT] Could not resolve existing safe key for skey={skey} "
+                    f"(wanted shape K_e={K_e_default}, D={D}).\n"
+                    f"Fix: pass safe key alongside embed_ind_dict, e.g.\n"
+                    f"  embed_ind_dict[skey] = {{'ind': <(B,)>, 'safe': <safe_key>}}\n"
+                    f"or ensure codebook contains a key that includes '{skey}' with tensor shape ({K_e_default},{D})."
+                )
 
             if safe not in codebook:
                 raise KeyError(
-                    f"[VQ_COMMIT] safe-key '{safe}' not in codebook "
-                    f"(from skey='{skey}')."
+                    f"[VQ_COMMIT] safe-key '{safe}' not found in codebook (from skey='{skey}')."
                 )
 
             cb_param = codebook[safe]
-            cb = cb_param.squeeze(0) if cb_param.ndim == 3 else cb_param  # [K_e, D]
-
-            K_e, Dk = cb.shape
-            if Dk != D:
+            cb = _unwrap_codebook_tensor(cb_param).to(device=device, dtype=dtype)  # [K_e, D]
+            if cb.ndim != 2 or cb.shape[1] != D:
                 raise RuntimeError(
-                    f"[VQ_COMMIT] D mismatch for skey={skey}: latent D={D} vs cb D={Dk}"
+                    f"[VQ_COMMIT] codebook tensor shape mismatch skey={skey} safe={safe}: got {tuple(cb.shape)}, expected (*,{D})"
                 )
+            K_e = cb.shape[0]
+            if K_e != K_e_default:
+                # not fatal, but warn; assignment OOB check uses actual K_e
+                _log(f"[VQ_COMMIT][WARN] skey={skey} expected K_e={K_e_default}, actual K_e={K_e} (safe={safe})")
 
-            # -------------------------------
-            # 3-5) 最近傍コード index
-            #      USE embed_ind_dict from _codebook (no NN recompute)
-            # -------------------------------
-            if embed_ind_dict is None:
-                raise RuntimeError(
-                    "[VQ_COMMIT] embed_ind_dict is required to keep "
-                    "assignments consistent with EMA / entropy / split"
-                )
-
-            if skey not in embed_ind_dict:
-                raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing skey={skey}")
-
-            nn_idx = embed_ind_dict[skey].to(device=device, dtype=torch.long).reshape(-1)
-
-            if nn_idx.numel() != N_i:
+            # ---- assignment selection aligned with z ----
+            # Case A: nn_all_or_masked is length-B (aligned to encoder_outputs)
+            # Case B: nn_all_or_masked is length-N_i (already masked-only)
+            if nn_all_or_masked.numel() == B:
+                nn_idx = nn_all_or_masked.index_select(0, local_idx)  # [N_i]
+            elif nn_all_or_masked.numel() == N_i:
+                nn_idx = nn_all_or_masked
+            else:
                 raise ValueError(
                     f"[VQ_COMMIT] nn_idx length mismatch skey={skey}: "
-                    f"{nn_idx.numel()} vs {N_i}"
+                    f"got {nn_all_or_masked.numel()} (expected B={B} or N_i={N_i})."
                 )
 
-            # ---- OOB guard BEFORE indexing (prevents CUDA device assert)
+            # ---- OOB guard before indexing ----
             min_i = int(nn_idx.min().item())
             max_i = int(nn_idx.max().item())
             if (min_i < 0) or (max_i >= K_e):
                 raise RuntimeError(
                     f"[VQ_COMMIT][OOB] skey={skey} safe={safe} "
-                    f"K_e={K_e} nn_idx range=[{min_i},{max_i}] "
-                    f"cb.shape={tuple(cb.shape)}"
+                    f"K_e={K_e} nn_idx range=[{min_i},{max_i}] cb.shape={tuple(cb.shape)}"
                 )
 
-            # -------------------------------
-            # 3-6) gather codes and compute losses
-            # -------------------------------
+            # ---- gather and losses ----
             e_star = cb.index_select(0, nn_idx)  # [N_i, D]
 
             commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
 
-            total_latent += N_i
+            total_latent += int(N_i)
             commit_num = commit_num + commit_part * N_i
             codebk_num = codebk_num + codebk_part * N_i
 
-            # repel loss (your existing API)
+            # ---- repel ONCE (your code double-counted this) ----
+            # Keep your existing API. We pass cb_param (original object) to preserve old behavior.
             ret = self.compute_contrastive_loss(z, 0, logger, cb_param, k)
             repel_val = ret[0]
-            cb_repel_val = ret[3]
+            cb_repel_val = ret[3]  # NOTE: verify your compute_contrastive_loss return layout!
 
             repel_num = repel_num + repel_val * N_i
-            total_cb_count += K_e
+
+            total_cb_count += int(K_e)
             cb_repel_num = cb_repel_num + cb_repel_val * K_e
 
-            # -------------------------------
-            # 3-7) repel loss (contrastive)
-            # -------------------------------
-            # 旧版と同様に cb 自体を使っても良いし、codebook[k] があればそれを使う
-            if isinstance(codebook, (dict, nn.ParameterDict)) and k in codebook:
-                cb_for_contrast = codebook[k]
-            else:
-                cb_for_contrast = cb  # Tensor でも compute_contrastive_loss が対応していれば OK
-            # compute_contrastive_loss は旧実装と同じインターフェースを仮定
-            # 返り値: (repel_loss, ..., ..., cb_repel_loss, ...)
-            ret = self.compute_contrastive_loss(z, 0, logger, cb_for_contrast, k)
-            repel_val     = ret[0]
-            cb_repel_val  = ret[3] # final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
-            repel_num    = repel_num + repel_val * N_i
-            total_cb_count += K_e
-            cb_repel_num = cb_repel_num + cb_repel_val * K_e
-
-        # ---- 4. 集計 ----
+        # ---- 5) aggregate ----
         if total_latent == 0:
-            # このチャンクに該当サンプルなし → 全て 0 だが encoder_outputs に繋げる
             zero = encoder_outputs.sum() * 0.0
-            if logger is not None:
-                logger.info(f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})")
+            _log(f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})")
             return zero, zero, zero, zero
 
-        commit_loss   = beta * (commit_num / float(total_latent))
-        codebook_loss = codebk_num / float(total_latent)
-        repel_loss    = repel_num / float(total_latent)
+        commit_loss = beta * (commit_num / float(total_latent))
+        codebook_loss = (codebk_num / float(total_latent))
+        repel_loss = (repel_num / float(total_latent))
 
         if total_cb_count > 0:
             cb_repel_loss = cb_repel_num / float(total_cb_count)
         else:
-            cb_repel_loss = cb_repel_num * 0.0  # guard
-
-        # if logger is not None:
-        #     logger.info(
-        #         f"[VQ_COMMIT] chunk_start={chunk_start}, B={B}, "
-        #         f"total_latent={int(total_latent)}, "
-        #         f"commit_loss={commit_loss.item():.6f}"
-        #     )
+            cb_repel_loss = cb_repel_num * 0.0
 
         return commit_loss, codebook_loss, repel_loss, cb_repel_loss
 
