@@ -1937,10 +1937,15 @@ class EuclideanCodebook(nn.Module):
           - assignment uses Xn (normalized latents) vs C (already normalized centers)
           - EMA uses Xn, and writes back normalized means
 
-        This rewrite removes redundant norms:
-          - no repeated _safe_l2norm(X) within the same key
-          - no _safe_l2norm(C) in assignment (centers assumed normalized)
-          - no _safe_l2norm(C_pre) unless debug-check is enabled
+        Max_p stabilization "all-in" pack:
+          (1) split trigger uses p_mix = mix(p_cs, p_ue) rather than ue-only (more responsive, less sticky)
+          (2) split can happen multiple times per epoch, regulated by cooldown (no "wait until next epoch")
+          (3) split triggers not only on max_p>thr but also on growth (max_p increased by delta)
+          (4) after split, re-sync ea to means * cs and keep centers normalized
+          (5) optional "revive" (very conservative) to prevent effective K shrinking over many minibatches
+              - does NOT fight your "dead is ok" stance; it's off by default
+
+        Note: dead/near-dead logs remain as diagnostics; not treated as an error.
         """
         import os, time
         import torch
@@ -1978,20 +1983,38 @@ class EuclideanCodebook(nn.Module):
             return used, maxc, maxp
 
         # ------------------------------------------------------------------
-        # config
+        # config (override via self.*)
         # ------------------------------------------------------------------
         k_block = int(getattr(self, "assign_k_block", 1024))
+
         do_split = bool(getattr(self, "do_split_the_winner", True))
-        split_once_per_epoch = True
-        split_only_last_batch = False
+
+        # --- IMPORTANT: allow multiple splits per epoch; cooldown will regulate
+        split_once_per_epoch = bool(getattr(self, "split_once_per_epoch", False))
+        split_only_last_batch = bool(getattr(self, "split_only_last_batch", False))
 
         usage_mom = float(getattr(self, "usage_ema_mom", 0.97))
         decay = float(getattr(self, "decay", 0.99))
         eps = float(getattr(self, "eps", 1e-8))
         prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
 
+        # policy mix: max_p computed on mix(cs_dist, ue_dist)
+        maxp_mix_alpha = float(getattr(self, "maxp_mix_alpha", 0.5))  # 0->cs only, 1->ue only
+        maxp_growth_delta = float(getattr(self, "maxp_growth_delta", 0.02))  # trigger if max_p grows by this
+        min_points_for_split = int(getattr(self, "split_min_points", 32))
+        min_N_for_split = int(getattr(self, "split_min_N", 200))
+
         # Optional: strict invariant check (cheap). Default False.
         debug_center_norm = bool(getattr(self, "debug_center_norm", False))
+
+        # Optional: prevent effective-K shrink (OFF by default)
+        revive_dead = bool(getattr(self, "revive_dead", False))
+        revive_k = int(getattr(self, "revive_k", 4))
+        revive_thr = float(getattr(self, "revive_thr", 1e-3))  # cs < this is considered dead
+        revive_noise = float(getattr(self, "revive_noise", 0.02))
+        revive_use_batch = bool(getattr(self, "revive_use_batch", True))  # use batch winners to seed
+        revive_every_steps = int(getattr(self, "revive_every_steps", 0))  # 0 disables step-based gating
+        # NOTE: revive_dead=False keeps behavior close to your current philosophy.
 
         # ------------------------------------------------------------------
         # 0) global offset management
@@ -2071,7 +2094,6 @@ class EuclideanCodebook(nn.Module):
 
                 with torch.no_grad():
                     Xn = _safe_l2norm(X)  # normalize X once
-                    # centers C assumed normalized (Option A)
                     idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.int32)
 
                 key_id_full.index_copy_(
@@ -2125,7 +2147,6 @@ class EuclideanCodebook(nn.Module):
                         (bc0 / bc0.sum().clamp_min(1)).max()
                     ])
                     self._kmeans_sig[skey] = {
-                        # optional diagnostic
                         "C_norm_mean": C.detach().float().norm(dim=1).mean().item(),
                         "sig": sig0.cpu(),
                     }
@@ -2179,7 +2200,7 @@ class EuclideanCodebook(nn.Module):
                 self._mp_list = []
                 self._mp_list_keys = []
 
-        # ---- per-epoch split gate ----
+        # ---- per-epoch split gate (only used if split_once_per_epoch=True)
         if do_ema and split_once_per_epoch:
             if not hasattr(self, "_split_epoch"):
                 self._split_epoch = None
@@ -2188,6 +2209,14 @@ class EuclideanCodebook(nn.Module):
             if self._split_epoch != int(epoch):
                 self._split_epoch = int(epoch)
                 self._split_done_epoch.clear()
+
+        # ---- remember previous max_p per key for "growth trigger"
+        if do_ema and not hasattr(self, "_prev_maxp"):
+            self._prev_maxp = {}
+        if do_ema and not hasattr(self, "_step_counter"):
+            self._step_counter = 0
+        if do_ema:
+            self._step_counter += 1
 
         # ---- buffer getter (SAFE): overwrite _buffers if name exists ----
         def _get_buf(name: str, shape, dtype, device):
@@ -2202,6 +2231,58 @@ class EuclideanCodebook(nn.Module):
             else:
                 self.register_buffer(name, new_t)
             return new_t
+
+        # ---- optional revive helper (very conservative)
+        def _revive_dead_centers_if_needed(
+                *,
+                means: torch.Tensor,  # (K,D) normalized
+                ea: torch.Tensor,  # (K,D)
+                cs: torch.Tensor,  # (K,)
+                ue: torch.Tensor,  # (K,)
+                Xn_dev: torch.Tensor,  # (N,D) normalized, float32
+                idx_dev: torch.Tensor,  # (N,) long
+                C_pre: torch.Tensor,  # (K,D) float32
+        ):
+            if not revive_dead:
+                return False
+            if revive_every_steps > 0:
+                if (int(self._step_counter) % int(revive_every_steps)) != 0:
+                    return False
+
+            K = int(means.shape[0])
+            dead = (cs < float(revive_thr))
+            n_dead = int(dead.sum().item())
+            if n_dead <= 0:
+                return False
+
+            # revive at most revive_k per call
+            k = min(int(revive_k), n_dead)
+            dead_idx = torch.nonzero(dead, as_tuple=False).flatten()
+            dead_idx = dead_idx[:k]
+
+            # pick seeds: either from batch dominant clusters (split pressure), or random X
+            if revive_use_batch and (idx_dev.numel() > 0):
+                bc = torch.bincount(idx_dev, minlength=K).float()
+                winners = torch.argsort(bc, descending=True)
+                # choose top winners as sources for seeds
+                src = winners[:k]
+                # seed near winner center with small noise
+                seeds = means.index_select(0, src).clone()
+            else:
+                # random X points as seeds
+                perm = torch.randperm(Xn_dev.shape[0], device=Xn_dev.device)[:k]
+                seeds = Xn_dev.index_select(0, perm).clone()
+
+            seeds = _safe_l2norm(seeds + revive_noise * torch.randn_like(seeds))
+            means.index_copy_(0, dead_idx, seeds)
+
+            # sync buffers minimally
+            # set small counts so they can start competing, but not explode
+            cs.index_fill_(0, dead_idx, float(min_points_for_split))
+            ue.index_fill_(0, dead_idx, float(min_points_for_split))
+            den = cs.unsqueeze(-1).clamp_min(1e-5)
+            ea.copy_(means * den)
+            return True
 
         for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
             if idx_global is None or idx_global.numel() == 0:
@@ -2226,7 +2307,6 @@ class EuclideanCodebook(nn.Module):
                     _log(f"[DBG][C-NORM] key={skey} mean={cn.mean().item():.4f} std={cn.std(correction=0).item():.4f}")
 
             # ---- normalize X ONCE per key (shared by assignment & EMA)
-            # normalize in float32 for stability, keep on same device
             Xn = _safe_l2norm(X.to(dtype=torch.float32))
 
             # ---- hard assignment (Option A): C assumed normalized
@@ -2263,11 +2343,9 @@ class EuclideanCodebook(nn.Module):
                 with torch.no_grad():
                     idx_dev = idx_code_long.to(device=dev)
 
-                    # ---- snapshot BEFORE update (NO extra norm; centers assumed already normalized)
+                    # ---- snapshot BEFORE update
                     C_pre = code_param.detach()
                     C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
-                    # if you REALLY want safety, uncomment:
-                    # C_pre = _safe_l2norm(C_pre.float())
                     C_pre = C_pre.to(device=dev, dtype=torch.float32)
 
                     # counts (K,)
@@ -2297,51 +2375,68 @@ class EuclideanCodebook(nn.Module):
                     cs.mul_(decay).add_(batch_counts, alpha=one_m)
                     ea.mul_(decay).add_(batch_sum, alpha=one_m)
 
-                    # means (K,D) and normalize (this one is REQUIRED)
+                    # means (K,D) and normalize (REQUIRED)
                     den = cs.unsqueeze(-1).clamp_min(1e-5)
                     means = _safe_l2norm(ea / den, eps=1e-12)
 
                     # IMPORTANT: do NOT overwrite inactive clusters with zeros
                     active = (cs > 0.0)
                     if active.any():
-                        means[~active] = _safe_l2norm(C_pre[~active])  # cheap; small subset
-                        ea[~active] = means[~active] * den[~active]
+                        # keep inactive as previous center (already unit-ish)
+                        means[~active] = _safe_l2norm(C_pre[~active])
                     else:
                         means.copy_(_safe_l2norm(C_pre))
-                        ea.copy_(means * den)
 
-                    # keep ea consistent
-                    ea[active] = means[active] * den[active]
+                    # keep ea consistent with means, always
+                    ea.copy_(means * den)
 
                     # debug logs
                     if (epoch == 1) and (chunk_i == 0):
                         mn = means[active].norm(dim=1).mean().item() if active.any() else float("nan")
-                        used_u, _maxc_u, maxp_u = _hist_sig(idx_dev, K_e)
+                        used_u, _maxc_u, maxp_u_batch = _hist_sig(idx_dev, K_e)
                         _log(
                             f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum()):.1f} "
-                            f"used={used_u} maxp_batch={maxp_u:.4f} means_mean_norm(active)={mn:.3f}"
+                            f"used={used_u} maxp_batch={maxp_u_batch:.4f} means_mean_norm(active)={mn:.3f}"
                         )
 
                     # ---------------------------------------------------------
-                    # N-dependent split policy (uses usage_ema distribution)
+                    # Max_p policy: compute p_mix from (cs_dist, ue_dist)
                     # ---------------------------------------------------------
+                    total_cs = cs.sum().clamp_min(1e-8)
+                    p_cs = cs / total_cs
+                    max_p_cs = float(p_cs.max().item())
+
+                    total_u = ue.sum().clamp_min(1e-8)
+                    p_u = ue / total_u
+                    max_p_u = float(p_u.max().item())
+
+                    a = float(maxp_mix_alpha)
+                    p_mix = (1.0 - a) * p_cs + a * p_u
+                    max_p = float(p_mix.max().item())
+
+                    N_key = int(cs.sum().item())
+                    thr = _target_max_p(N_key)
+
+                    # ---------------------------------------------------------
+                    # Split trigger: threshold OR growth
+                    # ---------------------------------------------------------
+                    prev = float(self._prev_maxp.get(skey, 0.0))
+                    grew = (max_p > prev + float(maxp_growth_delta))
+                    self._prev_maxp[skey] = max_p
+
                     can_split_now = do_split and (not split_only_last_batch or bool(is_last_batch))
                     if can_split_now and (not split_once_per_epoch or (skey not in self._split_done_epoch)):
-                        total_u = ue.sum().clamp_min(1e-8)
-                        p_u = ue / total_u
-                        max_p = float(p_u.max().item())
-                        N_key = int(cs.sum().item())
-                        thr = _target_max_p(N_key)
-
                         if chunk_i == 0:
                             _log(
                                 f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{N_key} "
-                                f"max_p={max_p:.4f} thr={thr:.4f} K={K_e}"
+                                f"max_p={max_p:.4f} (cs={max_p_cs:.4f}, ue={max_p_u:.4f}, prev={prev:.4f}) "
+                                f"thr={thr:.4f} K={K_e} grew={bool(grew)}"
                             )
 
-                        if max_p > thr and N_key > 200 and K_e > 2:
+                        do_it = ((max_p > thr) or bool(grew)) and (N_key >= min_N_for_split) and (K_e > 2)
+                        if do_it:
                             did = self.split_the_winner_ema(
-                                embed=means,  # normalized means view
+                                embed=means,  # normalized means view (K,D)
                                 ema_sum=ea,
                                 ema_count=cs,
                                 usage_ema=ue,
@@ -2354,7 +2449,7 @@ class EuclideanCodebook(nn.Module):
                                 cooldown=cd,
                                 cooldown_steps=int(getattr(self, "split_cooldown_steps", 2000)),
                                 eps=float(eps),
-                                min_points=int(getattr(self, "split_min_points", 32)),
+                                min_points=int(min_points_for_split),
                                 pca_power=float(getattr(self, "split_pca_power", 0.5)),
                                 noise_scale=float(getattr(self, "split_noise_scale", 0.02)),
                                 fallback_to_noise=bool(getattr(self, "split_fallback_to_noise", True)),
@@ -2364,41 +2459,74 @@ class EuclideanCodebook(nn.Module):
                                 self._split_done_epoch.add(skey)
 
                             if did:
+                                # enforce norm + re-sync ea exactly to cs
                                 means.copy_(_safe_l2norm(means))
                                 den2 = cs.unsqueeze(-1).clamp_min(1e-5)
                                 ea.copy_(means * den2)
 
+                                # recompute post-split max_p on mix
+                                total_cs2 = cs.sum().clamp_min(1e-8)
+                                p_cs2 = cs / total_cs2
+                                max_p_cs2 = float(p_cs2.max().item())
+
                                 total_u2 = ue.sum().clamp_min(1e-8)
                                 p_u2 = ue / total_u2
+                                max_p_u2 = float(p_u2.max().item())
+
+                                p_mix2 = (1.0 - a) * p_cs2 + a * p_u2
+                                max_p_after = float(p_mix2.max().item())
+
                                 _log(
                                     f"[SPLIT][N-DEP] epoch={epoch} key={skey} did_split=True "
                                     f"N~{N_key} thr={thr:.4f} max_p_before={max_p:.4f} "
-                                    f"max_p_after={float(p_u2.max().item()):.4f}"
+                                    f"max_p_after={max_p_after:.4f} (cs={max_p_cs2:.4f}, ue={max_p_u2:.4f})"
                                 )
+                                # update prev tracker to avoid immediate re-trigger on same value
+                                self._prev_maxp[skey] = max_p_after
 
-                    # collect max_p per key (post-update)
-                    total_u = ue.sum().clamp_min(1e-8)
-                    p_u = ue / total_u
-                    max_p_u = float(p_u.max().item())
+                    # ---------------------------------------------------------
+                    # Optional revive (prevent effective-K shrink)
+                    # ---------------------------------------------------------
+                    revived = _revive_dead_centers_if_needed(
+                        means=means,
+                        ea=ea,
+                        cs=cs,
+                        ue=ue,
+                        Xn_dev=Xn_dev,
+                        idx_dev=idx_dev,
+                        C_pre=C_pre,
+                    )
+                    if revived and (chunk_i == 0):
+                        _log(f"[REVIVE] epoch={epoch} key={skey} revived_some_dead_centers=True")
+
+                    # ---------------------------------------------------------
+                    # Collect max_p for reports (use mix)
+                    # ---------------------------------------------------------
+                    total_csR = cs.sum().clamp_min(1e-8)
+                    p_csR = cs / total_csR
+                    total_uR = ue.sum().clamp_min(1e-8)
+                    p_uR = ue / total_uR
+                    p_mixR = (1.0 - a) * p_csR + a * p_uR
+                    max_p_R = float(p_mixR.max().item())
+
                     # ---- dead / near-dead stats ----
                     dead_mask = (cs < 1e-3)
                     near_dead_mask = (cs < 0.1)
-
                     n_dead = int(dead_mask.sum().item())
                     n_near_dead = int(near_dead_mask.sum().item())
                     frac_dead = n_dead / float(K_e)
                     frac_near_dead = n_near_dead / float(K_e)
 
-                    if chunk_i == 0:  # うるさくならないように
+                    if chunk_i == 0:
                         _log(
                             f"[DEAD] epoch={epoch} key={skey} "
                             f"dead={n_dead}/{K_e} ({frac_dead:.3f}) "
                             f"near_dead={n_near_dead}/{K_e} ({frac_near_dead:.3f})"
                         )
 
-                    self._mp_list.append(max_p_u)
-                    N_key = int(cs.sum().item())
-                    self._mp_list_keys.append((skey, max_p_u, N_key, int(K_e)))
+                    self._mp_list.append(max_p_R)
+                    N_keyR = int(cs.sum().item())
+                    self._mp_list_keys.append((skey, max_p_R, N_keyR, int(K_e)))
 
                     # write centers back to parameter (already normalized)
                     if code_param.ndim == 3:
@@ -2406,7 +2534,7 @@ class EuclideanCodebook(nn.Module):
                     else:
                         code_param.data.copy_(means.to(dtype=code_param.dtype))
 
-                    # EMA-WRITE drift log (no need to renorm for logging)
+                    # EMA-WRITE drift log
                     if (epoch == 1) and (chunk_i == 0):
                         C_post = code_param.detach()
                         C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
