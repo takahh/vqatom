@@ -1318,12 +1318,10 @@ class EuclideanCodebook(nn.Module):
         """
         Initialize per-element codebooks (absolute K from self.cb_dict).
 
-        Guarantees:
-          - kmeans init happens ONLY at epoch==1
-            (epoch>1: if params/buffers missing -> raise error immediately)
-          - cluster metrics computed every epoch
-          - metrics/argmin are computed over ALL K_req centers (no active filtering)
-          - DIAG stats never produce NaN due to N==1 (uses correction=0 / guarded std)
+        Option A alignment:
+          - store centers as unit-norm at init
+          - init EMA buffers consistent with unit-norm centers
+          - cluster metrics computed in the same unit-norm space (cosine assignment)
         """
         import os
         import torch
@@ -1345,15 +1343,19 @@ class EuclideanCodebook(nn.Module):
             v = _get_from_dict(d, k)
             return None if v is None else int(v)
 
+        def _safe_l2norm(t: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+            den = t.norm(dim=-1, keepdim=True).clamp_min(eps)
+            t = t / den
+            return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+
         def _stats(x_nd: torch.Tensor):
             """Robust data stats for padding. Returns (mu, sigma) or None."""
             if x_nd is None or x_nd.numel() == 0:
                 return None
             mu = x_nd.mean(dim=0)
             with torch.no_grad():
-                # robust "radius" median
-                dev = (x_nd - mu).pow(2).sum(dim=1).sqrt()
-                sigma = torch.quantile(dev, 0.5)
+                devv = (x_nd - mu).pow(2).sum(dim=1).sqrt()
+                sigma = torch.quantile(devv, 0.5)
             return (mu, sigma)
 
         def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
@@ -1382,7 +1384,6 @@ class EuclideanCodebook(nn.Module):
 
             if data_stats is not None:
                 mu, sigma = data_stats
-                # small noise around mu (sigma can be 0 for tiny sets)
                 noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
                 out_means[K_run:] = mu + noise
             else:
@@ -1406,7 +1407,7 @@ class EuclideanCodebook(nn.Module):
                 return 0.0
             return x.float().var(dim=0, correction=0).mean().item()
 
-        def _safe_std(x: torch.Tensor):
+        def _safe_std_1d(x: torch.Tensor):
             """Std over a 1D tensor, never NaN for len==1."""
             if x is None or x.numel() == 0:
                 return float("nan")
@@ -1476,10 +1477,13 @@ class EuclideanCodebook(nn.Module):
 
             if need_init:
                 samples = masked.unsqueeze(0).to(device)
-                print(f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
-                      f"samples_norm_mean={samples.float().norm(dim=-1).mean().item():.4f} "
-                      f"samples_norm_std={samples.float().norm(dim=-1).std().item():.4f} "
-                      f"samples_var={samples.float().var(dim=-1).mean().item():.4e}")
+                norms = samples.float().norm(dim=-1)
+                print(
+                    f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
+                    f"samples_norm_mean={norms.mean().item():.4f} "
+                    f"samples_norm_std={_safe_std_1d(norms.reshape(-1)):.4f} "
+                    f"samples_var={samples.float().var(dim=-1, correction=0).mean().item():.4e}"
+                )
 
                 means_1kd, counts_1k, *_ = kmeans(
                     masked.unsqueeze(0).to(device),
@@ -1490,13 +1494,18 @@ class EuclideanCodebook(nn.Module):
                 ds = _stats(masked)
                 means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=ds)
 
+                # -------------------------
+                # Option A: normalize centers at init (CRITICAL)
+                # -------------------------
+                means_kd = _safe_l2norm(means_kd.detach().to(device=device, dtype=torch.float32))
+
                 # ensure parameter exists with correct shape, then copy
                 _ensure_param(safe, (K_req, D))
-                self.embed[safe].data.copy_(means_kd.detach().to(device=device, dtype=self.embed[safe].dtype))
+                self.embed[safe].data.copy_(means_kd.to(device=device, dtype=self.embed[safe].dtype))
 
-                # init EMA buffers (float32)
+                # init EMA buffers (float32): ea consistent with normalized means
                 cs = counts_k.to(device=device, dtype=torch.float32)  # (K_req,)
-                ea = means_kd.detach().to(device=device, dtype=torch.float32) * cs.view(-1, 1)  # (K_req, D)
+                ea = means_kd.to(device=device, dtype=torch.float32) * cs.view(-1, 1)  # (K_req, D)
 
                 # replace buffers safely
                 if hasattr(self, buf_name_cs):
@@ -1510,7 +1519,7 @@ class EuclideanCodebook(nn.Module):
                 logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
 
             # -------------------------
-            # 2) Cluster metrics every epoch (NO SS)
+            # 2) Cluster metrics every epoch (Option A-consistent)
             # -------------------------
             with torch.no_grad():
                 centers_clst = self.embed[safe].detach()  # (K_req, D)
@@ -1529,7 +1538,11 @@ class EuclideanCodebook(nn.Module):
                 else:
                     x_eval = masked
 
-                # optional diagnostics (safe stats; never NaN from N==1)
+                # Option A: normalize BOTH before argmax_sim
+                x_eval_n = _safe_l2norm(x_eval.float())
+                c_n = _safe_l2norm(centers_clst.float())
+
+                # diagnostics
                 def diag(tag: str, X: torch.Tensor, centers: torch.Tensor):
                     cn = centers.float().norm(dim=-1)
                     print(
@@ -1540,13 +1553,13 @@ class EuclideanCodebook(nn.Module):
                         f"X var={_safe_var_mean(X):.3e} "
                         f"C var={_safe_var_mean(centers):.3e} "
                         f"C mean-norm={cn.mean().item():.3e} "
-                        f"C std-norm={_safe_std(cn):.3e}"
+                        f"C std-norm={_safe_std_1d(cn):.3e}"
                     )
 
-                diag(" clst", x_eval, centers_clst)
+                diag(" clst", x_eval_n, c_n)
 
-                # assign labels using ALL centers (K_req)
-                y_eval = self.argmax_sim_blockwise(x_eval, centers_clst, k_block=1024)
+                # assign labels using ALL centers (K_req) in unit-norm space
+                y_eval = self.argmax_sim_blockwise(x_eval_n, c_n, k_block=1024)
 
                 # compute metrics from labels only
                 metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
@@ -1915,10 +1928,15 @@ class EuclideanCodebook(nn.Module):
         """
         Per-element vector quantization codebook forward (Option A: unified L2-normalized space).
 
-        Option A:
-          - assignment uses l2-normalized latents & l2-normalized centers
-          - EMA updates use l2-normalized latents (NOT raw latents)
-          - centers stored in codebook remain l2-normalized (explicitly normalize at write-back)
+        Option A invariant:
+          - centers (code_param) are stored L2-normalized (unit norm) at all times
+          - assignment uses Xn (normalized latents) vs C (already normalized centers)
+          - EMA uses Xn, and writes back normalized means
+
+        This rewrite removes redundant norms:
+          - no repeated _safe_l2norm(X) within the same key
+          - no _safe_l2norm(C) in assignment (centers assumed normalized)
+          - no _safe_l2norm(C_pre) unless debug-check is enabled
         """
         import os, time
         import torch
@@ -1937,11 +1955,6 @@ class EuclideanCodebook(nn.Module):
             den = t.norm(dim=-1, keepdim=True).clamp_min(eps)
             t = t / den
             return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
-
-        def _assign_l2norm(X: torch.Tensor, C: torch.Tensor, k_block: int = 1024) -> torch.Tensor:
-            Xn = _safe_l2norm(X)
-            Cn = _safe_l2norm(C)
-            return self.argmax_sim_blockwise(Xn, Cn, k_block=k_block)
 
         def _target_max_p(N: int) -> float:
             if N >= 1_000_000:
@@ -1972,6 +1985,9 @@ class EuclideanCodebook(nn.Module):
         decay = float(getattr(self, "decay", 0.99))
         eps = float(getattr(self, "eps", 1e-8))
         prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
+
+        # Optional: strict invariant check (cheap). Default False.
+        debug_center_norm = bool(getattr(self, "debug_center_norm", False))
 
         # ------------------------------------------------------------------
         # 0) global offset management
@@ -2050,7 +2066,9 @@ class EuclideanCodebook(nn.Module):
                 sid = _safe_id(safe)
 
                 with torch.no_grad():
-                    idx_code = _assign_l2norm(X, C, k_block=k_block).to(dtype=torch.int32)
+                    Xn = _safe_l2norm(X)  # normalize X once
+                    # centers C assumed normalized (Option A)
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.int32)
 
                 key_id_full.index_copy_(
                     0, idx_local,
@@ -2060,7 +2078,6 @@ class EuclideanCodebook(nn.Module):
                 self.embed_ind_dict[skey] = idx_code
 
             self.latent_size_sum = global_end
-            torch.cuda.empty_cache()
             return key_id_full, cluster_id_full, dict(self._id2safe)
 
         # ------------------------------------------------------------------
@@ -2071,7 +2088,6 @@ class EuclideanCodebook(nn.Module):
 
             if mask_dict is None:
                 self.latent_size_sum = global_end
-                torch.cuda.empty_cache()
                 return 0
 
             if not hasattr(self, "_kmeans_dump"):
@@ -2095,11 +2111,9 @@ class EuclideanCodebook(nn.Module):
                 safe, _code_param, C = _get_safe_and_code(skey)
 
                 with torch.no_grad():
-                    idx_code = _assign_l2norm(X, C, k_block=k_block)
-                    Q = C.index_select(0, idx_code)
-
-                    C0 = _safe_l2norm(C.detach().float())
-                    bc0 = torch.bincount(idx_code.long(), minlength=C0.shape[0]).float()
+                    Xn = _safe_l2norm(X)
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block)
+                    bc0 = torch.bincount(idx_code.long(), minlength=C.shape[0]).float()
                     sig0 = torch.stack([
                         bc0.sum(),
                         (bc0 > 0).sum().float(),
@@ -2107,13 +2121,14 @@ class EuclideanCodebook(nn.Module):
                         (bc0 / bc0.sum().clamp_min(1)).max()
                     ])
                     self._kmeans_sig[skey] = {
-                        "C_norm_mean": C0.norm(dim=1).mean().item(),
+                        # optional diagnostic
+                        "C_norm_mean": C.detach().float().norm(dim=1).mean().item(),
                         "sig": sig0.cpu(),
                     }
 
                 entry = self._kmeans_dump.get(skey)
                 if entry is None:
-                    entry = {"latents": [], "centers": None, "assign": [], "quantize": []}
+                    entry = {"latents": [], "centers": None, "assign": []}
                     self._kmeans_dump[skey] = entry
 
                 entry["latents"].append(X.detach().to("cpu", dtype=torch.float16))
@@ -2137,7 +2152,6 @@ class EuclideanCodebook(nn.Module):
             self._kmeans_dump = {}
 
             self.latent_size_sum = global_end
-            torch.cuda.empty_cache()
             return 0
 
         # ------------------------------------------------------------------
@@ -2201,9 +2215,19 @@ class EuclideanCodebook(nn.Module):
             skey = str(key)
             safe, code_param, C = _get_safe_and_code(skey)
 
-            # ---- hard assignment (Option A)
+            # (Optional) sanity check: centers should be unit-norm
+            if debug_center_norm and (epoch == 1) and (chunk_i == 0):
+                with torch.no_grad():
+                    cn = C.detach().float().norm(dim=1)
+                    _log(f"[DBG][C-NORM] key={skey} mean={cn.mean().item():.4f} std={cn.std(correction=0).item():.4f}")
+
+            # ---- normalize X ONCE per key (shared by assignment & EMA)
+            # normalize in float32 for stability, keep on same device
+            Xn = _safe_l2norm(X.to(dtype=torch.float32))
+
+            # ---- hard assignment (Option A): C assumed normalized
             with torch.no_grad():
-                idx_code = _assign_l2norm(X, C, k_block=k_block)
+                idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block)
                 idx_code_long = idx_code.to(dtype=torch.long)
 
             Q = C.index_select(0, idx_code_long)
@@ -2235,21 +2259,23 @@ class EuclideanCodebook(nn.Module):
                 with torch.no_grad():
                     idx_dev = idx_code_long.to(device=dev)
 
-                    # ---- snapshot BEFORE update (normalized) ----
+                    # ---- snapshot BEFORE update (NO extra norm; centers assumed already normalized)
                     C_pre = code_param.detach()
                     C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
-                    C_pre = _safe_l2norm(C_pre.float())
+                    # if you REALLY want safety, uncomment:
+                    # C_pre = _safe_l2norm(C_pre.float())
+                    C_pre = C_pre.to(device=dev, dtype=torch.float32)
 
                     # counts (K,)
                     batch_counts = torch.zeros((K_e,), device=dev, dtype=torch.float32)
                     batch_counts.index_add_(0, idx_dev, torch.ones_like(idx_dev, device=dev, dtype=torch.float32))
 
-                    # Option A: normalize latents BEFORE accumulating
-                    Xn = _safe_l2norm(X.to(device=dev, dtype=torch.float32))  # (Ni,D)
+                    # Xn already normalized; ensure on dev,float32
+                    Xn_dev = Xn.to(device=dev, dtype=torch.float32)
 
                     # sum (K,D)
                     batch_sum = torch.zeros((K_e, D_e), device=dev, dtype=torch.float32)
-                    batch_sum.index_add_(0, idx_dev, Xn)
+                    batch_sum.index_add_(0, idx_dev, Xn_dev)
 
                     # entropy metric (optional)
                     denom2 = batch_counts.sum()
@@ -2267,18 +2293,18 @@ class EuclideanCodebook(nn.Module):
                     cs.mul_(decay).add_(batch_counts, alpha=one_m)
                     ea.mul_(decay).add_(batch_sum, alpha=one_m)
 
-                    # means (K,D) and normalize
+                    # means (K,D) and normalize (this one is REQUIRED)
                     den = cs.unsqueeze(-1).clamp_min(1e-5)
                     means = _safe_l2norm(ea / den, eps=1e-12)
 
                     # IMPORTANT: do NOT overwrite inactive clusters with zeros
                     active = (cs > 0.0)
                     if active.any():
-                        means[~active] = C_pre[~active]
-                        ea[~active] = C_pre[~active] * den[~active]
+                        means[~active] = _safe_l2norm(C_pre[~active])  # cheap; small subset
+                        ea[~active] = means[~active] * den[~active]
                     else:
-                        means.copy_(C_pre)
-                        ea.copy_(C_pre * den)
+                        means.copy_(_safe_l2norm(C_pre))
+                        ea.copy_(means * den)
 
                     # keep ea consistent
                     ea[active] = means[active] * den[active]
@@ -2317,7 +2343,7 @@ class EuclideanCodebook(nn.Module):
                                 usage_ema=ue,
                                 batch_counts=batch_counts,
                                 batch_counts2=batch_counts,
-                                X_batch=Xn,
+                                X_batch=Xn_dev,
                                 assign=idx_dev.to(device=dev, dtype=torch.long),
                                 split_thr=float(thr),
                                 prune_src_thr=float(prune_src_thr),
@@ -2354,23 +2380,22 @@ class EuclideanCodebook(nn.Module):
                     N_key = int(cs.sum().item())
                     self._mp_list_keys.append((skey, max_p_u, N_key, int(K_e)))
 
-                    # write centers back to parameter
+                    # write centers back to parameter (already normalized)
                     if code_param.ndim == 3:
-                        code_param.data.copy_(means.unsqueeze(0))
+                        code_param.data.copy_(means.unsqueeze(0).to(dtype=code_param.dtype))
                     else:
-                        code_param.data.copy_(means)
+                        code_param.data.copy_(means.to(dtype=code_param.dtype))
 
-                    # EMA-WRITE drift log
+                    # EMA-WRITE drift log (no need to renorm for logging)
                     if (epoch == 1) and (chunk_i == 0):
                         C_post = code_param.detach()
                         C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
-                        C_post = _safe_l2norm(C_post.float())
-                        delta = (C_post - C_pre).abs().mean().item()
+                        delta = (C_post.float() - C_pre).abs().mean().item()
                         if not (delta == delta):
                             raise RuntimeError(f"[EMA-WRITE] delta NaN key={skey}")
                         _log(f"[EMA-WRITE] ep={epoch} key={skey} mean_abs_delta={delta:.3e}")
 
-            del X, C, idx_code, Q
+            del X, Xn, C, idx_code, Q
 
         # ------------------------------------------------------------------
         # 6) rebuild quantized tensor in original atom order
@@ -2444,7 +2469,6 @@ class EuclideanCodebook(nn.Module):
                     out = {"epoch": int(epoch), "maxp_list": self._mp_list, "detail": self._mp_list_keys}
                     torch.save(out, f"dumps/maxp_epoch_{int(epoch):04d}.pt")
 
-        torch.cuda.empty_cache()
         return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
 
 
