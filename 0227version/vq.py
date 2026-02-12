@@ -1546,7 +1546,7 @@ class EuclideanCodebook(nn.Module):
                 diag(" clst", x_eval, centers_clst)
 
                 # assign labels using ALL centers (K_req)
-                y_eval = self.argmin_dist_blockwise_l2(x_eval, centers_clst, k_block=1024)
+                y_eval = self.argmax_sim_blockwise(x_eval, centers_clst, k_block=1024)
 
                 # compute metrics from labels only
                 metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
@@ -1582,48 +1582,61 @@ class EuclideanCodebook(nn.Module):
 
     import torch
 
+    import torch
+    import torch.nn.functional as F
+
     @torch.no_grad()
-    def argmin_dist_blockwise_l2(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024):
+    def argmax_sim_blockwise(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024, eps: float = 1e-12):
+        """
+        x:    [N, D]
+        code: [K, D]
+        return best_idx: [N]  (argmax dot similarity)
+
+        A方針なら、呼び出し側で x/code を unit-norm に揃えるのが基本。
+        ただし安全のためここでも正規化オプションを入れたいなら後述。
+        """
         x_f = x.float()
         c_f = code.float()
 
         # 早期診断（必要ならコメントアウト）
         if not torch.isfinite(x_f).all():
             bad = (~torch.isfinite(x_f)).sum().item()
-            print(f"[argmin] non-finite x: {bad}")
+            print(f"[argmax] non-finite x: {bad}")
         if not torch.isfinite(c_f).all():
             bad = (~torch.isfinite(c_f)).sum().item()
-            print(f"[argmin] non-finite code: {bad}")
+            print(f"[argmax] non-finite code: {bad}")
 
-        x2 = (x_f * x_f).sum(dim=1, keepdim=True)  # [N,1]
+        # 念のため：ゼロノルムがあると dot が全部0になったりするのでチェック
+        # （Aなら本来あり得ないはず）
+        x_norm = x_f.norm(dim=1)
+        c_norm = c_f.norm(dim=1)
+        if (x_norm <= 0).any():
+            print(f"[argmax] WARNING: {(x_norm <= 0).sum().item()} zero-norm x rows.")
+        if (c_norm <= 0).any():
+            print(f"[argmax] WARNING: {(c_norm <= 0).sum().item()} zero-norm code rows.")
 
-        best_val = torch.full((x_f.size(0),), float("inf"), device=x.device, dtype=torch.float32)
+        best_val = torch.full((x_f.size(0),), -float("inf"), device=x.device, dtype=torch.float32)
         best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
 
         K = c_f.size(0)
         for k0 in range(0, K, k_block):
             k1 = min(k0 + k_block, K)
-            ck = c_f[k0:k1]  # [kb,D]
-            c2 = (ck * ck).sum(dim=1).unsqueeze(0)  # [1,kb]
+            ck = c_f[k0:k1]  # [kb, D]
 
-            xc = x_f @ ck.t()  # [N,kb]
-            d2 = x2 + c2 - 2.0 * xc
+            sims = x_f @ ck.t()  # [N, kb]
 
-            # ★ NaN/Inf を潰す（ここが本命）
-            d2 = torch.nan_to_num(d2, nan=float("inf"), posinf=float("inf"), neginf=float("inf"))
-            d2.clamp_min_(0.0)
+            # ★ NaN/Inf を潰す：NaNは -inf、inf はそのままでもいいが、保守的に posinfも大きくしてOK
+            sims = torch.nan_to_num(sims, nan=-float("inf"), posinf=float("inf"), neginf=-float("inf"))
 
-            vals, idxs = d2.min(dim=1)
+            vals, idxs = sims.max(dim=1)
 
-            # vals が inf の点は更新されないので、そのままだと0固定になり得る
-            update = vals < best_val
+            update = vals > best_val
             best_val = torch.where(update, vals, best_val)
             best_idx = torch.where(update, idxs + k0, best_idx)
 
-        # 追加の診断：一度も更新できてない点があるなら warning
-        if torch.isinf(best_val).any():
-            n_bad = torch.isinf(best_val).sum().item()
-            print(f"[argmin] WARNING: {n_bad} points never updated (all distances non-finite).")
+        if torch.isneginf(best_val).any():
+            n_bad = torch.isneginf(best_val).sum().item()
+            print(f"[argmax] WARNING: {n_bad} points never updated (all sims non-finite).")
 
         return best_idx
 
@@ -1928,7 +1941,7 @@ class EuclideanCodebook(nn.Module):
         def _assign_l2norm(X: torch.Tensor, C: torch.Tensor, k_block: int = 1024) -> torch.Tensor:
             Xn = _safe_l2norm(X)
             Cn = _safe_l2norm(C)
-            return self.argmin_dist_blockwise_l2(Xn, Cn, k_block=k_block)
+            return self.argmax_sim_blockwise(Xn, Cn, k_block=k_block)
 
         def _target_max_p(N: int) -> float:
             if N >= 1_000_000:
