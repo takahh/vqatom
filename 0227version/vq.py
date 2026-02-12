@@ -1981,7 +1981,7 @@ class EuclideanCodebook(nn.Module):
         split_once_per_epoch = True
         split_only_last_batch = False
 
-        usage_mom = float(getattr(self, "usage_ema_mom", 0.99))
+        usage_mom = float(getattr(self, "usage_ema_mom", 0.97))
         decay = float(getattr(self, "decay", 0.99))
         eps = float(getattr(self, "eps", 1e-8))
         prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
@@ -2376,6 +2376,22 @@ class EuclideanCodebook(nn.Module):
                     total_u = ue.sum().clamp_min(1e-8)
                     p_u = ue / total_u
                     max_p_u = float(p_u.max().item())
+                    # ---- dead / near-dead stats ----
+                    dead_mask = (cs < 1e-3)
+                    near_dead_mask = (cs < 0.1)
+
+                    n_dead = int(dead_mask.sum().item())
+                    n_near_dead = int(near_dead_mask.sum().item())
+                    frac_dead = n_dead / float(K_e)
+                    frac_near_dead = n_near_dead / float(K_e)
+
+                    if chunk_i == 0:  # うるさくならないように
+                        _log(
+                            f"[DEAD] epoch={epoch} key={skey} "
+                            f"dead={n_dead}/{K_e} ({frac_dead:.3f}) "
+                            f"near_dead={n_near_dead}/{K_e} ({frac_near_dead:.3f})"
+                        )
+
                     self._mp_list.append(max_p_u)
                     N_key = int(cs.sum().item())
                     self._mp_list_keys.append((skey, max_p_u, N_key, int(K_e)))
