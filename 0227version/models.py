@@ -490,6 +490,8 @@ class EquivariantThreeHopGINE(nn.Module):
             return h_out
         import torch.nn.functional as F
         h_vq = self.pre_vq_ln(h_out)
+
+        # L2 normalize latents here
         h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
 
         quantize_output = self.vq(
