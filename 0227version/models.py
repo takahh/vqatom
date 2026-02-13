@@ -114,6 +114,8 @@ def _normalize_quantize_output(qo, logger, device=None, dtype=None):
 
     commit, cb, rep, cb_rep, ent = inner[0], inner[1], inner[2], inner[3], inner[4]
 
+    # total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
+    print(f"end of model forward, loss {loss},　commit {commit}, ent {ent}")
     _infer_device_dtype(loss, commit, cb, rep, cb_rep, ent)
 
     embed = None  # qoにはembedが無い前提
