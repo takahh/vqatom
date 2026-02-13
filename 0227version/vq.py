@@ -2002,12 +2002,12 @@ class EuclideanCodebook(nn.Module):
         debug_center_norm = bool(getattr(self, "debug_center_norm", False))
 
         # Optional: prevent effective-K shrink (OFF by default)
-        revive_dead = bool(getattr(self, "revive_dead", False))
-        revive_k = int(getattr(self, "revive_k", 4))
-        revive_thr = float(getattr(self, "revive_thr", 1e-3))  # cs < this is dead
+        revive_dead = bool(getattr(self, "revive_dead", True))
+        revive_k = int(getattr(self, "revive_k", 16))
+        revive_thr = float(getattr(self, "revive_thr", 1e-2))  # cs < this is dead
         revive_noise = float(getattr(self, "revive_noise", 0.02))
         revive_use_batch = bool(getattr(self, "revive_use_batch", True))
-        revive_every_steps = int(getattr(self, "revive_every_steps", 0))  # 0 disables step-gate
+        revive_every_steps = int(getattr(self, "revive_every_steps", 20))  # 0 disables step-gate
 
         # ------------------------------------------------------------------
         # 0) global offset management
