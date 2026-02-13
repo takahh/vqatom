@@ -2366,7 +2366,7 @@ class EuclideanCodebook(nn.Module):
                         if ent_w is None:
                             ent_w = 0.0
                         ent_w = float(ent_w)
-                        print(f"ent_w {ent_w}, -ent {-entropy}")
+                        logegr.info(f"ent_w {ent_w}, -ent {-entropy}")
                         ent_metric_total = ent_metric_total + ent_w * (-entropy)
                     if chunk_i == 0:
                         _log(
@@ -3148,7 +3148,7 @@ class VectorQuantize(nn.Module):
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
 
             total_latent += int(N_i)
-            print(f"commit_part {commit_part}, N_i {N_i}")
+            logger.info(f"commit_part {commit_part}, N_i {N_i}")
             commit_num = commit_num + commit_part * N_i
             codebk_num = codebk_num + codebk_part * N_i
 
