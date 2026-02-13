@@ -2243,7 +2243,6 @@ class EuclideanCodebook(nn.Module):
                 self.register_buffer(name, new_t)
             return new_t
 
-        # ---- optional revive helper (very conservative)
         def _revive_dead_centers_if_needed(
                 *,
                 means: torch.Tensor,  # (K,D) normalized
@@ -2266,18 +2265,38 @@ class EuclideanCodebook(nn.Module):
             if n_dead <= 0:
                 return False
 
-            k = min(int(revive_k), n_dead)
+            # ---- determine maximum seeds we can actually generate ----
+            # default: from batch latents
+            max_from_X = int(Xn_dev.shape[0]) if (Xn_dev is not None) else 0
+            # from winners-copy we can always generate up to K, but it hurts diversity; still safe
+            max_from_means = K
+
+            if revive_use_batch and (idx_dev is not None) and (idx_dev.numel() > 0):
+                max_seeds = max_from_means
+            else:
+                max_seeds = max_from_X
+
+            if max_seeds <= 0:
+                return False
+
+            # ---- final k ----
+            k = min(int(revive_k), n_dead, max_seeds)
+            if k <= 0:
+                return False
+
             dead_idx = torch.nonzero(dead, as_tuple=False).flatten()[:k]
 
-            if revive_use_batch and (idx_dev.numel() > 0):
+            if revive_use_batch and (idx_dev is not None) and (idx_dev.numel() > 0):
                 bc = torch.bincount(idx_dev, minlength=K).float()
                 winners = torch.argsort(bc, descending=True)
                 src = winners[:k]
                 seeds = means.index_select(0, src).clone()
             else:
-                perm = torch.randperm(Xn_dev.shape[0], device=Xn_dev.device)[:k]
+                # sample from available batch latents (N may be < revive_k)
+                perm = torch.randperm(int(Xn_dev.shape[0]), device=Xn_dev.device)[:k]
                 seeds = Xn_dev.index_select(0, perm).clone()
 
+            # now seeds.shape[0] == dead_idx.numel() == k
             seeds = _safe_l2norm(seeds + revive_noise * torch.randn_like(seeds))
             means.index_copy_(0, dead_idx, seeds)
 
