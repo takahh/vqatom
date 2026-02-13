@@ -3139,6 +3139,10 @@ class VectorQuantize(nn.Module):
 
             # ---- gather and losses ----
             e_star = cb.index_select(0, nn_idx)  # [N_i, D]
+            _log(f"[VQ_COMMIT][DBG] skey={skey} "
+                 f"z_norm={z.float().norm(dim=-1).mean().item():.4f} "
+                 f"e_norm={e_star.float().norm(dim=-1).mean().item():.4f} "
+                 f"mse32={F.mse_loss(z.float(), e_star.detach().float()).item():.3e}")
 
             commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
@@ -3321,6 +3325,7 @@ class VectorQuantize(nn.Module):
         # 5) Train path: run _codebook first (assign + EMA + entropy)
         # -----------------------------
         if (mask_dict is not None) and (B > 0):
+            # quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
             quantize_st, embed_ind_dict, codebook_container, ent_loss = self._codebook(
                 encoder_outputs,
                 feature=feature,
