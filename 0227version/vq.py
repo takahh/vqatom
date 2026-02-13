@@ -3148,6 +3148,7 @@ class VectorQuantize(nn.Module):
             codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
 
             total_latent += int(N_i)
+            print(f"commit_part {commit_part}, N_i {N_i}")
             commit_num = commit_num + commit_part * N_i
             codebk_num = codebk_num + codebk_part * N_i
 
