@@ -3375,4 +3375,5 @@ class VectorQuantize(nn.Module):
         # -----------------------------
         # (あなたの今の return に合わせて: total_loss = commit + ent)
         total_loss = commit_loss + ent_loss
+        logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
