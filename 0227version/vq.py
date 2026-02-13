@@ -2428,7 +2428,7 @@ class EuclideanCodebook(nn.Module):
                     if can_split_now and (not split_once_per_epoch or (skey not in self._split_done_epoch)):
                         if chunk_i == 0:
                             _log(
-                                f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{float(cs.sum()):.1f}} "
+                                f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{float(cs.sum()):.1f}"
                                 f"max_p={max_p:.4f} (cs={max_p_cs:.4f}, ue={max_p_u:.4f}, prev={prev:.4f}) "
                                 f"thr={thr:.4f} K={K_e} grew={bool(grew)}"
                             )
