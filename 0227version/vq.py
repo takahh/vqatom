@@ -2315,6 +2315,10 @@ class EuclideanCodebook(nn.Module):
             # EMA + split (Option A)
             # -------------------------
             if do_ema:
+                if chunk_i == 0:
+                    _log(
+                        f"[ENT-DBG] training={self.training} mode={mode} epoch={epoch} do_ema={do_ema} ent_w={getattr(self, 'entropy_weight', None)}")
+
                 dev = code_param.device
                 if code_param.ndim == 3:
                     K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
@@ -2360,6 +2364,9 @@ class EuclideanCodebook(nn.Module):
                         entropy = -(p_ * (p_ + 1e-12).log()).sum()
                         ent_w = float(getattr(self, "entropy_weight", 1e-3))
                         ent_metric_total = ent_metric_total + ent_w * (-entropy)
+                    if chunk_i == 0:
+                        _log(
+                            f"[ENT-DBG2] skey={skey} denom2={denom2.item():.1f} entropy={entropy.item():.4f} contrib={(ent_w * (-entropy)).item():.6f}")
 
                     # usage_ema
                     ue.mul_(usage_mom).add_(batch_counts, alpha=(1.0 - usage_mom))
