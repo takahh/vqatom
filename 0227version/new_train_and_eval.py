@@ -1030,7 +1030,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
                     #     print("[DEBUG][TRAIN] loss is not a Tensor:", type(loss))
 
                     # record scalar losses
-                    clean_losses = [to_scalar(l) for l in x]
+                    clean_losses = [to_scalar(l) for l in loss_list_train]
                     for j, val in enumerate(clean_losses):
                         loss_list_list_train[j].append(val)
                     loss_list.append(to_scalar(loss))
