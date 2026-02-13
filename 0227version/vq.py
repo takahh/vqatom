@@ -2002,12 +2002,23 @@ class EuclideanCodebook(nn.Module):
         debug_center_norm = bool(getattr(self, "debug_center_norm", False))
 
         # Optional: prevent effective-K shrink (OFF by default)
+        # --- revive config (aggressive enough for huge-K keys like 6_0_3_1_1_0) ---
         revive_dead = bool(getattr(self, "revive_dead", True))
-        revive_k = int(getattr(self, "revive_k", 16))
-        revive_thr = float(getattr(self, "revive_thr", 1e-2))  # cs < this is dead
-        revive_noise = float(getattr(self, "revive_noise", 0.02))
-        revive_use_batch = bool(getattr(self, "revive_use_batch", True))
-        revive_every_steps = int(getattr(self, "revive_every_steps", 20))  # 0 disables step-gate
+
+        # revive many at a time; allow override via args
+        revive_k = int(getattr(self, "revive_k", 512))  # was 16
+
+        # treat "almost unused" as dead (cs-based); allow override via args
+        revive_thr = float(getattr(self, "revive_thr", 0.10))  # was 1e-2
+
+        # small noise + renorm (Option A friendly); allow override via args
+        revive_noise = float(getattr(self, "revive_noise", 0.01))  # was 0.02
+
+        # IMPORTANT: seed from current batch latents for diversity
+        revive_use_batch = bool(getattr(self, "revive_use_batch", False))  # was True
+
+        # revive frequently; 0 disables step-gate; allow override via args
+        revive_every_steps = int(getattr(self, "revive_every_steps", 5))  # was 20
 
         # ------------------------------------------------------------------
         # 0) global offset management
@@ -2490,7 +2501,7 @@ class EuclideanCodebook(nn.Module):
                         idx_dev=idx_dev,
                         C_pre=C_pre,
                     )
-                    if revived and (chunk_i == 0):
+                    if revived:
                         _log(f"[REVIVE] epoch={epoch} key={skey} revived_some_dead_centers=True")
 
                     total_csR = cs.sum().clamp_min(1e-8)
