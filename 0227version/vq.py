@@ -2366,7 +2366,7 @@ class EuclideanCodebook(nn.Module):
                         if ent_w is None:
                             ent_w = 0.0
                         ent_w = float(ent_w)
-                        logegr.info(f"ent_w {ent_w}, -ent {-entropy}")
+                        logger.info(f"ent_w {ent_w}, -ent {-entropy}")
                         ent_metric_total = ent_metric_total + ent_w * (-entropy)
                     if chunk_i == 0:
                         _log(
