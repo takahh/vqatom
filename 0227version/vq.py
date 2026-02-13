@@ -2642,7 +2642,7 @@ class VectorQuantize(nn.Module):
             lamb_div_equidist=1,
             lamb_div_elec_state=1,
             lamb_div_charge=1,
-            commitment_weight=1,  # using
+            commitment_weight=1000,  # using
             codebook_weight=1,  # using
             lamb_sil=0.00001,           # using
             lamb_cb=0.01,           # using
@@ -3374,6 +3374,6 @@ class VectorQuantize(nn.Module):
         # 7) Return
         # -----------------------------
         # (あなたの今の return に合わせて: total_loss = commit + ent)
-        total_loss = commit_loss + ent_loss
+        total_loss = self.commitment_weight * commit_loss + ent_loss
         logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
