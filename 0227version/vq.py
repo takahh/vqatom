@@ -2362,7 +2362,11 @@ class EuclideanCodebook(nn.Module):
                     if float(denom2.item()) > 0.0:
                         p_ = batch_counts / (denom2 + 1e-8)
                         entropy = -(p_ * (p_ + 1e-12).log()).sum()
-                        ent_w = float(getattr(self, "entropy_weight", 1e-3))
+                        ent_w = getattr(self, "entropy_weight", 1e-3)
+                        if ent_w is None:
+                            ent_w = 0.0
+                        ent_w = float(ent_w)
+
                         ent_metric_total = ent_metric_total + ent_w * (-entropy)
                     if chunk_i == 0:
                         _log(
@@ -2424,7 +2428,7 @@ class EuclideanCodebook(nn.Module):
                     if can_split_now and (not split_once_per_epoch or (skey not in self._split_done_epoch)):
                         if chunk_i == 0:
                             _log(
-                                f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{N_key} "
+                                f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{float(cs.sum()):.1f}} "
                                 f"max_p={max_p:.4f} (cs={max_p_cs:.4f}, ue={max_p_u:.4f}, prev={prev:.4f}) "
                                 f"thr={thr:.4f} K={K_e} grew={bool(grew)}"
                             )
