@@ -2376,18 +2376,31 @@ class EuclideanCodebook(nn.Module):
                     if used_now.numel() > 0:
                         ever.index_fill_(0, used_now, 1)
                         lue.index_fill_(0, used_now, ep_i)
+                    # -------------------------
+                    # Entropy regularizer (optional)
+                    # -------------------------
+                    denom = batch_counts.sum()
+                    if denom.item() > 0.0:
+                        # probability over K_e clusters for THIS key in THIS minibatch
+                        p = batch_counts / (denom + 1e-8)
 
-                    # entropy metric (optional)
-                    denom2 = batch_counts.sum()
-                    if float(denom2.item()) > 0.0:
-                        p_ = batch_counts / (denom2 + 1e-8)
-                        entropy = -(p_ * (p_ + 1e-12).log()).sum()
+                        # Shannon entropy (natural log); safe with p=0
+                        H = -(p * (p + 1e-12).log()).sum()
+
                         ent_w = getattr(self, "entropy_weight", 1e-3)
                         ent_w = 0.0 if ent_w is None else float(ent_w)
-                        ent_metric_total = ent_metric_total + ent_w * (-entropy)
+
+                        contrib = (-H) * ent_w
+                        ent_metric_total = ent_metric_total + contrib
+
                         if chunk_i == 0:
+                            effK = int((batch_counts > 0).sum().item())
+                            max_p = float(p.max().item())
                             _log(
-                                f"[ENT] epoch={epoch} key={skey} ent={entropy.item():.4f} ent_w={ent_w:.3g} contrib={(ent_w * (-entropy)).item():.6f}")
+                                f"[ENT] epoch={epoch} key={skey} "
+                                f"H={H.item():.4f} effK={effK} max_p={max_p:.4f} "
+                                f"ent_w={ent_w:.3g} contrib={contrib.item():.6f}"
+                            )
 
                     # usage_ema
                     ue.mul_(usage_mom).add_(batch_counts, alpha=(1.0 - usage_mom))
