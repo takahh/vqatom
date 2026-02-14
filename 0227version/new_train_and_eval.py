@@ -1148,7 +1148,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
               f"train - cb_repel_loss: {train_cbrep:.6f}",
               f"train - ent_loss: {train_ent:.6f}")
         logger.info(
-            "train - commit_loss: %.6f, lat_repel_loss: %.6f, cb_repel_loss: %.6f, ent_loss: %.6f",
+            "train - commit_loss: %.9f, lat_repel_loss: %.6f, cb_repel_loss: %.6f, ent_loss: %.6f",
             train_commit, train_latrep, train_cbrep, train_ent
         )
         print(f"train - total_loss: {train_total:.6f}")
