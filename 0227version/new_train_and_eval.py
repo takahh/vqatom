@@ -631,9 +631,6 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     all_chunk_starts = []
     last_id2safe = None
 
-    # ------------------------------------------------------------
-    # 3) INFER only
-    # ------------------------------------------------------------
     with torch.no_grad():
         for batch_idx, (adj_batch, attr_batch) in enumerate(dataloader):
 
@@ -641,30 +638,72 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
                 adj_batch, attr_batch, logger, 0, 0
             )
 
-            # iterate in chunks inside this batch's glist
-            for chunk_i_local, start in enumerate(range(0, len(glist), chunk_size)):
+            batched_graph = dgl.batch(glist).to(device)
+            batched_feats = batched_graph.ndata["feat"]
+
+            # probe (optional)
+            probe_key = None
+            for k in model.state_dict().keys():
+                if k.startswith("vq._codebook.embed."):
+                    probe_key = k
+                    break
+
+            if probe_key is not None:
+                before_norm = model.state_dict()[probe_key].float().norm().item()
+                print("center norm before:", before_norm)
+            for start in range(0, len(glist), chunk_size):
                 chunk = glist[start:start + chunk_size]
 
                 batched_graph = dgl.batch(chunk).to(device)
                 batched_feats = batched_graph.ndata["feat"]
 
-                if probe_key is not None:
-                    before = model.state_dict()[probe_key].float().norm().item()
-                    print("center norm before:", before)
-
-                # infer returns: (_, (kid, cid, id2safe), _)
                 _, ids, _ = evaluate(
                     model=model,
                     g=batched_graph,
                     feats=batched_feats,
                     epoch=int(conf.get("epoch_for_logging", 0)),
-                    mask_dict=masks_3,
+                    mask_dict=masks_3,  # batch全体
                     logger=logger,
                     g_base=None,
-                    chunk_i=chunk_i_local,
+                    chunk_i=start,  # ★ここが重要：trainと同じ契約にする
                     mode="infer",
                     attr_list=attr_matrices_all[start:start + chunk_size],
                 )
+
+    # ------------------------------------------------------------
+    # 3) INFER only
+    # ------------------------------------------------------------
+    # with torch.no_grad():
+    #     for batch_idx, (adj_batch, attr_batch) in enumerate(dataloader):
+    #
+    #         glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(
+    #             adj_batch, attr_batch, logger, 0, 0
+    #         )
+    #
+    #         # iterate in chunks inside this batch's glist
+    #         for chunk_i_local, start in enumerate(range(0, len(glist), chunk_size)):
+    #             chunk = glist[start:start + chunk_size]
+    #
+    #             batched_graph = dgl.batch(chunk).to(device)
+    #             batched_feats = batched_graph.ndata["feat"]
+    #
+    #             if probe_key is not None:
+    #                 before = model.state_dict()[probe_key].float().norm().item()
+    #                 print("center norm before:", before)
+    #
+    #             # infer returns: (_, (kid, cid, id2safe), _)
+    #             _, ids, _ = evaluate(
+    #                 model=model,
+    #                 g=batched_graph,
+    #                 feats=batched_feats,
+    #                 epoch=int(conf.get("epoch_for_logging", 0)),
+    #                 mask_dict=masks_3,
+    #                 logger=logger,
+    #                 g_base=None,
+    #                 chunk_i=start,
+    #                 mode="infer",
+    #                 attr_list=attr_matrices_all[start:start + chunk_size],
+    #             )
 
                 kid, cid, id2safe = ids
                 last_id2safe = id2safe  # may grow over time
