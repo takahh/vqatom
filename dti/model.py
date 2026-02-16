@@ -438,7 +438,7 @@ def main():
     ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV to also evaluate (useful with --eval_only).")
 
     # ligand MLM ckpt
-    ap.add_argument("--lig_ckpt", type=str, default="data/mlm_ep05.pt", help="Ligand MLM checkpoint (mlm_epXX.pt)")
+    ap.add_argument("--lig_ckpt", type=str, default="/vqatom/dti/data/mlm_ep05.pt", help="Ligand MLM checkpoint (mlm_epXX.pt)")
 
     # protein ESM-2
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Hugging Face model name for ESM-2")
