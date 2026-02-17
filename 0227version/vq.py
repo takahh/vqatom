@@ -2665,7 +2665,7 @@ class EuclideanCodebook(nn.Module):
                     os.makedirs("dumps", exist_ok=True)
                     out = {"epoch": int(epoch), "maxp_list": self._mp_list, "detail": self._mp_list_keys}
                     torch.save(out, f"dumps/maxp_epoch_{int(epoch):04d}.pt")
-        if (epoch is not None) and bool(is_last_batch) and (logger is not None):
+        if (epoch is not None) and (logger is not None):
             # そのepochで見えた skey->K の合計（枠）
             cb_sum = int(sum(int(v) for v in getattr(self, "cb_dict", {}).values()))
             logger.info(f"[VOCAB-CHECK][epoch={int(epoch)}] cb_dict_sum={cb_sum} vocab_size_if_fixed={cb_sum + 2}")
