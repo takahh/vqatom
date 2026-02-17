@@ -204,8 +204,8 @@ class PretrainedLigandEncoder(nn.Module):
         self.state = ckpt["model"]
         self.conf = ckpt["config"]
         self.base_vocab = int(ckpt["base_vocab"])
-        # self.vocab_size = int(ckpt["vocab_size"])
-        self.vocab_size = int(190000)
+        self.vocab_size = int(ckpt["vocab_size"])
+        # self.vocab_size = int(190000)
         self.pad_id = self.base_vocab + 0
         self.mask_id = self.base_vocab + 1
 
