@@ -245,6 +245,26 @@ class PretrainedLigandEncoder(nn.Module):
         return int(self.conf["d_model"])
 
     def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
+        # DEBUG: embedding index range check
+        with torch.no_grad():
+            li = l_ids.detach()
+            if li.is_cuda:
+                li_cpu = li.cpu()
+            else:
+                li_cpu = li
+
+            mn = int(li_cpu.min().item())
+            mx = int(li_cpu.max().item())
+            bad = ((li_cpu < 0) | (li_cpu >= self.tok.num_embeddings)).nonzero(as_tuple=False)
+
+            print(f"[lig] num_embeddings={self.tok.num_embeddings}  min_id={mn} max_id={mx}  bad_count={bad.size(0)}")
+            if bad.size(0) > 0:
+                b0 = bad[0].tolist()
+                v0 = int(li_cpu[b0[0], b0[1]].item())
+                print(f"[lig] first_bad at (B={b0[0]}, pos={b0[1]}): id={v0}")
+                # ここで強制停止（CUDAクラッシュ前に止める）
+                raise RuntimeError("Ligand token id out of range for embedding")
+
         x = self.tok(l_ids)  # (B, Ll, D)
         pad_mask = (l_ids == self.pad_id)  # True at PAD
         h = self.enc(x, src_key_padding_mask=pad_mask)  # (B, Ll, D)
