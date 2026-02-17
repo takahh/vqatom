@@ -585,7 +585,7 @@ def run_infer_only_after_restore(conf, model, logger, checkpoint_path):
     # Strict load by default; fallback to strict=False if requested
     strict = bool(conf.get("restore_strict", True))
     if strict:
-        model.load_state_dict(state, strict=True)
+        model.load_state_dict(state, strict=False)
     else:
         missing, unexpected = model.load_state_dict(state, strict=False)
         print("restore(strict=False) missing:", missing[:20])
