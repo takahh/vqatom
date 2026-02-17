@@ -1092,12 +1092,31 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         # ---------------------------
         # 3) SAVE MODEL
         # ---------------------------
+        # if conf["train_or_infer"] != "analysis":
+        #     os.makedirs(".", exist_ok=True)
+        #     state = copy.deepcopy(model.state_dict())
+        #     torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
+        #     model.load_state_dict(state)
+        # ---------------------------
         if conf["train_or_infer"] != "analysis":
             os.makedirs(".", exist_ok=True)
-            state = copy.deepcopy(model.state_dict())
-            torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
-            model.load_state_dict(state)
-        #
+
+            # ---- 語彙サイズの確定 ----
+            # CBDICT が element->K の辞書ならこれが正解
+            base_vocab = int(sum(int(v) for v in model.cb_dict.values()))
+            vocab_size = base_vocab + 2  # PAD/MASK
+
+            ckpt = {
+                "model": model.state_dict(),
+                "epoch": int(epoch),
+                "base_vocab": base_vocab,
+                "vocab_size": vocab_size,
+                "cb_dict": model.cb_dict,  # 再現用（任意だが推奨）
+                "config": conf,  # 再現用（任意）
+            }
+
+            torch.save(ckpt, f"model_epoch_{epoch}.pt")
+
         # # ---------------------------
         # # 4) TEST
         # # ---------------------------
