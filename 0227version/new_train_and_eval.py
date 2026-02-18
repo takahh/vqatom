@@ -98,58 +98,38 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
             return 0
 
         if mode == "infer":
-            # IMPORTANT: model forward should return (key_id_full, cluster_id_full, id2safe)
             out = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
 
-            if not (isinstance(out, (tuple, list)) and len(out) == 3):
+            # ----------------------------------------------------------
+            # NEW canonical contract:
+            # (key_id_full, cluster_id_full, global_id_full, id2safe)
+            # ----------------------------------------------------------
+            if isinstance(out, (tuple, list)) and len(out) == 4:
+                key_id_full, cluster_id_full, global_id_full, id2safe = out
+
+            # backward compat (very old checkpoints)
+            elif isinstance(out, (tuple, list)) and len(out) == 3:
+                key_id_full, cluster_id_full, id2safe = out
+                global_id_full = key_id_full  # fallback
+
+            else:
                 raise TypeError(
-                    f"[evaluate] mode='infer' expects 3-tuple (key_id_full, cluster_id_full, id2safe), got: {type(out)}"
+                    f"[evaluate] mode='infer' expects 4-tuple "
+                    f"(key_id_full, cluster_id_full, global_id_full, id2safe), got: {type(out)}"
                 )
 
-            key_id_full, cluster_id_full, id2safe = out
-            # --- HARDEN: force ids to be 1D ---
-            if torch.is_tensor(key_id_full):
-                key_id_full = key_id_full.reshape(-1)
-            else:
-                key_id_full = torch.as_tensor(key_id_full).reshape(-1)
+            # ---- HARDEN: force 1D long tensors ----
+            key_id_full = torch.as_tensor(key_id_full).reshape(-1).long()
+            cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1).long()
+            global_id_full = torch.as_tensor(global_id_full).reshape(-1).long()
 
-            if torch.is_tensor(cluster_id_full):
-                cluster_id_full = cluster_id_full.reshape(-1)
-            else:
-                cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1)
+            if not isinstance(id2safe, dict):
+                id2safe = {}
 
-            # (optional but recommended)
-            key_id_full = key_id_full.long()
-            cluster_id_full = cluster_id_full.long()
+            # return format expected by run_infer_after_restore
+            # kid, cid, gid, id2safe = ids
+            return None, (key_id_full, cluster_id_full, global_id_full, id2safe), None
 
-            # minimal sanity checks
-            if not isinstance(key_id_full, torch.Tensor) or key_id_full.ndim != 1:
-                raise TypeError(f"[evaluate] key_id_full must be 1D Tensor, got {type(key_id_full)} shape={getattr(key_id_full,'shape',None)}")
-            if not isinstance(cluster_id_full, torch.Tensor) or cluster_id_full.ndim != 1:
-                raise TypeError(f"[evaluate] cluster_id_full must be 1D Tensor, got {type(cluster_id_full)} shape={getattr(cluster_id_full,'shape',None)}")
-            if key_id_full.shape[0] != cluster_id_full.shape[0]:
-                raise ValueError(f"[evaluate] key_id_full and cluster_id_full length mismatch: {key_id_full.shape} vs {cluster_id_full.shape}")
-
-            if torch.is_tensor(key_id_full):
-                key_id_full = key_id_full.reshape(-1).long()
-            else:
-                key_id_full = torch.as_tensor(key_id_full).reshape(-1).long()
-
-            if torch.is_tensor(cluster_id_full):
-                cluster_id_full = cluster_id_full.reshape(-1).long()
-            else:
-                cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1).long()
-
-            # Return a consistent "outputs" object for caller:
-            # (loss, embed, loss_list) style is not meaningful here,
-            # so we return (None, (key_id_full, cluster_id_full, id2safe), None)
-            return None, (key_id_full, cluster_id_full, id2safe), None
-
-        # default (train/test/eval)
-        # return loss, embed, loss_list
-        # --- guarantee 1D ids (scalar -> [1], empty -> [0]) ---
-        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
-        return outputs
 
 class MoleculeGraphDataset(Dataset):
     def __init__(self, adj_dir, attr_dir):

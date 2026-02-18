@@ -505,7 +505,6 @@ class EquivariantThreeHopGINE(nn.Module):
             epoch,
             mode,
         )
-
         if mode == "infer":
             # vq.infer returns: (kid_full, cid_full, gid_full, id2safe)
             if isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 4:
