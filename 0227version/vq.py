@@ -3341,8 +3341,8 @@ class VectorQuantize(nn.Module):
             )
             z = torch.zeros((), device=device, dtype=dtype)
             return z, (z, z, z, z)
+
         if mode == "infer":
-            # ---- run codebook ----
             out = self._codebook(
                 encoder_outputs,
                 feature=feature,
@@ -3353,142 +3353,42 @@ class VectorQuantize(nn.Module):
                 mode=mode,
             )
 
-            # Optional one-shot debug (enable by setting self.debug_infer = True)
-            if getattr(self, "debug_infer", False):
-                print("[infer] out type:", type(out))
-                if isinstance(out, (tuple, list)):
-                    print("[infer] out len:", len(out))
-                    print("[infer] elem types:", [type(x) for x in out])
-                    for i, x in enumerate(out):
-                        if isinstance(x, dict):
-                            print(f"[infer] out[{i}] dict keys head:", list(x.keys())[:30])
+            # Preferred / canonical contract from _codebook:
+            # (key_id_full, cluster_id_full, global_id_full, id2safe)
+            if isinstance(out, (tuple, list)) and len(out) == 4:
+                key_id_full, cluster_id_full, global_id_full, id2safe = out
+                key_id_full = key_id_full.reshape(-1).long()
+                cluster_id_full = cluster_id_full.reshape(-1).long()
+                global_id_full = global_id_full.reshape(-1).long()
 
-            # ------------------------------------------------------------
-            # 1) New contract: (key_id_full, cluster_id_full, id2safe)
-            # ------------------------------------------------------------
+                n = key_id_full.numel()
+                if cluster_id_full.numel() != n or global_id_full.numel() != n:
+                    raise ValueError(
+                        f"[vq.forward] infer length mismatch: "
+                        f"kid={n}, cid={cluster_id_full.numel()}, gid={global_id_full.numel()}"
+                    )
+                if not isinstance(id2safe, dict):
+                    id2safe = {}
+
+                return key_id_full, cluster_id_full, global_id_full, id2safe
+
+            # Backward compat (very old checkpoints) — keep as fallback if you want:
             if isinstance(out, (tuple, list)) and len(out) == 3:
+                # old: (key_id_full, cluster_id_full, id2safe)  -> use key_id as global_id
                 key_id_full, cluster_id_full, id2safe = out
                 key_id_full = key_id_full.reshape(-1).long()
                 cluster_id_full = cluster_id_full.reshape(-1).long()
                 if key_id_full.numel() != cluster_id_full.numel():
                     raise ValueError("[vq.forward] infer length mismatch (tuple3)")
-                return key_id_full, cluster_id_full, id2safe
+                global_id_full = key_id_full
+                if not isinstance(id2safe, dict):
+                    id2safe = {}
+                return key_id_full, cluster_id_full, global_id_full, id2safe
 
-            import torch
-
-            # ------------------------------------------------------------
-            # 2) Dict contract fallback
-            # ------------------------------------------------------------
-            if isinstance(out, dict):
-                # Exact dict contract
-                if ("key_id_full" in out) and ("cluster_id_full" in out) and ("id2safe" in out):
-                    key_id_full = out["key_id_full"].reshape(-1).long()
-                    cluster_id_full = out["cluster_id_full"].reshape(-1).long()
-                    id2safe = out["id2safe"]
-                    if key_id_full.numel() != cluster_id_full.numel():
-                        raise ValueError("[vq.forward] infer length mismatch (dict)")
-                    return key_id_full, cluster_id_full, id2safe
-
-                # embed_ind_dict-based contract
-                if ("embed_ind_dict" in out) and ("id2safe" in out):
-                    embed_ind_dict = out["embed_ind_dict"]
-                    id2safe = out["id2safe"]
-
-                    N = encoder_outputs.shape[0]
-                    key_id_full = torch.empty((N,), device=encoder_outputs.device, dtype=torch.long)
-                    cluster_id_full = torch.empty((N,), device=encoder_outputs.device, dtype=torch.long)
-
-                    for skey, pack in embed_ind_dict.items():
-                        inds = pack.get("ind", None)
-                        if inds is None:
-                            raise RuntimeError(f"[vq.infer fallback] embed_ind_dict[{skey}] missing 'ind'")
-                        inds = inds.to(device=encoder_outputs.device)
-
-                        kid = pack.get("kid", None)
-                        if kid is None:
-                            inv = {v: k for k, v in id2safe.items()} if isinstance(id2safe, dict) else {}
-                            kid = inv.get(skey, None)
-                        if kid is None:
-                            raise RuntimeError(f"[vq.infer fallback] cannot recover kid for skey={skey}")
-                        key_id_full[inds] = int(kid)
-
-                        cid = pack.get("cid", None)
-                        if cid is None:
-                            cid = pack.get("cluster_id", None)
-                        if cid is None:
-                            raise RuntimeError(f"[vq.infer fallback] cannot recover cluster ids for skey={skey}")
-                        cluster_id_full[inds] = cid.to(device=encoder_outputs.device, dtype=torch.long)
-
-                    return key_id_full, cluster_id_full, id2safe
-
-            # Helper: recover id2safe from codebook if possible
-            def _recover_id2safe_from_cb():
-                cb = getattr(self, "_codebook", None)
-                if cb is None:
-                    return {}
-                for name in ("id2safe", "kid2safe", "id2safe_map", "kid2safe_map"):
-                    if hasattr(cb, name):
-                        m = getattr(cb, name)
-                        if isinstance(m, dict) and len(m) > 0:
-                            return m
-                if hasattr(cb, "safe2kid"):
-                    s2k = getattr(cb, "safe2kid")
-                    if isinstance(s2k, dict) and len(s2k) > 0:
-                        return {int(v): str(k) for k, v in s2k.items()}
-                return {}
-
-            # ------------------------------------------------------------
-            # 3) Tuple contract fallbacks (order matters: 4 -> 2)
-            # ------------------------------------------------------------
-
-            # 3a) Older 4-tuple: (Tensor, Tensor, Tensor, dict)
-            if isinstance(out, (tuple, list)) and len(out) == 4:
-                a, b, c, d = out
-
-                id2safe = d if isinstance(d, dict) else {}
-                if not isinstance(id2safe, dict) or len(id2safe) == 0:
-                    id2safe = _recover_id2safe_from_cb()
-
-                cand = [x for x in (a, b, c) if hasattr(x, "numel")]
-                found = None
-                for i in range(len(cand)):
-                    for j in range(i + 1, len(cand)):
-                        xi = cand[i].reshape(-1).long()
-                        xj = cand[j].reshape(-1).long()
-                        if xi.numel() == xj.numel():
-                            found = (xi, xj)
-                            break
-                    if found is not None:
-                        break
-
-                if found is None:
-                    raise TypeError("[vq.forward] infer fallback tuple4: cannot find two same-length id tensors")
-
-                key_id_full, cluster_id_full = found
-                if key_id_full.numel() != cluster_id_full.numel():
-                    raise ValueError("[vq.forward] infer length mismatch (tuple4)")
-
-                return key_id_full, cluster_id_full, id2safe
-
-            # 3b) Older 2-tuple: (key_id_full, cluster_id_full)
-            if isinstance(out, (tuple, list)) and len(out) == 2 and hasattr(out[0], "numel") and hasattr(out[1],
-                                                                                                         "numel"):
-                key_id_full, cluster_id_full = out
-                key_id_full = key_id_full.reshape(-1).long()
-                cluster_id_full = cluster_id_full.reshape(-1).long()
-                if key_id_full.numel() != cluster_id_full.numel():
-                    raise ValueError("[vq.forward] infer length mismatch (tuple2)")
-
-                id2safe = _recover_id2safe_from_cb()
-                return key_id_full, cluster_id_full, id2safe
-
-            # ------------------------------------------------------------
-            # 4) Unknown contract
-            # ------------------------------------------------------------
             raise TypeError(
-                f"[vq.forward] mode='infer' expects (key_id_full, cluster_id_full, id2safe). "
-                f"Got {type(out)} (tuple/list len={len(out) if isinstance(out, (tuple, list)) else 'n/a'}). "
-                "Please add a fallback adapter for your _codebook() return type."
+                f"[vq.forward] mode='infer' expects _codebook() -> "
+                f"(key_id_full, cluster_id_full, global_id_full, id2safe), got {type(out)} "
+                f"len={len(out) if isinstance(out, (tuple, list)) else 'n/a'}"
             )
 
         # -----------------------------
