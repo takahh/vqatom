@@ -3341,7 +3341,6 @@ class VectorQuantize(nn.Module):
             )
             z = torch.zeros((), device=device, dtype=dtype)
             return z, (z, z, z, z)
-
         if mode == "infer":
             out = self._codebook(
                 encoder_outputs,
@@ -3352,16 +3351,80 @@ class VectorQuantize(nn.Module):
                 epoch=epoch,
                 mode=mode,
             )
-            if not (isinstance(out, (tuple, list)) and len(out) == 3):
-                raise TypeError(
-                    "[vq.forward] mode='infer' expects _codebook() -> (key_id_full, cluster_id_full, id2safe)"
-                )
-            key_id_full, cluster_id_full, id2safe = out
-            key_id_full = key_id_full.reshape(-1).long()
-            cluster_id_full = cluster_id_full.reshape(-1).long()
-            if key_id_full.numel() != cluster_id_full.numel():
-                raise ValueError("[vq.forward] infer length mismatch")
-            return key_id_full, cluster_id_full, id2safe
+
+            # ------------------------------------------------------------
+            # New contract: (key_id_full, cluster_id_full, id2safe)
+            # ------------------------------------------------------------
+            if isinstance(out, (tuple, list)) and len(out) == 3:
+                key_id_full, cluster_id_full, id2safe = out
+                key_id_full = key_id_full.reshape(-1).long()
+                cluster_id_full = cluster_id_full.reshape(-1).long()
+                if key_id_full.numel() != cluster_id_full.numel():
+                    raise ValueError("[vq.forward] infer length mismatch")
+                return key_id_full, cluster_id_full, id2safe
+
+            # ------------------------------------------------------------
+            # Backward-compat fallback:
+            # try to build the contract from common older outputs
+            # ------------------------------------------------------------
+            import torch
+
+            # Case 1: out is dict-like and already contains what we need
+            if isinstance(out, dict):
+                if ("key_id_full" in out) and ("cluster_id_full" in out) and ("id2safe" in out):
+                    key_id_full = out["key_id_full"].reshape(-1).long()
+                    cluster_id_full = out["cluster_id_full"].reshape(-1).long()
+                    id2safe = out["id2safe"]
+                    if key_id_full.numel() != cluster_id_full.numel():
+                        raise ValueError("[vq.forward] infer length mismatch (fallback dict)")
+                    return key_id_full, cluster_id_full, id2safe
+
+                # Some older code returns embed_ind_dict / id2safe / maybe key_id_full etc.
+                if ("embed_ind_dict" in out) and ("id2safe" in out):
+                    embed_ind_dict = out["embed_ind_dict"]
+                    id2safe = out["id2safe"]
+
+                    N = encoder_outputs.shape[0]
+                    key_id_full = torch.empty((N,), device=encoder_outputs.device, dtype=torch.long)
+                    cluster_id_full = torch.empty((N,), device=encoder_outputs.device, dtype=torch.long)
+
+                    # Expect each entry has:
+                    #   pack["ind"] : positions in full tensor
+                    # and either:
+                    #   pack["kid"] : key id for that safe-key
+                    #   pack["cid"] : per-element cluster ids
+                    for skey, pack in embed_ind_dict.items():
+                        inds = pack.get("ind", None)
+                        if inds is None:
+                            raise RuntimeError(f"[vq.infer fallback] embed_ind_dict[{skey}] missing 'ind'")
+                        inds = inds.to(device=encoder_outputs.device)
+
+                        kid = pack.get("kid", None)
+                        if kid is None:
+                            # try to invert id2safe
+                            # (id2safe: kid -> skey)
+                            inv = {v: k for k, v in id2safe.items()} if isinstance(id2safe, dict) else {}
+                            kid = inv.get(skey, None)
+                        if kid is None:
+                            raise RuntimeError(f"[vq.infer fallback] cannot recover kid for skey={skey}")
+                        key_id_full[inds] = int(kid)
+
+                        cid = pack.get("cid", None)
+                        if cid is None:
+                            # sometimes the cluster ids are stored under "cluster_id" / "cluster_ind"
+                            cid = pack.get("cluster_id", None)
+                        if cid is None:
+                            raise RuntimeError(
+                                f"[vq.infer fallback] cannot recover per-element cluster ids for skey={skey}")
+                        cluster_id_full[inds] = cid.to(device=encoder_outputs.device, dtype=torch.long)
+
+                    return key_id_full, cluster_id_full, id2safe
+
+            # If we reached here, we don't know how to interpret the old output.
+            raise TypeError(
+                f"[vq.forward] mode='infer' expects 3-tuple, got {type(out)}; "
+                "add a fallback adapter for your _codebook() return type."
+            )
 
         # -----------------------------
         # 3) Debug index sanity (optional)
