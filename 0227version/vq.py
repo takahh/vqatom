@@ -2082,13 +2082,33 @@ class EuclideanCodebook(nn.Module):
 
         # ------------------------------------------------------------------
         # 3) infer: IDs only (no EMA, no split, no revive, no prune)
+        #    returns: (key_id_full, cluster_id_full, global_id_full, id2safe)
         # ------------------------------------------------------------------
         if mode == "infer":
             if mask_dict is None:
                 raise ValueError("mode='infer' requires mask_dict (global indices).")
 
+            # --------------------------------------------------------------
+            # Build / cache global offsets (safe -> offset) ONCE.
+            # infer doesn't grow/split, so this stays valid for the whole run.
+            # --------------------------------------------------------------
+            if not hasattr(self, "_global_offsets") or not hasattr(self, "_global_vocab_size"):
+                # IMPORTANT: fix ordering deterministically
+                safe_keys = sorted(self.embed.keys())
+                offsets = {}
+                cur = 0
+                for s in safe_keys:
+                    K = int(self.embed[s].shape[0] if self.embed[s].ndim == 2 else self.embed[s].shape[1])
+                    offsets[s] = cur
+                    cur += K
+                self._global_offsets = offsets
+                self._global_vocab_size = int(cur)
+
+            offsets = self._global_offsets  # dict: safe -> int offset
+
             key_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int32)
             cluster_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int32)
+            global_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int64)
 
             for key, idx_global in mask_dict.items():
                 if idx_global is None or idx_global.numel() == 0:
@@ -2111,16 +2131,27 @@ class EuclideanCodebook(nn.Module):
                     Xn = _safe_l2norm(X)
                     idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
 
+                # key_id / cluster_id
                 key_id_full.index_copy_(
                     0, idx_local,
                     torch.full((idx_local.numel(),), sid, device=flatten.device, dtype=torch.int32),
                 )
                 cluster_id_full.index_copy_(0, idx_local, idx_code.to(dtype=torch.int32))
 
+                # global_id = offset[safe] + cid
+                off = int(offsets.get(safe, -1))
+                if off < 0:
+                    raise RuntimeError(f"[infer] safe not found in global_offsets: {safe}")
+                global_id_full.index_copy_(
+                    0, idx_local,
+                    (idx_code.to(dtype=torch.int64) + off)
+                )
+
+                # keep contract for commitment_loss debugging (optional)
                 self.embed_ind_dict[skey] = {"ind": idx_code, "safe": safe}
 
             self.latent_size_sum = global_end
-            return key_id_full, cluster_id_full, dict(self._id2safe)
+            return key_id_full, cluster_id_full, global_id_full, dict(self._id2safe)
 
         # ------------------------------------------------------------------
         # 4) init_kmeans_final: init + dump then return
