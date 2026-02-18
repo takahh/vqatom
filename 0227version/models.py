@@ -505,6 +505,26 @@ class EquivariantThreeHopGINE(nn.Module):
             epoch,
             mode,
         )
+
+        if mode == "infer":
+            # vq.infer returns: (kid_full, cid_full, gid_full, id2safe)
+            if isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 4:
+                kid_full, cid_full, gid_full, id2safe = quantize_output
+                # IMPORTANT: return format expected by evaluate/run_infer_after_restore
+                # (they later do: kid, cid, gid, id2safe = ids)
+                ids = (kid_full, cid_full, gid_full, id2safe)
+                # The rest of your forward might expect (loss, ids, id2safe) or similar.
+                # If you already return (_, ids, _) in evaluate, keep that structure.
+                return None, ids, None
+
+            # Backward compat (older vq): (gid, cid, id2safe)
+            if isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 3:
+                gid_full, cid_full, id2safe = quantize_output
+                kid_full = gid_full
+                ids = (kid_full, cid_full, gid_full, id2safe)
+                return None, ids, None
+
+            raise TypeError(f"[model.forward] infer expected vq to return 4-tuple, got {type(quantize_output)}")
         # -------------------------
         # INFER: return token IDs
         # -------------------------
