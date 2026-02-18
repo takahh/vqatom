@@ -574,6 +574,18 @@ def run_infer_after_restore(
         state = ckpt
 
     _ensure_codebook_keys_if_possible(model, state)
+    strict = bool(conf.get("restore_strict", True))
+
+    try:
+        model.load_state_dict(state, strict=strict)
+    except RuntimeError as e:
+        print("\n[RESTORE ERROR]")
+        print(e)  # ここで Missing/Unexpected が全部出るはず
+        # さらに state の先頭キーも出す
+        if isinstance(state, dict):
+            ks = list(state.keys())
+            print("\n[state keys head]", ks[:50])
+        raise
 
     strict = bool(conf.get("restore_strict", True))
     model.load_state_dict(state, strict=strict)
