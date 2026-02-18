@@ -3419,6 +3419,37 @@ class VectorQuantize(nn.Module):
                         cluster_id_full[inds] = cid.to(device=encoder_outputs.device, dtype=torch.long)
 
                     return key_id_full, cluster_id_full, id2safe
+            # ---- tuple fallback ----
+            if isinstance(out, (tuple, list)):
+                # common older contract: (key_id_full, cluster_id_full)
+                if len(out) == 2 and hasattr(out[0], "numel") and hasattr(out[1], "numel"):
+                    key_id_full, cluster_id_full = out
+                    key_id_full = key_id_full.reshape(-1).long()
+                    cluster_id_full = cluster_id_full.reshape(-1).long()
+                    if key_id_full.numel() != cluster_id_full.numel():
+                        raise ValueError("[vq.forward] infer length mismatch (fallback tuple2)")
+
+                    # try to recover id2safe from codebook attributes
+                    id2safe = None
+                    cb = getattr(self, "_codebook", None)
+                    for name in ("id2safe", "kid2safe", "id2safe_map", "kid2safe_map"):
+                        if cb is not None and hasattr(cb, name):
+                            cand = getattr(cb, name)
+                            if isinstance(cand, dict) and len(cand) > 0:
+                                id2safe = cand
+                                break
+
+                    # try invert safe2kid if present
+                    if id2safe is None and cb is not None and hasattr(cb, "safe2kid"):
+                        s2k = getattr(cb, "safe2kid")
+                        if isinstance(s2k, dict) and len(s2k) > 0:
+                            id2safe = {int(v): str(k) for k, v in s2k.items()}
+
+                    if id2safe is None:
+                        # last resort: return empty mapping (often OK if caller doesn't use it)
+                        id2safe = {}
+
+                    return key_id_full, cluster_id_full, id2safe
 
             # If we reached here, we don't know how to interpret the old output.
             raise TypeError(
