@@ -3351,6 +3351,14 @@ class VectorQuantize(nn.Module):
                 epoch=epoch,
                 mode=mode,
             )
+            print("[infer] out:", type(out))
+            if isinstance(out, (tuple, list)):
+                print("[infer] out len:", len(out))
+                print("[infer] elem types:", [type(x) for x in out])
+                # 先頭要素が dict なら keys も出す
+                for i, x in enumerate(out[:3]):
+                    if isinstance(x, dict):
+                        print(f"[infer] out[{i}] dict keys head:", list(x.keys())[:30])
 
             # ------------------------------------------------------------
             # New contract: (key_id_full, cluster_id_full, id2safe)
