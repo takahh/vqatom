@@ -99,7 +99,8 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
 
         if mode == "infer":
             out = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
-
+            print("out")
+            print(out)
             # ----------------------------------------------------------
             # NEW canonical contract:
             # (key_id_full, cluster_id_full, global_id_full, id2safe)
