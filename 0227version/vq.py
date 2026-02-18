@@ -2139,9 +2139,15 @@ class EuclideanCodebook(nn.Module):
                 cluster_id_full.index_copy_(0, idx_local, idx_code.to(dtype=torch.int32))
 
                 # global_id = offset[safe] + cid
-                off = int(offsets.get(safe, -1))
-                if off < 0:
-                    raise RuntimeError(f"[infer] safe not found in global_offsets: {safe}")
+                off = offsets.get(safe, None)
+                if off is None:
+                    # unknown key for this checkpoint: mark as UNK and continue
+                    # (keep -1 in key_id/cluster_id/global_id)
+                    # optional: log once
+                    if logger is not None:
+                        logger.warning(f"[infer] unknown key not in ckpt/global_offsets: {safe} (skipped)")
+                    continue
+
                 global_id_full.index_copy_(
                     0, idx_local,
                     (idx_code.to(dtype=torch.int64) + off)
