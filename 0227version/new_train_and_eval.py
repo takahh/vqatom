@@ -561,8 +561,17 @@ def run_infer_after_restore(
     # 1) RESTORE
     # ----------------------------
     device = next(model.parameters()).device
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    if isinstance(ckpt, dict):
+        if "model" in ckpt:
+            state = ckpt["model"]
+        elif "state_dict" in ckpt:
+            state = ckpt["state_dict"]
+        else:
+            state = ckpt
+    else:
+        state = ckpt
 
     _ensure_codebook_keys_if_possible(model, state)
 
