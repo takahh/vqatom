@@ -99,36 +99,32 @@ def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=No
 
         if mode == "infer":
             out = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
-            print("out")
-            print(out)
-            # ----------------------------------------------------------
-            # NEW canonical contract:
+
+            # model returns: (loss=None, ids=(kid,cid,gid,id2safe), extra=None)
+            if not (isinstance(out, (tuple, list)) and len(out) >= 2):
+                raise TypeError(f"[evaluate] infer expects model to return tuple>=2, got {type(out)}")
+
+            ids = out[1]
+
+            # ids contract:
             # (key_id_full, cluster_id_full, global_id_full, id2safe)
-            # ----------------------------------------------------------
-            if isinstance(out, (tuple, list)) and len(out) == 4:
-                key_id_full, cluster_id_full, global_id_full, id2safe = out
-
-            # backward compat (very old checkpoints)
-            elif isinstance(out, (tuple, list)) and len(out) == 3:
-                key_id_full, cluster_id_full, id2safe = out
+            if isinstance(ids, (tuple, list)) and len(ids) == 4:
+                key_id_full, cluster_id_full, global_id_full, id2safe = ids
+            elif isinstance(ids, (tuple, list)) and len(ids) == 3:
+                key_id_full, cluster_id_full, id2safe = ids
                 global_id_full = key_id_full  # fallback
-
             else:
                 raise TypeError(
-                    f"[evaluate] mode='infer' expects 4-tuple "
-                    f"(key_id_full, cluster_id_full, global_id_full, id2safe), got: {type(out)}"
+                    f"[evaluate] infer expects ids 4-tuple (kid,cid,gid,id2safe) (or legacy 3-tuple), "
+                    f"got ids type={type(ids)} len={len(ids) if isinstance(ids, (tuple, list)) else 'n/a'}"
                 )
 
-            # ---- HARDEN: force 1D long tensors ----
             key_id_full = torch.as_tensor(key_id_full).reshape(-1).long()
             cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1).long()
             global_id_full = torch.as_tensor(global_id_full).reshape(-1).long()
-
             if not isinstance(id2safe, dict):
                 id2safe = {}
 
-            # return format expected by run_infer_after_restore
-            # kid, cid, gid, id2safe = ids
             return None, (key_id_full, cluster_id_full, global_id_full, id2safe), None
 
 
