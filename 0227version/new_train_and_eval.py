@@ -575,6 +575,20 @@ def run_infer_after_restore(
 
     _ensure_codebook_keys_if_possible(model, state)
     strict = bool(conf.get("restore_strict", True))
+    # drop non-essential tracking buffers (older ckpt compatibility)
+    DROP_PREFIXES = (
+        "vq._codebook.usage_ema_k_",
+        "vq._codebook.split_cd_k_",
+        "vq._codebook.ever_used_k_",
+        "vq._codebook.last_used_ep_k_",
+    )
+
+    if isinstance(state, dict):
+        n0 = len(state)
+        state = {k: v for k, v in state.items() if not any(k.startswith(p) for p in DROP_PREFIXES)}
+        n1 = len(state)
+        if n1 != n0:
+            print(f"[restore] dropped {n0 - n1} tracking keys from ckpt for compatibility")
 
     try:
         model.load_state_dict(state, strict=strict)
