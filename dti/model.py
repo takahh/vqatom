@@ -696,8 +696,19 @@ def main():
 
     # optimizer: only trainable params
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    base_lr = args.lr
+    lig_lr = args.lr * 0.01  # まずは1/10から
 
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": model.lig_enc.parameters(), "lr": lig_lr},
+            {"params": list(model.prot_enc.parameters()) +
+                       list(model.cross_attn.parameters()) +
+                       list(model.reg_head.parameters()),
+             "lr": base_lr},
+        ],
+        weight_decay=args.weight_decay,
+    )
     best = {"rmse": 1e9, "spearman": -1e9, "epoch": -1}
 
     # training loop
