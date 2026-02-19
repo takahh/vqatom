@@ -696,19 +696,38 @@ def main():
 
     # optimizer: only trainable params
     params = [p for p in model.parameters() if p.requires_grad]
+
+    def split_params_by_name(model, key_substrings):
+        key_substrings = [k.lower() for k in key_substrings]
+        lig_params, other_params = [], []
+        for n, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if any(k in n.lower() for k in key_substrings):
+                lig_params.append(p)
+            else:
+                other_params.append(p)
+        return lig_params, other_params
+
     base_lr = args.lr
-    lig_lr = args.lr * 0.01  # まずは1/10から
+    lig_lr = args.lr * 0.1  # まずは1/10
+
+    lig_params, other_params = split_params_by_name(
+        model,
+        key_substrings=["lig", "ligand", "mlm", "drug", "mol"]  # ここは状況で増減
+    )
+
+    print(f"lig_params={len(lig_params)}  other_params={len(other_params)}")
+    assert len(lig_params) > 0, "ligand側paramsが0。key_substringsかモデル命名を見直して"
 
     optimizer = torch.optim.AdamW(
         [
-            {"params": model.lig_enc.parameters(), "lr": lig_lr},
-            {"params": list(model.prot_enc.parameters()) +
-                       list(model.cross_attn.parameters()) +
-                       list(model.reg_head.parameters()),
-             "lr": base_lr},
+            {"params": lig_params, "lr": lig_lr},
+            {"params": other_params, "lr": base_lr},
         ],
         weight_decay=args.weight_decay,
     )
+
     best = {"rmse": 1e9, "spearman": -1e9, "epoch": -1}
 
     # training loop
