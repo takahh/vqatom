@@ -435,16 +435,30 @@ class CrossAttnDTIRegressor(nn.Module):
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        self.cross = nn.MultiheadAttention(
+        # bi-directional cross attention
+        # p <- attend(l)
+        self.cross_p_from_l = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads=cross_nhead,
+            dropout=dropout,
+            batch_first=True,
+        )
+        # l <- attend(p)
+        self.cross_l_from_p = nn.MultiheadAttention(
             embed_dim=d_model,
             num_heads=cross_nhead,
             dropout=dropout,
             batch_first=True,
         )
 
+        # Optional: light post fusion (stabilizes)
+        self.post_ln_p = nn.LayerNorm(d_model)
+        self.post_ln_l = nn.LayerNorm(d_model)
+
+        # Head now takes 2*d_model
         self.head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
+            nn.LayerNorm(2 * d_model),
+            nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
@@ -453,24 +467,51 @@ class CrossAttnDTIRegressor(nn.Module):
         self.lig_pad_id = self.lig.pad_id
 
     def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor) -> torch.Tensor:
+        """
+        p_input_ids: (B, Lp)
+        p_attn_mask: (B, Lp) 1=real 0=pad
+        l_ids      : (B, Ll)
+        """
+        # encoders
         p_h = self.prot(p_input_ids, p_attn_mask)  # (B, Lp, Hp)
         if self.p_proj is not None:
             p_h = self.p_proj(p_h)                 # (B, Lp, D)
 
         l_h = self.lig(l_ids)                      # (B, Ll, D)
 
+        # masks
+        prot_pad_mask = (p_attn_mask == 0)         # True at PAD (key_padding_mask expects True=ignore)
         lig_pad_mask = (l_ids == self.lig_pad_id)  # True at PAD
-        p2l, _ = self.cross(
+
+        # ---- p <- attend(l)
+        p_from_l, _ = self.cross_p_from_l(
             query=p_h,
             key=l_h,
             value=l_h,
-            key_padding_mask=lig_pad_mask,
+            key_padding_mask=lig_pad_mask,  # mask keys (ligand)
             need_weights=False,
         )
-        p_h = p_h + p2l  # residual
+        p_h = self.post_ln_p(p_h + p_from_l)
 
-        pooled = masked_mean_by_attn(p_h, p_attn_mask)  # (B, D)
-        y_hat = self.head(pooled).squeeze(-1)           # (B,)
+        # ---- l <- attend(p)
+        l_from_p, _ = self.cross_l_from_p(
+            query=l_h,
+            key=p_h,
+            value=p_h,
+            key_padding_mask=prot_pad_mask,  # mask keys (protein)
+            need_weights=False,
+        )
+        l_h = self.post_ln_l(l_h + l_from_p)
+
+        # pool both sides
+        p_pool = masked_mean_by_attn(p_h, p_attn_mask)  # (B, D)
+
+        # ligand has no attn_mask tensor; build one from PAD
+        l_attn_mask = (~lig_pad_mask).long()            # (B, Ll) 1=real 0=pad
+        l_pool = masked_mean_by_attn(l_h, l_attn_mask)  # (B, D)
+
+        fused = torch.cat([p_pool, l_pool], dim=-1)     # (B, 2D)
+        y_hat = self.head(fused).squeeze(-1)            # (B,)
         return y_hat
 
 
