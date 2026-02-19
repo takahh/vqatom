@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 End-to-end DTI regression (protein sequence only + ligand VQ-Atom tokens)
++ linear calibration (a,b) fit on a held-out calibration split from TRAIN,
+  then applied to VALID/TEST metrics (no leakage from VALID).
 
 - Protein: ESM-2 (Hugging Face transformers)
 - Ligand : pretrained MLM Transformer weights (loaded from --lig_ckpt)
@@ -13,6 +15,11 @@ CSV must contain:
   - seq      : protein amino-acid sequence (string)
   - lig_tok  : ligand token ids as space-separated integers (string)
   - y        : regression target (float) e.g., pKd/pKi/log-affinity
+
+Calibration:
+- Each epoch, fit linear calibration y ≈ a*y_pred + b on TRAIN-CALIB split only.
+- Report (and optionally checkpoint-select) calibrated RMSE on VALID/TEST.
+- Spearman is invariant to linear transform, so calibration won't change it (numerically tiny diffs only).
 
 IMPORTANT:
 - lig_tok MUST be token ids in the SAME global-id space as the vocab meta you use.
@@ -29,6 +36,7 @@ IMPORTANT:
 
 import os
 import json
+import math
 import random
 import argparse
 from dataclasses import dataclass
@@ -38,7 +46,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 
 from transformers import AutoTokenizer, EsmModel
 
@@ -60,6 +68,12 @@ def rmse(pred: np.ndarray, y: np.ndarray) -> float:
     pred = pred.astype(np.float64)
     y = y.astype(np.float64)
     return float(np.sqrt(np.mean((pred - y) ** 2)))
+
+
+def mae(pred: np.ndarray, y: np.ndarray) -> float:
+    pred = pred.astype(np.float64)
+    y = y.astype(np.float64)
+    return float(np.mean(np.abs(pred - y)))
 
 
 def _rankdata(x: np.ndarray) -> np.ndarray:
@@ -92,6 +106,43 @@ def spearmanr(pred: np.ndarray, y: np.ndarray) -> float:
     if denom < 1e-12:
         return 0.0
     return float((rp * ry).sum() / denom)
+
+
+def pearsonr(pred: np.ndarray, y: np.ndarray) -> float:
+    pred = pred.astype(np.float64)
+    y = y.astype(np.float64)
+    pred -= pred.mean()
+    y -= y.mean()
+    denom = float(np.sqrt((pred ** 2).sum()) * np.sqrt((y ** 2).sum()))
+    if denom < 1e-12:
+        return 0.0
+    return float((pred * y).sum() / denom)
+
+
+# -----------------------------
+# Calibration (no leakage)
+# -----------------------------
+def fit_linear_calibration(pred: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
+    """
+    Fit y ≈ a*pred + b by least squares on calibration split.
+    Returns (a, b). Safe if pred variance ~ 0.
+    """
+    pred = pred.astype(np.float64)
+    y = y.astype(np.float64)
+
+    vx = float(np.var(pred))
+    if vx < 1e-12:
+        return 0.0, float(np.mean(y))
+
+    # a = Cov(x,y) / Var(x)
+    cov = float(np.mean((pred - pred.mean()) * (y - y.mean())))
+    a = cov / vx
+    b = float(np.mean(y) - a * np.mean(pred))
+    return float(a), float(b)
+
+
+def apply_linear_calibration(pred: np.ndarray, a: float, b: float) -> np.ndarray:
+    return (a * pred + b).astype(np.float64)
 
 
 # -----------------------------
@@ -237,14 +288,9 @@ class PretrainedLigandEncoder(nn.Module):
     Loads ligand Transformer encoder weights from MLM ckpt (ckpt_path),
     but can source vocab meta from discretization ckpt (--vq_ckpt).
 
-    - If vq_ckpt_path is provided:
-        base_vocab/vocab_size/pad_id/mask_id are taken from vq_ckpt global_id_meta.
-      Else:
-        taken from MLM ckpt keys: base_vocab, vocab_size (legacy).
-
     Weight loading:
     - encoder weights: shape-safe partial load
-    - embedding tok.weight: overlap rows copied (min(mlm_vocab, target_vocab))
+    - embedding tok.weight: overlap rows copied
     """
     def __init__(
         self,
@@ -287,7 +333,6 @@ class PretrainedLigandEncoder(nn.Module):
         dim_ff = int(self.conf["dim_ff"])
         dropout = float(self.conf["dropout"])
 
-        # Embedding + Encoder
         self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -301,10 +346,8 @@ class PretrainedLigandEncoder(nn.Module):
         self.debug_index_check = bool(debug_index_check)
 
         # ---- Load weights (shape-safe), then handle tok.weight overlap copy
-        # 1) shape-safe partial load for everything that matches
         load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
 
-        # 2) overlap copy for embedding rows if MLM tok.weight exists
         mlm_tok_key = "tok.weight"
         if mlm_tok_key in self.state:
             w = self.state[mlm_tok_key]
@@ -336,30 +379,19 @@ class PretrainedLigandEncoder(nn.Module):
             with torch.no_grad():
                 li = l_ids.detach()
                 li_cpu = li.cpu() if li.is_cuda else li
-                if li_cpu.numel() > 0:
-                    mn = int(li_cpu.min().item())
-                    mx = int(li_cpu.max().item())
-                else:
-                    mn, mx = 0, -1
                 bad = ((li_cpu < 0) | (li_cpu >= self.tok.num_embeddings)).nonzero(as_tuple=False)
-                print(f"[lig] num_embeddings={self.tok.num_embeddings}  min_id={mn} max_id={mx}  bad_count={bad.size(0)}")
-                if bad.size(0) > 0:
+                if bad.numel() > 0:
                     b0 = bad[0].tolist()
                     v0 = int(li_cpu[b0[0], b0[1]].item())
-                    print(f"[lig] first_bad at (B={b0[0]}, pos={b0[1]}): id={v0}")
-                    raise RuntimeError("Ligand token id out of range for embedding")
+                    raise RuntimeError(f"Ligand token id out of range: id={v0}, num_embeddings={self.tok.num_embeddings}")
 
-        x = self.tok(l_ids)  # (B, Ll, D)
-        pad_mask = (l_ids == self.pad_id)  # True at PAD
+        x = self.tok(l_ids)                      # (B, Ll, D)
+        pad_mask = (l_ids == self.pad_id)        # True at PAD
         h = self.enc(x, src_key_padding_mask=pad_mask)  # (B, Ll, D)
         return h
 
 
 def masked_mean_by_attn(h: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
-    """
-    h: (B,L,D)
-    attn_mask: (B,L) 1=real, 0=pad
-    """
     m = attn_mask.float()
     denom = m.sum(dim=1).clamp(min=1.0)
     return (h * m.unsqueeze(-1)).sum(dim=1) / denom.unsqueeze(-1)
@@ -371,7 +403,6 @@ class ESMProteinEncoder(nn.Module):
         self.model_name = model_name
         self.esm = EsmModel.from_pretrained(model_name)
         self.hidden_size = int(self.esm.config.hidden_size)
-
         self.to(device)
 
         if not finetune:
@@ -444,10 +475,10 @@ class CrossAttnDTIRegressor(nn.Module):
 
 
 # -----------------------------
-# Train / Eval
+# Predict / Eval (raw + calibrated)
 # -----------------------------
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[float, float]:
+def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
     model.eval()
     preds = []
     ys = []
@@ -461,11 +492,25 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tupl
         ys.append(y.detach().cpu().numpy())
     pred = np.concatenate(preds, axis=0) if preds else np.array([], dtype=np.float64)
     yy = np.concatenate(ys, axis=0) if ys else np.array([], dtype=np.float64)
+    return pred, yy
+
+
+def eval_metrics(pred: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     if pred.size == 0:
-        return 0.0, 0.0
-    return rmse(pred, yy), spearmanr(pred, yy)
+        return {"rmse": 0.0, "mae": 0.0, "spearman": 0.0, "pearson": 0.0, "pred_mean": 0.0, "pred_std": 0.0}
+    return {
+        "rmse": rmse(pred, y),
+        "mae": mae(pred, y),
+        "spearman": spearmanr(pred, y),
+        "pearson": pearsonr(pred, y),
+        "pred_mean": float(np.mean(pred)),
+        "pred_std": float(np.std(pred)),
+    }
 
 
+# -----------------------------
+# Train
+# -----------------------------
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -507,13 +552,22 @@ def save_json(path: str, obj: dict):
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: PretrainedLigandEncoder, epoch: int, best: dict):
+def save_dti_checkpoint(
+    path: str,
+    model: nn.Module,
+    args: argparse.Namespace,
+    lig_enc: PretrainedLigandEncoder,
+    epoch: int,
+    best: dict,
+    calib: dict,
+):
     torch.save(
         {
             "epoch": epoch,
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
+            "calibration": calib,  # {"a":..., "b":..., "fit_on":"train_calib", "epoch":...}
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -547,15 +601,15 @@ def main():
     # ligand MLM weights ckpt
     ap.add_argument("--lig_ckpt", type=str, default="/vqatom/data/mlm_ep05.pt", help="Ligand MLM checkpoint (mlm_epXX.pt)")
 
-    # NEW: discretization ckpt (vocab meta source)
+    # discretization ckpt (vocab meta source)
     ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")
 
     # protein ESM-2
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Hugging Face model name for ESM-2")
     ap.add_argument("--finetune_esm", action="store_true", help="If set, allow gradients into ESM-2; otherwise frozen.")
 
-    # DTI ckpt (best.pt) for loading before eval/train
-    ap.add_argument("--dti_ckpt", type=str, default=None, help="Path to a trained DTI checkpoint (e.g., ./dti_out/best.pt). If set, load it before eval.")
+    # DTI ckpt for loading before eval/train
+    ap.add_argument("--dti_ckpt", type=str, default=None, help="Path to a trained DTI checkpoint (e.g., ./dti_out/best.pt). If set, load it before eval/train.")
 
     # io
     ap.add_argument("--out_dir", type=str, default="./dti_out")
@@ -565,8 +619,13 @@ def main():
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.1, help="Ligand LR multiplier (lig_lr = lr * lig_lr_mult)")
     ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
+
+    # calibration split
+    ap.add_argument("--calib_frac", type=float, default=0.1, help="Fraction of TRAIN held out for calibration (fit a,b).")
+    ap.add_argument("--calib_every", type=int, default=1, help="Fit calibration every N epochs (>=1).")
 
     # cross attn
     ap.add_argument("--cross_nhead", type=int, default=8)
@@ -576,17 +635,29 @@ def main():
     ap.add_argument("--finetune_lig", action="store_true")
 
     # debug
-    ap.add_argument("--lig_debug_index", action="store_true", help="Print ligand id range and crash early if out-of-range.")
+    ap.add_argument("--lig_debug_index", action="store_true", help="Crash early if ligand id out-of-range.")
 
     # loss
     ap.add_argument("--loss", type=str, default="huber", choices=["huber", "mse", "mae"])
     ap.add_argument("--huber_delta", type=float, default=1.0)
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
+    # scheduler
+    ap.add_argument("--plateau", action="store_true", help="Use ReduceLROnPlateau on VALID calibrated RMSE.")
+    ap.add_argument("--plateau_factor", type=float, default=0.5)
+    ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--min_lr", type=float, default=1e-6)
+
+    # selection criterion
+    ap.add_argument("--select_on", type=str, default="rmse_cal", choices=["rmse_raw", "rmse_cal"],
+                    help="Which VALID RMSE to use for best.pt selection.")
+
     args = ap.parse_args()
 
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
+    if not (0.0 <= args.calib_frac < 0.5):
+        raise ValueError("--calib_frac must be in [0, 0.5).")
 
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
@@ -635,15 +706,36 @@ def main():
         )
 
     train_loader = None
+    calib_loader = None
+    train_ds = None
+
     if not args.eval_only:
         train_ds = DTIDataset(args.train_csv)
+        n = len(train_ds)
+        idx = np.arange(n)
+        rng = np.random.default_rng(args.seed)
+        rng.shuffle(idx)
+
+        n_cal = int(round(n * args.calib_frac))
+        n_cal = max(0, min(n_cal, n - 1))  # keep at least 1 sample for train
+        cal_idx = idx[:n_cal]
+        tr_idx = idx[n_cal:]
+
         train_loader = DataLoader(
-            train_ds,
+            Subset(train_ds, tr_idx),
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
         )
+        calib_loader = DataLoader(
+            Subset(train_ds, cal_idx),
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+        )
+        print(f"[split] train={len(tr_idx)}  calib={len(cal_idx)}  valid={len(valid_ds)}")
 
     # protein encoder (ESM-2)
     prot_enc = ESMProteinEncoder(
@@ -661,6 +753,7 @@ def main():
     ).to(device)
 
     # optionally load DTI checkpoint before eval/train
+    loaded_calib = None
     if args.dti_ckpt is not None:
         ckpt_obj, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
         print(f"Loaded DTI checkpoint: {args.dti_ckpt}")
@@ -668,57 +761,64 @@ def main():
             print("  [warn] missing keys (up to 20):", missing[:20])
         if unexpected:
             print("  [warn] unexpected keys (up to 20):", unexpected[:20])
+        loaded_calib = ckpt_obj.get("calibration", None) if isinstance(ckpt_obj, dict) else None
+        if loaded_calib is not None:
+            print(f"Loaded calibration: a={loaded_calib.get('a')} b={loaded_calib.get('b')} (epoch={loaded_calib.get('epoch')})")
 
-    # eval-only mode
+    # eval-only mode (apply loaded calibration if exists)
     if args.eval_only:
-        va_rmse, va_spear = evaluate(model, valid_loader, device)
-        print(f"[VALID] RMSE={va_rmse:.4f}  Spearman={va_spear:.4f}")
+        pred_v, y_v = predict(model, valid_loader, device)
+        m_raw = eval_metrics(pred_v, y_v)
 
-        te_rmse, te_spear = None, None
+        if loaded_calib is not None and "a" in loaded_calib and "b" in loaded_calib:
+            a = float(loaded_calib["a"])
+            b = float(loaded_calib["b"])
+            pred_v_cal = apply_linear_calibration(pred_v, a, b)
+            m_cal = eval_metrics(pred_v_cal, y_v)
+            print(f"[VALID raw] RMSE={m_raw['rmse']:.4f}  Spearman={m_raw['spearman']:.4f}  Pearson={m_raw['pearson']:.4f}  MAE={m_raw['mae']:.4f}")
+            print(f"[VALID cal] RMSE={m_cal['rmse']:.4f}  (a={a:.4f}, b={b:.4f})")
+        else:
+            print(f"[VALID] RMSE={m_raw['rmse']:.4f}  Spearman={m_raw['spearman']:.4f}  Pearson={m_raw['pearson']:.4f}  MAE={m_raw['mae']:.4f}")
+
         if test_loader is not None:
-            te_rmse, te_spear = evaluate(model, test_loader, device)
-            print(f"[TEST ] RMSE={te_rmse:.4f}  Spearman={te_spear:.4f}")
+            pred_t, y_t = predict(model, test_loader, device)
+            mt_raw = eval_metrics(pred_t, y_t)
+            if loaded_calib is not None and "a" in loaded_calib and "b" in loaded_calib:
+                a = float(loaded_calib["a"])
+                b = float(loaded_calib["b"])
+                pred_t_cal = apply_linear_calibration(pred_t, a, b)
+                mt_cal = eval_metrics(pred_t_cal, y_t)
+                print(f"[TEST  raw] RMSE={mt_raw['rmse']:.4f}  Spearman={mt_raw['spearman']:.4f}  Pearson={mt_raw['pearson']:.4f}  MAE={mt_raw['mae']:.4f}")
+                print(f"[TEST  cal] RMSE={mt_cal['rmse']:.4f}  (a={a:.4f}, b={b:.4f})")
+            else:
+                print(f"[TEST ] RMSE={mt_raw['rmse']:.4f}  Spearman={mt_raw['spearman']:.4f}  Pearson={mt_raw['pearson']:.4f}  MAE={mt_raw['mae']:.4f}")
 
         summary = {
             "mode": "eval_only",
-            "valid": {"rmse": va_rmse, "spearman": va_spear, "csv": args.valid_csv},
-            "test": ({"rmse": te_rmse, "spearman": te_spear, "csv": args.test_csv} if test_loader is not None else None),
+            "valid_raw": m_raw,
+            "valid_csv": args.valid_csv,
+            "test_csv": args.test_csv,
             "dti_ckpt": args.dti_ckpt,
-            "lig_ckpt": args.lig_ckpt,
-            "vq_ckpt": args.vq_ckpt,
-            "esm_model": args.esm_model,
-            "finetune_esm": bool(args.finetune_esm),
-            "finetune_lig": bool(args.finetune_lig),
-            "seed": args.seed,
+            "calibration_loaded": loaded_calib,
         }
         save_json(os.path.join(args.out_dir, "eval_only.json"), summary)
         return
 
-    # optimizer: only trainable params
-    params = [p for p in model.parameters() if p.requires_grad]
+    # optimizer with LR split (now we can reference model.lig/model.prot directly)
+    base_lr = float(args.lr)
+    lig_lr = float(args.lr) * float(args.lig_lr_mult)
 
-    def split_params_by_name(model, key_substrings):
-        key_substrings = [k.lower() for k in key_substrings]
-        lig_params, other_params = [], []
-        for n, p in model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if any(k in n.lower() for k in key_substrings):
-                lig_params.append(p)
-            else:
-                other_params.append(p)
-        return lig_params, other_params
+    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
+    other_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if n.startswith("lig."):
+            continue
+        other_params.append(p)
 
-    base_lr = args.lr
-    lig_lr = args.lr * 0.1  # まずは1/10
-
-    lig_params, other_params = split_params_by_name(
-        model,
-        key_substrings=["lig", "ligand", "mlm", "drug", "mol"]  # ここは状況で増減
-    )
-
-    print(f"lig_params={len(lig_params)}  other_params={len(other_params)}")
-    assert len(lig_params) > 0, "ligand側paramsが0。key_substringsかモデル命名を見直して"
+    print(f"[opt] lig_lr={lig_lr:g} base_lr={base_lr:g}  lig_params={len(lig_params)} other_params={len(other_params)}")
+    assert len(other_params) > 0, "No trainable params outside ligand. Did you freeze everything?"
 
     optimizer = torch.optim.AdamW(
         [
@@ -728,7 +828,19 @@ def main():
         weight_decay=args.weight_decay,
     )
 
-    best = {"rmse": 1e9, "spearman": -1e9, "epoch": -1}
+    scheduler = None
+    if args.plateau:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=float(args.plateau_factor),
+            patience=int(args.plateau_patience),
+            min_lr=float(args.min_lr),
+        )
+
+    # best selection
+    best = {"rmse_raw": 1e9, "rmse_cal": 1e9, "spearman": -1e9, "epoch": -1}
+    calib_state = {"a": 1.0, "b": 0.0, "fit_on": "train_calib", "epoch": 0}
 
     # training loop
     for ep in range(1, args.epochs + 1):
@@ -736,20 +848,67 @@ def main():
             model, train_loader, optimizer, device,
             loss_type=args.loss, huber_delta=args.huber_delta, grad_clip=args.grad_clip
         )
-        va_rmse, va_spear = evaluate(model, valid_loader, device)
-        print(f"[ep {ep:03d}] train_loss={tr_loss:.4f}  val_RMSE={va_rmse:.4f}  val_Spearman={va_spear:.4f}")
 
-        if va_rmse < best["rmse"]:
-            best.update({"rmse": va_rmse, "spearman": va_spear, "epoch": ep})
+        # ---- fit calibration on TRAIN-CALIB every N epochs (or if calib split empty, keep identity)
+        if calib_loader is not None and len(calib_loader.dataset) > 0 and (ep % max(1, args.calib_every) == 0):
+            pred_c, y_c = predict(model, calib_loader, device)
+            a, b = fit_linear_calibration(pred_c, y_c)
+            calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
+        a = float(calib_state["a"])
+        b = float(calib_state["b"])
+
+        # ---- VALID metrics (raw + calibrated)
+        pred_v, y_v = predict(model, valid_loader, device)
+        m_raw = eval_metrics(pred_v, y_v)
+
+        pred_v_cal = apply_linear_calibration(pred_v, a, b)
+        m_cal = eval_metrics(pred_v_cal, y_v)
+
+        print(
+            f"[ep {ep:03d}] train_loss={tr_loss:.4f}  "
+            f"val_RMSE={m_raw['rmse']:.4f}  val_RMSE_cal={m_cal['rmse']:.4f}  "
+            f"val_Spearman={m_raw['spearman']:.4f}  "
+            f"(a={a:.4f}, b={b:.4f})"
+        )
+
+        # scheduler step on calibrated RMSE (recommended)
+        if scheduler is not None:
+            scheduler.step(m_cal["rmse"])
+
+        # selection
+        cur_key = "rmse_cal" if args.select_on == "rmse_cal" else "rmse_raw"
+        cur_val = float(m_cal["rmse"]) if cur_key == "rmse_cal" else float(m_raw["rmse"])
+        best_val = float(best[cur_key])
+
+        if cur_val < best_val:
+            best.update(
+                {
+                    "rmse_raw": float(m_raw["rmse"]),
+                    "rmse_cal": float(m_cal["rmse"]),
+                    "spearman": float(m_raw["spearman"]),
+                    "epoch": ep,
+                }
+            )
             save_path = os.path.join(args.out_dir, "best.pt")
-            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
+            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best, calib=calib_state)
             print("  saved:", save_path)
 
         last_path = os.path.join(args.out_dir, "last.pt")
-        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best)
+        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib=calib_state)
+
+        # optional TEST metrics (if provided) each epoch (can be slow; keep it light)
+        if test_loader is not None:
+            pred_t, y_t = predict(model, test_loader, device)
+            mt_raw = eval_metrics(pred_t, y_t)
+            mt_cal = eval_metrics(apply_linear_calibration(pred_t, a, b), y_t)
+            print(
+                f"         test_RMSE={mt_raw['rmse']:.4f}  test_RMSE_cal={mt_cal['rmse']:.4f}  "
+                f"test_Spearman={mt_raw['spearman']:.4f}"
+            )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
+    save_json(os.path.join(args.out_dir, "calibration.json"), calib_state)
 
 
 if __name__ == "__main__":
