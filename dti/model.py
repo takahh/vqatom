@@ -852,8 +852,19 @@ def main():
         # ---- fit calibration on TRAIN-CALIB every N epochs (or if calib split empty, keep identity)
         if calib_loader is not None and len(calib_loader.dataset) > 0 and (ep % max(1, args.calib_every) == 0):
             pred_c, y_c = predict(model, calib_loader, device)
-            a, b = fit_linear_calibration(pred_c, y_c)
+            # a, b = fit_linear_calibration(pred_c, y_c)
+            # calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
+
+            a_new, b_new = fit_linear_calibration(pred_c, y_c)
+
+            ema = 0.9
+            a_old = float(calib_state["a"])
+            b_old = float(calib_state["b"])
+            a = ema * a_old + (1 - ema) * float(a_new)
+            b = ema * b_old + (1 - ema) * float(b_new)
+
             calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
+
         a = float(calib_state["a"])
         b = float(calib_state["b"])
 
