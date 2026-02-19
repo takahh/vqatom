@@ -633,6 +633,13 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--llrd", action="store_true", help="Use layer-wise LR decay for ESM.")
+    ap.add_argument("--llrd_decay", type=float, default=0.95, help="LLRD decay per lower layer (e.g. 0.95).")
+    ap.add_argument("--esm_lr_mult", type=float, default=1.0, help="Overall multiplier for ESM LR vs base lr.")
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05,
+                    help="Clamp for bottom layers (as a fraction of ESM top lr).")
+    ap.add_argument("--freeze_esm_bottom", type=int, default=0,
+                    help="Freeze bottom N ESM encoder layers (0=no freeze).")
 
     # data
     ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only). Columns: seq, lig_tok, y")
@@ -861,13 +868,107 @@ def main():
     print(f"[opt] lig_lr={lig_lr:g} base_lr={base_lr:g}  lig_params={len(lig_params)} other_params={len(other_params)}")
     assert len(other_params) > 0, "No trainable params outside ligand. Did you freeze everything?"
 
-    optimizer = torch.optim.AdamW(
-        [
-            {"params": lig_params, "lr": lig_lr},
-            {"params": other_params, "lr": base_lr},
-        ],
-        weight_decay=args.weight_decay,
-    )
+    def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Namespace) -> torch.optim.Optimizer:
+        base_lr = float(args.lr)
+        lig_lr = base_lr * float(args.lig_lr_mult)
+
+        # ---- ligand params
+        lig_params = [p for p in model.lig.parameters() if p.requires_grad]
+
+        # ---- everything except ESM
+        non_esm_params = []
+        for n, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if n.startswith("lig."):
+                continue
+            if n.startswith("prot.esm."):
+                continue
+            non_esm_params.append(p)
+
+        param_groups = [
+            {"params": lig_params, "lr": lig_lr, "name": "lig"},
+            {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
+        ]
+
+        # ---- ESM LLRD
+        # prot.esm is HuggingFace EsmModel
+        # encoder layers are typically: model.prot.esm.encoder.layer.{i}
+        esm = model.prot.esm
+        top_lr = base_lr * float(args.esm_lr_mult)
+        decay = float(args.llrd_decay)
+        min_mult = float(args.esm_min_lr_mult)
+
+        # optionally freeze bottom N layers
+        if int(args.freeze_esm_bottom) > 0:
+            n_freeze = int(args.freeze_esm_bottom)
+            # try common names
+            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+                layers = esm.encoder.layer
+                for i in range(min(n_freeze, len(layers))):
+                    for p in layers[i].parameters():
+                        p.requires_grad = False
+            else:
+                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
+
+        if args.llrd and any(p.requires_grad for p in esm.parameters()):
+            # collect layers
+            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+                layers = list(esm.encoder.layer)
+                n_layers = len(layers)
+
+                # embeddings group (slightly smaller than bottom)
+                if hasattr(esm, "embeddings"):
+                    emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
+                    if emb_params:
+                        lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
+                        param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
+
+                # encoder layers: bottom -> top
+                for i, layer in enumerate(layers):
+                    layer_params = [p for p in layer.parameters() if p.requires_grad]
+                    if not layer_params:
+                        continue
+                    # i=0 bottom, i=n_layers-1 top
+                    depth_from_top = (n_layers - 1) - i
+                    lr_i = top_lr * (decay ** depth_from_top)
+                    lr_i = max(lr_i, top_lr * min_mult)
+                    param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
+
+                # pooler / lm_head 등이 있으면 여기 (EsmModel은 보통 pooler 없음)
+                other = []
+                for n, p in esm.named_parameters():
+                    if not p.requires_grad:
+                        continue
+                    # skip ones already in embeddings/layers by checking prefix
+                    if n.startswith("embeddings."):
+                        continue
+                    if n.startswith("encoder.layer."):
+                        continue
+                    other.append(p)
+                if other:
+                    param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
+            else:
+                print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
+                esm_params = [p for p in esm.parameters() if p.requires_grad]
+                if esm_params:
+                    param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+        else:
+            # no llrd: just one ESM group (if finetune_esm)
+            esm_params = [p for p in esm.parameters() if p.requires_grad]
+            if esm_params:
+                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+
+        # Print group summary
+        print("[opt groups]")
+        for g in param_groups:
+            nparam = sum(p.numel() for p in g["params"])
+            print(f"  - {g.get('name', 'group')}: lr={g['lr']:.3g}  params={len(g['params'])}  numel={nparam}")
+
+        opt = torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
+        return opt
+
+    optimizer = build_optimizer_with_llrd(model, args)
 
     scheduler = None
     if args.plateau:
