@@ -4,7 +4,8 @@
 End-to-end DTI regression (protein sequence only + ligand VQ-Atom tokens)
 
 - Protein: ESM-2 (Hugging Face transformers)
-- Ligand : pretrained MLM Transformer (loaded from --lig_ckpt)
+- Ligand : pretrained MLM Transformer weights (loaded from --lig_ckpt)
+          BUT vocab meta (base_vocab/vocab_size/PAD/MASK) can be sourced from discretization ckpt (--vq_ckpt)
 - Cross-attention: protein queries attend to ligand keys/values
 - Regression head: pooled protein -> affinity (scalar)
 
@@ -13,11 +14,17 @@ CSV must contain:
   - lig_tok  : ligand token ids as space-separated integers (string)
   - y        : regression target (float) e.g., pKd/pKi/log-affinity
 
-Notes:
-- lig_tok MUST already be VQ-Atom token ids in the same vocabulary as your ligand MLM pretrain.
-- PAD/MASK ids are taken from the ligand MLM checkpoint:
-    PAD = base_vocab + 0
-    MASK = base_vocab + 1
+IMPORTANT:
+- lig_tok MUST be token ids in the SAME global-id space as the vocab meta you use.
+  If you pass --vq_ckpt, PAD/MASK/vocab_size come from discretization global_id_meta.
+  If you do NOT pass --vq_ckpt, they come from ligand MLM ckpt (legacy behavior).
+
+- When vocab_size differs between MLM weights and discretization vocab meta:
+    * We do a SHAPE-SAFE partial load for transformer weights.
+    * Embedding tok.weight is copied for the overlapping rows [0:overlap).
+      Remaining rows stay randomly initialized.
+  This lets you run without index-out-of-range crashes, but note:
+    If MLM was trained under a different token-id space, semantic alignment is not guaranteed.
 """
 
 import os
@@ -33,7 +40,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
-# NEW: Hugging Face ESM-2
 from transformers import AutoTokenizer, EsmModel
 
 
@@ -69,7 +75,7 @@ def _rankdata(x: np.ndarray) -> np.ndarray:
             j += 1
         if j > i:
             avg = 0.5 * (i + j)
-            ranks[order[i : j + 1]] = avg
+            ranks[order[i: j + 1]] = avg
         i = j + 1
 
     return ranks + 1.0
@@ -82,7 +88,7 @@ def spearmanr(pred: np.ndarray, y: np.ndarray) -> float:
     ry = _rankdata(y)
     rp -= rp.mean()
     ry -= ry.mean()
-    denom = (np.sqrt((rp**2).sum()) * np.sqrt((ry**2).sum()))
+    denom = (np.sqrt((rp ** 2).sum()) * np.sqrt((ry ** 2).sum()))
     if denom < 1e-12:
         return 0.0
     return float((rp * ry).sum() / denom)
@@ -93,7 +99,6 @@ def spearmanr(pred: np.ndarray, y: np.ndarray) -> float:
 # -----------------------------
 def read_csv_rows(path: str) -> List[Dict[str, str]]:
     import csv
-
     rows = []
     with open(path, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -124,7 +129,6 @@ class DTIDataset(Dataset):
         for r in rows:
             if "seq" not in r or "lig_tok" not in r or "y" not in r:
                 raise KeyError("CSV must contain columns: seq, lig_tok, y")
-
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
             y = float(r["y"])
@@ -137,7 +141,7 @@ class DTIDataset(Dataset):
         seq, lig_str, y = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
-            "seq": seq,  # keep as string; tokenize in collate
+            "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y": torch.tensor(y, dtype=torch.float32),
         }
@@ -154,32 +158,75 @@ class Batch:
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
         return torch.empty((0, 0), dtype=torch.long)
-    max_len = max(int(x.numel()) for x in seqs)
+    max_len = max(int(x.numel()) for x in seqs) if seqs else 0
     out = torch.full((len(seqs), max_len), pad_value, dtype=seqs[0].dtype)
     for i, x in enumerate(seqs):
-        out[i, : x.numel()] = x
+        if x.numel() > 0:
+            out[i, : x.numel()] = x
     return out
 
 
 def collate_fn(samples: List[Dict[str, object]], esm_tokenizer, lig_pad: int) -> Batch:
-    # protein (tokenize here)
     seqs = [s["seq"] for s in samples]
     enc = esm_tokenizer(
         seqs,
         return_tensors="pt",
         padding=True,
-        truncation=True,  # keep True; optionally set max_length if you want
+        truncation=True,
     )
-    p_input_ids = enc["input_ids"].long()         # (B, Lp)
-    p_attn_mask = enc["attention_mask"].long()    # (B, Lp), 1=real, 0=pad
+    p_input_ids = enc["input_ids"].long()
+    p_attn_mask = enc["attention_mask"].long()
 
-    # ligand (pad int ids)
     l_ids = pad_1d([s["l_ids"] for s in samples], lig_pad)
-
-    # targets
     y = torch.stack([s["y"] for s in samples], dim=0)
-
     return Batch(p_input_ids=p_input_ids, p_attn_mask=p_attn_mask, l_ids=l_ids, y=y)
+
+
+# -----------------------------
+# Utilities: vocab meta + safe loading
+# -----------------------------
+def load_vocab_meta_from_vq_ckpt(vq_ckpt_path: str) -> dict:
+    vq = torch.load(vq_ckpt_path, map_location="cpu", weights_only=False)
+    if not (isinstance(vq, dict) and "global_id_meta" in vq):
+        raise RuntimeError("vq_ckpt must be a dict containing 'global_id_meta'")
+
+    gim = vq["global_id_meta"]
+    for k in ["global_vocab_size", "vocab_size", "pad_id", "mask_id"]:
+        if k not in gim:
+            raise RuntimeError(f"global_id_meta missing key: {k}")
+
+    return {
+        "base_vocab": int(gim["global_vocab_size"]),
+        "vocab_size": int(gim["vocab_size"]),
+        "pad_id": int(gim["pad_id"]),
+        "mask_id": int(gim["mask_id"]),
+    }
+
+
+def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = True):
+    cur = module.state_dict()
+    loadable = {}
+    skipped = []
+    for k, v in state.items():
+        if k not in cur:
+            skipped.append((k, "missing_in_model"))
+            continue
+        if cur[k].shape != v.shape:
+            skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
+            continue
+        loadable[k] = v
+
+    missing, unexpected = module.load_state_dict(loadable, strict=False)
+
+    if verbose:
+        if skipped:
+            print("[load_shape_safe] skipped (up to 20):", skipped[:20])
+        if unexpected:
+            print("[load_shape_safe] unexpected (up to 20):", unexpected[:20])
+        if missing:
+            print("[load_shape_safe] missing (up to 20):", missing[:20])
+
+    return missing, unexpected, skipped
 
 
 # -----------------------------
@@ -187,27 +234,52 @@ def collate_fn(samples: List[Dict[str, object]], esm_tokenizer, lig_pad: int) ->
 # -----------------------------
 class PretrainedLigandEncoder(nn.Module):
     """
-    Loads the ligand MLM encoder from a checkpoint produced by your MLM pretrain script.
+    Loads ligand Transformer encoder weights from MLM ckpt (ckpt_path),
+    but can source vocab meta from discretization ckpt (--vq_ckpt).
 
-    Expected checkpoint keys:
-      ckpt["model"] : state_dict of the MLM model (tok + enc + lm_head)
-      ckpt["config"]: args dict including d_model, nhead, layers, dim_ff, dropout
-      ckpt["base_vocab"], ckpt["vocab_size"]
+    - If vq_ckpt_path is provided:
+        base_vocab/vocab_size/pad_id/mask_id are taken from vq_ckpt global_id_meta.
+      Else:
+        taken from MLM ckpt keys: base_vocab, vocab_size (legacy).
+
+    Weight loading:
+    - encoder weights: shape-safe partial load
+    - embedding tok.weight: overlap rows copied (min(mlm_vocab, target_vocab))
     """
-    def __init__(self, ckpt_path: str, device: torch.device, finetune: bool = False):
+    def __init__(
+        self,
+        ckpt_path: str,
+        device: torch.device,
+        finetune: bool = False,
+        vq_ckpt_path: Optional[str] = None,
+        verbose_load: bool = True,
+        debug_index_check: bool = False,
+    ):
         super().__init__()
-        ckpt = torch.load(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
         if not (isinstance(ckpt, dict) and "model" in ckpt and "config" in ckpt):
             raise RuntimeError("Ligand checkpoint must be a dict containing at least keys: 'model', 'config'")
 
         self.state = ckpt["model"]
         self.conf = ckpt["config"]
-        self.base_vocab = int(ckpt["base_vocab"])
-        self.vocab_size = int(ckpt["vocab_size"])
-        # self.vocab_size = int(190000)
-        self.pad_id = self.base_vocab + 0
-        self.mask_id = self.base_vocab + 1
+
+        # ---- vocab meta
+        if vq_ckpt_path is not None:
+            vm = load_vocab_meta_from_vq_ckpt(vq_ckpt_path)
+            self.base_vocab = int(vm["base_vocab"])
+            self.vocab_size = int(vm["vocab_size"])
+            self.pad_id = int(vm["pad_id"])
+            self.mask_id = int(vm["mask_id"])
+            self.vocab_source = f"vq_ckpt:{vq_ckpt_path}"
+        else:
+            if "base_vocab" not in ckpt or "vocab_size" not in ckpt:
+                raise RuntimeError("Ligand MLM ckpt must contain base_vocab and vocab_size if --vq_ckpt is not provided")
+            self.base_vocab = int(ckpt["base_vocab"])
+            self.vocab_size = int(ckpt["vocab_size"])
+            self.pad_id = self.base_vocab + 0
+            self.mask_id = self.base_vocab + 1
+            self.vocab_source = f"mlm_ckpt:{ckpt_path}"
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
@@ -215,6 +287,7 @@ class PretrainedLigandEncoder(nn.Module):
         dim_ff = int(self.conf["dim_ff"])
         dropout = float(self.conf["dropout"])
 
+        # Embedding + Encoder
         self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -225,11 +298,25 @@ class PretrainedLigandEncoder(nn.Module):
         )
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
 
-        missing, unexpected = self.load_state_dict(self.state, strict=False)
-        if unexpected:
-            print("[ligand] load_state_dict unexpected keys (showing up to 10):", unexpected[:10])
-        if missing:
-            print("[ligand] load_state_dict missing keys (showing up to 10):", missing[:10])
+        self.debug_index_check = bool(debug_index_check)
+
+        # ---- Load weights (shape-safe), then handle tok.weight overlap copy
+        # 1) shape-safe partial load for everything that matches
+        load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
+
+        # 2) overlap copy for embedding rows if MLM tok.weight exists
+        mlm_tok_key = "tok.weight"
+        if mlm_tok_key in self.state:
+            w = self.state[mlm_tok_key]
+            if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
+                overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
+                if overlap > 0:
+                    with torch.no_grad():
+                        self.tok.weight[:overlap].copy_(w[:overlap])
+                if verbose_load:
+                    print(f"[ligand] tok.weight overlap-copied rows: {overlap} / {self.tok.weight.shape[0]}")
+            elif verbose_load:
+                print("[ligand] tok.weight exists but shape is unexpected; skipped overlap copy.")
 
         self.to(device)
 
@@ -245,25 +332,22 @@ class PretrainedLigandEncoder(nn.Module):
         return int(self.conf["d_model"])
 
     def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
-        # DEBUG: embedding index range check
-        with torch.no_grad():
-            li = l_ids.detach()
-            if li.is_cuda:
-                li_cpu = li.cpu()
-            else:
-                li_cpu = li
-
-            mn = int(li_cpu.min().item())
-            mx = int(li_cpu.max().item())
-            bad = ((li_cpu < 0) | (li_cpu >= self.tok.num_embeddings)).nonzero(as_tuple=False)
-
-            print(f"[lig] num_embeddings={self.tok.num_embeddings}  min_id={mn} max_id={mx}  bad_count={bad.size(0)}")
-            if bad.size(0) > 0:
-                b0 = bad[0].tolist()
-                v0 = int(li_cpu[b0[0], b0[1]].item())
-                print(f"[lig] first_bad at (B={b0[0]}, pos={b0[1]}): id={v0}")
-                # ここで強制停止（CUDAクラッシュ前に止める）
-                raise RuntimeError("Ligand token id out of range for embedding")
+        if self.debug_index_check:
+            with torch.no_grad():
+                li = l_ids.detach()
+                li_cpu = li.cpu() if li.is_cuda else li
+                if li_cpu.numel() > 0:
+                    mn = int(li_cpu.min().item())
+                    mx = int(li_cpu.max().item())
+                else:
+                    mn, mx = 0, -1
+                bad = ((li_cpu < 0) | (li_cpu >= self.tok.num_embeddings)).nonzero(as_tuple=False)
+                print(f"[lig] num_embeddings={self.tok.num_embeddings}  min_id={mn} max_id={mx}  bad_count={bad.size(0)}")
+                if bad.size(0) > 0:
+                    b0 = bad[0].tolist()
+                    v0 = int(li_cpu[b0[0], b0[1]].item())
+                    print(f"[lig] first_bad at (B={b0[0]}, pos={b0[1]}): id={v0}")
+                    raise RuntimeError("Ligand token id out of range for embedding")
 
         x = self.tok(l_ids)  # (B, Ll, D)
         pad_mask = (l_ids == self.pad_id)  # True at PAD
@@ -277,7 +361,7 @@ def masked_mean_by_attn(h: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tenso
     attn_mask: (B,L) 1=real, 0=pad
     """
     m = attn_mask.float()
-    denom = m.sum(dim=1).clamp(min=1.0)  # (B,)
+    denom = m.sum(dim=1).clamp(min=1.0)
     return (h * m.unsqueeze(-1)).sum(dim=1) / denom.unsqueeze(-1)
 
 
@@ -298,7 +382,6 @@ class ESMProteinEncoder(nn.Module):
             self.train()
 
     def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor) -> torch.Tensor:
-        # returns last_hidden_state: (B, Lp, H)
         out = self.esm(input_ids=p_input_ids, attention_mask=p_attn_mask)
         return out.last_hidden_state
 
@@ -315,7 +398,7 @@ class CrossAttnDTIRegressor(nn.Module):
         self.prot = protein_encoder
         self.lig = ligand_encoder
 
-        d_model = self.lig.d_model  # unify to ligand dim
+        d_model = self.lig.d_model
 
         self.p_proj = None
         if self.prot.hidden_size != d_model:
@@ -432,15 +515,18 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, l
             "args": vars(args),
             "best": best,
             "lig_config": lig_enc.conf,
+            "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
             "lig_vocab_size": lig_enc.vocab_size,
+            "lig_pad_id": lig_enc.pad_id,
+            "lig_mask_id": lig_enc.mask_id,
         },
         path,
     )
 
 
 def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
     state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
     missing, unexpected = model.load_state_dict(state, strict=False)
     model.to(device)
@@ -458,14 +544,17 @@ def main():
     ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV. Columns: seq, lig_tok, y")
     ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV to also evaluate (useful with --eval_only).")
 
-    # ligand MLM ckpt
+    # ligand MLM weights ckpt
     ap.add_argument("--lig_ckpt", type=str, default="/vqatom/data/mlm_ep05.pt", help="Ligand MLM checkpoint (mlm_epXX.pt)")
+
+    # NEW: discretization ckpt (vocab meta source)
+    ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")
 
     # protein ESM-2
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Hugging Face model name for ESM-2")
     ap.add_argument("--finetune_esm", action="store_true", help="If set, allow gradients into ESM-2; otherwise frozen.")
 
-    # DTI ckpt (best.pt) for loading before eval
+    # DTI ckpt (best.pt) for loading before eval/train
     ap.add_argument("--dti_ckpt", type=str, default=None, help="Path to a trained DTI checkpoint (e.g., ./dti_out/best.pt). If set, load it before eval.")
 
     # io
@@ -486,6 +575,9 @@ def main():
     # finetune ligand encoder or freeze
     ap.add_argument("--finetune_lig", action="store_true")
 
+    # debug
+    ap.add_argument("--lig_debug_index", action="store_true", help="Print ligand id range and crash early if out-of-range.")
+
     # loss
     ap.add_argument("--loss", type=str, default="huber", choices=["huber", "mse", "mae"])
     ap.add_argument("--huber_delta", type=float, default=1.0)
@@ -502,15 +594,24 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
     print("lig_ckpt:", args.lig_ckpt)
+    print("vq_ckpt :", args.vq_ckpt)
     print("esm_model:", args.esm_model)
 
-    # ESM tokenizer (CPUでOK。collateで呼ぶ)
+    # ESM tokenizer
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
     # ligand encoder first (to get lig_pad id)
-    lig_enc = PretrainedLigandEncoder(args.lig_ckpt, device=device, finetune=args.finetune_lig)
+    lig_enc = PretrainedLigandEncoder(
+        ckpt_path=args.lig_ckpt,
+        device=device,
+        finetune=args.finetune_lig,
+        vq_ckpt_path=args.vq_ckpt,
+        verbose_load=True,
+        debug_index_check=bool(args.lig_debug_index),
+    )
     lig_pad = lig_enc.pad_id
-    print(f"lig_vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
+    print(f"[ligand] vocab_source={lig_enc.vocab_source}")
+    print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
     # datasets/loaders
     valid_ds = DTIDataset(args.valid_csv)
@@ -573,6 +674,7 @@ def main():
         va_rmse, va_spear = evaluate(model, valid_loader, device)
         print(f"[VALID] RMSE={va_rmse:.4f}  Spearman={va_spear:.4f}")
 
+        te_rmse, te_spear = None, None
         if test_loader is not None:
             te_rmse, te_spear = evaluate(model, test_loader, device)
             print(f"[TEST ] RMSE={te_rmse:.4f}  Spearman={te_spear:.4f}")
@@ -583,8 +685,10 @@ def main():
             "test": ({"rmse": te_rmse, "spearman": te_spear, "csv": args.test_csv} if test_loader is not None else None),
             "dti_ckpt": args.dti_ckpt,
             "lig_ckpt": args.lig_ckpt,
+            "vq_ckpt": args.vq_ckpt,
             "esm_model": args.esm_model,
             "finetune_esm": bool(args.finetune_esm),
+            "finetune_lig": bool(args.finetune_lig),
             "seed": args.seed,
         }
         save_json(os.path.join(args.out_dir, "eval_only.json"), summary)

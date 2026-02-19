@@ -15,7 +15,7 @@ import torch
 # Paths (user says path0/path1/path2 are correct)
 # =============================================================================
 path0 = "/Users/taka/Downloads/pretrain_no_id.tar.gz"      # tar.gz with attr_*.npy + smiles_*.txt
-path1 = "/Users/taka/Documents/infer_token_ids.pt"         # has d["cluster_id"] (global IDs)
+path1 = "/Users/taka/Downloads/infer_token_ids.pt"         # has d["cluster_id"] (global IDs)
 out_dir = "/Users/taka/Documents/pretrain_ragged"          # output directory
 os.makedirs(out_dir, exist_ok=True)
 
