@@ -2,36 +2,32 @@
 # -*- coding: utf-8 -*-
 """
 End-to-end DTI regression (protein sequence only + ligand VQ-Atom tokens)
++ optional distance-logits bias in cross-attention using .npz distance matrices
 + linear calibration (a,b) fit on a held-out calibration split from TRAIN,
   then applied to VALID/TEST metrics (no leakage from VALID).
 
+Distance bias (logits add):
+- CSV may contain: pdbid, dist_ok
+- If dist_ok==1, load {dist_dir}/{pdbid}.npz and read key "D" (float32, shape ~ (L_res, L_lig_atoms))
+- Add bias to cross-attention logits:
+    logits += beta * (-clamp(D, dist_cut)/sigma)
+- IMPORTANT (based on your data): len(seq)=349 and D rows=349 => D is residue-only.
+  ESM tokenization has [CLS] + residues + [EOS], so residue token positions are offset by +1.
+  Therefore we write the bias into protein positions [1 : 1+L_res] (p_off=1).
+
+Model:
 - Protein: ESM-2 (Hugging Face transformers)
 - Ligand : pretrained MLM Transformer weights (loaded from --lig_ckpt)
-          BUT vocab meta (base_vocab/vocab_size/PAD/MASK) can be sourced from discretization ckpt (--vq_ckpt)
-- Cross-attention: protein queries attend to ligand keys/values
-- Regression head: pooled protein -> affinity (scalar)
+          vocab meta can be sourced from discretization ckpt (--vq_ckpt)
+- Cross-attention:
+    p <- attend(l)   (distance bias applied here)
+    l <- attend(p)   (optional if --dist_bidir)
 
-CSV must contain:
-  - seq      : protein amino-acid sequence (string)
-  - lig_tok  : ligand token ids as space-separated integers (string)
-  - y        : regression target (float) e.g., pKd/pKi/log-affinity
-
-Calibration:
-- Each epoch, fit linear calibration y ≈ a*y_pred + b on TRAIN-CALIB split only.
-- Report (and optionally checkpoint-select) calibrated RMSE on VALID/TEST.
-- Spearman is invariant to linear transform, so calibration won't change it (numerically tiny diffs only).
-
-IMPORTANT:
+Notes:
 - lig_tok MUST be token ids in the SAME global-id space as the vocab meta you use.
-  If you pass --vq_ckpt, PAD/MASK/vocab_size come from discretization global_id_meta.
-  If you do NOT pass --vq_ckpt, they come from ligand MLM ckpt (legacy behavior).
-
 - When vocab_size differs between MLM weights and discretization vocab meta:
-    * We do a SHAPE-SAFE partial load for transformer weights.
+    * Shape-safe partial load for transformer weights.
     * Embedding tok.weight is copied for the overlapping rows [0:overlap).
-      Remaining rows stay randomly initialized.
-  This lets you run without index-out-of-range crashes, but note:
-    If MLM was trained under a different token-id space, semantic alignment is not guaranteed.
 """
 
 import os
@@ -134,7 +130,6 @@ def fit_linear_calibration(pred: np.ndarray, y: np.ndarray) -> Tuple[float, floa
     if vx < 1e-12:
         return 0.0, float(np.mean(y))
 
-    # a = Cov(x,y) / Var(x)
     cov = float(np.mean((pred - pred.mean()) * (y - y.mean())))
     a = cov / vx
     b = float(np.mean(y) - a * np.mean(pred))
@@ -174,6 +169,12 @@ def parse_lig_tokens(s: str) -> List[int]:
 # Dataset
 # -----------------------------
 class DTIDataset(Dataset):
+    """
+    CSV must contain:
+      - seq, lig_tok, y
+    Optional:
+      - pdbid, dist_ok (1 means distance matrix exists and should be used)
+    """
     def __init__(self, csv_path: str):
         rows = read_csv_rows(csv_path)
         self.samples = []
@@ -183,15 +184,19 @@ class DTIDataset(Dataset):
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
             y = float(r["y"])
-            self.samples.append((seq, lig, y))
+            pdbid = r.get("pdbid", "").strip()
+            dist_ok = int(float(r.get("dist_ok", "0")))
+            self.samples.append((pdbid, dist_ok, seq, lig, y))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y = self.samples[idx]
+        pdbid, dist_ok, seq, lig_str, y = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
+            "pdbid": pdbid,
+            "dist_ok": int(dist_ok),
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y": torch.tensor(y, dtype=torch.float32),
@@ -204,6 +209,8 @@ class Batch:
     p_attn_mask: torch.Tensor  # (B, Lp) 1=real 0=pad
     l_ids: torch.Tensor        # (B, Ll)
     y: torch.Tensor            # (B,)
+    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) or None
+    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) or None
 
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
@@ -217,20 +224,96 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     return out
 
 
-def collate_fn(samples: List[Dict[str, object]], esm_tokenizer, lig_pad: int) -> Batch:
+def _load_dist_npz(pdbid: str, dist_dir: str) -> Optional[np.ndarray]:
+    """
+    Loads {dist_dir}/{pdbid}.npz and returns z["D"] if present.
+    Expected D shape: (L_residue, L_ligand_atoms)
+    """
+    if not pdbid:
+        return None
+    path = os.path.join(dist_dir, f"{pdbid}.npz")
+    if not os.path.exists(path):
+        return None
+    z = np.load(path)
+    if "D" not in z.files:
+        return None
+    D = z["D"]
+    if not np.issubdtype(D.dtype, np.floating):
+        D = D.astype(np.float32)
+    return D
+
+
+def collate_fn(
+    samples: List[Dict[str, object]],
+    esm_tokenizer,
+    lig_pad: int,
+    use_dist_bias: bool = False,
+    dist_dir: str = "../data/dist_mat",
+    dist_sigma: float = 3.0,
+    dist_beta: float = 0.5,
+    dist_cut: float = 12.0,
+    dist_bidir: bool = False,
+) -> Batch:
+    # protein
     seqs = [s["seq"] for s in samples]
-    enc = esm_tokenizer(
-        seqs,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    )
+    enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
+    Lp = p_input_ids.size(1)
 
+    # ligand
     l_ids = pad_1d([s["l_ids"] for s in samples], lig_pad)
+    Ll = l_ids.size(1)
+
+    # target
     y = torch.stack([s["y"] for s in samples], dim=0)
-    return Batch(p_input_ids=p_input_ids, p_attn_mask=p_attn_mask, l_ids=l_ids, y=y)
+
+    dist_bias_pl = None
+    dist_bias_lp = None
+
+    if use_dist_bias:
+        B = len(samples)
+        dist_bias_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
+        if dist_bidir:
+            dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
+
+        for bi, s in enumerate(samples):
+            if int(s.get("dist_ok", 0)) != 1:
+                continue
+            pdbid = str(s.get("pdbid", ""))
+            D = _load_dist_npz(pdbid, dist_dir)
+            if D is None:
+                continue
+
+            # clamp distances (stabilize)
+            if dist_cut is not None and float(dist_cut) > 0:
+                D = np.minimum(D, float(dist_cut))
+
+            # ligand non-pad length for this sample
+            lig_len = int(s["l_ids"].numel())
+
+            # IMPORTANT: residue-only D rows, ESM has CLS/EOS => residue tokens start at offset 1
+            p_off = 1
+
+            max_r = min(int(D.shape[0]), max(0, Lp - p_off))
+            max_c = min(int(D.shape[1]), lig_len, Ll)
+            if max_r <= 0 or max_c <= 0:
+                continue
+
+            bias = (-torch.from_numpy(D[:max_r, :max_c]).float() / float(dist_sigma)) * float(dist_beta)
+            dist_bias_pl[bi, p_off:p_off + max_r, :max_c] = bias
+
+            if dist_bidir:
+                dist_bias_lp[bi, :max_c, p_off:p_off + max_r] = bias.transpose(0, 1)
+
+    return Batch(
+        p_input_ids=p_input_ids,
+        p_attn_mask=p_attn_mask,
+        l_ids=l_ids,
+        y=y,
+        dist_bias_pl=dist_bias_pl,
+        dist_bias_lp=dist_bias_lp,
+    )
 
 
 # -----------------------------
@@ -385,8 +468,8 @@ class PretrainedLigandEncoder(nn.Module):
                     v0 = int(li_cpu[b0[0], b0[1]].item())
                     raise RuntimeError(f"Ligand token id out of range: id={v0}, num_embeddings={self.tok.num_embeddings}")
 
-        x = self.tok(l_ids)                      # (B, Ll, D)
-        pad_mask = (l_ids == self.pad_id)        # True at PAD
+        x = self.tok(l_ids)                           # (B, Ll, D)
+        pad_mask = (l_ids == self.pad_id)             # True at PAD
         h = self.enc(x, src_key_padding_mask=pad_mask)  # (B, Ll, D)
         return h
 
@@ -417,6 +500,62 @@ class ESMProteinEncoder(nn.Module):
         return out.last_hidden_state
 
 
+class BiasedCrossAttention(nn.Module):
+    """
+    Cross-attention with additive logits bias (and key padding mask), implemented via SDPA.
+    The same logits_bias is broadcast to all heads.
+    """
+    def __init__(self, d_model: int, nhead: int, dropout: float):
+        super().__init__()
+        assert d_model % nhead == 0
+        self.nhead = nhead
+        self.d_head = d_model // nhead
+        self.dropout = float(dropout)
+
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.o_proj = nn.Linear(d_model, d_model)
+
+    def forward(
+        self,
+        q: torch.Tensor,  # (B, Lq, D)
+        k: torch.Tensor,  # (B, Lk, D)
+        v: torch.Tensor,  # (B, Lk, D)
+        key_padding_mask: Optional[torch.Tensor] = None,  # (B, Lk) True=PAD(ignore)
+        logits_bias: Optional[torch.Tensor] = None,       # (B, Lq, Lk) additive to logits
+    ) -> torch.Tensor:
+        B, Lq, D = q.shape
+        Lk = k.shape[1]
+
+        q = self.q_proj(q).view(B, Lq, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lq,Dh)
+        k = self.k_proj(k).view(B, Lk, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lk,Dh)
+        v = self.v_proj(v).view(B, Lk, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lk,Dh)
+
+        attn_mask = None  # (B,1 or H,Lq,Lk) additive
+
+        # key padding -> additive -inf
+        if key_padding_mask is not None:
+            pad = key_padding_mask.unsqueeze(1).unsqueeze(2)  # (B,1,1,Lk) bool
+            attn_mask = torch.zeros((B, 1, Lq, Lk), device=q.device, dtype=q.dtype)
+            attn_mask = attn_mask.masked_fill(pad, float("-inf"))
+
+        # logits bias -> additive
+        if logits_bias is not None:
+            bias = logits_bias.to(device=q.device, dtype=q.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
+            attn_mask = bias if attn_mask is None else (attn_mask + bias)
+
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=False,
+        )  # (B,H,Lq,Dh)
+
+        out = out.transpose(1, 2).contiguous().view(B, Lq, D)
+        return self.o_proj(out)
+
+
 class CrossAttnDTIRegressor(nn.Module):
     def __init__(
         self,
@@ -436,26 +575,12 @@ class CrossAttnDTIRegressor(nn.Module):
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
         # bi-directional cross attention
-        # p <- attend(l)
-        self.cross_p_from_l = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=cross_nhead,
-            dropout=dropout,
-            batch_first=True,
-        )
-        # l <- attend(p)
-        self.cross_l_from_p = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads=cross_nhead,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.cross_p_from_l = BiasedCrossAttention(d_model, cross_nhead, dropout)
+        self.cross_l_from_p = BiasedCrossAttention(d_model, cross_nhead, dropout)
 
-        # Optional: light post fusion (stabilizes)
         self.post_ln_p = nn.LayerNorm(d_model)
         self.post_ln_l = nn.LayerNorm(d_model)
 
-        # Head now takes 2*d_model
         self.head = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
@@ -466,12 +591,14 @@ class CrossAttnDTIRegressor(nn.Module):
 
         self.lig_pad_id = self.lig.pad_id
 
-    def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor) -> torch.Tensor:
-        """
-        p_input_ids: (B, Lp)
-        p_attn_mask: (B, Lp) 1=real 0=pad
-        l_ids      : (B, Ll)
-        """
+    def forward(
+        self,
+        p_input_ids: torch.Tensor,
+        p_attn_mask: torch.Tensor,
+        l_ids: torch.Tensor,
+        dist_bias_pl: Optional[torch.Tensor] = None,  # (B, Lp, Ll)
+        dist_bias_lp: Optional[torch.Tensor] = None,  # (B, Ll, Lp)
+    ) -> torch.Tensor:
         # encoders
         p_h = self.prot(p_input_ids, p_attn_mask)  # (B, Lp, Hp)
         if self.p_proj is not None:
@@ -480,34 +607,32 @@ class CrossAttnDTIRegressor(nn.Module):
         l_h = self.lig(l_ids)                      # (B, Ll, D)
 
         # masks
-        prot_pad_mask = (p_attn_mask == 0)         # True at PAD (key_padding_mask expects True=ignore)
-        lig_pad_mask = (l_ids == self.lig_pad_id)  # True at PAD
+        prot_pad_mask = (p_attn_mask == 0)         # (B, Lp) True at PAD (keys ignored)
+        lig_pad_mask = (l_ids == self.lig_pad_id)  # (B, Ll) True at PAD
 
         # ---- p <- attend(l)
-        p_from_l, _ = self.cross_p_from_l(
-            query=p_h,
-            key=l_h,
-            value=l_h,
-            key_padding_mask=lig_pad_mask,  # mask keys (ligand)
-            need_weights=False,
+        p_from_l = self.cross_p_from_l(
+            q=p_h,
+            k=l_h,
+            v=l_h,
+            key_padding_mask=lig_pad_mask,  # mask ligand keys
+            logits_bias=dist_bias_pl,       # additive logits bias
         )
         p_h = self.post_ln_p(p_h + p_from_l)
 
         # ---- l <- attend(p)
-        l_from_p, _ = self.cross_l_from_p(
-            query=l_h,
-            key=p_h,
-            value=p_h,
-            key_padding_mask=prot_pad_mask,  # mask keys (protein)
-            need_weights=False,
+        l_from_p = self.cross_l_from_p(
+            q=l_h,
+            k=p_h,
+            v=p_h,
+            key_padding_mask=prot_pad_mask,  # mask protein keys
+            logits_bias=dist_bias_lp,
         )
         l_h = self.post_ln_l(l_h + l_from_p)
 
         # pool both sides
         p_pool = masked_mean_by_attn(p_h, p_attn_mask)  # (B, D)
-
-        # ligand has no attn_mask tensor; build one from PAD
-        l_attn_mask = (~lig_pad_mask).long()            # (B, Ll) 1=real 0=pad
+        l_attn_mask = (~lig_pad_mask).long()            # (B, Ll)
         l_pool = masked_mean_by_attn(l_h, l_attn_mask)  # (B, D)
 
         fused = torch.cat([p_pool, l_pool], dim=-1)     # (B, 2D)
@@ -528,7 +653,11 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
         p_msk = batch.p_attn_mask.to(device)
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
-        y_hat = model(p_ids, p_msk, l)
+
+        db_pl = batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None
+        db_lp = batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None
+
+        y_hat = model(p_ids, p_msk, l, dist_bias_pl=db_pl, dist_bias_lp=db_lp)
         preds.append(y_hat.detach().cpu().numpy())
         ys.append(y.detach().cpu().numpy())
     pred = np.concatenate(preds, axis=0) if preds else np.array([], dtype=np.float64)
@@ -569,8 +698,11 @@ def train_one_epoch(
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
 
+        db_pl = batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None
+        db_lp = batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None
+
         optimizer.zero_grad(set_to_none=True)
-        y_hat = model(p_ids, p_msk, l)
+        y_hat = model(p_ids, p_msk, l, dist_bias_pl=db_pl, dist_bias_lp=db_lp)
 
         if loss_type == "mse":
             loss = F.mse_loss(y_hat, y)
@@ -642,8 +774,8 @@ def main():
                     help="Freeze bottom N ESM encoder layers (0=no freeze).")
 
     # data
-    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only). Columns: seq, lig_tok, y")
-    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV. Columns: seq, lig_tok, y")
+    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only). Columns: seq, lig_tok, y. Optional: pdbid, dist_ok")
+    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV. Columns: seq, lig_tok, y. Optional: pdbid, dist_ok")
     ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV to also evaluate (useful with --eval_only).")
 
     # ligand MLM weights ckpt
@@ -700,6 +832,14 @@ def main():
     ap.add_argument("--select_on", type=str, default="rmse_cal", choices=["rmse_raw", "rmse_cal"],
                     help="Which VALID RMSE to use for best.pt selection.")
 
+    # ---- distance bias (logits add) ----
+    ap.add_argument("--use_dist_bias", action="store_true", help="Add beta*(-D/sigma) to cross-attn logits when dist_ok=1.")
+    ap.add_argument("--dist_dir", type=str, default="../data/dist_mat", help="Dir for {PDBID}.npz distance matrices.")
+    ap.add_argument("--dist_sigma", type=float, default=3.0, help="Sigma (Å) for dist bias (used as -D/sigma).")
+    ap.add_argument("--dist_beta", type=float, default=0.5, help="Strength of dist bias added to logits.")
+    ap.add_argument("--dist_cut", type=float, default=12.0, help="Clamp distances at this Å before bias (stabilizes).")
+    ap.add_argument("--dist_bidir", action="store_true", help="Also apply bias for l<-p attention using D^T.")
+
     args = ap.parse_args()
 
     if not args.eval_only and not args.train_csv:
@@ -715,6 +855,7 @@ def main():
     print("lig_ckpt:", args.lig_ckpt)
     print("vq_ckpt :", args.vq_ckpt)
     print("esm_model:", args.esm_model)
+    print(f"[dist] use={args.use_dist_bias} dir={args.dist_dir} sigma={args.dist_sigma} beta={args.dist_beta} cut={args.dist_cut} bidir={args.dist_bidir}")
 
     # ESM tokenizer
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
@@ -732,6 +873,19 @@ def main():
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
+    # collate (shared)
+    coll = lambda xs: collate_fn(
+        xs,
+        esm_tokenizer=esm_tokenizer,
+        lig_pad=lig_pad,
+        use_dist_bias=bool(args.use_dist_bias),
+        dist_dir=str(args.dist_dir),
+        dist_sigma=float(args.dist_sigma),
+        dist_beta=float(args.dist_beta),
+        dist_cut=float(args.dist_cut),
+        dist_bidir=bool(args.dist_bidir),
+    )
+
     # datasets/loaders
     valid_ds = DTIDataset(args.valid_csv)
     valid_loader = DataLoader(
@@ -739,7 +893,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+        collate_fn=coll,
     )
 
     test_loader = None
@@ -750,12 +904,11 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=coll,
         )
 
     train_loader = None
     calib_loader = None
-    train_ds = None
 
     if not args.eval_only:
         train_ds = DTIDataset(args.train_csv)
@@ -774,14 +927,14 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=coll,
         )
         calib_loader = DataLoader(
             Subset(train_ds, cal_idx),
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=coll,
         )
         print(f"[split] train={len(tr_idx)}  calib={len(cal_idx)}  valid={len(valid_ds)}")
 
@@ -852,30 +1005,13 @@ def main():
         save_json(os.path.join(args.out_dir, "eval_only.json"), summary)
         return
 
-    # optimizer with LR split (now we can reference model.lig/model.prot directly)
-    base_lr = float(args.lr)
-    lig_lr = float(args.lr) * float(args.lig_lr_mult)
-
-    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
-    other_params = []
-    for n, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if n.startswith("lig."):
-            continue
-        other_params.append(p)
-
-    print(f"[opt] lig_lr={lig_lr:g} base_lr={base_lr:g}  lig_params={len(lig_params)} other_params={len(other_params)}")
-    assert len(other_params) > 0, "No trainable params outside ligand. Did you freeze everything?"
-
+    # optimizer with LR split + optional LLRD for ESM
     def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Namespace) -> torch.optim.Optimizer:
         base_lr = float(args.lr)
         lig_lr = base_lr * float(args.lig_lr_mult)
 
-        # ---- ligand params
         lig_params = [p for p in model.lig.parameters() if p.requires_grad]
 
-        # ---- everything except ESM
         non_esm_params = []
         for n, p in model.named_parameters():
             if not p.requires_grad:
@@ -891,9 +1027,6 @@ def main():
             {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
         ]
 
-        # ---- ESM LLRD
-        # prot.esm is HuggingFace EsmModel
-        # encoder layers are typically: model.prot.esm.encoder.layer.{i}
         esm = model.prot.esm
         top_lr = base_lr * float(args.esm_lr_mult)
         decay = float(args.llrd_decay)
@@ -902,7 +1035,6 @@ def main():
         # optionally freeze bottom N layers
         if int(args.freeze_esm_bottom) > 0:
             n_freeze = int(args.freeze_esm_bottom)
-            # try common names
             if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
                 layers = esm.encoder.layer
                 for i in range(min(n_freeze, len(layers))):
@@ -912,35 +1044,29 @@ def main():
                 print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
 
         if args.llrd and any(p.requires_grad for p in esm.parameters()):
-            # collect layers
             if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
                 layers = list(esm.encoder.layer)
                 n_layers = len(layers)
 
-                # embeddings group (slightly smaller than bottom)
                 if hasattr(esm, "embeddings"):
                     emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
                     if emb_params:
                         lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
                         param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
 
-                # encoder layers: bottom -> top
                 for i, layer in enumerate(layers):
                     layer_params = [p for p in layer.parameters() if p.requires_grad]
                     if not layer_params:
                         continue
-                    # i=0 bottom, i=n_layers-1 top
                     depth_from_top = (n_layers - 1) - i
                     lr_i = top_lr * (decay ** depth_from_top)
                     lr_i = max(lr_i, top_lr * min_mult)
                     param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
 
-                # pooler / lm_head 등이 있으면 여기 (EsmModel은 보통 pooler 없음)
                 other = []
                 for n, p in esm.named_parameters():
                     if not p.requires_grad:
                         continue
-                    # skip ones already in embeddings/layers by checking prefix
                     if n.startswith("embeddings."):
                         continue
                     if n.startswith("encoder.layer."):
@@ -954,12 +1080,10 @@ def main():
                 if esm_params:
                     param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
         else:
-            # no llrd: just one ESM group (if finetune_esm)
             esm_params = [p for p in esm.parameters() if p.requires_grad]
             if esm_params:
                 param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
 
-        # Print group summary
         print("[opt groups]")
         for g in param_groups:
             nparam = sum(p.numel() for p in g["params"])
@@ -991,12 +1115,9 @@ def main():
             loss_type=args.loss, huber_delta=args.huber_delta, grad_clip=args.grad_clip
         )
 
-        # ---- fit calibration on TRAIN-CALIB every N epochs (or if calib split empty, keep identity)
+        # ---- fit calibration on TRAIN-CALIB every N epochs
         if calib_loader is not None and len(calib_loader.dataset) > 0 and (ep % max(1, args.calib_every) == 0):
             pred_c, y_c = predict(model, calib_loader, device)
-            # a, b = fit_linear_calibration(pred_c, y_c)
-            # calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
-
             a_new, b_new = fit_linear_calibration(pred_c, y_c)
 
             ema = 0.9
@@ -1004,7 +1125,6 @@ def main():
             b_old = float(calib_state["b"])
             a = ema * a_old + (1 - ema) * float(a_new)
             b = ema * b_old + (1 - ema) * float(b_new)
-
             calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
 
         a = float(calib_state["a"])
@@ -1013,7 +1133,6 @@ def main():
         # ---- VALID metrics (raw + calibrated)
         pred_v, y_v = predict(model, valid_loader, device)
         m_raw = eval_metrics(pred_v, y_v)
-
         pred_v_cal = apply_linear_calibration(pred_v, a, b)
         m_cal = eval_metrics(pred_v_cal, y_v)
 
@@ -1024,7 +1143,6 @@ def main():
             f"(a={a:.4f}, b={b:.4f})"
         )
 
-        # scheduler step on calibrated RMSE (recommended)
         if scheduler is not None:
             scheduler.step(m_cal["rmse"])
 
@@ -1049,7 +1167,6 @@ def main():
         last_path = os.path.join(args.out_dir, "last.pt")
         save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib=calib_state)
 
-        # optional TEST metrics (if provided) each epoch (can be slow; keep it light)
         if test_loader is not None:
             pred_t, y_t = predict(model, test_loader, device)
             mt_raw = eval_metrics(pred_t, y_t)
