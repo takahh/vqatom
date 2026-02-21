@@ -1,33 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
 End-to-end DTI regression (protein sequence only + ligand VQ-Atom tokens)
-+ optional distance-logits bias in cross-attention using .npz distance matrices
-+ linear calibration (a,b) fit on a held-out calibration split from TRAIN,
-  then applied to VALID/TEST metrics (no leakage from VALID).
++ optional distance bias in cross-attention logits
++ optional auxiliary KL loss: guide ONLY the FIRST head (head0) of p<-l cross-attn
+  using a target distribution derived from distances.
 
-Distance bias (logits add):
-- CSV may contain: pdbid, dist_ok
-- If dist_ok==1, load {dist_dir}/{pdbid}.npz and read key "D" (float32, shape ~ (L_res, L_lig_atoms))
-- Add bias to cross-attention logits:
-    logits += beta * (-clamp(D, dist_cut)/sigma)
-- IMPORTANT (based on your data): len(seq)=349 and D rows=349 => D is residue-only.
-  ESM tokenization has [CLS] + residues + [EOS], so residue token positions are offset by +1.
-  Therefore we write the bias into protein positions [1 : 1+L_res] (p_off=1).
+CSV columns (minimum):
+  - seq      : protein amino-acid sequence (string)
+  - lig_tok  : ligand token ids as space-separated integers (string)
+  - y        : regression target (float)
 
-Model:
-- Protein: ESM-2 (Hugging Face transformers)
-- Ligand : pretrained MLM Transformer weights (loaded from --lig_ckpt)
-          vocab meta can be sourced from discretization ckpt (--vq_ckpt)
-- Cross-attention:
-    p <- attend(l)   (distance bias applied here)
-    l <- attend(p)   (optional if --dist_bidir)
+Optional CSV columns (for distance):
+  - pdbid    : PDB ID (string)
+  - dist_ok  : 1 to enable dist loading for this row, else 0
 
-Notes:
-- lig_tok MUST be token ids in the SAME global-id space as the vocab meta you use.
-- When vocab_size differs between MLM weights and discretization vocab meta:
-    * Shape-safe partial load for transformer weights.
-    * Embedding tok.weight is copied for the overlapping rows [0:overlap).
+Distance file:
+  {dist_dir}/{pdbid}.npz
+  must contain key: "D" (float32) shape (n_res, n_lig)
+  Example you showed: D (349, 31)
+
+Alignment:
+  - ESM tokenization includes special tokens; distance rows correspond to residues.
+  - We place residue row i into protein token position (i + p_off), with p_off=1.
+
+Outputs:
+  model.forward(...) -> Tuple[y_hat (B,), aux dict]
+  aux may include: "attn_kl_head0_p_from_l" (scalar tensor)
 """
 
 import os
@@ -76,7 +76,6 @@ def _rankdata(x: np.ndarray) -> np.ndarray:
     order = np.argsort(x, kind="mergesort")
     ranks = np.empty_like(order, dtype=np.float64)
     ranks[order] = np.arange(len(x), dtype=np.float64)
-
     sorted_x = x[order]
     i = 0
     while i < len(x):
@@ -87,7 +86,6 @@ def _rankdata(x: np.ndarray) -> np.ndarray:
             avg = 0.5 * (i + j)
             ranks[order[i: j + 1]] = avg
         i = j + 1
-
     return ranks + 1.0
 
 
@@ -119,17 +117,11 @@ def pearsonr(pred: np.ndarray, y: np.ndarray) -> float:
 # Calibration (no leakage)
 # -----------------------------
 def fit_linear_calibration(pred: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
-    """
-    Fit y ≈ a*pred + b by least squares on calibration split.
-    Returns (a, b). Safe if pred variance ~ 0.
-    """
     pred = pred.astype(np.float64)
     y = y.astype(np.float64)
-
     vx = float(np.var(pred))
     if vx < 1e-12:
         return 0.0, float(np.mean(y))
-
     cov = float(np.mean((pred - pred.mean()) * (y - y.mean())))
     a = cov / vx
     b = float(np.mean(y) - a * np.mean(pred))
@@ -159,7 +151,7 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
 # Ligand tokenizer/parser
 # -----------------------------
 def parse_lig_tokens(s: str) -> List[int]:
-    s = s.strip().replace(",", " ")
+    s = str(s).strip().replace(",", " ")
     if not s:
         return []
     return [int(x) for x in s.split()]
@@ -169,54 +161,59 @@ def parse_lig_tokens(s: str) -> List[int]:
 # Dataset
 # -----------------------------
 class DTIDataset(Dataset):
-    """
-    CSV must contain:
-      - seq, lig_tok, y
-    Optional:
-      - pdbid, dist_ok (1 means distance matrix exists and should be used)
-    """
     def __init__(self, csv_path: str):
         rows = read_csv_rows(csv_path)
         self.samples = []
         for r in rows:
             if "seq" not in r or "lig_tok" not in r or "y" not in r:
                 raise KeyError("CSV must contain columns: seq, lig_tok, y")
+
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
             y = float(r["y"])
+
+            # optional
             pdbid = r.get("pdbid", "").strip()
-            dist_ok = int(float(r.get("dist_ok", "0")))
-            self.samples.append((pdbid, dist_ok, seq, lig, y))
+            dist_ok = int(float(r.get("dist_ok", "0") or 0))
+
+            self.samples.append((seq, lig, y, pdbid, dist_ok))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        pdbid, dist_ok, seq, lig_str, y = self.samples[idx]
+        seq, lig_str, y, pdbid, dist_ok = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
-            "pdbid": pdbid,
-            "dist_ok": int(dist_ok),
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y": torch.tensor(y, dtype=torch.float32),
+            "pdbid": pdbid,
+            "dist_ok": dist_ok,
         }
 
 
 @dataclass
 class Batch:
-    p_input_ids: torch.Tensor  # (B, Lp)
-    p_attn_mask: torch.Tensor  # (B, Lp) 1=real 0=pad
-    l_ids: torch.Tensor        # (B, Ll)
-    y: torch.Tensor            # (B,)
-    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) or None
-    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) or None
+    p_input_ids: torch.Tensor        # (B, Lp)
+    p_attn_mask: torch.Tensor        # (B, Lp) 1=real 0=pad
+    l_ids: torch.Tensor              # (B, Ll)
+    y: torch.Tensor                  # (B,)
+
+    # distance-related (optional)
+    pdbid: List[str]
+    dist_ok: torch.Tensor            # (B,) int/long 0/1
+
+    dist_bias_pl: Optional[torch.Tensor]    # (B, Lp, Ll) float32 logits bias
+    dist_bias_lp: Optional[torch.Tensor]    # (B, Ll, Lp) float32 logits bias (if bidir)
+    dist_D_pl: Optional[torch.Tensor]       # (B, Lp, Ll) float32 raw distances (Å)
+    dist_mask_pl: Optional[torch.Tensor]    # (B, Lp, Ll) bool mask for valid dist entries
 
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
         return torch.empty((0, 0), dtype=torch.long)
-    max_len = max(int(x.numel()) for x in seqs) if seqs else 0
+    max_len = max(int(x.numel()) for x in seqs)
     out = torch.full((len(seqs), max_len), pad_value, dtype=seqs[0].dtype)
     for i, x in enumerate(seqs):
         if x.numel() > 0:
@@ -225,82 +222,92 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
 
 
 def _load_dist_npz(pdbid: str, dist_dir: str) -> Optional[np.ndarray]:
-    """
-    Loads {dist_dir}/{pdbid}.npz and returns z["D"] if present.
-    Expected D shape: (L_residue, L_ligand_atoms)
-    """
     if not pdbid:
         return None
     path = os.path.join(dist_dir, f"{pdbid}.npz")
-    if not os.path.exists(path):
+    if not os.path.isfile(path):
         return None
-    z = np.load(path)
-    if "D" not in z.files:
+    try:
+        z = np.load(path, allow_pickle=False)
+        if "D" not in z:
+            return None
+        D = z["D"]
+        if not isinstance(D, np.ndarray) or D.ndim != 2:
+            return None
+        return D.astype(np.float32, copy=False)
+    except Exception:
         return None
-    D = z["D"]
-    if not np.issubdtype(D.dtype, np.floating):
-        D = D.astype(np.float32)
-    return D
 
 
 def collate_fn(
     samples: List[Dict[str, object]],
     esm_tokenizer,
     lig_pad: int,
-    use_dist_bias: bool = False,
-    dist_dir: str = "../data/dist_mat",
-    dist_sigma: float = 3.0,
-    dist_beta: float = 0.5,
-    dist_cut: float = 12.0,
-    dist_bidir: bool = False,
+    use_dist_bias: bool,
+    dist_dir: str,
+    dist_sigma: float,
+    dist_beta: float,
+    dist_cut: float,
+    dist_bidir: bool,
 ) -> Batch:
-    # protein
-    seqs = [s["seq"] for s in samples]
-    enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
-    p_input_ids = enc["input_ids"].long()
-    p_attn_mask = enc["attention_mask"].long()
-    Lp = p_input_ids.size(1)
+    seqs = [str(s["seq"]) for s in samples]
+    enc = esm_tokenizer(
+        seqs,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+    )
+    p_input_ids = enc["input_ids"].long()         # (B, Lp)
+    p_attn_mask = enc["attention_mask"].long()    # (B, Lp)
 
-    # ligand
-    l_ids = pad_1d([s["l_ids"] for s in samples], lig_pad)
-    Ll = l_ids.size(1)
+    l_ids_list = [s["l_ids"] for s in samples]
+    l_ids = pad_1d(l_ids_list, lig_pad)           # (B, Ll)
 
-    # target
     y = torch.stack([s["y"] for s in samples], dim=0)
+
+    pdbid_list = [str(s.get("pdbid", "")) for s in samples]
+    dist_ok = torch.tensor([int(s.get("dist_ok", 0)) for s in samples], dtype=torch.long)
 
     dist_bias_pl = None
     dist_bias_lp = None
+    dist_D_pl = None
+    dist_mask_pl = None
 
     if use_dist_bias:
-        B = len(samples)
+        B, Lp = p_input_ids.shape
+        _, Ll = l_ids.shape
+
         dist_bias_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
+        dist_D_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
+        dist_mask_pl = torch.zeros((B, Lp, Ll), dtype=torch.bool)
+
         if dist_bidir:
             dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
 
-        for bi, s in enumerate(samples):
-            if int(s.get("dist_ok", 0)) != 1:
+        p_off = 1  # ESM token offset for residue alignment (common: 1 for [CLS])
+
+        for bi, pdbid in enumerate(pdbid_list):
+            if int(dist_ok[bi].item()) != 1:
                 continue
-            pdbid = str(s.get("pdbid", ""))
             D = _load_dist_npz(pdbid, dist_dir)
             if D is None:
                 continue
 
-            # clamp distances (stabilize)
             if dist_cut is not None and float(dist_cut) > 0:
                 D = np.minimum(D, float(dist_cut))
 
-            # ligand non-pad length for this sample
-            lig_len = int(s["l_ids"].numel())
-
-            # IMPORTANT: residue-only D rows, ESM has CLS/EOS => residue tokens start at offset 1
-            p_off = 1
-
+            lig_len = int(l_ids_list[bi].numel())
             max_r = min(int(D.shape[0]), max(0, Lp - p_off))
             max_c = min(int(D.shape[1]), lig_len, Ll)
             if max_r <= 0 or max_c <= 0:
                 continue
 
-            bias = (-torch.from_numpy(D[:max_r, :max_c]).float() / float(dist_sigma)) * float(dist_beta)
+            D_t = torch.from_numpy(D[:max_r, :max_c]).float()  # (R,C) Å
+            dist_D_pl[bi, p_off:p_off + max_r, :max_c] = D_t
+            dist_mask_pl[bi, p_off:p_off + max_r, :max_c] = True
+
+            # logits bias: (-D/sigma) * beta
+            bias = (-D_t / float(dist_sigma)) * float(dist_beta)
             dist_bias_pl[bi, p_off:p_off + max_r, :max_c] = bias
 
             if dist_bidir:
@@ -311,8 +318,12 @@ def collate_fn(
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
         y=y,
+        pdbid=pdbid_list,
+        dist_ok=dist_ok,
         dist_bias_pl=dist_bias_pl,
         dist_bias_lp=dist_bias_lp,
+        dist_D_pl=dist_D_pl,
+        dist_mask_pl=dist_mask_pl,
     )
 
 
@@ -323,12 +334,10 @@ def load_vocab_meta_from_vq_ckpt(vq_ckpt_path: str) -> dict:
     vq = torch.load(vq_ckpt_path, map_location="cpu", weights_only=False)
     if not (isinstance(vq, dict) and "global_id_meta" in vq):
         raise RuntimeError("vq_ckpt must be a dict containing 'global_id_meta'")
-
     gim = vq["global_id_meta"]
     for k in ["global_vocab_size", "vocab_size", "pad_id", "mask_id"]:
         if k not in gim:
             raise RuntimeError(f"global_id_meta missing key: {k}")
-
     return {
         "base_vocab": int(gim["global_vocab_size"]),
         "vocab_size": int(gim["vocab_size"]),
@@ -428,7 +437,6 @@ class PretrainedLigandEncoder(nn.Module):
 
         self.debug_index_check = bool(debug_index_check)
 
-        # ---- Load weights (shape-safe), then handle tok.weight overlap copy
         load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
 
         mlm_tok_key = "tok.weight"
@@ -468,8 +476,8 @@ class PretrainedLigandEncoder(nn.Module):
                     v0 = int(li_cpu[b0[0], b0[1]].item())
                     raise RuntimeError(f"Ligand token id out of range: id={v0}, num_embeddings={self.tok.num_embeddings}")
 
-        x = self.tok(l_ids)                           # (B, Ll, D)
-        pad_mask = (l_ids == self.pad_id)             # True at PAD
+        x = self.tok(l_ids)                      # (B, Ll, D)
+        pad_mask = (l_ids == self.pad_id)        # True at PAD
         h = self.enc(x, src_key_padding_mask=pad_mask)  # (B, Ll, D)
         return h
 
@@ -499,6 +507,7 @@ class ESMProteinEncoder(nn.Module):
         out = self.esm(input_ids=p_input_ids, attention_mask=p_attn_mask)
         return out.last_hidden_state
 
+
 class TinyFFNBlock(nn.Module):
     """
     Transformer-style FFN residual block (PreNorm).
@@ -522,14 +531,16 @@ class TinyFFNBlock(nn.Module):
         h = self.drop2(h)
         return x + h
 
+
 class BiasedCrossAttention(nn.Module):
     """
-    Cross-attention with additive logits bias (and key padding mask), implemented via SDPA.
-    The same logits_bias is broadcast to all heads.
+    Cross attention using SDPA (scaled_dot_product_attention) with optional logits bias.
+    Also can return head0 attention weights for auxiliary loss (manual compute for head0).
     """
     def __init__(self, d_model: int, nhead: int, dropout: float):
         super().__init__()
         assert d_model % nhead == 0
+        self.d_model = d_model
         self.nhead = nhead
         self.d_head = d_model // nhead
         self.dropout = float(dropout)
@@ -539,43 +550,76 @@ class BiasedCrossAttention(nn.Module):
         self.v_proj = nn.Linear(d_model, d_model)
         self.o_proj = nn.Linear(d_model, d_model)
 
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, L, D) -> (B, H, L, Dh)
+        B, L, D = x.shape
+        x = x.view(B, L, self.nhead, self.d_head).transpose(1, 2).contiguous()
+        return x
+
     def forward(
         self,
-        q: torch.Tensor,  # (B, Lq, D)
-        k: torch.Tensor,  # (B, Lk, D)
-        v: torch.Tensor,  # (B, Lk, D)
-        key_padding_mask: Optional[torch.Tensor] = None,  # (B, Lk) True=PAD(ignore)
-        logits_bias: Optional[torch.Tensor] = None,       # (B, Lq, Lk) additive to logits
-    ) -> torch.Tensor:
+        q: torch.Tensor,                   # (B, Lq, D)
+        k: torch.Tensor,                   # (B, Lk, D)
+        v: torch.Tensor,                   # (B, Lk, D)
+        key_padding_mask: Optional[torch.Tensor] = None,  # (B, Lk) True=ignore
+        logits_bias: Optional[torch.Tensor] = None,        # (B, Lq, Lk) additive to logits
+        return_attn_head0: bool = False,
+    ):
         B, Lq, D = q.shape
-        Lk = k.shape[1]
+        _, Lk, _ = k.shape
+        device = q.device
 
-        q = self.q_proj(q).view(B, Lq, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lq,Dh)
-        k = self.k_proj(k).view(B, Lk, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lk,Dh)
-        v = self.v_proj(v).view(B, Lk, self.nhead, self.d_head).transpose(1, 2)  # (B,H,Lk,Dh)
+        qh = self._split_heads(self.q_proj(q))  # (B,H,Lq,Dh)
+        kh = self._split_heads(self.k_proj(k))  # (B,H,Lk,Dh)
+        vh = self._split_heads(self.v_proj(v))  # (B,H,Lk,Dh)
 
-        attn_mask = None  # (B,1 or H,Lq,Lk) additive
+        # ---- optional manual head0 attn (for aux loss)
+        attn_head0 = None
+        if return_attn_head0:
+            q0 = qh[:, 0]  # (B, Lq, Dh)
+            k0 = kh[:, 0]  # (B, Lk, Dh)
+            logits0 = torch.matmul(q0, k0.transpose(-2, -1)) / math.sqrt(self.d_head)  # (B,Lq,Lk)
 
-        # key padding -> additive -inf
-        if key_padding_mask is not None:
-            pad = key_padding_mask.unsqueeze(1).unsqueeze(2)  # (B,1,1,Lk) bool
-            attn_mask = torch.zeros((B, 1, Lq, Lk), device=q.device, dtype=q.dtype)
-            attn_mask = attn_mask.masked_fill(pad, float("-inf"))
+            if key_padding_mask is not None:
+                logits0 = logits0.masked_fill(key_padding_mask.to(device=device).unsqueeze(1), float("-inf"))
 
-        # logits bias -> additive
+            if logits_bias is not None:
+                logits0 = logits0 + logits_bias.to(device=device, dtype=logits0.dtype)
+
+            attn_head0 = torch.softmax(logits0, dim=-1)  # (B,Lq,Lk)
+
+        # ---- build SDPA attn_mask with bias + padding
+        # SDPA attn_mask shape can be (B,H,Lq,Lk) boolean or float additive.
+        attn_mask = None
         if logits_bias is not None:
-            bias = logits_bias.to(device=q.device, dtype=q.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
-            attn_mask = bias if attn_mask is None else (attn_mask + bias)
+            # broadcast bias to heads
+            bias = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
+            attn_mask = bias
 
+        if key_padding_mask is not None:
+            kpm = key_padding_mask.to(device=device)  # (B, Lk) True=ignore
+            # boolean mask for SDPA needs shape broadcastable to (B,H,Lq,Lk)
+            kpm2 = kpm.unsqueeze(1).unsqueeze(1)  # (B,1,1,Lk)
+            if attn_mask is None:
+                attn_mask = kpm2
+            else:
+                # float mask already: set ignored keys to -inf
+                attn_mask = attn_mask.masked_fill(kpm2, float("-inf"))
+
+        # ---- SDPA
         out = F.scaled_dot_product_attention(
-            q, k, v,
+            qh, kh, vh,
             attn_mask=attn_mask,
             dropout_p=self.dropout if self.training else 0.0,
             is_causal=False,
         )  # (B,H,Lq,Dh)
 
         out = out.transpose(1, 2).contiguous().view(B, Lq, D)
-        return self.o_proj(out)
+        out = self.o_proj(out)
+
+        if return_attn_head0:
+            return out, attn_head0
+        return out
 
 
 class CrossAttnDTIRegressor(nn.Module):
@@ -585,6 +629,7 @@ class CrossAttnDTIRegressor(nn.Module):
         ligand_encoder: PretrainedLigandEncoder,
         cross_nhead: int,
         dropout: float,
+        attn_sigma: float = 3.0,    # for target exp(-D/sigma)
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -596,16 +641,20 @@ class CrossAttnDTIRegressor(nn.Module):
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        # bi-directional cross attention
-        self.cross_p_from_l = BiasedCrossAttention(d_model, cross_nhead, dropout)
-        self.cross_l_from_p = BiasedCrossAttention(d_model, cross_nhead, dropout)
+        # p <- attend(l)
+        self.cross_p_from_l = BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
+        # l <- attend(p)
+        self.cross_l_from_p = BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
 
+        # Add&Norm
         self.post_ln_p = nn.LayerNorm(d_model)
         self.post_ln_l = nn.LayerNorm(d_model)
-        # Transformer-style FFN blocks after cross-attn (both sides)
+
+        # FFN blocks (Transformer-ish)
         self.ffn_p = TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
         self.ffn_l = TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
 
+        # Head takes 2*d_model
         self.head = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
@@ -615,54 +664,99 @@ class CrossAttnDTIRegressor(nn.Module):
         )
 
         self.lig_pad_id = self.lig.pad_id
+        self.attn_sigma = float(attn_sigma)
 
     def forward(
         self,
-        p_input_ids: torch.Tensor,
-        p_attn_mask: torch.Tensor,
-        l_ids: torch.Tensor,
-        dist_bias_pl: Optional[torch.Tensor] = None,  # (B, Lp, Ll)
-        dist_bias_lp: Optional[torch.Tensor] = None,  # (B, Ll, Lp)
-    ) -> torch.Tensor:
+        p_input_ids: torch.Tensor,         # (B, Lp)
+        p_attn_mask: torch.Tensor,         # (B, Lp) 1=real 0=pad
+        l_ids: torch.Tensor,               # (B, Ll)
+        dist_bias_pl: Optional[torch.Tensor] = None,   # (B,Lp,Ll) logits bias for p<-l
+        dist_bias_lp: Optional[torch.Tensor] = None,   # (B,Ll,Lp) logits bias for l<-p (if bidir)
+        dist_D_pl: Optional[torch.Tensor] = None,      # (B,Lp,Ll) raw distances for aux
+        dist_mask_pl: Optional[torch.Tensor] = None,   # (B,Lp,Ll) bool
+        attn_lambda: float = 0.0,                      # aux weight (used in trainer; kept here for flexibility)
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Returns:
+          y_hat: (B,)
+          aux : dict, may include "attn_kl_head0_p_from_l"
+        """
+        aux: Dict[str, torch.Tensor] = {}
+
         # encoders
         p_h = self.prot(p_input_ids, p_attn_mask)  # (B, Lp, Hp)
         if self.p_proj is not None:
             p_h = self.p_proj(p_h)                 # (B, Lp, D)
-
         l_h = self.lig(l_ids)                      # (B, Ll, D)
 
         # masks
-        prot_pad_mask = (p_attn_mask == 0)         # (B, Lp) True at PAD (keys ignored)
+        prot_pad_mask = (p_attn_mask == 0)         # (B, Lp) True at PAD
         lig_pad_mask = (l_ids == self.lig_pad_id)  # (B, Ll) True at PAD
 
-        # ---- p <- attend(l)
-        p_from_l = self.cross_p_from_l(
-            q=p_h,
-            k=l_h,
-            v=l_h,
-            key_padding_mask=lig_pad_mask,  # mask ligand keys
-            logits_bias=dist_bias_pl,       # additive logits bias
+        # ---- p <- attend(l)  (return head0 attn for aux)
+        p_from_l, attn0 = self.cross_p_from_l(
+            q=p_h, k=l_h, v=l_h,
+            key_padding_mask=lig_pad_mask,
+            logits_bias=dist_bias_pl,
+            return_attn_head0=True,
         )
         p_h = self.post_ln_p(p_h + p_from_l)
         p_h = self.ffn_p(p_h)
+
+        # ---- optional AUX: KL distance-derived target vs head0 attention
+        # guide ONLY the head0 attention of p<-l
+        if (attn0 is not None) and (dist_D_pl is not None) and (dist_mask_pl is not None):
+            # dist_D_pl/mask are aligned to p tokens already (with p_off applied in collate)
+            D = dist_D_pl.to(device=p_h.device, dtype=p_h.dtype)         # (B,Lp,Ll)
+            M = dist_mask_pl.to(device=p_h.device)                       # (B,Lp,Ll) bool
+
+            # ensure ligand keys are not PAD
+            key_ok = (~lig_pad_mask).unsqueeze(1)                        # (B,1,Ll)
+            M = M & key_ok
+
+            # target unnormalized: exp(-D/sigma) on valid entries
+            T = torch.exp(-D / float(self.attn_sigma))
+            T = T.masked_fill(~M, 0.0)
+
+            # normalize over keys
+            Z = T.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            T = T / Z
+
+            # A: head0 attention (already softmax). Clip for logs.
+            A = attn0.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)
+
+            # only count queries (protein positions) that have any supervision
+            q_ok = (M.sum(dim=-1) > 0)  # (B,Lp) bool
+
+            # KL(T||A) per query: sum_j T_ij (log T_ij - log A_ij)
+            T_clip = T.clamp(min=1e-12)
+            kl = (T_clip * (torch.log(T_clip) - torch.log(A))).sum(dim=-1)  # (B,Lp)
+            kl = kl.masked_fill(~q_ok, 0.0)
+
+            denom = q_ok.float().sum().clamp(min=1.0)
+            attn_kl = kl.sum() / denom
+            aux["attn_kl_head0_p_from_l"] = attn_kl
+
         # ---- l <- attend(p)
         l_from_p = self.cross_l_from_p(
-            q=l_h,
-            k=p_h,
-            v=p_h,
-            key_padding_mask=prot_pad_mask,  # mask protein keys
+            q=l_h, k=p_h, v=p_h,
+            key_padding_mask=prot_pad_mask,
             logits_bias=dist_bias_lp,
+            return_attn_head0=False,
         )
         l_h = self.post_ln_l(l_h + l_from_p)
         l_h = self.ffn_l(l_h)
-        # pool both sides
-        p_pool = masked_mean_by_attn(p_h, p_attn_mask)  # (B, D)
-        l_attn_mask = (~lig_pad_mask).long()            # (B, Ll)
-        l_pool = masked_mean_by_attn(l_h, l_attn_mask)  # (B, D)
 
-        fused = torch.cat([p_pool, l_pool], dim=-1)     # (B, 2D)
+        # pool
+        p_pool = masked_mean_by_attn(p_h, p_attn_mask)  # (B,D)
+        l_attn_mask = (~lig_pad_mask).long()            # (B,Ll)
+        l_pool = masked_mean_by_attn(l_h, l_attn_mask)  # (B,D)
+
+        fused = torch.cat([p_pool, l_pool], dim=-1)     # (B,2D)
         y_hat = self.head(fused).squeeze(-1)            # (B,)
-        return y_hat
+
+        return y_hat, aux
 
 
 # -----------------------------
@@ -679,12 +773,19 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
 
-        db_pl = batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None
-        db_lp = batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None
+        out = model(
+            p_ids, p_msk, l,
+            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
+            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
+            dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
+            dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
+            attn_lambda=0.0,
+        )
+        y_hat = out[0] if isinstance(out, (tuple, list)) else out
 
-        y_hat = model(p_ids, p_msk, l, dist_bias_pl=db_pl, dist_bias_lp=db_lp)
         preds.append(y_hat.detach().cpu().numpy())
         ys.append(y.detach().cpu().numpy())
+
     pred = np.concatenate(preds, axis=0) if preds else np.array([], dtype=np.float64)
     yy = np.concatenate(ys, axis=0) if ys else np.array([], dtype=np.float64)
     return pred, yy
@@ -714,27 +815,41 @@ def train_one_epoch(
     loss_type: str = "huber",
     huber_delta: float = 1.0,
     grad_clip: float = 1.0,
-) -> float:
+    attn_lambda: float = 0.0,
+) -> Dict[str, float]:
     model.train()
     losses = []
+    base_losses = []
+    attn_losses = []
+
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
 
-        db_pl = batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None
-        db_lp = batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None
-
         optimizer.zero_grad(set_to_none=True)
-        y_hat = model(p_ids, p_msk, l, dist_bias_pl=db_pl, dist_bias_lp=db_lp)
+
+        y_hat, aux = model(
+            p_ids, p_msk, l,
+            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
+            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
+            dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
+            dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
+            attn_lambda=attn_lambda,
+        )
 
         if loss_type == "mse":
-            loss = F.mse_loss(y_hat, y)
+            base_loss = F.mse_loss(y_hat, y)
         elif loss_type == "mae":
-            loss = F.l1_loss(y_hat, y)
+            base_loss = F.l1_loss(y_hat, y)
         else:
-            loss = F.huber_loss(y_hat, y, delta=huber_delta)
+            base_loss = F.huber_loss(y_hat, y, delta=huber_delta)
+
+        loss = base_loss
+        attn_loss = aux.get("attn_kl_head0_p_from_l", None)
+        if attn_lambda > 0 and attn_loss is not None and torch.isfinite(attn_loss).all():
+            loss = loss + float(attn_lambda) * attn_loss
 
         loss.backward()
         if grad_clip is not None and grad_clip > 0:
@@ -742,7 +857,15 @@ def train_one_epoch(
         optimizer.step()
 
         losses.append(float(loss.detach().cpu().item()))
-    return float(sum(losses) / max(1, len(losses)))
+        base_losses.append(float(base_loss.detach().cpu().item()))
+        if attn_loss is not None:
+            attn_losses.append(float(attn_loss.detach().cpu().item()))
+
+    return {
+        "loss": float(sum(losses) / max(1, len(losses))),
+        "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
+        "attn_kl": float(sum(attn_losses) / max(1, len(attn_losses))) if attn_losses else 0.0,
+    }
 
 
 def save_json(path: str, obj: dict):
@@ -765,7 +888,7 @@ def save_dti_checkpoint(
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
-            "calibration": calib,  # {"a":..., "b":..., "fit_on":"train_calib", "epoch":...}
+            "calibration": calib,
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -786,61 +909,145 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
 
 
 # -----------------------------
+# Optimizer with LLRD (ESM)
+# -----------------------------
+def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Namespace) -> torch.optim.Optimizer:
+    base_lr = float(args.lr)
+    lig_lr = base_lr * float(args.lig_lr_mult)
+
+    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
+
+    non_esm_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if n.startswith("lig."):
+            continue
+        if n.startswith("prot.esm."):
+            continue
+        non_esm_params.append(p)
+
+    param_groups = [
+        {"params": lig_params, "lr": lig_lr, "name": "lig"},
+        {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
+    ]
+
+    esm = model.prot.esm
+    top_lr = base_lr * float(args.esm_lr_mult)
+    decay = float(args.llrd_decay)
+    min_mult = float(args.esm_min_lr_mult)
+
+    # freeze bottom N layers
+    if int(args.freeze_esm_bottom) > 0:
+        n_freeze = int(args.freeze_esm_bottom)
+        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+            layers = esm.encoder.layer
+            for i in range(min(n_freeze, len(layers))):
+                for p in layers[i].parameters():
+                    p.requires_grad = False
+        else:
+            print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
+
+    if args.llrd and any(p.requires_grad for p in esm.parameters()):
+        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+            layers = list(esm.encoder.layer)
+            n_layers = len(layers)
+
+            # embeddings group
+            if hasattr(esm, "embeddings"):
+                emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
+                if emb_params:
+                    lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
+                    param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
+
+            # encoder layers bottom->top
+            for i, layer in enumerate(layers):
+                layer_params = [p for p in layer.parameters() if p.requires_grad]
+                if not layer_params:
+                    continue
+                depth_from_top = (n_layers - 1) - i
+                lr_i = top_lr * (decay ** depth_from_top)
+                lr_i = max(lr_i, top_lr * min_mult)
+                param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
+
+            # other params
+            other = []
+            for n, p in esm.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if n.startswith("embeddings."):
+                    continue
+                if n.startswith("encoder.layer."):
+                    continue
+                other.append(p)
+            if other:
+                param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
+        else:
+            print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
+            esm_params = [p for p in esm.parameters() if p.requires_grad]
+            if esm_params:
+                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+    else:
+        esm_params = [p for p in esm.parameters() if p.requires_grad]
+        if esm_params:
+            param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+
+    print("[opt groups]")
+    for g in param_groups:
+        nparam = sum(p.numel() for p in g["params"])
+        print(f"  - {g.get('name','group')}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
+
+    opt = torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
+    return opt
+
+
+# -----------------------------
 # Main
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--llrd", action="store_true", help="Use layer-wise LR decay for ESM.")
-    ap.add_argument("--llrd_decay", type=float, default=0.95, help="LLRD decay per lower layer (e.g. 0.95).")
-    ap.add_argument("--esm_lr_mult", type=float, default=1.0, help="Overall multiplier for ESM LR vs base lr.")
-    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05,
-                    help="Clamp for bottom layers (as a fraction of ESM top lr).")
-    ap.add_argument("--freeze_esm_bottom", type=int, default=0,
-                    help="Freeze bottom N ESM encoder layers (0=no freeze).")
 
     # data
-    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only). Columns: seq, lig_tok, y. Optional: pdbid, dist_ok")
-    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV. Columns: seq, lig_tok, y. Optional: pdbid, dist_ok")
-    ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV to also evaluate (useful with --eval_only).")
+    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
+    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
+    ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
 
     # ligand MLM weights ckpt
-    ap.add_argument("--lig_ckpt", type=str, default="/vqatom/data/mlm_ep05.pt", help="Ligand MLM checkpoint (mlm_epXX.pt)")
+    ap.add_argument("--lig_ckpt", type=str, default="/vqatom/data/mlm_ep05.pt", help="Ligand MLM checkpoint")
 
     # discretization ckpt (vocab meta source)
     ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")
 
     # protein ESM-2
-    ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Hugging Face model name for ESM-2")
-    ap.add_argument("--finetune_esm", action="store_true", help="If set, allow gradients into ESM-2; otherwise frozen.")
+    ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
+    ap.add_argument("--finetune_esm", action="store_true")
 
-    # DTI ckpt for loading before eval/train
-    ap.add_argument("--dti_ckpt", type=str, default=None, help="Path to a trained DTI checkpoint (e.g., ./dti_out/best.pt). If set, load it before eval/train.")
+    # DTI ckpt
+    ap.add_argument("--dti_ckpt", type=str, default=None)
 
     # io
     ap.add_argument("--out_dir", type=str, default="./dti_out")
-    ap.add_argument("--eval_only", action="store_true", help="Skip training and only run evaluation.")
+    ap.add_argument("--eval_only", action="store_true")
 
     # train
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--lig_lr_mult", type=float, default=0.1, help="Ligand LR multiplier (lig_lr = lr * lig_lr_mult)")
+    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
     ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
 
-    # calibration split
-    ap.add_argument("--calib_frac", type=float, default=0.1, help="Fraction of TRAIN held out for calibration (fit a,b).")
-    ap.add_argument("--calib_every", type=int, default=1, help="Fit calibration every N epochs (>=1).")
+    # calibration
+    ap.add_argument("--calib_frac", type=float, default=0.1)
+    ap.add_argument("--calib_every", type=int, default=1)
 
     # cross attn
     ap.add_argument("--cross_nhead", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
 
-    # finetune ligand encoder or freeze
+    # finetune ligand
     ap.add_argument("--finetune_lig", action="store_true")
-
-    # debug
-    ap.add_argument("--lig_debug_index", action="store_true", help="Crash early if ligand id out-of-range.")
+    ap.add_argument("--lig_debug_index", action="store_true")
 
     # loss
     ap.add_argument("--loss", type=str, default="huber", choices=["huber", "mse", "mae"])
@@ -848,22 +1055,32 @@ def main():
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
     # scheduler
-    ap.add_argument("--plateau", action="store_true", help="Use ReduceLROnPlateau on VALID calibrated RMSE.")
+    ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
     ap.add_argument("--min_lr", type=float, default=1e-6)
 
     # selection criterion
-    ap.add_argument("--select_on", type=str, default="rmse_cal", choices=["rmse_raw", "rmse_cal"],
-                    help="Which VALID RMSE to use for best.pt selection.")
+    ap.add_argument("--select_on", type=str, default="rmse_cal", choices=["rmse_raw", "rmse_cal"])
 
-    # ---- distance bias (logits add) ----
-    ap.add_argument("--use_dist_bias", action="store_true", help="Add beta*(-D/sigma) to cross-attn logits when dist_ok=1.")
-    ap.add_argument("--dist_dir", type=str, default="../data/dist_mat", help="Dir for {PDBID}.npz distance matrices.")
-    ap.add_argument("--dist_sigma", type=float, default=3.0, help="Sigma (Å) for dist bias (used as -D/sigma).")
-    ap.add_argument("--dist_beta", type=float, default=0.5, help="Strength of dist bias added to logits.")
-    ap.add_argument("--dist_cut", type=float, default=12.0, help="Clamp distances at this Å before bias (stabilizes).")
-    ap.add_argument("--dist_bidir", action="store_true", help="Also apply bias for l<-p attention using D^T.")
+    # ESM LLRD
+    ap.add_argument("--llrd", action="store_true")
+    ap.add_argument("--llrd_decay", type=float, default=0.95)
+    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
+    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
+
+    # distance bias
+    ap.add_argument("--use_dist_bias", action="store_true")
+    ap.add_argument("--dist_dir", type=str, default="../data/dist_mat")
+    ap.add_argument("--dist_sigma", type=float, default=3.0)
+    ap.add_argument("--dist_beta", type=float, default=0.2)
+    ap.add_argument("--dist_cut", type=float, default=12.0)
+    ap.add_argument("--dist_bidir", action="store_true")
+
+    # aux attn KL (head0 only)
+    ap.add_argument("--attn_lambda", type=float, default=0.0, help="Aux KL weight for head0 attention guidance")
+    ap.add_argument("--attn_sigma", type=float, default=3.0, help="Sigma for target exp(-D/sigma) in KL loss")
 
     args = ap.parse_args()
 
@@ -880,12 +1097,13 @@ def main():
     print("lig_ckpt:", args.lig_ckpt)
     print("vq_ckpt :", args.vq_ckpt)
     print("esm_model:", args.esm_model)
-    print(f"[dist] use={args.use_dist_bias} dir={args.dist_dir} sigma={args.dist_sigma} beta={args.dist_beta} cut={args.dist_cut} bidir={args.dist_bidir}")
+    print("use_dist_bias:", bool(args.use_dist_bias), "dist_dir:", args.dist_dir)
+    print("attn_lambda:", float(args.attn_lambda), "attn_sigma:", float(args.attn_sigma))
 
     # ESM tokenizer
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
-    # ligand encoder first (to get lig_pad id)
+    # ligand encoder
     lig_enc = PretrainedLigandEncoder(
         ckpt_path=args.lig_ckpt,
         device=device,
@@ -898,19 +1116,6 @@ def main():
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
-    # collate (shared)
-    coll = lambda xs: collate_fn(
-        xs,
-        esm_tokenizer=esm_tokenizer,
-        lig_pad=lig_pad,
-        use_dist_bias=bool(args.use_dist_bias),
-        dist_dir=str(args.dist_dir),
-        dist_sigma=float(args.dist_sigma),
-        dist_beta=float(args.dist_beta),
-        dist_cut=float(args.dist_cut),
-        dist_bidir=bool(args.dist_bidir),
-    )
-
     # datasets/loaders
     valid_ds = DTIDataset(args.valid_csv)
     valid_loader = DataLoader(
@@ -918,7 +1123,17 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=coll,
+        collate_fn=lambda xs: collate_fn(
+            xs,
+            esm_tokenizer=esm_tokenizer,
+            lig_pad=lig_pad,
+            use_dist_bias=bool(args.use_dist_bias),
+            dist_dir=str(args.dist_dir),
+            dist_sigma=float(args.dist_sigma),
+            dist_beta=float(args.dist_beta),
+            dist_cut=float(args.dist_cut),
+            dist_bidir=bool(args.dist_bidir),
+        ),
     )
 
     test_loader = None
@@ -929,11 +1144,22 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=coll,
+            collate_fn=lambda xs: collate_fn(
+                xs,
+                esm_tokenizer=esm_tokenizer,
+                lig_pad=lig_pad,
+                use_dist_bias=bool(args.use_dist_bias),
+                dist_dir=str(args.dist_dir),
+                dist_sigma=float(args.dist_sigma),
+                dist_beta=float(args.dist_beta),
+                dist_cut=float(args.dist_cut),
+                dist_bidir=bool(args.dist_bidir),
+            ),
         )
 
     train_loader = None
     calib_loader = None
+    train_ds = None
 
     if not args.eval_only:
         train_ds = DTIDataset(args.train_csv)
@@ -943,7 +1169,7 @@ def main():
         rng.shuffle(idx)
 
         n_cal = int(round(n * args.calib_frac))
-        n_cal = max(0, min(n_cal, n - 1))  # keep at least 1 sample for train
+        n_cal = max(0, min(n_cal, n - 1))
         cal_idx = idx[:n_cal]
         tr_idx = idx[n_cal:]
 
@@ -952,18 +1178,38 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
-            collate_fn=coll,
+            collate_fn=lambda xs: collate_fn(
+                xs,
+                esm_tokenizer=esm_tokenizer,
+                lig_pad=lig_pad,
+                use_dist_bias=bool(args.use_dist_bias),
+                dist_dir=str(args.dist_dir),
+                dist_sigma=float(args.dist_sigma),
+                dist_beta=float(args.dist_beta),
+                dist_cut=float(args.dist_cut),
+                dist_bidir=bool(args.dist_bidir),
+            ),
         )
         calib_loader = DataLoader(
             Subset(train_ds, cal_idx),
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=coll,
+            collate_fn=lambda xs: collate_fn(
+                xs,
+                esm_tokenizer=esm_tokenizer,
+                lig_pad=lig_pad,
+                use_dist_bias=bool(args.use_dist_bias),
+                dist_dir=str(args.dist_dir),
+                dist_sigma=float(args.dist_sigma),
+                dist_beta=float(args.dist_beta),
+                dist_cut=float(args.dist_cut),
+                dist_bidir=bool(args.dist_bidir),
+            ),
         )
         print(f"[split] train={len(tr_idx)}  calib={len(cal_idx)}  valid={len(valid_ds)}")
 
-    # protein encoder (ESM-2)
+    # protein encoder
     prot_enc = ESMProteinEncoder(
         model_name=args.esm_model,
         device=device,
@@ -976,9 +1222,10 @@ def main():
         ligand_encoder=lig_enc,
         cross_nhead=args.cross_nhead,
         dropout=args.dropout,
+        attn_sigma=float(args.attn_sigma),
     ).to(device)
 
-    # optionally load DTI checkpoint before eval/train
+    # optionally load DTI checkpoint
     loaded_calib = None
     if args.dti_ckpt is not None:
         ckpt_obj, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
@@ -991,7 +1238,7 @@ def main():
         if loaded_calib is not None:
             print(f"Loaded calibration: a={loaded_calib.get('a')} b={loaded_calib.get('b')} (epoch={loaded_calib.get('epoch')})")
 
-    # eval-only mode (apply loaded calibration if exists)
+    # eval-only
     if args.eval_only:
         pred_v, y_v = predict(model, valid_loader, device)
         m_raw = eval_metrics(pred_v, y_v)
@@ -1030,93 +1277,7 @@ def main():
         save_json(os.path.join(args.out_dir, "eval_only.json"), summary)
         return
 
-    # optimizer with LR split + optional LLRD for ESM
-    def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Namespace) -> torch.optim.Optimizer:
-        base_lr = float(args.lr)
-        lig_lr = base_lr * float(args.lig_lr_mult)
-
-        lig_params = [p for p in model.lig.parameters() if p.requires_grad]
-
-        non_esm_params = []
-        for n, p in model.named_parameters():
-            if not p.requires_grad:
-                continue
-            if n.startswith("lig."):
-                continue
-            if n.startswith("prot.esm."):
-                continue
-            non_esm_params.append(p)
-
-        param_groups = [
-            {"params": lig_params, "lr": lig_lr, "name": "lig"},
-            {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
-        ]
-
-        esm = model.prot.esm
-        top_lr = base_lr * float(args.esm_lr_mult)
-        decay = float(args.llrd_decay)
-        min_mult = float(args.esm_min_lr_mult)
-
-        # optionally freeze bottom N layers
-        if int(args.freeze_esm_bottom) > 0:
-            n_freeze = int(args.freeze_esm_bottom)
-            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-                layers = esm.encoder.layer
-                for i in range(min(n_freeze, len(layers))):
-                    for p in layers[i].parameters():
-                        p.requires_grad = False
-            else:
-                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
-
-        if args.llrd and any(p.requires_grad for p in esm.parameters()):
-            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-                layers = list(esm.encoder.layer)
-                n_layers = len(layers)
-
-                if hasattr(esm, "embeddings"):
-                    emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
-                    if emb_params:
-                        lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
-                        param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
-
-                for i, layer in enumerate(layers):
-                    layer_params = [p for p in layer.parameters() if p.requires_grad]
-                    if not layer_params:
-                        continue
-                    depth_from_top = (n_layers - 1) - i
-                    lr_i = top_lr * (decay ** depth_from_top)
-                    lr_i = max(lr_i, top_lr * min_mult)
-                    param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
-
-                other = []
-                for n, p in esm.named_parameters():
-                    if not p.requires_grad:
-                        continue
-                    if n.startswith("embeddings."):
-                        continue
-                    if n.startswith("encoder.layer."):
-                        continue
-                    other.append(p)
-                if other:
-                    param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
-            else:
-                print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
-                esm_params = [p for p in esm.parameters() if p.requires_grad]
-                if esm_params:
-                    param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
-        else:
-            esm_params = [p for p in esm.parameters() if p.requires_grad]
-            if esm_params:
-                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
-
-        print("[opt groups]")
-        for g in param_groups:
-            nparam = sum(p.numel() for p in g["params"])
-            print(f"  - {g.get('name', 'group')}: lr={g['lr']:.3g}  params={len(g['params'])}  numel={nparam}")
-
-        opt = torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
-        return opt
-
+    # optimizer
     optimizer = build_optimizer_with_llrd(model, args)
 
     scheduler = None
@@ -1135,12 +1296,15 @@ def main():
 
     # training loop
     for ep in range(1, args.epochs + 1):
-        tr_loss = train_one_epoch(
+        tr_stat = train_one_epoch(
             model, train_loader, optimizer, device,
-            loss_type=args.loss, huber_delta=args.huber_delta, grad_clip=args.grad_clip
+            loss_type=args.loss,
+            huber_delta=args.huber_delta,
+            grad_clip=args.grad_clip,
+            attn_lambda=float(args.attn_lambda),
         )
 
-        # ---- fit calibration on TRAIN-CALIB every N epochs
+        # fit calibration
         if calib_loader is not None and len(calib_loader.dataset) > 0 and (ep % max(1, args.calib_every) == 0):
             pred_c, y_c = predict(model, calib_loader, device)
             a_new, b_new = fit_linear_calibration(pred_c, y_c)
@@ -1150,19 +1314,20 @@ def main():
             b_old = float(calib_state["b"])
             a = ema * a_old + (1 - ema) * float(a_new)
             b = ema * b_old + (1 - ema) * float(b_new)
+
             calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
 
         a = float(calib_state["a"])
         b = float(calib_state["b"])
 
-        # ---- VALID metrics (raw + calibrated)
+        # VALID metrics
         pred_v, y_v = predict(model, valid_loader, device)
         m_raw = eval_metrics(pred_v, y_v)
         pred_v_cal = apply_linear_calibration(pred_v, a, b)
         m_cal = eval_metrics(pred_v_cal, y_v)
 
         print(
-            f"[ep {ep:03d}] train_loss={tr_loss:.4f}  "
+            f"[ep {ep:03d}] train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f} attnKL={tr_stat['attn_kl']:.4f})  "
             f"val_RMSE={m_raw['rmse']:.4f}  val_RMSE_cal={m_cal['rmse']:.4f}  "
             f"val_Spearman={m_raw['spearman']:.4f}  "
             f"(a={a:.4f}, b={b:.4f})"
@@ -1171,7 +1336,6 @@ def main():
         if scheduler is not None:
             scheduler.step(m_cal["rmse"])
 
-        # selection
         cur_key = "rmse_cal" if args.select_on == "rmse_cal" else "rmse_raw"
         cur_val = float(m_cal["rmse"]) if cur_key == "rmse_cal" else float(m_raw["rmse"])
         best_val = float(best[cur_key])
