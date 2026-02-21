@@ -499,6 +499,28 @@ class ESMProteinEncoder(nn.Module):
         out = self.esm(input_ids=p_input_ids, attention_mask=p_attn_mask)
         return out.last_hidden_state
 
+class TinyFFNBlock(nn.Module):
+    """
+    Transformer-style FFN residual block (PreNorm).
+    x -> x + Dropout( W2( Dropout(GELU(W1(LN(x)))) ) )
+    """
+    def __init__(self, d_model: int, dropout: float = 0.1, mult: int = 4):
+        super().__init__()
+        self.ln = nn.LayerNorm(d_model)
+        self.fc1 = nn.Linear(d_model, mult * d_model)
+        self.act = nn.GELU()
+        self.drop1 = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(mult * d_model, d_model)
+        self.drop2 = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.ln(x)
+        h = self.fc1(h)
+        h = self.act(h)
+        h = self.drop1(h)
+        h = self.fc2(h)
+        h = self.drop2(h)
+        return x + h
 
 class BiasedCrossAttention(nn.Module):
     """
@@ -580,6 +602,9 @@ class CrossAttnDTIRegressor(nn.Module):
 
         self.post_ln_p = nn.LayerNorm(d_model)
         self.post_ln_l = nn.LayerNorm(d_model)
+        # Transformer-style FFN blocks after cross-attn (both sides)
+        self.ffn_p = TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
+        self.ffn_l = TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
 
         self.head = nn.Sequential(
             nn.LayerNorm(2 * d_model),
@@ -619,7 +644,7 @@ class CrossAttnDTIRegressor(nn.Module):
             logits_bias=dist_bias_pl,       # additive logits bias
         )
         p_h = self.post_ln_p(p_h + p_from_l)
-
+        p_h = self.ffn_p(p_h)
         # ---- l <- attend(p)
         l_from_p = self.cross_l_from_p(
             q=l_h,
@@ -629,7 +654,7 @@ class CrossAttnDTIRegressor(nn.Module):
             logits_bias=dist_bias_lp,
         )
         l_h = self.post_ln_l(l_h + l_from_p)
-
+        l_h = self.ffn_l(l_h)
         # pool both sides
         p_pool = masked_mean_by_attn(p_h, p_attn_mask)  # (B, D)
         l_attn_mask = (~lig_pad_mask).long()            # (B, Ll)
