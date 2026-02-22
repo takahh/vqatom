@@ -1314,6 +1314,12 @@ def main():
         a = float(calib_state["a"])
         b = float(calib_state["b"])
 
+        # ---- TRAIN metrics (post-epoch, like VALID)
+        pred_tr, y_tr = predict(model, train_loader, device)
+        tr_raw = eval_metrics(pred_tr, y_tr)
+        pred_tr_cal = apply_linear_calibration(pred_tr, a, b)
+        tr_cal = eval_metrics(pred_tr_cal, y_tr)
+
         # VALID metrics
         pred_v, y_v = predict(model, valid_loader, device)
         m_raw = eval_metrics(pred_v, y_v)
@@ -1321,7 +1327,10 @@ def main():
         m_cal = eval_metrics(pred_v_cal, y_v)
 
         print(
-            f"[ep {ep:03d}] train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f}  "
+            f"[ep {ep:03d}] "
+            f"train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f})  "
+            f"train_RMSE={tr_raw['rmse']:.4f}  train_RMSE_cal={tr_cal['rmse']:.4f}  "
+            f"train_Spearman={tr_raw['spearman']:.4f}  "
             f"val_RMSE={m_raw['rmse']:.4f}  val_RMSE_cal={m_cal['rmse']:.4f}  "
             f"val_Spearman={m_raw['spearman']:.4f}  "
             f"(a={a:.4f}, b={b:.4f})"
