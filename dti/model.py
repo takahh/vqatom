@@ -709,8 +709,8 @@ class CrossAttnDTIRegressor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        self.lig_pad_id = self.lig.pad_id,
-        self.attn_sigma = float(attn_sigma),
+        self.lig_pad_id = self.lig.pad_id
+        self.attn_sigma = float(attn_sigma)
 
 
 
