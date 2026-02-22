@@ -204,10 +204,6 @@ class Batch:
     pdbid: List[str]
     dist_ok: torch.Tensor            # (B,) int/long 0/1
 
-    dist_bias_pl: Optional[torch.Tensor]    # (B, Lp, Ll) float32 logits bias
-    dist_bias_lp: Optional[torch.Tensor]    # (B, Ll, Lp) float32 logits bias (if bidir)
-    dist_D_pl: Optional[torch.Tensor]       # (B, Lp, Ll) float32 raw distances (Å)
-    dist_mask_pl: Optional[torch.Tensor]    # (B, Lp, Ll) bool mask for valid dist entries
     dist_res_target_p: Optional[torch.Tensor]  # (B, Lp) float32 target prob over protein tokens
     dist_res_mask_p: Optional[torch.Tensor]    # (B, Lp) bool where target is defined (residue positions)
 
@@ -249,7 +245,7 @@ def collate_fn(
     samples: List[Dict[str, object]],
     esm_tokenizer,
     lig_pad: int,
-    use_dist_bias: bool,
+    use_dist_profile: bool,
     dist_dir: str,
     dist_sigma: float,
     dist_beta: float,
@@ -274,14 +270,10 @@ def collate_fn(
     pdbid_list = [str(s.get("pdbid", "")) for s in samples]
     dist_ok = torch.tensor([int(s.get("dist_ok", 0)) for s in samples], dtype=torch.long)
 
-    dist_bias_pl = None
-    dist_bias_lp = None
-    dist_D_pl = None
-    dist_mask_pl = None
     dist_res_target_p = None
     dist_res_mask_p = None
 
-    if use_dist_bias:
+    if use_dist_profile:
         B, Lp = p_input_ids.shape
         dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
         dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
@@ -320,46 +312,6 @@ def collate_fn(
             dist_res_target_p[bi, p_off:p_off+R] = t
             dist_res_mask_p[bi, p_off:p_off+R] = ok
 
-    if use_dist_bias:
-        B, Lp = p_input_ids.shape
-        _, Ll = l_ids.shape
-
-        dist_bias_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
-        dist_D_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
-        dist_mask_pl = torch.zeros((B, Lp, Ll), dtype=torch.bool)
-
-        if dist_bidir:
-            dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
-
-        p_off = 1  # ESM token offset for residue alignment (common: 1 for [CLS])
-
-        for bi, pdbid in enumerate(pdbid_list):
-            if int(dist_ok[bi].item()) != 1:
-                continue
-            D = _load_dist_npz(pdbid, dist_dir)
-            if D is None:
-                continue
-
-            if dist_cut is not None and float(dist_cut) > 0:
-                D = np.minimum(D, float(dist_cut))
-
-            lig_len = int(l_ids_list[bi].numel())
-            max_r = min(int(D.shape[0]), max(0, Lp - p_off))
-            max_c = min(int(D.shape[1]), lig_len, Ll)
-            if max_r <= 0 or max_c <= 0:
-                continue
-
-            D_t = torch.from_numpy(D[:max_r, :max_c]).float()  # (R,C) Å
-            dist_D_pl[bi, p_off:p_off + max_r, :max_c] = D_t
-            dist_mask_pl[bi, p_off:p_off + max_r, :max_c] = True
-
-            # logits bias: (-D/sigma) * beta
-            bias = (-D_t / float(dist_sigma)) * float(dist_beta)
-            dist_bias_pl[bi, p_off:p_off + max_r, :max_c] = bias
-
-            if dist_bidir:
-                dist_bias_lp[bi, :max_c, p_off:p_off + max_r] = bias.transpose(0, 1)
-
     return Batch(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
@@ -367,10 +319,6 @@ def collate_fn(
         y=y,
         pdbid=pdbid_list,
         dist_ok=dist_ok,
-        dist_bias_pl=dist_bias_pl,
-        dist_bias_lp=dist_bias_lp,
-        dist_D_pl=dist_D_pl,
-        dist_mask_pl=dist_mask_pl,
         dist_res_target_p=dist_res_target_p,   # 追加
         dist_res_mask_p=dist_res_mask_p,       # 追加
     )
@@ -723,9 +671,6 @@ class CrossAttnDTIRegressor(nn.Module):
         l_ids: torch.Tensor,               # (B, Ll)
         dist_bias_pl: Optional[torch.Tensor] = None,   # (B,Lp,Ll) logits bias for p<-l
         dist_bias_lp: Optional[torch.Tensor] = None,   # (B,Ll,Lp) logits bias for l<-p (if bidir)
-        dist_D_pl: Optional[torch.Tensor] = None,      # (B,Lp,Ll) raw distances for aux
-        dist_mask_pl: Optional[torch.Tensor] = None,   # (B,Lp,Ll) bool
-        attn_lambda: float = 0.0,                      # aux weight (used in trainer; kept here for flexibility)
         dist_res_target_p: Optional[torch.Tensor] = None,  # (B,Lp) prob
         dist_res_mask_p: Optional[torch.Tensor] = None,  # (B,Lp) bool
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -757,36 +702,36 @@ class CrossAttnDTIRegressor(nn.Module):
         p_h = self.ffn_p(p_h)
 
         # ---- optional AUX: KL distance-derived target vs head0 attention
-        # guide ONLY the head0 attention of p<-l
-        if (attn0 is not None) and (dist_D_pl is not None) and (dist_mask_pl is not None):
-            # dist_D_pl/mask are aligned to p tokens already (with p_off applied in collate)
-            D = dist_D_pl.to(device=p_h.device, dtype=p_h.dtype)         # (B,Lp,Ll)
-            M = dist_mask_pl.to(device=p_h.device)                       # (B,Lp,Ll) bool
-
-            # ensure ligand keys are not PAD
-            key_ok = (~lig_pad_mask).unsqueeze(1)                        # (B,1,Ll)
-            M = M & key_ok
-
-            # target unnormalized: exp(-D/sigma) on valid entries
-            T = torch.exp(-D / float(self.attn_sigma))
-            T = T.masked_fill(~M, 0.0)
-
-            # normalize over keys
-            Z = T.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-            T = T / Z
-
-            # A: head0 attention (already softmax). Clip for logs.
-            A = attn0.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)
-
-            # only count queries (protein positions) that have any supervision
-            q_ok = (M.sum(dim=-1) > 0)  # (B,Lp) bool
-
-            # KL(T||A) per query: sum_j T_ij (log T_ij - log A_ij)
-            T_clip = T.clamp(min=1e-12)
-            kl = (T_clip * (torch.log(T_clip) - torch.log(A))).sum(dim=-1)  # (B,Lp)
-            kl = kl.masked_fill(~q_ok, 0.0)
-
-            denom = q_ok.float().sum().clamp(min=1.0)
+        # # guide ONLY the head0 attention of p<-l
+        # if (attn0 is not None) and (dist_D_pl is not None) and (dist_mask_pl is not None):
+        #     # dist_D_pl/mask are aligned to p tokens already (with p_off applied in collate)
+        #     D = dist_D_pl.to(device=p_h.device, dtype=p_h.dtype)         # (B,Lp,Ll)
+        #     M = dist_mask_pl.to(device=p_h.device)                       # (B,Lp,Ll) bool
+        #
+        #     # ensure ligand keys are not PAD
+        #     key_ok = (~lig_pad_mask).unsqueeze(1)                        # (B,1,Ll)
+        #     M = M & key_ok
+        #
+        #     # target unnormalized: exp(-D/sigma) on valid entries
+        #     T = torch.exp(-D / float(self.attn_sigma))
+        #     T = T.masked_fill(~M, 0.0)
+        #
+        #     # normalize over keys
+        #     Z = T.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        #     T = T / Z
+        #
+        #     # A: head0 attention (already softmax). Clip for logs.
+        #     A = attn0.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)
+        #
+        #     # only count queries (protein positions) that have any supervision
+        #     q_ok = (M.sum(dim=-1) > 0)  # (B,Lp) bool
+        #
+        #     # KL(T||A) per query: sum_j T_ij (log T_ij - log A_ij)
+        #     T_clip = T.clamp(min=1e-12)
+        #     kl = (T_clip * (torch.log(T_clip) - torch.log(A))).sum(dim=-1)  # (B,Lp)
+        #     kl = kl.masked_fill(~q_ok, 0.0)
+        #
+        #     # denom = q_ok.float().sum().clamp(min=1.0)
 
         # ---- l <- attend(p)  (return head0 attn for residue-level aux)
         l_from_p, attn0_lp = self.cross_l_from_p(
@@ -854,11 +799,6 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
 
         out = model(
             p_ids, p_msk, l,
-            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
-            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
-            dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
-            dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
-            attn_lambda=0.0,
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
@@ -896,11 +836,11 @@ def train_one_epoch(
     loss_type: str = "huber",
     huber_delta: float = 1.0,
     grad_clip: float = 1.0,
-    attn_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
     losses = []
     base_losses = []
+    kls = []
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
@@ -912,11 +852,6 @@ def train_one_epoch(
 
         y_hat, aux = model(
             p_ids, p_msk, l,
-            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
-            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
-            dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
-            dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
-            attn_lambda=attn_lambda,
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
@@ -930,14 +865,16 @@ def train_one_epoch(
 
         loss = base_loss
         res_kl = aux.get("res_kl_head0_l_from_p", None)
-        if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
-            loss = loss + float(attn_lambda) * res_kl
+        # if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
+        #     loss = loss + float(attn_lambda) * res_kl
 
         loss.backward()
         if grad_clip is not None and grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
 
+        if res_kl is not None and torch.isfinite(res_kl).all():
+            kls.append(float(res_kl.detach().cpu().item()))
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
 
@@ -945,7 +882,7 @@ def train_one_epoch(
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
         "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
-    }
+        "res_kl": float(sum(kls) / max(1, len(kls))) if kls else 0.0}
 
 
 def save_json(path: str, obj: dict):
@@ -1151,7 +1088,7 @@ def main():
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
 
     # distance bias
-    ap.add_argument("--use_dist_bias", action="store_true")
+    ap.add_argument("--use_dist_profile", action="store_true")
     ap.add_argument("--dist_dir", type=str, default="../data/dist_mat")
     ap.add_argument("--dist_sigma", type=float, default=3.0)
     ap.add_argument("--dist_beta", type=float, default=0.2)
@@ -1177,7 +1114,7 @@ def main():
     print("lig_ckpt:", args.lig_ckpt)
     print("vq_ckpt :", args.vq_ckpt)
     print("esm_model:", args.esm_model)
-    print("use_dist_bias:", bool(args.use_dist_bias), "dist_dir:", args.dist_dir)
+    print("use_dist_profile:", bool(args.use_dist_profile), "dist_dir:", args.dist_dir)
     print("attn_lambda:", float(args.attn_lambda), "attn_sigma:", float(args.attn_sigma))
 
     # ESM tokenizer
@@ -1207,7 +1144,7 @@ def main():
             xs,
             esm_tokenizer=esm_tokenizer,
             lig_pad=lig_pad,
-            use_dist_bias=bool(args.use_dist_bias),
+            use_dist_profile=bool(args.use_dist_profile),
             dist_dir=str(args.dist_dir),
             dist_sigma=float(args.dist_sigma),
             dist_beta=float(args.dist_beta),
@@ -1228,7 +1165,7 @@ def main():
                 xs,
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_pad,
-                use_dist_bias=bool(args.use_dist_bias),
+                use_dist_profile=bool(args.use_dist_profile),
                 dist_dir=str(args.dist_dir),
                 dist_sigma=float(args.dist_sigma),
                 dist_beta=float(args.dist_beta),
@@ -1262,7 +1199,7 @@ def main():
                 xs,
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_pad,
-                use_dist_bias=bool(args.use_dist_bias),
+                use_dist_profile=bool(args.use_dist_profile),
                 dist_dir=str(args.dist_dir),
                 dist_sigma=float(args.dist_sigma),
                 dist_beta=float(args.dist_beta),
@@ -1279,7 +1216,7 @@ def main():
                 xs,
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_pad,
-                use_dist_bias=bool(args.use_dist_bias),
+                use_dist_profile=bool(args.use_dist_profile),
                 dist_dir=str(args.dist_dir),
                 dist_sigma=float(args.dist_sigma),
                 dist_beta=float(args.dist_beta),
@@ -1381,7 +1318,6 @@ def main():
             loss_type=args.loss,
             huber_delta=args.huber_delta,
             grad_clip=args.grad_clip,
-            attn_lambda=float(args.attn_lambda),
         )
 
         # fit calibration
