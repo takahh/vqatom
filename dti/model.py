@@ -173,23 +173,21 @@ class DTIDataset(Dataset):
             y = float(r["y"])
 
             # optional
+            # optional
             pdbid = r.get("pdbid", "").strip()
-            dist_ok = int(float(r.get("dist_ok", "0") or 0))
-
-            self.samples.append((seq, lig, y, pdbid, dist_ok))
+            self.samples.append((seq, lig, y, pdbid))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y, pdbid, dist_ok = self.samples[idx]
+        seq, lig_str, y, pdbid = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y": torch.tensor(y, dtype=torch.float32),
             "pdbid": pdbid,
-            "dist_ok": dist_ok,
         }
 
 
@@ -268,8 +266,16 @@ def collate_fn(
     y = torch.stack([s["y"] for s in samples], dim=0)
 
     pdbid_list = [str(s.get("pdbid", "")) for s in samples]
-    dist_ok = torch.tensor([int(s.get("dist_ok", 0)) for s in samples], dtype=torch.long)
 
+
+    pdbid_list = [str(s.get("pdbid", "")) for s in samples]
+    # dist_ok = torch.tensor([int(s.get("dist_ok", 0)) for s in samples], dtype=torch.long)
+
+    # dist_ok はCSVではなく「ファイルがあるか」で決める
+    dist_ok = torch.tensor(
+        [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
+        dtype=torch.long
+    )
     dist_res_target_p = None
     dist_res_mask_p = None
 
