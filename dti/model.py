@@ -371,6 +371,8 @@ def collate_fn(
         dist_bias_lp=dist_bias_lp,
         dist_D_pl=dist_D_pl,
         dist_mask_pl=dist_mask_pl,
+        dist_res_target_p=dist_res_target_p,   # 追加
+        dist_res_mask_p=dist_res_mask_p,       # 追加
     )
 
 
