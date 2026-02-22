@@ -866,8 +866,6 @@ def train_one_epoch(
             print("dist_res_mask_p is None (use_dist_profile off?)")
         else:
             msum = batch.dist_res_mask_p.sum().item()
-            print(f"dist_ok sum={batch.dist_ok.sum().item()} mask_sum={msum} "
-                  f"example_pdbid={batch.pdbid[0]}")
         if loss_type == "mse":
             base_loss = F.mse_loss(y_hat, y)
         elif loss_type == "mae":
