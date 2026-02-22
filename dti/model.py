@@ -901,7 +901,6 @@ def train_one_epoch(
     model.train()
     losses = []
     base_losses = []
-    attn_losses = []
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
@@ -930,7 +929,6 @@ def train_one_epoch(
             base_loss = F.huber_loss(y_hat, y, delta=huber_delta)
 
         loss = base_loss
-        attn_loss = aux.get("attn_kl_head0_p_from_l", None)
         res_kl = aux.get("res_kl_head0_l_from_p", None)
         if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
             loss = loss + float(attn_lambda) * res_kl
@@ -942,13 +940,10 @@ def train_one_epoch(
 
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
-        if attn_loss is not None:
-            attn_losses.append(float(attn_loss.detach().cpu().item()))
 
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
         "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
-        "attn_kl": float(sum(attn_losses) / max(1, len(attn_losses))) if attn_losses else 0.0,
     }
 
 
