@@ -696,11 +696,11 @@ class CrossAttnDTIRegressor(nn.Module):
         # stacked blocks
         for li in range(self.cross_layers):
             # p <- l
-            p_from_l, _attn0_pl = self.cross_p_from_l[li](
+            p_from_l = self.cross_p_from_l[li](
                 q=p_h, k=l_h, v=l_h,
                 key_padding_mask=lig_pad_mask,
                 logits_bias=dist_bias_pl,
-                return_attn_head0=False,   # いまは不要（p<-l にKL入れないなら）
+                return_attn_head0=False,
             )
             p_h = self.post_ln_p[li](p_h + p_from_l)
             p_h = self.ffn_p[li](p_h)
