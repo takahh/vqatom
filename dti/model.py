@@ -269,6 +269,8 @@ def collate_fn(
 
     # dist_ok はCSVではなく「ファイルがあるか」で決める
     pdbid_list = [str(s.get("pdbid", "") or "") for s in samples]
+    print(f"pdblist from samples {pdbid_list}")
+    print(pdbid_list)
 
     dist_ok = torch.tensor(
         [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
