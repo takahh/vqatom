@@ -790,10 +790,6 @@ def eval_metrics(pred: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         "pred_std": float(np.std(pred)),
     }
 
-
-# -----------------------------
-# Train
-# -----------------------------
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -802,7 +798,7 @@ def train_one_epoch(
     loss_type: str = "huber",
     huber_delta: float = 1.0,
     grad_clip: float = 1.0,
-    attn_lambda: float = 0.0,  # 追加
+    attn_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
     losses = []
@@ -822,11 +818,8 @@ def train_one_epoch(
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
-        if batch.dist_res_mask_p is None:
-            print("dist_res_mask_p is None (use_dist_profile off?)")
-        else:
-            msum = batch.dist_res_mask_p.sum().item()
 
+        # base loss
         if loss_type == "mse":
             base_loss = F.mse_loss(y_hat, y)
         elif loss_type == "mae":
@@ -834,9 +827,9 @@ def train_one_epoch(
         else:
             base_loss = F.huber_loss(y_hat, y, delta=huber_delta)
 
-        # ---- ALWAYS define loss
         loss = base_loss
 
+        # KL (layer0 head0) — choose which ones you actually use
         res_kl_lp = aux.get("res_kl_head0_l_from_p", None)
         res_kl_pl = aux.get("res_kl_head0_p_from_l", None)
 
@@ -850,28 +843,22 @@ def train_one_epoch(
             loss = loss + float(attn_lambda) * kl_sum
 
         loss.backward()
-
-        # ---- log KL: prefer lp
-        if res_kl_lp is not None and torch.isfinite(res_kl_lp).all():
-            kls.append(float(res_kl_lp.detach().cpu().item()))
-        elif res_kl_pl is not None and torch.isfinite(res_kl_pl).all():
-            kls.append(float(res_kl_pl.detach().cpu().item()))
-        if grad_clip is not None and grad_clip > 0:
+        if grad_clip and grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
-        if res_kl_pl is not None and torch.isfinite(res_kl_pl).all():
-            kls.append(float(res_kl_pl.detach().cpu().item()))
 
-        if res_kl_lp is not None:
-            kls.append(float(res_kl_lp.detach().cpu().item()))
+        # ---- logging (1回だけ)
+        losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
 
-    # return
+        if kl_sum is not None and torch.isfinite(kl_sum).all():
+            kls.append(float(kl_sum.detach().cpu().item()))
+
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
         "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
-        "res_kl": float(sum(kls) / max(1, len(kls))) if kls else 0.0}
-
+        "res_kl": float(sum(kls) / max(1, len(kls))) if kls else 0.0,
+    }
 
 def save_json(path: str, obj: dict):
     with open(path, "w", encoding="utf-8") as f:
