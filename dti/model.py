@@ -274,6 +274,9 @@ def collate_fn(
         [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
         dtype=torch.long
     )
+    if use_dist_profile:
+        ex = next((p for p in pdbid_list if p), "")
+        print(f"dist_found sum={int(dist_ok.sum())}  example_pdbid={ex}")
     dist_res_target_p = None
     dist_res_mask_p = None
 
