@@ -787,8 +787,6 @@ class CrossAttnDTIRegressor(nn.Module):
             kl = kl.masked_fill(~q_ok, 0.0)
 
             denom = q_ok.float().sum().clamp(min=1.0)
-            attn_kl = kl.sum() / denom
-            aux["attn_kl_head0_p_from_l"] = attn_kl
 
         # ---- l <- attend(p)  (return head0 attn for residue-level aux)
         l_from_p, attn0_lp = self.cross_l_from_p(
@@ -943,6 +941,7 @@ def train_one_epoch(
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
 
+    # return
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
         "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
@@ -1408,7 +1407,7 @@ def main():
         m_cal = eval_metrics(pred_v_cal, y_v)
 
         print(
-            f"[ep {ep:03d}] train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f} attnKL={tr_stat['attn_kl']:.4f})  "
+            f"[ep {ep:03d}] train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f}  "
             f"val_RMSE={m_raw['rmse']:.4f}  val_RMSE_cal={m_cal['rmse']:.4f}  "
             f"val_Spearman={m_raw['spearman']:.4f}  "
             f"(a={a:.4f}, b={b:.4f})"
