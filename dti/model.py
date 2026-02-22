@@ -836,6 +836,7 @@ def train_one_epoch(
     loss_type: str = "huber",
     huber_delta: float = 1.0,
     grad_clip: float = 1.0,
+    attn_lambda: float = 0.0,  # 追加
 ) -> Dict[str, float]:
     model.train()
     losses = []
@@ -865,8 +866,8 @@ def train_one_epoch(
 
         loss = base_loss
         res_kl = aux.get("res_kl_head0_l_from_p", None)
-        # if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
-        #     loss = loss + float(attn_lambda) * res_kl
+        if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
+            loss = loss + float(attn_lambda) * res_kl
 
         loss.backward()
         if grad_clip is not None and grad_clip > 0:
@@ -1318,6 +1319,7 @@ def main():
             loss_type=args.loss,
             huber_delta=args.huber_delta,
             grad_clip=args.grad_clip,
+            attn_lambda=float(args.attn_lambda),  # 追加
         )
 
         # fit calibration
@@ -1332,7 +1334,7 @@ def main():
             b = ema * b_old + (1 - ema) * float(b_new)
 
             calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
-
+        print(f"res_kl={tr_stat['res_kl']:.6f} attn_lambda={args.attn_lambda}")
         a = float(calib_state["a"])
         b = float(calib_state["b"])
 
