@@ -294,7 +294,9 @@ def collate_fn(
                 continue
 
             # map d_mean rows into protein token positions [p_off : p_off + R]
-            R = min(int(d_mean_np.shape[0]), max(0, Lp - p_off))
+            # keep room for EOS at the end: tokens are [CLS] ... [EOS]
+            max_res_tokens = max(0, Lp - 2)  # exclude CLS/EOS positions
+            R = min(int(d_mean_np.shape[0]), max_res_tokens)
             if R <= 0:
                 continue
 
@@ -824,6 +826,7 @@ def train_one_epoch(
             print("dist_res_mask_p is None (use_dist_profile off?)")
         else:
             msum = batch.dist_res_mask_p.sum().item()
+
         if loss_type == "mse":
             base_loss = F.mse_loss(y_hat, y)
         elif loss_type == "mae":
@@ -831,10 +834,12 @@ def train_one_epoch(
         else:
             base_loss = F.huber_loss(y_hat, y, delta=huber_delta)
 
+        # ---- ALWAYS define loss
+        loss = base_loss
+
         res_kl_lp = aux.get("res_kl_head0_l_from_p", None)
         res_kl_pl = aux.get("res_kl_head0_p_from_l", None)
 
-        # pick one or sum both (here: sum if both exist)
         kl_sum = None
         if res_kl_lp is not None and torch.isfinite(res_kl_lp).all():
             kl_sum = res_kl_lp
@@ -843,18 +848,22 @@ def train_one_epoch(
 
         if attn_lambda > 0 and kl_sum is not None and torch.isfinite(kl_sum).all():
             loss = loss + float(attn_lambda) * kl_sum
-        # loss = base_loss
-        # res_kl = aux.get("res_kl_head0_l_from_p", None)
-        # if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
-        #     loss = loss + float(attn_lambda) * res_kl
 
         loss.backward()
+
+        # ---- log KL: prefer lp
+        if res_kl_lp is not None and torch.isfinite(res_kl_lp).all():
+            kls.append(float(res_kl_lp.detach().cpu().item()))
+        elif res_kl_pl is not None and torch.isfinite(res_kl_pl).all():
+            kls.append(float(res_kl_pl.detach().cpu().item()))
         if grad_clip is not None and grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
         if res_kl_pl is not None and torch.isfinite(res_kl_pl).all():
             kls.append(float(res_kl_pl.detach().cpu().item()))
-        losses.append(float(loss.detach().cpu().item()))
+
+        if res_kl_lp is not None:
+            kls.append(float(res_kl_lp.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
 
     # return
