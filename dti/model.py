@@ -208,7 +208,8 @@ class Batch:
     dist_bias_lp: Optional[torch.Tensor]    # (B, Ll, Lp) float32 logits bias (if bidir)
     dist_D_pl: Optional[torch.Tensor]       # (B, Lp, Ll) float32 raw distances (Å)
     dist_mask_pl: Optional[torch.Tensor]    # (B, Lp, Ll) bool mask for valid dist entries
-
+    dist_res_target_p: Optional[torch.Tensor]  # (B, Lp) float32 target prob over protein tokens
+    dist_res_mask_p: Optional[torch.Tensor]    # (B, Lp) bool where target is defined (residue positions)
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -220,23 +221,28 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, : x.numel()] = x
     return out
 
-
-def _load_dist_npz(pdbid: str, dist_dir: str) -> Optional[np.ndarray]:
+def _load_dist_profile_npz(pdbid: str, dist_dir: str):
+    """
+    returns (d_mean, row_mask) or (None, None)
+      d_mean : (L_seq,) float32
+      row_mask: (L_seq,) uint8
+    """
     if not pdbid:
-        return None
+        return None, None
     path = os.path.join(dist_dir, f"{pdbid}.npz")
     if not os.path.isfile(path):
-        return None
+        return None, None
     try:
         z = np.load(path, allow_pickle=False)
-        if "D" not in z:
-            return None
-        D = z["D"]
-        if not isinstance(D, np.ndarray) or D.ndim != 2:
-            return None
-        return D.astype(np.float32, copy=False)
+        if ("d_mean" not in z) or ("row_mask" not in z):
+            return None, None
+        d = z["d_mean"].astype(np.float32, copy=False)
+        m = z["row_mask"].astype(np.uint8, copy=False)
+        if d.ndim != 1 or m.ndim != 1 or d.shape[0] != m.shape[0]:
+            return None, None
+        return d, m
     except Exception:
-        return None
+        return None, None
 
 
 def collate_fn(
@@ -272,6 +278,47 @@ def collate_fn(
     dist_bias_lp = None
     dist_D_pl = None
     dist_mask_pl = None
+    dist_res_target_p = None
+    dist_res_mask_p = None
+
+    if use_dist_bias:
+        B, Lp = p_input_ids.shape
+        dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
+        dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
+
+        p_off = 1  # [CLS] offset
+
+        for bi, pdbid in enumerate(pdbid_list):
+            if int(dist_ok[bi].item()) != 1:
+                continue
+            d_mean_np, row_mask_np = _load_dist_profile_npz(pdbid, dist_dir)
+            if d_mean_np is None:
+                continue
+
+            # map d_mean rows into protein token positions [p_off : p_off + R]
+            R = min(int(d_mean_np.shape[0]), max(0, Lp - p_off))
+            if R <= 0:
+                continue
+
+            d = torch.from_numpy(d_mean_np[:R]).float()       # (R,)
+            rm = torch.from_numpy(row_mask_np[:R]).bool()     # (R,)
+
+            # valid residue token positions + also must not be PAD on protein side
+            prot_not_pad = (p_attn_mask[bi, p_off:p_off+R] == 1)
+            ok = rm & prot_not_pad
+
+            if ok.sum().item() <= 0:
+                continue
+
+            # weights -> prob
+            # NOTE: use dist_sigma as sigma_res (reuse arg) or add new arg
+            w = torch.exp(-d / float(dist_sigma))  # (R,)
+            w = w.masked_fill(~ok, 0.0)
+            Z = w.sum().clamp(min=1e-12)
+            t = w / Z                               # (R,)
+
+            dist_res_target_p[bi, p_off:p_off+R] = t
+            dist_res_mask_p[bi, p_off:p_off+R] = ok
 
     if use_dist_bias:
         B, Lp = p_input_ids.shape
@@ -662,9 +709,10 @@ class CrossAttnDTIRegressor(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
+        self.lig_pad_id = self.lig.pad_id,
+        self.attn_sigma = float(attn_sigma),
 
-        self.lig_pad_id = self.lig.pad_id
-        self.attn_sigma = float(attn_sigma)
+
 
     def forward(
         self,
@@ -676,6 +724,8 @@ class CrossAttnDTIRegressor(nn.Module):
         dist_D_pl: Optional[torch.Tensor] = None,      # (B,Lp,Ll) raw distances for aux
         dist_mask_pl: Optional[torch.Tensor] = None,   # (B,Lp,Ll) bool
         attn_lambda: float = 0.0,                      # aux weight (used in trainer; kept here for flexibility)
+        dist_res_target_p: Optional[torch.Tensor] = None,  # (B,Lp) prob
+        dist_res_mask_p: Optional[torch.Tensor] = None,  # (B,Lp) bool
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Returns:
@@ -738,12 +788,12 @@ class CrossAttnDTIRegressor(nn.Module):
             attn_kl = kl.sum() / denom
             aux["attn_kl_head0_p_from_l"] = attn_kl
 
-        # ---- l <- attend(p)
-        l_from_p = self.cross_l_from_p(
+        # ---- l <- attend(p)  (return head0 attn for residue-level aux)
+        l_from_p, attn0_lp = self.cross_l_from_p(
             q=l_h, k=p_h, v=p_h,
             key_padding_mask=prot_pad_mask,
             logits_bias=dist_bias_lp,
-            return_attn_head0=False,
+            return_attn_head0=True,
         )
         l_h = self.post_ln_l(l_h + l_from_p)
         l_h = self.ffn_l(l_h)
@@ -755,6 +805,35 @@ class CrossAttnDTIRegressor(nn.Module):
 
         fused = torch.cat([p_pool, l_pool], dim=-1)     # (B,2D)
         y_hat = self.head(fused).squeeze(-1)            # (B,)
+        # ---- AUX: residue-importance KL using l<-p head0 attention
+        if (attn0_lp is not None) and (dist_res_target_p is not None) and (dist_res_mask_p is not None):
+            # attn0_lp: (B, Ll, Lp) already softmax over Lp
+            A = attn0_lp.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)  # (B,Ll,Lp)
+
+            # mask ligand queries (exclude PAD)
+            q_ok = (~lig_pad_mask).to(device=p_h.device)  # (B,Ll) bool
+            q_ok_f = q_ok.float()
+            denom_q = q_ok_f.sum(dim=1, keepdim=True).clamp(min=1.0)  # (B,1)
+
+            # average over ligand queries -> (B,Lp)
+            Abar = (A * q_ok_f.unsqueeze(-1)).sum(dim=1) / denom_q     # (B,Lp)
+
+            # target
+            T = dist_res_target_p.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)  # (B,Lp)
+            M = dist_res_mask_p.to(device=p_h.device)                                      # (B,Lp) bool
+
+            # also ignore special/pad protein positions automatically by mask M
+            Tm = T.masked_fill(~M, 0.0)
+            Am = Abar.masked_fill(~M, 1e-12)
+
+            # renormalize over masked positions
+            Zt = Tm.sum(dim=1, keepdim=True).clamp(min=1e-12)
+            Za = Am.sum(dim=1, keepdim=True).clamp(min=1e-12)
+            Tm = Tm / Zt
+            Am = Am / Za
+
+            kl = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (B,)
+            aux["res_kl_head0_l_from_p"] = kl.mean()
 
         return y_hat, aux
 
@@ -780,6 +859,8 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
             dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
             dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
             attn_lambda=0.0,
+            dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
+            dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
         y_hat = out[0] if isinstance(out, (tuple, list)) else out
 
@@ -837,6 +918,8 @@ def train_one_epoch(
             dist_D_pl=(batch.dist_D_pl.to(device) if batch.dist_D_pl is not None else None),
             dist_mask_pl=(batch.dist_mask_pl.to(device) if batch.dist_mask_pl is not None else None),
             attn_lambda=attn_lambda,
+            dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
+            dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
 
         if loss_type == "mse":
@@ -848,8 +931,9 @@ def train_one_epoch(
 
         loss = base_loss
         attn_loss = aux.get("attn_kl_head0_p_from_l", None)
-        if attn_lambda > 0 and attn_loss is not None and torch.isfinite(attn_loss).all():
-            loss = loss + float(attn_lambda) * attn_loss
+        res_kl = aux.get("res_kl_head0_l_from_p", None)
+        if attn_lambda > 0 and res_kl is not None and torch.isfinite(res_kl).all():
+            loss = loss + float(attn_lambda) * res_kl
 
         loss.backward()
         if grad_clip is not None and grad_clip > 0:
