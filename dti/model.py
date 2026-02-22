@@ -163,6 +163,8 @@ def parse_lig_tokens(s: str) -> List[int]:
 class DTIDataset(Dataset):
     def __init__(self, csv_path: str):
         rows = read_csv_rows(csv_path)
+        print("[csv]", csv_path, "columns=", list(rows[0].keys()))
+        print("[csv] sample pdbid raw=", rows[0].get("pdbid", None))
         self.samples = []
         for r in rows:
             if "seq" not in r or "lig_tok" not in r or "y" not in r:
@@ -265,13 +267,9 @@ def collate_fn(
 
     y = torch.stack([s["y"] for s in samples], dim=0)
 
-    pdbid_list = [str(s.get("pdbid", "")) for s in samples]
-
-
-    pdbid_list = [str(s.get("pdbid", "")) for s in samples]
-    # dist_ok = torch.tensor([int(s.get("dist_ok", 0)) for s in samples], dtype=torch.long)
-
     # dist_ok はCSVではなく「ファイルがあるか」で決める
+    pdbid_list = [str(s.get("pdbid", "") or "") for s in samples]
+
     dist_ok = torch.tensor(
         [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
         dtype=torch.long
