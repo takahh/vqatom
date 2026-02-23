@@ -826,9 +826,9 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
 
     prec, rec, thr = precision_recall_curve(y01, prob)
     f1s = 2 * prec * rec / (prec + rec + 1e-12)
-    best_i = int(np.argmax(f1s))
     # precision_recall_curve のthrは長さが1短いので、この取り方が安全
-    best_thr = float(thr[best_i-1]) if (thr.size > 0 and best_i > 0) else 0.5
+    best_i = int(np.argmax(f1s[:-1]))  # thr と同じ長さに揃える
+    best_thr = float(thr[best_i]) if thr.size > 0 else 0.5
 
     pred01 = (prob >= best_thr).astype(np.int32)
     f1 = f1_score(y01, pred01)
@@ -1037,6 +1037,8 @@ def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Names
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--pos_weight", type=float, default=1.0,
+                    help="BCE pos_weight. >1 boosts positive class (useful for imbalance).")
     # aux attn KL (head0 only)
     # ★追加：何層をKL対象にするか
     ap.add_argument("--attn_kl_layers", type=int, default=1,
@@ -1308,7 +1310,15 @@ def main():
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
 
     for ep in range(1, args.epochs + 1):
-        tr_stat = train_one_epoch(...)
+        tr_stat = train_one_epoch(
+            model=model,
+            loader=train_loader,
+            optimizer=optimizer,
+            device=device,
+            grad_clip=float(args.grad_clip),
+            attn_lambda=float(args.attn_lambda),
+            pos_weight=float(args.pos_weight),
+        )
 
         print(f"res_kl={tr_stat['res_kl']:.6f} attn_lambda={args.attn_lambda}")
 
@@ -1324,10 +1334,8 @@ def main():
             f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
             f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f})"
         )
-
         if scheduler is not None:
-            # plateau なら最大化したいので mode="max" にするか、ここはオフが安全
-            pass
+            scheduler.step(float(v_m[args.select_on]))
 
         cur_key = args.select_on
         cur_val = float(v_m[cur_key])
