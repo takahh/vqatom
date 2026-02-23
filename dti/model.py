@@ -320,8 +320,6 @@ def collate_fn(
         for bi, pdbid in enumerate(pdbid_list):
             if int(dist_ok[bi].item()) != 1:
                 continue
-            if bi == 0:
-                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
             D_np = _load_dist_D_npz(pdbid, dist_dir)
             if D_np is None:
                 continue
@@ -356,6 +354,9 @@ def collate_fn(
             # ligand tokens: [0 : A]
             dist_bias_pl[bi, p_off:p_off + R, :A] = bias_RA
             dist_bias_lp[bi, :A, p_off:p_off + R] = bias_RA.transpose(0, 1)
+
+            if bi == 0:
+                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
 
     return Batch(
         p_input_ids=p_input_ids,
