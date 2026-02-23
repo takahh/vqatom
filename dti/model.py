@@ -1087,8 +1087,6 @@ def main():
     ap.add_argument("--lig_debug_index", action="store_true")
 
     # loss
-    ap.add_argument("--loss", type=str, default="huber", choices=["huber", "mse", "mae"])
-    ap.add_argument("--huber_delta", type=float, default=1.0)
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
     # scheduler
@@ -1098,8 +1096,7 @@ def main():
     ap.add_argument("--min_lr", type=float, default=1e-6)
 
     # selection criterion
-    ap.add_argument("--select_on", type=str, default="rmse_cal", choices=["rmse_raw", "rmse_cal"])
-
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     # ESM LLRD
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
@@ -1128,7 +1125,6 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
-    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
     print("lig_ckpt:", args.lig_ckpt)
@@ -1302,15 +1298,11 @@ def main():
     if args.plateau:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode="min",
+            mode="max",
             factor=float(args.plateau_factor),
             patience=int(args.plateau_patience),
             min_lr=float(args.min_lr),
         )
-
-    # best selection
-    best = {"rmse_raw": 1e9, "rmse_cal": 1e9, "spearman": -1e9, "epoch": -1}
-    calib_state = {"a": 1.0, "b": 0.0, "fit_on": "train_calib", "epoch": 0}
 
     # training loop
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
@@ -1358,7 +1350,6 @@ def main():
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
-    save_json(os.path.join(args.out_dir, "calibration.json"), calib_state)
 
 
 if __name__ == "__main__":
