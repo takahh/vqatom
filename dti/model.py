@@ -853,6 +853,7 @@ def train_one_epoch(
     kls: List[float] = []
 
     use_kl = float(attn_lambda) > 0.0
+    pw = torch.tensor([float(pos_weight)], device=device)
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
@@ -870,7 +871,6 @@ def train_one_epoch(
 
         # ---- base loss
         logit = y_hat  # (B,)
-        pw = torch.tensor([float(pos_weight)], device=device)
         base_loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=pw)
         loss = base_loss
 
