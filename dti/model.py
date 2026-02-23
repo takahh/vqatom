@@ -836,9 +836,11 @@ def train_one_epoch(
     attn_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
-    losses = []
-    base_losses = []
-    kls = []
+    losses: List[float] = []
+    base_losses: List[float] = []
+    kls: List[float] = []
+
+    use_kl = float(attn_lambda) > 0.0
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
@@ -854,34 +856,33 @@ def train_one_epoch(
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
 
-        # base loss
+        # ---- base loss
         if loss_type == "mse":
             base_loss = F.mse_loss(y_hat, y)
         elif loss_type == "mae":
             base_loss = F.l1_loss(y_hat, y)
         else:
-            base_loss = F.huber_loss(y_hat, y, delta=huber_delta)
+            base_loss = F.huber_loss(y_hat, y, delta=float(huber_delta))
 
         loss = base_loss
 
-        # KL (layer0 head0) — choose which ones you actually use
-        kl = aux.get("res_kl", None)
-        if attn_lambda > 0 and (kl is not None) and torch.isfinite(kl).all():
-            loss = loss + float(attn_lambda) * kl
-
-        if attn_lambda > 0 and kl_sum is not None and torch.isfinite(kl_sum).all():
-            loss = loss + float(attn_lambda) * kl_sum
+        # ---- optional KL (already aggregated in aux["res_kl"])
+        if use_kl:
+            kl = aux.get("res_kl", None)
+            if (kl is not None) and torch.isfinite(kl).all():
+                loss = loss + float(attn_lambda) * kl
+        else:
+            kl = None  # for logging
 
         loss.backward()
-        if grad_clip and grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if grad_clip and float(grad_clip) > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
         optimizer.step()
 
-        # ---- logging (1回だけ)
+        # ---- logging
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
-
-        if kl is not None and torch.isfinite(kl).all():
+        if use_kl and (kl is not None) and torch.isfinite(kl).all():
             kls.append(float(kl.detach().cpu().item()))
 
     return {
