@@ -197,6 +197,25 @@ class DTIDataset(Dataset):
             "pdbid": pdbid,
         }
 
+def _load_dist_D_npz(pdbid: str, dist_dir: str):
+    """
+    returns D: (n_res, n_lig) float32 or None
+    """
+    if not pdbid:
+        return None
+    path = os.path.join(dist_dir, f"{pdbid}.npz")
+    if not os.path.isfile(path):
+        return None
+    try:
+        z = np.load(path, allow_pickle=False)
+        if "D" not in z:
+            return None
+        D = z["D"].astype(np.float32, copy=False)
+        if D.ndim != 2:
+            return None
+        return D
+    except Exception:
+        return None
 
 @dataclass
 class Batch:
@@ -205,6 +224,8 @@ class Batch:
     l_ids: torch.Tensor              # (B, Ll)
     y: torch.Tensor                  # (B,)
 
+    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) float
+    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) float
     # distance-related (optional)
     pdbid: List[str]
     dist_ok: torch.Tensor            # (B,) int/long 0/1
@@ -281,49 +302,60 @@ def collate_fn(
     )
     if use_dist_profile:
         ex = next((p for p in pdbid_list if p), "")
-    dist_res_target_p = None
-    dist_res_mask_p = None
+
+    dist_bias_pl = None
+    dist_bias_lp = None
 
     if use_dist_profile:
         B, Lp = p_input_ids.shape
-        dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
-        dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
+        _, Ll = l_ids.shape
 
-        p_off = 1  # [CLS] offset
+        # logits bias tensors
+        dist_bias_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
+        dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
+
+        p_off = 1  # CLS offset
+        max_res_tokens = max(0, Lp - 2)  # exclude CLS/EOS
 
         for bi, pdbid in enumerate(pdbid_list):
             if int(dist_ok[bi].item()) != 1:
                 continue
-            d_mean_np, row_mask_np = _load_dist_profile_npz(pdbid, dist_dir)
-            if d_mean_np is None:
+            if bi == 0:
+                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
+            D_np = _load_dist_D_npz(pdbid, dist_dir)
+            if D_np is None:
                 continue
 
-            # map d_mean rows into protein token positions [p_off : p_off + R]
-            # keep room for EOS at the end: tokens are [CLS] ... [EOS]
-            max_res_tokens = max(0, Lp - 2)  # exclude CLS/EOS positions
-            R = min(int(d_mean_np.shape[0]), max_res_tokens)
-            if R <= 0:
+            n_res, n_lig = D_np.shape
+
+            # align lengths (truncate to available)
+            R = min(n_res, max_res_tokens)
+            A = min(n_lig, Ll)
+            if R <= 0 or A <= 0:
                 continue
 
-            d = torch.from_numpy(d_mean_np[:R]).float()       # (R,)
-            rm = torch.from_numpy(row_mask_np[:R]).bool()     # (R,)
+            D = torch.from_numpy(D_np[:R, :A]).float()  # (R, A)
 
-            # valid residue token positions + also must not be PAD on protein side
-            prot_not_pad = (p_attn_mask[bi, p_off:p_off+R] == 1)
-            ok = rm & prot_not_pad
+            # optional cut: beyond cut -> 0 influence
+            if dist_cut is not None and float(dist_cut) > 0:
+                far = (D > float(dist_cut))
+            else:
+                far = None
 
-            if ok.sum().item() <= 0:
-                continue
+            # similarity: close -> 1, far -> ~0
+            sim = torch.exp(-D / float(dist_sigma))  # (R,A)
 
-            # weights -> prob
-            # NOTE: use dist_sigma as sigma_res (reuse arg) or add new arg
-            w = torch.exp(-d / float(dist_sigma))  # (R,)
-            w = w.masked_fill(~ok, 0.0)
-            Z = w.sum().clamp(min=1e-12)
-            t = w / Z                               # (R,)
+            if far is not None:
+                sim = sim.masked_fill(far, 0.0)
 
-            dist_res_target_p[bi, p_off:p_off+R] = t
-            dist_res_mask_p[bi, p_off:p_off+R] = ok
+            # scale to logits bias
+            bias_RA = float(dist_beta) * sim  # (R,A)
+
+            # place into token grids
+            # protein keys/queries: positions [p_off : p_off+R]
+            # ligand tokens: [0 : A]
+            dist_bias_pl[bi, p_off:p_off + R, :A] = bias_RA
+            dist_bias_lp[bi, :A, p_off:p_off + R] = bias_RA.transpose(0, 1)
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -332,8 +364,8 @@ def collate_fn(
         y=y,
         pdbid=pdbid_list,
         dist_ok=dist_ok,
-        dist_res_target_p=dist_res_target_p,   # 追加
-        dist_res_mask_p=dist_res_mask_p,       # 追加
+        dist_bias_pl=dist_bias_pl,
+        dist_bias_lp=dist_bias_lp,
     )
 
 
@@ -805,6 +837,8 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
 
         logit, _aux = model(
             p_ids, p_msk, l,
+            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
+            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
@@ -870,6 +904,8 @@ def train_one_epoch(
 
         y_hat, aux = model(
             p_ids, p_msk, l,
+            dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
+            dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
@@ -1158,7 +1194,7 @@ def main():
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
     # datasets/loaders
-    valid_ds = DTIDataset(args.valid_csv)
+    valid_ds = DTIDataset(args.valid_csv, y_thr=args.y_thr)
     valid_loader = DataLoader(
         valid_ds,
         batch_size=args.batch_size,
@@ -1203,8 +1239,8 @@ def main():
     train_ds = None
 
     if not args.eval_only:
-        train_ds = DTIDataset(train_csv, y_thr=7.0)
-        valid_ds = DTIDataset(valid_csv, y_thr=7.0)
+        train_ds = DTIDataset(args.train_csv, y_thr=args.y_thr)
+        valid_ds = DTIDataset(args.valid_csv, y_thr=args.y_thr)  # 既に作ってるならこの再定義は削除でもOK
         n = len(train_ds)
         idx = np.arange(n)
         rng = np.random.default_rng(args.seed)
