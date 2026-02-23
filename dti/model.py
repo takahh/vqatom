@@ -634,6 +634,8 @@ class CrossAttnDTIRegressor(nn.Module):
         dropout: float,
         attn_sigma: float = 3.0,
         cross_layers: int = 1,
+        attn_kl_layers: int = 1,  # ★追加
+        attn_kl_reduce: str = "mean",  # ★追加
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -672,6 +674,8 @@ class CrossAttnDTIRegressor(nn.Module):
 
         self.lig_pad_id = self.lig.pad_id
         self.attn_sigma = float(attn_sigma)
+        self.attn_kl_layers = int(attn_kl_layers)
+        self.attn_kl_reduce = str(attn_kl_reduce)
 
     def forward(
         self,
@@ -694,6 +698,8 @@ class CrossAttnDTIRegressor(nn.Module):
         lig_pad_mask = (l_ids == self.lig_pad_id)  # (B,Ll) True=PAD
 
         # stacked blocks
+        kls_lp: List[torch.Tensor] = []  # ★追加：層ごとのKLを集める
+
         for li in range(self.cross_layers):
             # p <- l
             p_from_l = self.cross_p_from_l[li](
@@ -705,18 +711,33 @@ class CrossAttnDTIRegressor(nn.Module):
             p_h = self.post_ln_p[li](p_h + p_from_l)
             p_h = self.ffn_p[li](p_h)
 
-            # l <- p (layer0だけ head0 を取る)
-            l_from_p, attn0_lp = self.cross_l_from_p[li](
-                q=l_h, k=p_h, v=p_h,
-                key_padding_mask=prot_pad_mask,
-                logits_bias=dist_bias_lp,
-                return_attn_head0=(li == 0),
+            # l <- p : ★指定層だけ head0 を取る
+            want_kl_this_layer = (
+                (self.attn_kl_layers > 0) and (li < self.attn_kl_layers)
+                and (dist_res_target_p is not None) and (dist_res_mask_p is not None)
             )
+
+            if want_kl_this_layer:
+                l_from_p, attn0_lp = self.cross_l_from_p[li](
+                    q=l_h, k=p_h, v=p_h,
+                    key_padding_mask=prot_pad_mask,
+                    logits_bias=dist_bias_lp,
+                    return_attn_head0=True,
+                )
+            else:
+                l_from_p = self.cross_l_from_p[li](
+                    q=l_h, k=p_h, v=p_h,
+                    key_padding_mask=prot_pad_mask,
+                    logits_bias=dist_bias_lp,
+                    return_attn_head0=False,
+                )
+                attn0_lp = None
+
             l_h = self.post_ln_l[li](l_h + l_from_p)
             l_h = self.ffn_l[li](l_h)
 
-            # KL (layer0 only): residue importance via l<-p head0
-            if (li == 0) and (attn0_lp is not None) and (dist_res_target_p is not None) and (dist_res_mask_p is not None):
+            # KL (layer selected): residue importance via l<-p head0
+            if want_kl_this_layer and (attn0_lp is not None):
                 # attn0_lp: (B, Ll, Lp) softmax over Lp
                 A = attn0_lp.to(device=p_h.device, dtype=p_h.dtype).clamp(min=1e-12)
 
@@ -737,8 +758,22 @@ class CrossAttnDTIRegressor(nn.Module):
                 Tm = Tm / Zt
                 Am = Am / Za
 
-                kl = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (B,)
-                aux["res_kl_head0_l_from_p"] = kl.mean()
+                kl_b = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (B,)
+                kl = kl_b.mean()
+                kls_lp.append(kl)
+
+                # 層別ログも欲しければ残す
+                aux[f"res_kl_head0_l_from_p_layer{li}"] = kl
+
+        # ★集約（aux["res_kl"] を統一キーに）
+        if kls_lp:
+            if self.attn_kl_reduce == "sum":
+                aux["res_kl"] = torch.stack(kls_lp, dim=0).sum()
+            else:
+                aux["res_kl"] = torch.stack(kls_lp, dim=0).mean()
+        else:
+            # ないときは入れない（train側で get する）
+            pass
 
         # pool & head
         p_pool = masked_mean_by_attn(p_h, p_attn_mask)         # (B,D)
@@ -830,14 +865,9 @@ def train_one_epoch(
         loss = base_loss
 
         # KL (layer0 head0) — choose which ones you actually use
-        res_kl_lp = aux.get("res_kl_head0_l_from_p", None)
-        res_kl_pl = aux.get("res_kl_head0_p_from_l", None)
-
-        kl_sum = None
-        if res_kl_lp is not None and torch.isfinite(res_kl_lp).all():
-            kl_sum = res_kl_lp
-        if res_kl_pl is not None and torch.isfinite(res_kl_pl).all():
-            kl_sum = res_kl_pl if kl_sum is None else (kl_sum + res_kl_pl)
+        kl = aux.get("res_kl", None)
+        if attn_lambda > 0 and (kl is not None) and torch.isfinite(kl).all():
+            loss = loss + float(attn_lambda) * kl
 
         if attn_lambda > 0 and kl_sum is not None and torch.isfinite(kl_sum).all():
             loss = loss + float(attn_lambda) * kl_sum
@@ -851,8 +881,8 @@ def train_one_epoch(
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
 
-        if kl_sum is not None and torch.isfinite(kl_sum).all():
-            kls.append(float(kl_sum.detach().cpu().item()))
+        if kl is not None and torch.isfinite(kl).all():
+            kls.append(float(kl.detach().cpu().item()))
 
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
@@ -998,7 +1028,15 @@ def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Names
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
+    # aux attn KL (head0 only)
+    ap.add_argument("--attn_lambda", type=float, default=0.0, help="Aux KL weight for head0 attention guidance")
+    ap.add_argument("--attn_sigma", type=float, default=3.0, help="Sigma for target exp(-D/sigma) in KL loss")
 
+    # ★追加：何層をKL対象にするか
+    ap.add_argument("--attn_kl_layers", type=int, default=1,
+                    help="Apply distance-guided KL on the first N cross layers (l<-p head0). 0 disables.")
+    ap.add_argument("--attn_kl_reduce", type=str, default="mean", choices=["mean", "sum"],
+                    help="How to aggregate KL over layers when attn_kl_layers>1.")
     # data
     ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
     ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
@@ -1217,6 +1255,8 @@ def main():
         dropout=args.dropout,
         attn_sigma=float(args.attn_sigma),
         cross_layers=int(args.cross_layers),
+        attn_kl_layers=int(args.attn_kl_layers),      # ★追加
+        attn_kl_reduce=str(args.attn_kl_reduce),      # ★追加
     ).to(device)
 
     # optionally load DTI checkpoint
