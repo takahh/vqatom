@@ -161,22 +161,27 @@ def parse_lig_tokens(s: str) -> List[int]:
 # Dataset
 # -----------------------------
 class DTIDataset(Dataset):
-    def __init__(self, csv_path: str):
+    def __init__(self, csv_path: str, y_thr: float = 7.0):
+        self.y_thr = y_thr
+
         rows = read_csv_rows(csv_path)
         print("[csv]", csv_path, "columns=", list(rows[0].keys()))
         print("[csv] sample pdbid raw=", rows[0].get("pdbid", None))
+
         self.samples = []
+
         for r in rows:
             if "seq" not in r or "lig_tok" not in r or "y" not in r:
                 raise KeyError("CSV must contain columns: seq, lig_tok, y")
 
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
-            # 例：pKd/pKi が前提で 7.0 を境界にする￥
-            thr = 7.0
+
             y = float(r["y"])
-            y_bin = 1.0 if (y >= thr) else 0.0
+            y_bin = 1.0 if (y >= self.y_thr) else 0.0
+
             pdbid = r.get("pdbid", "").strip()
+
             self.samples.append((seq, lig, y_bin, pdbid))
 
     def __len__(self):
@@ -1046,6 +1051,7 @@ def main():
     ap.add_argument("--attn_kl_reduce", type=str, default="mean", choices=["mean", "sum"],
                     help="How to aggregate KL over layers when attn_kl_layers>1.")
     # data
+    ap.add_argument("--y_thr", type=float, default=7.0, help="Binarize y: y>=thr -> 1 else 0")
     ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
     ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
     ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
@@ -1197,7 +1203,8 @@ def main():
     train_ds = None
 
     if not args.eval_only:
-        train_ds = DTIDataset(args.train_csv)
+        train_ds = DTIDataset(train_csv, y_thr=7.0)
+        valid_ds = DTIDataset(valid_csv, y_thr=7.0)
         n = len(train_ds)
         idx = np.arange(n)
         rng = np.random.default_rng(args.seed)
