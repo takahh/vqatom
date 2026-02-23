@@ -1029,8 +1029,6 @@ def build_optimizer_with_llrd(model: CrossAttnDTIRegressor, args: argparse.Names
 def main():
     ap = argparse.ArgumentParser()
     # aux attn KL (head0 only)
-    ap.add_argument("--attn_sigma", type=float, default=3.0, help="Sigma for target exp(-D/sigma) in KL loss")
-
     # ★追加：何層をKL対象にするか
     ap.add_argument("--attn_kl_layers", type=int, default=1,
                     help="Apply distance-guided KL on the first N cross layers (l<-p head0). 0 disables.")
