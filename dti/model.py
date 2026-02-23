@@ -172,23 +172,23 @@ class DTIDataset(Dataset):
 
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
+            # 例：pKd/pKi が前提で 7.0 を境界にする￥
+            thr = 7.0
             y = float(r["y"])
-
-            # optional
-            # optional
+            y_bin = 1.0 if (y >= thr) else 0.0
             pdbid = r.get("pdbid", "").strip()
-            self.samples.append((seq, lig, y, pdbid))
+            self.samples.append((seq, lig, y_bin, pdbid))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y, pdbid = self.samples[idx]
+        seq, lig_str, y_bin, pdbid = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
-            "y": torch.tensor(y, dtype=torch.float32),
+            "y": torch.tensor(y_bin, dtype=torch.float32),
             "pdbid": pdbid,
         }
 
@@ -785,12 +785,12 @@ class CrossAttnDTIRegressor(nn.Module):
 
 
 # -----------------------------
-# Predict / Eval (raw + calibrated)
-# -----------------------------
+# Predict / Eval (raw + calibrated
+# ---- predict は「logitを返す」(中身はほぼ同じ)
 @torch.no_grad()
 def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
     model.eval()
-    preds = []
+    logits = []
     ys = []
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
@@ -798,32 +798,43 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
 
-        out = model(
+        logit, _aux = model(
             p_ids, p_msk, l,
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
-        y_hat = out[0] if isinstance(out, (tuple, list)) else out
-
-        preds.append(y_hat.detach().cpu().numpy())
+        logits.append(logit.detach().cpu().numpy())
         ys.append(y.detach().cpu().numpy())
 
-    pred = np.concatenate(preds, axis=0) if preds else np.array([], dtype=np.float64)
+    logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
     yy = np.concatenate(ys, axis=0) if ys else np.array([], dtype=np.float64)
-    return pred, yy
+    return logit, yy
 
 
-def eval_metrics(pred: np.ndarray, y: np.ndarray) -> Dict[str, float]:
-    if pred.size == 0:
-        return {"rmse": 0.0, "mae": 0.0, "spearman": 0.0, "pearson": 0.0, "pred_mean": 0.0, "pred_std": 0.0}
-    return {
-        "rmse": rmse(pred, y),
-        "mae": mae(pred, y),
-        "spearman": spearmanr(pred, y),
-        "pearson": pearsonr(pred, y),
-        "pred_mean": float(np.mean(pred)),
-        "pred_std": float(np.std(pred)),
-    }
+def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_recall_curve
+
+    prob = 1.0 / (1.0 + np.exp(-logit))
+    y01 = (y > 0.5).astype(np.int32)
+
+    if len(np.unique(y01)) <= 1:
+        return {"auroc": 0.0, "ap": 0.0, "f1": 0.0, "thr": 0.5,
+                "prob_mean": float(prob.mean()), "prob_std": float(prob.std())}
+
+    auroc = roc_auc_score(y01, prob)
+    ap = average_precision_score(y01, prob)
+
+    prec, rec, thr = precision_recall_curve(y01, prob)
+    f1s = 2 * prec * rec / (prec + rec + 1e-12)
+    best_i = int(np.argmax(f1s))
+    # precision_recall_curve のthrは長さが1短いので、この取り方が安全
+    best_thr = float(thr[best_i-1]) if (thr.size > 0 and best_i > 0) else 0.5
+
+    pred01 = (prob >= best_thr).astype(np.int32)
+    f1 = f1_score(y01, pred01)
+
+    return {"auroc": float(auroc), "ap": float(ap), "f1": float(f1), "thr": float(best_thr),
+            "prob_mean": float(prob.mean()), "prob_std": float(prob.std())}
 
 def train_one_epoch(
     model: nn.Module,
@@ -834,6 +845,7 @@ def train_one_epoch(
     huber_delta: float = 1.0,
     grad_clip: float = 1.0,
     attn_lambda: float = 0.0,
+    pos_weight: float = 1.0,
 ) -> Dict[str, float]:
     model.train()
     losses: List[float] = []
@@ -857,13 +869,9 @@ def train_one_epoch(
         )
 
         # ---- base loss
-        if loss_type == "mse":
-            base_loss = F.mse_loss(y_hat, y)
-        elif loss_type == "mae":
-            base_loss = F.l1_loss(y_hat, y)
-        else:
-            base_loss = F.huber_loss(y_hat, y, delta=float(huber_delta))
-
+        logit = y_hat  # (B,)
+        pw = torch.tensor([float(pos_weight)], device=device)
+        base_loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=pw)
         loss = base_loss
 
         # ---- optional KL (already aggregated in aux["res_kl"])
@@ -1120,7 +1128,7 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
-
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
     print("lig_ckpt:", args.lig_ckpt)
@@ -1272,40 +1280,18 @@ def main():
 
     # eval-only
     if args.eval_only:
-        pred_v, y_v = predict(model, valid_loader, device)
-        m_raw = eval_metrics(pred_v, y_v)
-
-        if loaded_calib is not None and "a" in loaded_calib and "b" in loaded_calib:
-            a = float(loaded_calib["a"])
-            b = float(loaded_calib["b"])
-            pred_v_cal = apply_linear_calibration(pred_v, a, b)
-            m_cal = eval_metrics(pred_v_cal, y_v)
-            print(f"[VALID raw] RMSE={m_raw['rmse']:.4f}  Spearman={m_raw['spearman']:.4f}  Pearson={m_raw['pearson']:.4f}  MAE={m_raw['mae']:.4f}")
-            print(f"[VALID cal] RMSE={m_cal['rmse']:.4f}  (a={a:.4f}, b={b:.4f})")
-        else:
-            print(f"[VALID] RMSE={m_raw['rmse']:.4f}  Spearman={m_raw['spearman']:.4f}  Pearson={m_raw['pearson']:.4f}  MAE={m_raw['mae']:.4f}")
+        logit_v, y_v = predict(model, valid_loader, device)
+        m = eval_metrics(logit_v, y_v)
+        print(f"[VALID] AP={m['ap']:.4f} AUROC={m['auroc']:.4f} F1={m['f1']:.4f} (thr={m['thr']:.3f}) "
+              f"prob_mean={m['prob_mean']:.4f} prob_std={m['prob_std']:.4f}")
 
         if test_loader is not None:
-            pred_t, y_t = predict(model, test_loader, device)
-            mt_raw = eval_metrics(pred_t, y_t)
-            if loaded_calib is not None and "a" in loaded_calib and "b" in loaded_calib:
-                a = float(loaded_calib["a"])
-                b = float(loaded_calib["b"])
-                pred_t_cal = apply_linear_calibration(pred_t, a, b)
-                mt_cal = eval_metrics(pred_t_cal, y_t)
-                print(f"[TEST  raw] RMSE={mt_raw['rmse']:.4f}  Spearman={mt_raw['spearman']:.4f}  Pearson={mt_raw['pearson']:.4f}  MAE={mt_raw['mae']:.4f}")
-                print(f"[TEST  cal] RMSE={mt_cal['rmse']:.4f}  (a={a:.4f}, b={b:.4f})")
-            else:
-                print(f"[TEST ] RMSE={mt_raw['rmse']:.4f}  Spearman={mt_raw['spearman']:.4f}  Pearson={mt_raw['pearson']:.4f}  MAE={mt_raw['mae']:.4f}")
+            logit_t, y_t = predict(model, test_loader, device)
+            mt = eval_metrics(logit_t, y_t)
+            print(f"[TEST ] AP={mt['ap']:.4f} AUROC={mt['auroc']:.4f} F1={mt['f1']:.4f} (thr={mt['thr']:.3f})")
 
-        summary = {
-            "mode": "eval_only",
-            "valid_raw": m_raw,
-            "valid_csv": args.valid_csv,
-            "test_csv": args.test_csv,
-            "dti_ckpt": args.dti_ckpt,
-            "calibration_loaded": loaded_calib,
-        }
+        summary = {"mode": "eval_only", "valid": m, "valid_csv": args.valid_csv,
+                   "test_csv": args.test_csv, "dti_ckpt": args.dti_ckpt}
         save_json(os.path.join(args.out_dir, "eval_only.json"), summary)
         return
 
@@ -1327,84 +1313,48 @@ def main():
     calib_state = {"a": 1.0, "b": 0.0, "fit_on": "train_calib", "epoch": 0}
 
     # training loop
+    best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
+
     for ep in range(1, args.epochs + 1):
-        tr_stat = train_one_epoch(
-            model, train_loader, optimizer, device,
-            loss_type=args.loss,
-            huber_delta=args.huber_delta,
-            grad_clip=args.grad_clip,
-            attn_lambda=float(args.attn_lambda),  # 追加
-        )
+        tr_stat = train_one_epoch(...)
 
-        # fit calibration
-        if calib_loader is not None and len(calib_loader.dataset) > 0 and (ep % max(1, args.calib_every) == 0):
-            pred_c, y_c = predict(model, calib_loader, device)
-            a_new, b_new = fit_linear_calibration(pred_c, y_c)
-
-            ema = 0.9
-            a_old = float(calib_state["a"])
-            b_old = float(calib_state["b"])
-            a = ema * a_old + (1 - ema) * float(a_new)
-            b = ema * b_old + (1 - ema) * float(b_new)
-
-            calib_state = {"a": float(a), "b": float(b), "fit_on": "train_calib", "epoch": ep}
         print(f"res_kl={tr_stat['res_kl']:.6f} attn_lambda={args.attn_lambda}")
-        a = float(calib_state["a"])
-        b = float(calib_state["b"])
 
-        # ---- TRAIN metrics (post-epoch, like VALID)
-        pred_tr, y_tr = predict(model, train_loader, device)
-        tr_raw = eval_metrics(pred_tr, y_tr)
-        pred_tr_cal = apply_linear_calibration(pred_tr, a, b)
-        tr_cal = eval_metrics(pred_tr_cal, y_tr)
+        logit_tr, y_tr = predict(model, train_loader, device)
+        tr_m = eval_metrics(logit_tr, y_tr)
 
-        # VALID metrics
-        pred_v, y_v = predict(model, valid_loader, device)
-        m_raw = eval_metrics(pred_v, y_v)
-        pred_v_cal = apply_linear_calibration(pred_v, a, b)
-        m_cal = eval_metrics(pred_v_cal, y_v)
+        logit_v, y_v = predict(model, valid_loader, device)
+        v_m = eval_metrics(logit_v, y_v)
 
         print(
             f"[ep {ep:03d}] "
-            f"train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f})  "
-            f"train_RMSE={tr_raw['rmse']:.4f}  train_RMSE_cal={tr_cal['rmse']:.4f}  "
-            f"train_Spearman={tr_raw['spearman']:.4f}  "
-            f"val_RMSE={m_raw['rmse']:.4f}  val_RMSE_cal={m_cal['rmse']:.4f}  "
-            f"val_Spearman={m_raw['spearman']:.4f}  "
-            f"(a={a:.4f}, b={b:.4f})"
+            f"train_loss={tr_stat['loss']:.4f} (base={tr_stat['base_loss']:.4f}) "
+            f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
+            f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f})"
         )
 
         if scheduler is not None:
-            scheduler.step(m_cal["rmse"])
+            # plateau なら最大化したいので mode="max" にするか、ここはオフが安全
+            pass
 
-        cur_key = "rmse_cal" if args.select_on == "rmse_cal" else "rmse_raw"
-        cur_val = float(m_cal["rmse"]) if cur_key == "rmse_cal" else float(m_raw["rmse"])
+        cur_key = args.select_on
+        cur_val = float(v_m[cur_key])
         best_val = float(best[cur_key])
 
-        if cur_val < best_val:
-            best.update(
-                {
-                    "rmse_raw": float(m_raw["rmse"]),
-                    "rmse_cal": float(m_cal["rmse"]),
-                    "spearman": float(m_raw["spearman"]),
-                    "epoch": ep,
-                }
-            )
+        if cur_val > best_val:
+            best.update({"ap": float(v_m["ap"]), "auroc": float(v_m["auroc"]), "f1": float(v_m["f1"]), "epoch": ep})
             save_path = os.path.join(args.out_dir, "best.pt")
-            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best, calib=calib_state)
+            # calibは空 dict で渡す（関数を変えたくなければ）
+            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best, calib={})
             print("  saved:", save_path)
 
         last_path = os.path.join(args.out_dir, "last.pt")
-        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib=calib_state)
+        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib={})
 
         if test_loader is not None:
-            pred_t, y_t = predict(model, test_loader, device)
-            mt_raw = eval_metrics(pred_t, y_t)
-            mt_cal = eval_metrics(apply_linear_calibration(pred_t, a, b), y_t)
-            print(
-                f"         test_RMSE={mt_raw['rmse']:.4f}  test_RMSE_cal={mt_cal['rmse']:.4f}  "
-                f"test_Spearman={mt_raw['spearman']:.4f}"
-            )
+            logit_t, y_t = predict(model, test_loader, device)
+            t_m = eval_metrics(logit_t, y_t)
+            print(f"         test_AP={t_m['ap']:.4f} test_AUROC={t_m['auroc']:.4f} test_F1={t_m['f1']:.4f}")
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
