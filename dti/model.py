@@ -302,7 +302,8 @@ def collate_fn(
     )
     if use_dist_profile:
         ex = next((p for p in pdbid_list if p), "")
-
+    dist_res_target_p = None
+    dist_res_mask_p = None
     dist_bias_pl = None
     dist_bias_lp = None
 
@@ -367,6 +368,8 @@ def collate_fn(
         dist_ok=dist_ok,
         dist_bias_pl=dist_bias_pl,
         dist_bias_lp=dist_bias_lp,
+        dist_res_target_p=dist_res_target_p,
+        dist_res_mask_p=dist_res_mask_p,
     )
 
 
