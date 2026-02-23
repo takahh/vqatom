@@ -224,14 +224,14 @@ class Batch:
     l_ids: torch.Tensor              # (B, Ll)
     y: torch.Tensor                  # (B,)
 
-    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) float
-    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) float
-    # distance-related (optional)
     pdbid: List[str]
-    dist_ok: torch.Tensor            # (B,) int/long 0/1
+    dist_ok: torch.Tensor            # (B,) long 0/1
 
-    dist_res_target_p: Optional[torch.Tensor]  # (B, Lp) float32 target prob over protein tokens
-    dist_res_mask_p: Optional[torch.Tensor]    # (B, Lp) bool where target is defined (residue positions)
+    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) float32
+    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) float32
+
+    dist_res_target_p: Optional[torch.Tensor]  # (B, Lp) float32 (target prob over protein tokens)
+    dist_res_mask_p: Optional[torch.Tensor]    # (B, Lp) bool   (where target defined)
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -277,6 +277,7 @@ def collate_fn(
     dist_beta: float,
     dist_cut: float,
     dist_bidir: bool,
+    attn_sigma: float,   # ★追加（KLターゲット用）
 ) -> Batch:
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(
@@ -293,71 +294,104 @@ def collate_fn(
 
     y = torch.stack([s["y"] for s in samples], dim=0)
 
-    # dist_ok はCSVではなく「ファイルがあるか」で決める
     pdbid_list = [str(s.get("pdbid", "") or "") for s in samples]
-
     dist_ok = torch.tensor(
         [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
         dtype=torch.long
     )
-    if use_dist_profile:
-        ex = next((p for p in pdbid_list if p), "")
-    dist_res_target_p = None
-    dist_res_mask_p = None
+
+    # defaults (must exist in Batch)
     dist_bias_pl = None
     dist_bias_lp = None
+    dist_res_target_p = None
+    dist_res_mask_p = None
 
     if use_dist_profile:
         B, Lp = p_input_ids.shape
         _, Ll = l_ids.shape
 
-        # logits bias tensors
-        dist_bias_pl = torch.zeros((B, Lp, Ll), dtype=torch.float32)
-        dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
+        # We'll build both bias matrices; later optionally drop one if dist_bidir=False
+        dist_bias_pl_full = torch.zeros((B, Lp, Ll), dtype=torch.float32)
+        dist_bias_lp_full = torch.zeros((B, Ll, Lp), dtype=torch.float32)
 
-        p_off = 1  # CLS offset
+        dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
+        dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
+
+        p_off = 1
         max_res_tokens = max(0, Lp - 2)  # exclude CLS/EOS
 
         for bi, pdbid in enumerate(pdbid_list):
             if int(dist_ok[bi].item()) != 1:
                 continue
+
             D_np = _load_dist_D_npz(pdbid, dist_dir)
             if D_np is None:
                 continue
 
             n_res, n_lig = D_np.shape
 
-            # align lengths (truncate to available)
-            R = min(n_res, max_res_tokens)
-            A = min(n_lig, Ll)
+            # align lengths
+            R = min(int(n_res), int(max_res_tokens))
+            A = min(int(n_lig), int(Ll))
+
+            if bi == 0:
+                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
             if R <= 0 or A <= 0:
                 continue
-
             D = torch.from_numpy(D_np[:R, :A]).float()  # (R, A)
 
-            # optional cut: beyond cut -> 0 influence
+            # -------------------------
+            # (1) logits bias from D (R,A) -> place into token grids
+            # close -> higher bias
+            # -------------------------
             if dist_cut is not None and float(dist_cut) > 0:
                 far = (D > float(dist_cut))
             else:
                 far = None
 
-            # similarity: close -> 1, far -> ~0
             sim = torch.exp(-D / float(dist_sigma))  # (R,A)
-
             if far is not None:
                 sim = sim.masked_fill(far, 0.0)
 
-            # scale to logits bias
             bias_RA = float(dist_beta) * sim  # (R,A)
 
-            # place into token grids
-            # protein keys/queries: positions [p_off : p_off+R]
-            # ligand tokens: [0 : A]
-            dist_bias_pl[bi, p_off:p_off + R, :A] = bias_RA
-            dist_bias_lp[bi, :A, p_off:p_off + R] = bias_RA.transpose(0, 1)
+            dist_bias_pl_full[bi, p_off:p_off+R, :A] = bias_RA
+            dist_bias_lp_full[bi, :A, p_off:p_off+R] = bias_RA.transpose(0, 1)
 
-            if bi == 0:
-                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
+            # -------------------------
+            # (2) KL target over protein residues from D
+            # Use residue closest distance: d_res[i] = min_j D[i,j]
+            # target ~ exp(-d_res/attn_sigma), mask invalid/pad
+            # -------------------------
+            d_res = D.min(dim=1).values  # (R,)
+            # valid residue token positions (exclude PAD)
+            prot_not_pad = (p_attn_mask[bi, p_off:p_off+R] == 1)
+
+            # if you want also mask by cut, uncomment:
+            # if dist_cut is not None and float(dist_cut) > 0:
+            #     prot_not_pad = prot_not_pad & (d_res <= float(dist_cut))
+
+            ok = prot_not_pad
+            if ok.sum().item() <= 0:
+                continue
+
+            w = torch.exp(-d_res / float(attn_sigma))  # (R,)
+            w = w.masked_fill(~ok, 0.0)
+            Z = w.sum().clamp(min=1e-12)
+            t = w / Z  # (R,)
+
+            dist_res_target_p[bi, p_off:p_off+R] = t
+            dist_res_mask_p[bi, p_off:p_off+R] = ok
+
+        # apply bidir toggle:
+        # - dist_bidir=True : bias both directions
+        # - dist_bidir=False: bias only l<-p (lp), leave pl=None
+        if bool(dist_bidir):
+            dist_bias_pl = dist_bias_pl_full
+            dist_bias_lp = dist_bias_lp_full
+        else:
+            dist_bias_pl = None
+            dist_bias_lp = dist_bias_lp_full
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -371,7 +405,6 @@ def collate_fn(
         dist_res_target_p=dist_res_target_p,
         dist_res_mask_p=dist_res_mask_p,
     )
-
 
 # -----------------------------
 # Utilities: vocab meta + safe loading
@@ -1214,6 +1247,7 @@ def main():
             dist_beta=float(args.dist_beta),
             dist_cut=float(args.dist_cut),
             dist_bidir=bool(args.dist_bidir),
+            attn_sigma=float(args.attn_sigma),
         ),
     )
 
@@ -1235,6 +1269,7 @@ def main():
                 dist_beta=float(args.dist_beta),
                 dist_cut=float(args.dist_cut),
                 dist_bidir=bool(args.dist_bidir),
+                attn_sigma=float(args.attn_sigma),
             ),
         )
 
@@ -1270,6 +1305,7 @@ def main():
                 dist_beta=float(args.dist_beta),
                 dist_cut=float(args.dist_cut),
                 dist_bidir=bool(args.dist_bidir),
+                attn_sigma=float(args.attn_sigma),
             ),
         )
         calib_loader = DataLoader(
@@ -1287,6 +1323,7 @@ def main():
                 dist_beta=float(args.dist_beta),
                 dist_cut=float(args.dist_cut),
                 dist_bidir=bool(args.dist_bidir),
+                attn_sigma=float(args.attn_sigma),
             ),
         )
         print(f"[split] train={len(tr_idx)}  calib={len(cal_idx)}  valid={len(valid_ds)}")
