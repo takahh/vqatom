@@ -827,10 +827,9 @@ class CrossAttnDTIRegressor(nn.Module):
 
         # ---- aggregate KL across layers
         if kls_lp:
-            stk = torch.stack(kls_lp, dim=0)  # (n_layers_used,)
-            aux["res_kl"] = stk.sum() if self.attn_kl_reduce == "sum" else stk.mean()
+            aux["res_kl"] = torch.stack(kls_lp).mean() if self.attn_kl_reduce != "sum" else torch.stack(kls_lp).sum()
         else:
-            aux["res_kl"] = torch.tensor(float("nan"), device=p_h.device)
+            aux["res_kl"] = torch.zeros((), device=p_h.device)  # 0.0
 
         # ---- pool & head (classification logits)
         p_pool = masked_mean_by_attn(p_h, p_attn_mask)     # (B,D)
