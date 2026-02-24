@@ -714,129 +714,129 @@ class CrossAttnDTIRegressor(nn.Module):
         self.attn_kl_layers = int(attn_kl_layers)
         self.attn_kl_reduce = str(attn_kl_reduce)
 
-def forward(
-    self,
-    p_input_ids: torch.Tensor,
-    p_attn_mask: torch.Tensor,
-    l_ids: torch.Tensor,
-    dist_bias_pl: Optional[torch.Tensor] = None,      # (B,Lp,Ll) additive logits bias for p<-l
-    dist_bias_lp: Optional[torch.Tensor] = None,      # (B,Ll,Lp) additive logits bias for l<-p
-    dist_res_target_p: Optional[torch.Tensor] = None, # (B,Lp)   unnormalized target weights over protein tokens
-    dist_res_mask_p: Optional[torch.Tensor] = None,   # (B,Lp)   bool mask where target is defined
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """
-    Returns:
-      y_hat: (B,) logits (for BCEWithLogits)
-      aux: dict, may contain:
-        - "res_kl": scalar tensor (nan if not computed)
-        - "res_kl_head0_l_from_p_layer{i}": scalar per layer (nan if not computed)
-    """
-    aux: Dict[str, torch.Tensor] = {}
+    def forward(
+        self,
+        p_input_ids: torch.Tensor,
+        p_attn_mask: torch.Tensor,
+        l_ids: torch.Tensor,
+        dist_bias_pl: Optional[torch.Tensor] = None,      # (B,Lp,Ll) additive logits bias for p<-l
+        dist_bias_lp: Optional[torch.Tensor] = None,      # (B,Ll,Lp) additive logits bias for l<-p
+        dist_res_target_p: Optional[torch.Tensor] = None, # (B,Lp)   unnormalized target weights over protein tokens
+        dist_res_mask_p: Optional[torch.Tensor] = None,   # (B,Lp)   bool mask where target is defined
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """
+        Returns:
+          y_hat: (B,) logits (for BCEWithLogits)
+          aux: dict, may contain:
+            - "res_kl": scalar tensor (nan if not computed)
+            - "res_kl_head0_l_from_p_layer{i}": scalar per layer (nan if not computed)
+        """
+        aux: Dict[str, torch.Tensor] = {}
 
-    # ---- encode
-    p_h = self.prot(p_input_ids, p_attn_mask)  # (B,Lp,Hp)
-    if self.p_proj is not None:
-        p_h = self.p_proj(p_h)                 # (B,Lp,D)
-    l_h = self.lig(l_ids)                      # (B,Ll,D)
+        # ---- encode
+        p_h = self.prot(p_input_ids, p_attn_mask)  # (B,Lp,Hp)
+        if self.p_proj is not None:
+            p_h = self.p_proj(p_h)                 # (B,Lp,D)
+        l_h = self.lig(l_ids)                      # (B,Ll,D)
 
-    prot_pad_mask = (p_attn_mask == 0)         # (B,Lp) True=PAD (ignore as keys)
-    lig_pad_mask  = (l_ids == self.lig_pad_id) # (B,Ll) True=PAD (ignore as keys / queries)
+        prot_pad_mask = (p_attn_mask == 0)         # (B,Lp) True=PAD (ignore as keys)
+        lig_pad_mask  = (l_ids == self.lig_pad_id) # (B,Ll) True=PAD (ignore as keys / queries)
 
-    # ---- stacked cross blocks
-    kls_lp: List[torch.Tensor] = []
+        # ---- stacked cross blocks
+        kls_lp: List[torch.Tensor] = []
 
-    for li in range(self.cross_layers):
-        # ========== p <- l ==========
-        p_from_l = self.cross_p_from_l[li](
-            q=p_h, k=l_h, v=l_h,
-            key_padding_mask=lig_pad_mask,     # ignore ligand PAD as keys
-            logits_bias=dist_bias_pl,
-            return_attn_head0=False,
-        )
-        p_h = self.post_ln_p[li](p_h + p_from_l)
-        p_h = self.ffn_p[li](p_h)
-
-        # ========== l <- p (optionally get head0 attn for KL) ==========
-        want_kl_this_layer = (
-            (self.attn_kl_layers > 0) and (li < self.attn_kl_layers)
-            and (dist_res_target_p is not None) and (dist_res_mask_p is not None)
-        )
-
-        if want_kl_this_layer:
-            l_from_p, attn0_lp = self.cross_l_from_p[li](
-                q=l_h, k=p_h, v=p_h,
-                key_padding_mask=prot_pad_mask,  # ignore protein PAD as keys
-                logits_bias=dist_bias_lp,
-                return_attn_head0=True,          # gives (B,Ll,Lp) softmax over Lp
-            )
-        else:
-            l_from_p = self.cross_l_from_p[li](
-                q=l_h, k=p_h, v=p_h,
-                key_padding_mask=prot_pad_mask,
-                logits_bias=dist_bias_lp,
+        for li in range(self.cross_layers):
+            # ========== p <- l ==========
+            p_from_l = self.cross_p_from_l[li](
+                q=p_h, k=l_h, v=l_h,
+                key_padding_mask=lig_pad_mask,     # ignore ligand PAD as keys
+                logits_bias=dist_bias_pl,
                 return_attn_head0=False,
             )
-            attn0_lp = None
+            p_h = self.post_ln_p[li](p_h + p_from_l)
+            p_h = self.ffn_p[li](p_h)
 
-        l_h = self.post_ln_l[li](l_h + l_from_p)
-        l_h = self.ffn_l[li](l_h)
+            # ========== l <- p (optionally get head0 attn for KL) ==========
+            want_kl_this_layer = (
+                (self.attn_kl_layers > 0) and (li < self.attn_kl_layers)
+                and (dist_res_target_p is not None) and (dist_res_mask_p is not None)
+            )
 
-        # ========== KL guidance (layer selected) ==========
-        # We guide "residue importance": average over ligand queries of l<-p head0 attention
-        if want_kl_this_layer and (attn0_lp is not None):
-            device = p_h.device
-            dtype = p_h.dtype
-
-            # attn0_lp: (B, Ll, Lp) already softmax over Lp, but we'll clamp anyway
-            A = attn0_lp.to(device=device, dtype=dtype).clamp(min=1e-12)
-
-            # exclude PAD ligand queries when averaging
-            q_ok = (~lig_pad_mask).to(device=device)          # (B,Ll) bool
-            q_ok_f = q_ok.float()
-            denom_q = q_ok_f.sum(dim=1, keepdim=True).clamp(min=1.0)   # (B,1)
-            Abar = (A * q_ok_f.unsqueeze(-1)).sum(dim=1) / denom_q     # (B,Lp)
-
-            T = dist_res_target_p.to(device=device, dtype=dtype).clamp(min=1e-12)  # (B,Lp)
-            M = dist_res_mask_p.to(device=device)                                  # (B,Lp) bool
-
-            valid = (M.sum(dim=1) > 0)  # (B,)
-            if valid.any():
-                Tv = T[valid]
-                Av = Abar[valid]
-                Mv = M[valid]
-
-                # mask outside -> 0 (target) / tiny (attn)
-                Tm = Tv.masked_fill(~Mv, 0.0)
-                Am = Av.masked_fill(~Mv, 1e-12)
-
-                # renormalize to distributions over masked positions
-                Zt = Tm.sum(dim=1, keepdim=True).clamp(min=1e-12)
-                Za = Am.sum(dim=1, keepdim=True).clamp(min=1e-12)
-                Tm = Tm / Zt
-                Am = Am / Za
-
-                # KL(T || A)
-                kl_b = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (Bv,)
-                kl = kl_b.mean()
-                kls_lp.append(kl)
-                aux[f"res_kl_head0_l_from_p_layer{li}"] = kl
+            if want_kl_this_layer:
+                l_from_p, attn0_lp = self.cross_l_from_p[li](
+                    q=l_h, k=p_h, v=p_h,
+                    key_padding_mask=prot_pad_mask,  # ignore protein PAD as keys
+                    logits_bias=dist_bias_lp,
+                    return_attn_head0=True,          # gives (B,Ll,Lp) softmax over Lp
+                )
             else:
-                aux[f"res_kl_head0_l_from_p_layer{li}"] = torch.tensor(float("nan"), device=device)
+                l_from_p = self.cross_l_from_p[li](
+                    q=l_h, k=p_h, v=p_h,
+                    key_padding_mask=prot_pad_mask,
+                    logits_bias=dist_bias_lp,
+                    return_attn_head0=False,
+                )
+                attn0_lp = None
 
-    # ---- aggregate KL across layers
-    if kls_lp:
-        stk = torch.stack(kls_lp, dim=0)  # (n_layers_used,)
-        aux["res_kl"] = stk.sum() if self.attn_kl_reduce == "sum" else stk.mean()
-    else:
-        aux["res_kl"] = torch.tensor(float("nan"), device=p_h.device)
+            l_h = self.post_ln_l[li](l_h + l_from_p)
+            l_h = self.ffn_l[li](l_h)
 
-    # ---- pool & head (classification logits)
-    p_pool = masked_mean_by_attn(p_h, p_attn_mask)     # (B,D)
-    l_attn_mask = (~lig_pad_mask).long()               # (B,Ll)
-    l_pool = masked_mean_by_attn(l_h, l_attn_mask)     # (B,D)
+            # ========== KL guidance (layer selected) ==========
+            # We guide "residue importance": average over ligand queries of l<-p head0 attention
+            if want_kl_this_layer and (attn0_lp is not None):
+                device = p_h.device
+                dtype = p_h.dtype
 
-    y_hat = self.head(torch.cat([p_pool, l_pool], dim=-1)).squeeze(-1)  # (B,)
-    return y_hat, aux
+                # attn0_lp: (B, Ll, Lp) already softmax over Lp, but we'll clamp anyway
+                A = attn0_lp.to(device=device, dtype=dtype).clamp(min=1e-12)
+
+                # exclude PAD ligand queries when averaging
+                q_ok = (~lig_pad_mask).to(device=device)          # (B,Ll) bool
+                q_ok_f = q_ok.float()
+                denom_q = q_ok_f.sum(dim=1, keepdim=True).clamp(min=1.0)   # (B,1)
+                Abar = (A * q_ok_f.unsqueeze(-1)).sum(dim=1) / denom_q     # (B,Lp)
+
+                T = dist_res_target_p.to(device=device, dtype=dtype).clamp(min=1e-12)  # (B,Lp)
+                M = dist_res_mask_p.to(device=device)                                  # (B,Lp) bool
+
+                valid = (M.sum(dim=1) > 0)  # (B,)
+                if valid.any():
+                    Tv = T[valid]
+                    Av = Abar[valid]
+                    Mv = M[valid]
+
+                    # mask outside -> 0 (target) / tiny (attn)
+                    Tm = Tv.masked_fill(~Mv, 0.0)
+                    Am = Av.masked_fill(~Mv, 1e-12)
+
+                    # renormalize to distributions over masked positions
+                    Zt = Tm.sum(dim=1, keepdim=True).clamp(min=1e-12)
+                    Za = Am.sum(dim=1, keepdim=True).clamp(min=1e-12)
+                    Tm = Tm / Zt
+                    Am = Am / Za
+
+                    # KL(T || A)
+                    kl_b = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (Bv,)
+                    kl = kl_b.mean()
+                    kls_lp.append(kl)
+                    aux[f"res_kl_head0_l_from_p_layer{li}"] = kl
+                else:
+                    aux[f"res_kl_head0_l_from_p_layer{li}"] = torch.tensor(float("nan"), device=device)
+
+        # ---- aggregate KL across layers
+        if kls_lp:
+            stk = torch.stack(kls_lp, dim=0)  # (n_layers_used,)
+            aux["res_kl"] = stk.sum() if self.attn_kl_reduce == "sum" else stk.mean()
+        else:
+            aux["res_kl"] = torch.tensor(float("nan"), device=p_h.device)
+
+        # ---- pool & head (classification logits)
+        p_pool = masked_mean_by_attn(p_h, p_attn_mask)     # (B,D)
+        l_attn_mask = (~lig_pad_mask).long()               # (B,Ll)
+        l_pool = masked_mean_by_attn(l_h, l_attn_mask)     # (B,D)
+
+        y_hat = self.head(torch.cat([p_pool, l_pool], dim=-1)).squeeze(-1)  # (B,)
+        return y_hat, aux
 
 # -----------------------------
 # Predict / Eval (raw + calibrated
