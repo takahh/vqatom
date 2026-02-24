@@ -781,47 +781,49 @@ class CrossAttnDTIRegressor(nn.Module):
             l_h = self.post_ln_l[li](l_h + l_from_p)
             l_h = self.ffn_l[li](l_h)
 
-            # ========== KL guidance (layer selected) ==========
-            # We guide "residue importance": average over ligand queries of l<-p head0 attention
+            # --- KL (layer selected): residue importance via l<-p head0
             if want_kl_this_layer and (attn0_lp is not None):
-                device = p_h.device
-                dtype = p_h.dtype
+                # attn0_lp: (B, Ll, Lp) softmax over Lp  (may contain NaN if logits were all -inf)
+                A = attn0_lp.to(device=p_h.device, dtype=p_h.dtype)
 
-                # attn0_lp: (B, Ll, Lp) already softmax over Lp, but we'll clamp anyway
-                A = attn0_lp.to(device=device, dtype=dtype).clamp(min=1e-12)
+                # まず NaN を潰す（all -inf softmax 対策）
+                A = torch.nan_to_num(A, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0)
 
-                # exclude PAD ligand queries when averaging
-                q_ok = (~lig_pad_mask).to(device=device)          # (B,Ll) bool
+                # average over ligand queries (exclude PAD queries)
+                q_ok = (~lig_pad_mask).to(device=p_h.device)  # (B,Ll)
                 q_ok_f = q_ok.float()
-                denom_q = q_ok_f.sum(dim=1, keepdim=True).clamp(min=1.0)   # (B,1)
-                Abar = (A * q_ok_f.unsqueeze(-1)).sum(dim=1) / denom_q     # (B,Lp)
+                denom_q = q_ok_f.sum(dim=1, keepdim=True).clamp(min=1.0)  # (B,1)
+                Abar = (A * q_ok_f.unsqueeze(-1)).sum(dim=1) / denom_q  # (B,Lp)
 
-                T = dist_res_target_p.to(device=device, dtype=dtype).clamp(min=1e-12)  # (B,Lp)
-                M = dist_res_mask_p.to(device=device)                                  # (B,Lp) bool
+                # target + mask
+                T = dist_res_target_p.to(device=p_h.device, dtype=p_h.dtype)
+                M = dist_res_mask_p.to(device=p_h.device)
 
-                valid = (M.sum(dim=1) > 0)  # (B,)
+                # apply mask
+                Tm = T.masked_fill(~M, 0.0)
+                Am = Abar.masked_fill(~M, 0.0)
+
+                # valid rows: at least one masked position AND both sums > 0
+                sumT = Tm.sum(dim=1)  # (B,)
+                sumA = Am.sum(dim=1)  # (B,)
+                valid = (sumT > 0) & (sumA > 0)
+
                 if valid.any():
-                    Tv = T[valid]
-                    Av = Abar[valid]
-                    Mv = M[valid]
+                    Tm = Tm[valid]
+                    Am = Am[valid]
 
-                    # mask outside -> 0 (target) / tiny (attn)
-                    Tm = Tv.masked_fill(~Mv, 0.0)
-                    Am = Av.masked_fill(~Mv, 1e-12)
-
-                    # renormalize to distributions over masked positions
-                    Zt = Tm.sum(dim=1, keepdim=True).clamp(min=1e-12)
-                    Za = Am.sum(dim=1, keepdim=True).clamp(min=1e-12)
-                    Tm = Tm / Zt
-                    Am = Am / Za
+                    # normalize to distributions
+                    Tm = Tm / Tm.sum(dim=1, keepdim=True).clamp(min=1e-12)
+                    Am = Am / Am.sum(dim=1, keepdim=True).clamp(min=1e-12)
 
                     # KL(T || A)
-                    kl_b = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)  # (Bv,)
+                    kl_b = (Tm * (torch.log(Tm.clamp(min=1e-12)) - torch.log(Am.clamp(min=1e-12)))).sum(dim=1)
                     kl = kl_b.mean()
-                    kls_lp.append(kl)
-                    aux[f"res_kl_head0_l_from_p_layer{li}"] = kl
-                else:
-                    aux[f"res_kl_head0_l_from_p_layer{li}"] = torch.tensor(float("nan"), device=device)
+
+                    # final safety
+                    if torch.isfinite(kl).all():
+                        kls_lp.append(kl)
+                        aux[f"res_kl_head0_l_from_p_layer{li}"] = kl
 
         # ---- aggregate KL across layers
         if kls_lp:
