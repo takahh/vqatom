@@ -850,29 +850,23 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple
     return logit, yy
 
 
-def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
-    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_recall_curve
+def eval_metrics(logit: np.ndarray, y: np.ndarray, thr: float = 0.5) -> Dict[str, float]:
+    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
     prob = 1.0 / (1.0 + np.exp(-logit))
     y01 = (y > 0.5).astype(np.int32)
 
     if len(np.unique(y01)) <= 1:
-        return {"auroc": 0.0, "ap": 0.0, "f1": 0.0, "thr": 0.5,
+        return {"auroc": 0.0, "ap": 0.0, "f1": 0.0, "thr": float(thr),
                 "prob_mean": float(prob.mean()), "prob_std": float(prob.std())}
 
     auroc = roc_auc_score(y01, prob)
     ap = average_precision_score(y01, prob)
 
-    prec, rec, thr = precision_recall_curve(y01, prob)
-    f1s = 2 * prec * rec / (prec + rec + 1e-12)
-    # precision_recall_curve のthrは長さが1短いので、この取り方が安全
-    best_i = int(np.argmax(f1s[:-1]))  # thr と同じ長さに揃える
-    best_thr = float(thr[best_i]) if thr.size > 0 else 0.5
-
-    pred01 = (prob >= best_thr).astype(np.int32)
+    pred01 = (prob >= float(thr)).astype(np.int32)
     f1 = f1_score(y01, pred01)
 
-    return {"auroc": float(auroc), "ap": float(ap), "f1": float(f1), "thr": float(best_thr),
+    return {"auroc": float(auroc), "ap": float(ap), "f1": float(f1), "thr": float(thr),
             "prob_mean": float(prob.mean()), "prob_std": float(prob.std())}
 
 def train_one_epoch(
