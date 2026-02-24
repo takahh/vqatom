@@ -905,44 +905,46 @@ def train_one_epoch(
     use_kl = float(attn_lambda) > 0.0
     pw = torch.tensor([float(pos_weight)], device=device)
 
-    for batch in loader:
+    # ... 省略 ...
+
+    for step, batch in enumerate(loader):
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
         l = batch.l_ids.to(device)
         y = batch.y.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        if use_kl:
-            print("kl finite ratio:", torch.isfinite(aux["res_kl"]).float().mean().item())
-        y_hat, aux = model(
+
+        logit, aux = model(
             p_ids, p_msk, l,
             dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
             dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
-        if use_kl:
-            if "res_kl" not in aux:
-                # debug once
-                if len(losses) == 0:
-                    print("[debug] aux has no res_kl. keys:", list(aux.keys())[:10])
-        # ---- base loss
-        logit = y_hat  # (B,)
+
+        # ---- debug: first few steps only
+        if use_kl and step < 3:
+            rk = aux.get("res_kl", None)
+            if rk is None:
+                print("[dbg] res_kl: MISSING (aux has no key)")
+            else:
+                print("[dbg] res_kl:", float(rk.detach().cpu()) if torch.isfinite(rk).all() else "NaN/Inf")
+
         base_loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=pw)
         loss = base_loss
 
-        # ---- optional KL (already aggregated in aux["res_kl"])
         if use_kl:
             kl = aux.get("res_kl", None)
             if (kl is not None) and torch.isfinite(kl).all():
                 loss = loss + float(attn_lambda) * kl
-        else:
-            kl = None  # for logging
 
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
         optimizer.step()
+
+        # ... logging ...
 
         # ---- logging
         losses.append(float(loss.detach().cpu().item()))
