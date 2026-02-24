@@ -305,93 +305,56 @@ def collate_fn(
     dist_bias_lp = None
     dist_res_target_p = None
     dist_res_mask_p = None
-
     if use_dist_profile:
         B, Lp = p_input_ids.shape
         _, Ll = l_ids.shape
+        dist_bias_pl = None  # d_meanではp<-lに入れても基本効かないのでNone推奨
+        dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
 
-        # We'll build both bias matrices; later optionally drop one if dist_bidir=False
-        dist_bias_pl_full = torch.zeros((B, Lp, Ll), dtype=torch.float32)
-        dist_bias_lp_full = torch.zeros((B, Ll, Lp), dtype=torch.float32)
-
+        # optional: KL用
         dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
         dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
 
         p_off = 1
-        max_res_tokens = max(0, Lp - 2)  # exclude CLS/EOS
+        max_res_tokens = max(0, Lp - 2)
 
         for bi, pdbid in enumerate(pdbid_list):
             if int(dist_ok[bi].item()) != 1:
                 continue
 
-            D_np = _load_dist_D_npz(pdbid, dist_dir)
-            if D_np is None:
+            d_mean_np, row_mask_np = _load_dist_profile_npz(pdbid, dist_dir)
+            if d_mean_np is None:
                 continue
 
-            n_res, n_lig = D_np.shape
-
-            # align lengths
-            R = min(int(n_res), int(max_res_tokens))
-            A = min(int(n_lig), int(Ll))
-
-            if bi == 0:
-                print(f"[dist] pdbid={pdbid} D={n_res}x{n_lig} Lp={Lp} Ll={Ll} -> R={R} A={A}")
-            if R <= 0 or A <= 0:
+            R = min(int(d_mean_np.shape[0]), max_res_tokens)
+            if R <= 0:
                 continue
-            D = torch.from_numpy(D_np[:R, :A]).float()  # (R, A)
 
-            # -------------------------
-            # (1) logits bias from D (R,A) -> place into token grids
-            # close -> higher bias
-            # -------------------------
+            d = torch.from_numpy(d_mean_np[:R]).float()  # (R,)
+            m = torch.from_numpy(row_mask_np[:R]).bool()  # (R,)
+
+            # close -> big weight
+            s = torch.exp(-d / float(dist_sigma))  # (R,)
             if dist_cut is not None and float(dist_cut) > 0:
-                far = (D > float(dist_cut))
-            else:
-                far = None
+                s = s.masked_fill(d > float(dist_cut), 0.0)
 
-            sim = torch.exp(-D / float(dist_sigma))  # (R,A)
-            if far is not None:
-                sim = sim.masked_fill(far, 0.0)
+            # logits bias strength
+            s = float(dist_beta) * s  # (R,)
 
-            bias_RA = float(dist_beta) * sim  # (R,A)
+            # place into token positions (protein keys)
+            pos = slice(p_off, p_off + R)
 
-            dist_bias_pl_full[bi, p_off:p_off+R, :A] = bias_RA
-            dist_bias_lp_full[bi, :A, p_off:p_off+R] = bias_RA.transpose(0, 1)
+            # l<-p logits bias: (Ll,Lp) の protein列に s を足す
+            s_bias = torch.exp(-d / float(dist_sigma))
+            s_bias = float(dist_beta) * s_bias
+            dist_bias_lp[bi, :, pos] = s_bias.unsqueeze(0).expand(Ll, R)
 
-            # -------------------------
-            # (2) KL target over protein residues from D
-            # Use residue closest distance: d_res[i] = min_j D[i,j]
-            # target ~ exp(-d_res/attn_sigma), mask invalid/pad
-            # -------------------------
-            d_res = D.min(dim=1).values  # (R,)
-            # valid residue token positions (exclude PAD)
-            prot_not_pad = (p_attn_mask[bi, p_off:p_off+R] == 1)
-
-            # if you want also mask by cut, uncomment:
-            # if dist_cut is not None and float(dist_cut) > 0:
-            #     prot_not_pad = prot_not_pad & (d_res <= float(dist_cut))
-
-            ok = prot_not_pad
-            if ok.sum().item() <= 0:
-                continue
-
-            w = torch.exp(-d_res / float(attn_sigma))  # (R,)
-            w = w.masked_fill(~ok, 0.0)
-            Z = w.sum().clamp(min=1e-12)
-            t = w / Z  # (R,)
-
-            dist_res_target_p[bi, p_off:p_off+R] = t
-            dist_res_mask_p[bi, p_off:p_off+R] = ok
-
-        # apply bidir toggle:
-        # - dist_bidir=True : bias both directions
-        # - dist_bidir=False: bias only l<-p (lp), leave pl=None
-        if bool(dist_bidir):
-            dist_bias_pl = dist_bias_pl_full
-            dist_bias_lp = dist_bias_lp_full
-        else:
-            dist_bias_pl = None
-            dist_bias_lp = dist_bias_lp_full
+            # KL target: betaは掛けない（あとで正規化される）
+            t = torch.exp(-d / float(attn_sigma))
+            if dist_cut is not None and float(dist_cut) > 0:
+                t = t.masked_fill(d > float(dist_cut), 0.0)
+            dist_res_target_p[bi, pos] = t
+            dist_res_mask_p[bi, pos] = m
 
     return Batch(
         p_input_ids=p_input_ids,
