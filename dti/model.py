@@ -1297,7 +1297,11 @@ def main():
         device=device,
         finetune=args.finetune_esm,
     )
-
+    print("finetune_esm:", args.finetune_esm)
+    esm = prot_enc.esm
+    n_train = sum(p.requires_grad for p in esm.parameters())
+    n_all = sum(1 for _ in esm.parameters())
+    print(f"[debug] ESM requires_grad: {n_train}/{n_all}")
     # full model
     model = CrossAttnDTIRegressor(
         protein_encoder=prot_enc,
