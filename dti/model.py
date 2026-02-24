@@ -912,7 +912,8 @@ def train_one_epoch(
         y = batch.y.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-
+        if use_kl:
+            print("kl finite ratio:", torch.isfinite(aux["res_kl"]).float().mean().item())
         y_hat, aux = model(
             p_ids, p_msk, l,
             dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
