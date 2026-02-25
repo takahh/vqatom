@@ -946,12 +946,15 @@ def train_one_epoch(
         optimizer.step()
 
         # ... logging ...
-        if not torch.isfinite(aux["res_kl"]).all():
+        if use_kl and step < 3:
             print("[dbg] dist_ok sum:", int(batch.dist_ok.sum().item()))
-            print("[dbg] mask sum:",
-                  int(batch.dist_res_mask_p.sum().item()) if batch.dist_res_mask_p is not None else None)
-            print("[dbg] target sum:",
-                  float(batch.dist_res_target_p.sum().item()) if batch.dist_res_target_p is not None else None)
+            m = batch.dist_res_mask_p
+            t = batch.dist_res_target_p
+            print("[dbg] mask sum:", int(m.sum().item()) if m is not None else None)
+            print("[dbg] target sum:", float(t.sum().item()) if t is not None else None)
+            rk = aux.get("res_kl", None)
+            print("[dbg] res_kl:", None if rk is None else float(rk.detach().cpu()))
+
         # ---- logging
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
