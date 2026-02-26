@@ -219,19 +219,22 @@ def _load_dist_D_npz(pdbid: str, dist_dir: str):
 
 @dataclass
 class Batch:
-    p_input_ids: torch.Tensor        # (B, Lp)
-    p_attn_mask: torch.Tensor        # (B, Lp) 1=real 0=pad
-    l_ids: torch.Tensor              # (B, Ll)
-    y: torch.Tensor                  # (B,)
+    p_input_ids: torch.Tensor
+    p_attn_mask: torch.Tensor
+    l_ids: torch.Tensor
+
+    y_bin: torch.Tensor        # (B,)
+    y_aff: torch.Tensor        # (B,)
+    aff_mask: torch.Tensor     # (B,) float 0/1
 
     pdbid: List[str]
-    dist_ok: torch.Tensor            # (B,) long 0/1
+    dist_ok: torch.Tensor
 
-    dist_bias_pl: Optional[torch.Tensor]  # (B, Lp, Ll) float32
-    dist_bias_lp: Optional[torch.Tensor]  # (B, Ll, Lp) float32
+    dist_bias_pl: Optional[torch.Tensor]
+    dist_bias_lp: Optional[torch.Tensor]
+    dist_res_target_p: Optional[torch.Tensor]
+    dist_res_mask_p: Optional[torch.Tensor]
 
-    dist_res_target_p: Optional[torch.Tensor]  # (B, Lp) float32 (target prob over protein tokens)
-    dist_res_mask_p: Optional[torch.Tensor]    # (B, Lp) bool   (where target defined)
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -266,7 +269,6 @@ def _load_dist_profile_npz(pdbid: str, dist_dir: str):
     except Exception:
         return None, None
 
-
 def collate_fn(
     samples: List[Dict[str, object]],
     esm_tokenizer,
@@ -277,22 +279,20 @@ def collate_fn(
     dist_beta: float,
     dist_cut: float,
     dist_bidir: bool,
-    attn_sigma: float,   # ★追加（KLターゲット用）
+    attn_sigma: float,
 ) -> Batch:
     seqs = [str(s["seq"]) for s in samples]
-    enc = esm_tokenizer(
-        seqs,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-    )
-    p_input_ids = enc["input_ids"].long()         # (B, Lp)
-    p_attn_mask = enc["attention_mask"].long()    # (B, Lp)
+    enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
+    p_input_ids = enc["input_ids"].long()
+    p_attn_mask = enc["attention_mask"].long()
 
     l_ids_list = [s["l_ids"] for s in samples]
-    l_ids = pad_1d(l_ids_list, lig_pad)           # (B, Ll)
+    l_ids = pad_1d(l_ids_list, lig_pad)
 
-    y = torch.stack([s["y"] for s in samples], dim=0)
+    # ★ここ：必ずループ外で一回だけ作る
+    y_bin = torch.stack([s["y_bin"] for s in samples], dim=0)       # (B,)
+    y_aff = torch.stack([s["y_aff"] for s in samples], dim=0)       # (B,)
+    aff_mask = torch.stack([s["aff_mask"] for s in samples], dim=0) # (B,)
 
     pdbid_list = [str(s.get("pdbid", "") or "") for s in samples]
     dist_ok = torch.tensor(
@@ -300,18 +300,18 @@ def collate_fn(
         dtype=torch.long
     )
 
-    # defaults (must exist in Batch)
     dist_bias_pl = None
     dist_bias_lp = None
     dist_res_target_p = None
     dist_res_mask_p = None
+
     if use_dist_profile:
         B, Lp = p_input_ids.shape
         _, Ll = l_ids.shape
-        dist_bias_pl = None  # d_meanではp<-lに入れても基本効かないのでNone推奨
+
+        dist_bias_pl = None
         dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
 
-        # optional: KL用
         dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
         dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
 
@@ -321,7 +321,6 @@ def collate_fn(
         for bi, pdbid in enumerate(pdbid_list):
             if int(dist_ok[bi].item()) != 1:
                 continue
-
             d_mean_np, row_mask_np = _load_dist_profile_npz(pdbid, dist_dir)
             if d_mean_np is None:
                 continue
@@ -330,26 +329,19 @@ def collate_fn(
             if R <= 0:
                 continue
 
-            d = torch.from_numpy(d_mean_np[:R]).float()  # (R,)
-            m = torch.from_numpy(row_mask_np[:R]).bool()  # (R,)
+            d = torch.from_numpy(d_mean_np[:R]).float()     # (R,)
+            m = torch.from_numpy(row_mask_np[:R]).bool()    # (R,)
 
-            # close -> big weight
-            s = torch.exp(-d / float(dist_sigma))  # (R,)
-            if dist_cut is not None and float(dist_cut) > 0:
-                s = s.masked_fill(d > float(dist_cut), 0.0)
-
-            # logits bias strength
-            s = float(dist_beta) * s  # (R,)
-
-            # place into token positions (protein keys)
             pos = slice(p_off, p_off + R)
 
-            # l<-p logits bias: (Ll,Lp) の protein列に s を足す
+            # l<-p logits bias
             s_bias = torch.exp(-d / float(dist_sigma))
+            if dist_cut is not None and float(dist_cut) > 0:
+                s_bias = s_bias.masked_fill(d > float(dist_cut), 0.0)
             s_bias = float(dist_beta) * s_bias
             dist_bias_lp[bi, :, pos] = s_bias.unsqueeze(0).expand(Ll, R)
 
-            # KL target: betaは掛けない（あとで正規化される）
+            # KL target (no beta)
             t = torch.exp(-d / float(attn_sigma))
             if dist_cut is not None and float(dist_cut) > 0:
                 t = t.masked_fill(d > float(dist_cut), 0.0)
@@ -360,7 +352,9 @@ def collate_fn(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
-        y=y,
+        y_bin=y_bin,
+        y_aff=y_aff,
+        aff_mask=aff_mask,
         pdbid=pdbid_list,
         dist_ok=dist_ok,
         dist_bias_pl=dist_bias_pl,
@@ -662,6 +656,49 @@ class BiasedCrossAttention(nn.Module):
         if return_attn_head0:
             return out, attn_head0
         return out
+
+class DTIDataset(Dataset):
+    def __init__(self, csv_path: str):
+        rows = read_csv_rows(csv_path)
+        self.samples = []
+        for r in rows:
+            seq = r["seq"].strip()
+            lig = r["lig_tok"].strip()
+
+            # --- binary label (required)
+            if "label" not in r:
+                raise KeyError("CSV must contain 'label' (0/1) for binding classification.")
+            y_bin = float(r["label"])
+
+            # --- affinity (optional)
+            y_aff = float("nan")
+            y_aff_ok = 0.0
+            if "y" in r and str(r["y"]).strip() != "":
+                try:
+                    y_aff = float(r["y"])
+                    y_aff_ok = 1.0
+                except Exception:
+                    pass
+
+            pdbid = r.get("pdbid", "").strip()
+
+            self.samples.append((seq, lig, y_bin, y_aff, y_aff_ok, pdbid))
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        seq, lig_str, y_bin, y_aff, y_aff_ok, pdbid = self.samples[idx]
+        l_ids = parse_lig_tokens(lig_str)
+        return {
+            "seq": seq,
+            "l_ids": torch.tensor(l_ids, dtype=torch.long),
+            "y_bin": torch.tensor(y_bin, dtype=torch.float32),
+            "y_aff": torch.tensor(y_aff, dtype=torch.float32),
+            "aff_mask": torch.tensor(y_aff_ok, dtype=torch.float32),  # 1 if y_aff valid else 0
+            "pdbid": pdbid,
+        }
+
 class CrossAttnDTIRegressor(nn.Module):
     def __init__(
         self,
@@ -701,18 +738,21 @@ class CrossAttnDTIRegressor(nn.Module):
         self.ffn_p = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
         self.ffn_l = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
 
-        self.head = nn.Sequential(
+        self.shared = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
         )
+
+        self.head_cls = nn.Linear(d_model, 1)  # binding logit
+        self.head_aff = nn.Linear(d_model, 1)  # affinity regression
 
         self.lig_pad_id = self.lig.pad_id
         self.attn_sigma = float(attn_sigma)
         self.attn_kl_layers = int(attn_kl_layers)
         self.attn_kl_reduce = str(attn_kl_reduce)
+
 
     def forward(
         self,
@@ -836,8 +876,12 @@ class CrossAttnDTIRegressor(nn.Module):
         l_attn_mask = (~lig_pad_mask).long()               # (B,Ll)
         l_pool = masked_mean_by_attn(l_h, l_attn_mask)     # (B,D)
 
-        y_hat = self.head(torch.cat([p_pool, l_pool], dim=-1)).squeeze(-1)  # (B,)
-        return y_hat, aux
+        z = self.shared(torch.cat([p_pool, l_pool], dim=-1))  # (B,D)
+
+        logit = self.head_cls(z).squeeze(-1)  # (B,)
+        y_aff_hat = self.head_aff(z).squeeze(-1)  # (B,)
+
+        return logit, y_aff_hat, aux
 
 # -----------------------------
 # Predict / Eval (raw + calibrated
@@ -916,7 +960,7 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        logit, aux = model(
+        logit, y_aff_hat, aux = model(
             p_ids, p_msk, l,
             dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
             dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
