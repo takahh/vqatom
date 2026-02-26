@@ -157,46 +157,6 @@ def parse_lig_tokens(s: str) -> List[int]:
     return [int(x) for x in s.split()]
 
 
-# -----------------------------
-# Dataset
-# -----------------------------
-class DTIDataset(Dataset):
-    def __init__(self, csv_path: str, y_thr: float = 7.0):
-        self.y_thr = y_thr
-
-        rows = read_csv_rows(csv_path)
-        print("[csv]", csv_path, "columns=", list(rows[0].keys()))
-        print("[csv] sample pdbid raw=", rows[0].get("pdbid", None))
-
-        self.samples = []
-
-        for r in rows:
-            if "seq" not in r or "lig_tok" not in r or "y" not in r:
-                raise KeyError("CSV must contain columns: seq, lig_tok, y")
-
-            seq = r["seq"].strip()
-            lig = r["lig_tok"].strip()
-
-            y = float(r["y"])
-            y_bin = 1.0 if (y >= self.y_thr) else 0.0
-
-            pdbid = r.get("pdbid", "").strip()
-
-            self.samples.append((seq, lig, y_bin, pdbid))
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx: int):
-        seq, lig_str, y_bin, pdbid = self.samples[idx]
-        l_ids = parse_lig_tokens(lig_str)
-        return {
-            "seq": seq,
-            "l_ids": torch.tensor(l_ids, dtype=torch.long),
-            "y": torch.tensor(y_bin, dtype=torch.float32),
-            "pdbid": pdbid,
-        }
-
 def _load_dist_D_npz(pdbid: str, dist_dir: str):
     """
     returns D: (n_res, n_lig) float32 or None
@@ -235,6 +195,94 @@ class Batch:
     dist_res_target_p: Optional[torch.Tensor]
     dist_res_mask_p: Optional[torch.Tensor]
 
+def enrichment_factor(scores: np.ndarray, y_bin: np.ndarray, frac: float = 0.01) -> float:
+    y01 = (y_bin > 0.5).astype(np.int32)
+    n = len(y01)
+    if n == 0:
+        return 0.0
+    k = max(1, int(round(n * frac)))
+    order = np.argsort(scores)[::-1]  # high score = ranked top
+    top_hits = int(y01[order[:k]].sum())
+    base_rate = float(y01.mean())
+    if base_rate <= 0:
+        return 0.0
+    return float((top_hits / k) / base_rate)
+
+def ranking_cls_metrics(logit: np.ndarray, y_bin: np.ndarray, fracs=(0.01, 0.05, 0.1)) -> Dict[str, float]:
+    from sklearn.metrics import roc_auc_score, average_precision_score
+    prob = 1.0 / (1.0 + np.exp(-logit))
+    y01 = (y_bin > 0.5).astype(np.int32)
+
+    out = {}
+    if len(np.unique(y01)) > 1:
+        out["auroc"] = float(roc_auc_score(y01, prob))
+        out["ap"] = float(average_precision_score(y01, prob))
+    else:
+        out["auroc"] = 0.0
+        out["ap"] = 0.0
+
+    for f in fracs:
+        out[f"ef@{int(100*f)}%"] = enrichment_factor(prob, y_bin, frac=float(f))
+    return out
+
+def _dcg(rels: np.ndarray) -> float:
+    # rels: relevance in ranked order (high->low rank)
+    if rels.size == 0:
+        return 0.0
+    denom = np.log2(np.arange(2, rels.size + 2))
+    return float(np.sum((2.0 ** rels - 1.0) / denom))
+
+def ndcg_at_k(y_true: np.ndarray, y_score: np.ndarray, k: int = 50, rel_mode: str = "raw") -> float:
+    """
+    rel_mode:
+      - "raw": relevance = y_true (works if y_true is already a nice scale)
+      - "rank": relevance = rank-normalized (0..1)
+    """
+    n = len(y_true)
+    if n == 0:
+        return 0.0
+    k = min(int(k), n)
+
+    if rel_mode == "rank":
+        # convert y_true into [0,1] by rank
+        order = np.argsort(y_true)
+        rel = np.empty_like(y_true, dtype=np.float64)
+        rel[order] = np.linspace(0.0, 1.0, n)
+    else:
+        rel = y_true.astype(np.float64)
+
+    pred_order = np.argsort(y_score)[::-1]
+    ideal_order = np.argsort(rel)[::-1]
+
+    dcg = _dcg(rel[pred_order[:k]])
+    idcg = _dcg(rel[ideal_order[:k]])
+    if idcg <= 0:
+        return 0.0
+    return float(dcg / idcg)
+
+def ranking_aff_metrics(y_aff_hat: np.ndarray, y_aff: np.ndarray, aff_mask: np.ndarray, ks=(20, 50, 100)) -> Dict[str, float]:
+    ok = aff_mask > 0.5
+    yh = y_aff_hat[ok]
+    yt = y_aff[ok]
+
+    if yh.size < 3:
+        return {"aff_n": float(yh.size), "spearman": 0.0, "pearson": 0.0, **{f"ndcg@{k}": 0.0 for k in ks}}
+
+    # spearman/pearson はあなたの実装を使ってOK（ここでは簡易で numpy）
+    def pearson(x, y):
+        x = x - x.mean()
+        y = y - y.mean()
+        denom = np.sqrt((x*x).sum()) * np.sqrt((y*y).sum())
+        return float((x*y).sum() / denom) if denom > 1e-12 else 0.0
+
+    # 既に spearmanr(pred, y) を持ってるならそれを使ってOK
+    sp = spearmanr(yh.astype(np.float64), yt.astype(np.float64))
+    pr = pearson(yh.astype(np.float64), yt.astype(np.float64))
+
+    out = {"aff_n": float(yh.size), "spearman": float(sp), "pearson": float(pr)}
+    for k in ks:
+        out[f"ndcg@{k}"] = ndcg_at_k(yt, yh, k=int(k), rel_mode="rank")  # rank推奨（スケール頑健）
+    return out
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -766,10 +814,9 @@ class CrossAttnDTIRegressor(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Returns:
-          y_hat: (B,) logits (for BCEWithLogits)
-          aux: dict, may contain:
-            - "res_kl": scalar tensor (nan if not computed)
-            - "res_kl_head0_l_from_p_layer{i}": scalar per layer (nan if not computed)
+          logit: (B,)  (for BCEWithLogits)
+          y_aff_hat: (B,) (for SmoothL1)
+          aux: dict, may contain "res_kl"
         """
         aux: Dict[str, torch.Tensor] = {}
 
@@ -883,34 +930,44 @@ class CrossAttnDTIRegressor(nn.Module):
 
         return logit, y_aff_hat, aux
 
-# -----------------------------
-# Predict / Eval (raw + calibrated
-# ---- predict は「logitを返す」(中身はほぼ同じ)
 @torch.no_grad()
-def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[np.ndarray, np.ndarray]:
+def predict(model, loader, device, return_aff: bool = False):
     model.eval()
-    logits = []
-    ys = []
+    logits, ybins = [], []
+
+    y_aff_hats, y_affs, aff_masks = [], [], []
+
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
-        l = batch.l_ids.to(device)
-        y = batch.y.to(device)
+        l     = batch.l_ids.to(device)
 
-        logit, _aux = model(
+        logit, y_aff_hat, _ = model(
             p_ids, p_msk, l,
             dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
             dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
+
         logits.append(logit.detach().cpu().numpy())
-        ys.append(y.detach().cpu().numpy())
+        ybins.append(batch.y_bin.detach().cpu().numpy())
+
+        if return_aff:
+            y_aff_hats.append(y_aff_hat.detach().cpu().numpy())
+            y_affs.append(batch.y_aff.detach().cpu().numpy())
+            aff_masks.append(batch.aff_mask.detach().cpu().numpy())
 
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
-    yy = np.concatenate(ys, axis=0) if ys else np.array([], dtype=np.float64)
-    return logit, yy
+    yb    = np.concatenate(ybins, axis=0) if ybins else np.array([], dtype=np.float64)
 
+    if not return_aff:
+        return logit, yb
+
+    y_aff_hat = np.concatenate(y_aff_hats, axis=0) if y_aff_hats else np.array([], dtype=np.float64)
+    y_aff     = np.concatenate(y_affs, axis=0) if y_affs else np.array([], dtype=np.float64)
+    aff_mask  = np.concatenate(aff_masks, axis=0) if aff_masks else np.array([], dtype=np.float64)
+    return logit, yb, y_aff_hat, y_aff, aff_mask
 
 def eval_metrics(logit: np.ndarray, y: np.ndarray, thr: float = 0.5) -> Dict[str, float]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
@@ -936,8 +993,9 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    loss_type: str = "huber",
-    huber_delta: float = 1.0,
+    args,
+    loss_type: str = "huber",   # 互換のため残してOK（未使用）
+    huber_delta: float = 1.0,   # 互換のため残してOK（未使用）
     grad_clip: float = 1.0,
     attn_lambda: float = 0.0,
     pos_weight: float = 1.0,
@@ -946,70 +1004,85 @@ def train_one_epoch(
     losses: List[float] = []
     base_losses: List[float] = []
     kls: List[float] = []
+    aff_losses: List[float] = []
 
     use_kl = float(attn_lambda) > 0.0
     pw = torch.tensor([float(pos_weight)], device=device)
 
-    # ... 省略 ...
+    aff_lambda = float(getattr(args, "aff_lambda", 0.0))
+    aff_beta = float(getattr(args, "aff_huber_beta", 1.0))
 
     for step, batch in enumerate(loader):
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
-        l = batch.l_ids.to(device)
-        y = batch.y.to(device)
+        l_ids = batch.l_ids.to(device)
+        y_bin = batch.y_bin.to(device)  # (B,)
 
         optimizer.zero_grad(set_to_none=True)
 
         logit, y_aff_hat, aux = model(
-            p_ids, p_msk, l,
+            p_ids, p_msk, l_ids,
             dist_bias_pl=(batch.dist_bias_pl.to(device) if batch.dist_bias_pl is not None else None),
             dist_bias_lp=(batch.dist_bias_lp.to(device) if batch.dist_bias_lp is not None else None),
             dist_res_target_p=(batch.dist_res_target_p.to(device) if batch.dist_res_target_p is not None else None),
             dist_res_mask_p=(batch.dist_res_mask_p.to(device) if batch.dist_res_mask_p is not None else None),
         )
 
-        # ---- debug: first few steps only
-        if use_kl and step < 3:
-            rk = aux.get("res_kl", None)
-            if rk is None:
-                print("[dbg] res_kl: MISSING (aux has no key)")
-            else:
-                print("[dbg] res_kl:", float(rk.detach().cpu()) if torch.isfinite(rk).all() else "NaN/Inf")
-
-        base_loss = F.binary_cross_entropy_with_logits(logit, y, pos_weight=pw)
+        # ---- base loss (classification)
+        base_loss = F.binary_cross_entropy_with_logits(logit, y_bin, pos_weight=pw)
         loss = base_loss
 
+        # ---- affinity aux loss（y があるサンプルだけ）
+        aff_loss_val = None
+        if aff_lambda > 0.0:
+            aff_mask = batch.aff_mask.to(device)  # (B,) 0/1
+            ok = (aff_mask > 0.5)
+            if ok.any():
+                y_aff = batch.y_aff.to(device)  # (B,)
+                aff_loss = F.smooth_l1_loss(y_aff_hat[ok], y_aff[ok], beta=aff_beta)
+                loss = loss + aff_lambda * aff_loss
+                aff_loss_val = aff_loss
+
+        # ---- KL aux
+        kl = None
         if use_kl:
             kl = aux.get("res_kl", None)
             if (kl is not None) and torch.isfinite(kl).all():
                 loss = loss + float(attn_lambda) * kl
+            else:
+                kl = None
+
+        # ---- debug（最初の数stepだけ）
+        if use_kl and step < 3:
+            rk = aux.get("res_kl", None)
+            print("[dbg] res_kl:", None if rk is None else float(torch.nan_to_num(rk).detach().cpu()))
+            print("[dbg] dist_ok sum:", int(batch.dist_ok.sum().item()))
+            m = batch.dist_res_mask_p
+            t = batch.dist_res_target_p
+            print("[dbg] mask sum:", int(m.sum().item()) if m is not None else None)
+            print("[dbg] target sum:", float(t.sum().item()) if t is not None else None)
 
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
         optimizer.step()
 
-        # ... logging ...
-        if use_kl and step < 3:
-            print("[dbg] dist_ok sum:", int(batch.dist_ok.sum().item()))
-            m = batch.dist_res_mask_p
-            t = batch.dist_res_target_p
-            print("[dbg] mask sum:", int(m.sum().item()) if m is not None else None)
-            print("[dbg] target sum:", float(t.sum().item()) if t is not None else None)
-            rk = aux.get("res_kl", None)
-            print("[dbg] res_kl:", None if rk is None else float(rk.detach().cpu()))
-
         # ---- logging
         losses.append(float(loss.detach().cpu().item()))
         base_losses.append(float(base_loss.detach().cpu().item()))
-        if use_kl and (kl is not None) and torch.isfinite(kl).all():
+        if kl is not None:
             kls.append(float(kl.detach().cpu().item()))
+        if aff_loss_val is not None:
+            aff_losses.append(float(aff_loss_val.detach().cpu().item()))
 
-    return {
+    out = {
         "loss": float(sum(losses) / max(1, len(losses))),
         "base_loss": float(sum(base_losses) / max(1, len(base_losses))),
         "res_kl": float(sum(kls) / max(1, len(kls))) if kls else 0.0,
     }
+    if aff_lambda > 0.0:
+        out["aff_loss"] = float(sum(aff_losses) / max(1, len(aff_losses))) if aff_losses else 0.0
+    return out
 
 def save_json(path: str, obj: dict):
     with open(path, "w", encoding="utf-8") as f:
@@ -1226,7 +1299,9 @@ def main():
     ap.add_argument("--dist_beta", type=float, default=0.2)
     ap.add_argument("--dist_cut", type=float, default=12.0)
     ap.add_argument("--dist_bidir", action="store_true")
-
+    ap.add_argument("--aff_lambda", type=float, default=0.0,
+                    help="Aux weight for affinity regression loss (only where y is available)")
+    ap.add_argument("--aff_huber_beta", type=float, default=1.0, help="Huber beta for affinity SmoothL1 loss")
     # aux attn KL (head0 only)
     ap.add_argument("--attn_lambda", type=float, default=0.0, help="Aux KL weight for head0 attention guidance")
     ap.add_argument("--attn_sigma", type=float, default=3.0, help="Sigma for target exp(-D/sigma) in KL loss")
@@ -1265,7 +1340,7 @@ def main():
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
     # datasets/loaders
-    valid_ds = DTIDataset(args.valid_csv, y_thr=args.y_thr)
+    valid_ds = DTIDataset(args.valid_csv)
     valid_loader = DataLoader(
         valid_ds,
         batch_size=args.batch_size,
@@ -1312,8 +1387,8 @@ def main():
     train_ds = None
 
     if not args.eval_only:
-        train_ds = DTIDataset(args.train_csv, y_thr=args.y_thr)
-        valid_ds = DTIDataset(args.valid_csv, y_thr=args.y_thr)  # 既に作ってるならこの再定義は削除でもOK
+        train_ds = DTIDataset(args.train_csv)
+        valid_ds = DTIDataset(args.valid_csv)  # 既に作ってるならこの再定義は削除でもOK
         n = len(train_ds)
         idx = np.arange(n)
         rng = np.random.default_rng(args.seed)
@@ -1400,13 +1475,14 @@ def main():
 
     # eval-only
     if args.eval_only:
-        logit_v, y_v = predict(model, valid_loader, device)
-        m = eval_metrics(logit_v, y_v)
-        print(f"[VALID] AP={m['ap']:.4f} AUROC={m['auroc']:.4f} F1={m['f1']:.4f} (thr={m['thr']:.3f}) "
-              f"prob_mean={m['prob_mean']:.4f} prob_std={m['prob_std']:.4f}")
+        logit_v, yb_v, yhat_aff_v, y_aff_v, m_aff_v = predict(model, valid_loader, device, return_aff=True)
+        m = eval_metrics(logit_v, yb_v)
+        print("[VALID]", m)
+        print("[VALID ranking cls]", ranking_cls_metrics(logit_v, yb_v, fracs=(0.01, 0.05, 0.1)))
+        print("[VALID ranking aff]", ranking_aff_metrics(yhat_aff_v, y_aff_v, m_aff_v, ks=(20, 50, 100)))
 
         if test_loader is not None:
-            logit_t, y_t = predict(model, test_loader, device)
+            logit_t, y_t, y_aff_v, m_aff_v = predict(model, test_loader, device)
             mt = eval_metrics(logit_t, y_t)
             print(f"[TEST ] AP={mt['ap']:.4f} AUROC={mt['auroc']:.4f} F1={mt['f1']:.4f} (thr={mt['thr']:.3f})")
 
@@ -1430,25 +1506,41 @@ def main():
 
     # training loop
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
-
     for ep in range(1, args.epochs + 1):
         tr_stat = train_one_epoch(
             model=model,
             loader=train_loader,
             optimizer=optimizer,
             device=device,
+            args=args,
             grad_clip=float(args.grad_clip),
             attn_lambda=float(args.attn_lambda),
             pos_weight=float(args.pos_weight),
         )
-
         print(f"res_kl={tr_stat['res_kl']:.6f} attn_lambda={args.attn_lambda}")
 
-        logit_tr, y_tr = predict(model, train_loader, device)
-        tr_m = eval_metrics(logit_tr, y_tr)
+        # -------------------------
+        # TRAIN metrics (optional)
+        # -------------------------
+        # ※重いならここは消してOK。train_loss は tr_stat にあるし。
+        logit_tr, yb_tr = predict(model, train_loader, device, return_aff=False)
+        tr_m = eval_metrics(logit_tr, yb_tr)
 
-        logit_v, y_v = predict(model, valid_loader, device)
-        v_m = eval_metrics(logit_v, y_v)
+        # ----------------------------------------
+        # VALID: cls + ranking + affinity ranking
+        # ----------------------------------------
+        logit_v, yb_v, yhat_aff_v, y_aff_v, m_aff_v = predict(
+            model, valid_loader, device, return_aff=True
+        )
+
+        v_m = eval_metrics(logit_v, yb_v)
+        m_cls_rank = ranking_cls_metrics(logit_v, yb_v, fracs=(0.01, 0.05, 0.1))
+        m_aff_rank = ranking_aff_metrics(yhat_aff_v, y_aff_v, m_aff_v, ks=(20, 50, 100))
+
+        # prints
+        print("[VALID cls]", v_m)
+        print("[VALID ranking cls]", m_cls_rank)
+        print("[VALID ranking aff]", m_aff_rank)
 
         print(
             f"[ep {ep:03d}] "
@@ -1456,6 +1548,8 @@ def main():
             f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
             f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f})"
         )
+
+        # scheduler / best selection uses VALID metrics (v_m)
         if scheduler is not None:
             scheduler.step(float(v_m[args.select_on]))
 
@@ -1466,21 +1560,28 @@ def main():
         if cur_val > best_val:
             best.update({"ap": float(v_m["ap"]), "auroc": float(v_m["auroc"]), "f1": float(v_m["f1"]), "epoch": ep})
             save_path = os.path.join(args.out_dir, "best.pt")
-            # calibは空 dict で渡す（関数を変えたくなければ）
             save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best, calib={})
             print("  saved:", save_path)
 
         last_path = os.path.join(args.out_dir, "last.pt")
         save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib={})
 
+        # -------------------------
+        # TEST (optional)
+        # -------------------------
         if test_loader is not None:
-            logit_t, y_t = predict(model, test_loader, device)
-            t_m = eval_metrics(logit_t, y_t)
+            logit_t, yb_t, yhat_aff_t, y_aff_t, m_aff_t = predict(
+                model, test_loader, device, return_aff=True
+            )
+            t_m = eval_metrics(logit_t, yb_t)
+            t_cls_rank = ranking_cls_metrics(logit_t, yb_t, fracs=(0.01, 0.05, 0.1))
+            t_aff_rank = ranking_aff_metrics(yhat_aff_t, y_aff_t, m_aff_t, ks=(20, 50, 100))
             print(f"         test_AP={t_m['ap']:.4f} test_AUROC={t_m['auroc']:.4f} test_F1={t_m['f1']:.4f}")
+            print("         [TEST ranking cls]", t_cls_rank)
+            print("         [TEST ranking aff]", t_aff_rank)
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
-
 
 if __name__ == "__main__":
     main()
