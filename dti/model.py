@@ -188,13 +188,11 @@ class Batch:
     aff_mask: torch.Tensor     # (B,) float 0/1
 
     pdbid: List[str]
-    dist_ok: torch.Tensor
 
     dist_bias_pl: Optional[torch.Tensor]
     dist_bias_lp: Optional[torch.Tensor]
     dist_res_target_p: Optional[torch.Tensor]
     dist_res_mask_p: Optional[torch.Tensor]
-
 def enrichment_factor(scores: np.ndarray, y_bin: np.ndarray, frac: float = 0.01) -> float:
     y01 = (y_bin > 0.5).astype(np.int32)
     n = len(y01)
@@ -326,75 +324,110 @@ def collate_fn(
     dist_sigma: float,
     dist_beta: float,
     dist_cut: float,
-    dist_bidir: bool,
+    dist_bidir: bool,   # kept for compatibility (you can extend later)
     attn_sigma: float,
 ) -> Batch:
+    # -------------------------
+    # Protein tokenize
+    # -------------------------
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
+    # -------------------------
+    # Ligand pad
+    # -------------------------
     l_ids_list = [s["l_ids"] for s in samples]
     l_ids = pad_1d(l_ids_list, lig_pad)
 
-    # ★ここ：必ずループ外で一回だけ作る
+    # -------------------------
+    # Labels
+    # -------------------------
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0)       # (B,)
     y_aff = torch.stack([s["y_aff"] for s in samples], dim=0)       # (B,)
     aff_mask = torch.stack([s["aff_mask"] for s in samples], dim=0) # (B,)
 
+    # -------------------------
+    # pdbid list
+    # -------------------------
     pdbid_list = [str(s.get("pdbid", "") or "") for s in samples]
-    dist_ok = torch.tensor(
-        [1 if (pid and os.path.isfile(os.path.join(dist_dir, f"{pid}.npz"))) else 0 for pid in pdbid_list],
-        dtype=torch.long
-    )
 
+    # -------------------------
+    # Distance-derived tensors (lazy allocate)
+    # -------------------------
     dist_bias_pl = None
     dist_bias_lp = None
     dist_res_target_p = None
     dist_res_mask_p = None
 
     if use_dist_profile:
-        B, Lp = p_input_ids.shape
-        _, Ll = l_ids.shape
-
-        dist_bias_pl = None
-        dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
-
-        dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
-        dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
-
-        p_off = 1
-        max_res_tokens = max(0, Lp - 2)
-
-        for bi, pdbid in enumerate(pdbid_list):
-            if int(dist_ok[bi].item()) != 1:
+        # Find which entries actually have an NPZ
+        has_npz = []
+        for pid in pdbid_list:
+            if not pid:
+                has_npz.append(False)
                 continue
-            d_mean_np, row_mask_np = _load_dist_profile_npz(pdbid, dist_dir)
-            if d_mean_np is None:
-                continue
+            path = os.path.join(dist_dir, f"{pid}.npz")
+            has_npz.append(os.path.isfile(path))
 
-            R = min(int(d_mean_np.shape[0]), max_res_tokens)
-            if R <= 0:
-                continue
+        if any(has_npz):
+            B, Lp = p_input_ids.shape
+            _, Ll = l_ids.shape
 
-            d = torch.from_numpy(d_mean_np[:R]).float()     # (R,)
-            m = torch.from_numpy(row_mask_np[:R]).bool()    # (R,)
+            # Note: you currently only use dist_bias_lp (l<-p) not dist_bias_pl (p<-l).
+            # Keep dist_bias_pl as None unless you implement it.
+            dist_bias_pl = None
 
-            pos = slice(p_off, p_off + R)
+            # Allocate only if at least one file exists in this batch
+            dist_bias_lp = torch.zeros((B, Ll, Lp), dtype=torch.float32)
+            dist_res_target_p = torch.zeros((B, Lp), dtype=torch.float32)
+            dist_res_mask_p = torch.zeros((B, Lp), dtype=torch.bool)
 
-            # l<-p logits bias
-            s_bias = torch.exp(-d / float(dist_sigma))
-            if dist_cut is not None and float(dist_cut) > 0:
-                s_bias = s_bias.masked_fill(d > float(dist_cut), 0.0)
-            s_bias = float(dist_beta) * s_bias
-            dist_bias_lp[bi, :, pos] = s_bias.unsqueeze(0).expand(Ll, R)
+            # ESM special tokens offset: [CLS] + residues + [EOS]
+            p_off = 1
+            max_res_tokens = max(0, Lp - 2)
 
-            # KL target (no beta)
-            t = torch.exp(-d / float(attn_sigma))
-            if dist_cut is not None and float(dist_cut) > 0:
-                t = t.masked_fill(d > float(dist_cut), 0.0)
-            dist_res_target_p[bi, pos] = t
-            dist_res_mask_p[bi, pos] = m
+            for bi, pid in enumerate(pdbid_list):
+                if not has_npz[bi]:
+                    continue
+
+                d_mean_np, row_mask_np = _load_dist_profile_npz(pid, dist_dir)
+                if d_mean_np is None:
+                    continue
+
+                R = min(int(d_mean_np.shape[0]), max_res_tokens)
+                if R <= 0:
+                    continue
+
+                d = torch.from_numpy(d_mean_np[:R]).float()   # (R,)
+                m = torch.from_numpy(row_mask_np[:R]).bool()  # (R,)
+                pos = slice(p_off, p_off + R)
+
+                # -------------------------
+                # l <- p logits bias (scaled by dist_beta)
+                # -------------------------
+                s_bias = torch.exp(-d / float(dist_sigma))
+                if dist_cut is not None and float(dist_cut) > 0:
+                    s_bias = s_bias.masked_fill(d > float(dist_cut), 0.0)
+                s_bias = float(dist_beta) * s_bias  # (R,)
+                dist_bias_lp[bi, :, pos] = s_bias.unsqueeze(0).expand(Ll, R)
+
+                # -------------------------
+                # KL target over protein tokens (NOT scaled by beta)
+                # -------------------------
+                t = torch.exp(-d / float(attn_sigma))
+                if dist_cut is not None and float(dist_cut) > 0:
+                    t = t.masked_fill(d > float(dist_cut), 0.0)
+
+                dist_res_target_p[bi, pos] = t
+                dist_res_mask_p[bi, pos] = m
+
+            # If somehow all loaded targets are empty, drop them to None (prevents “all-zero KL” silently)
+            if dist_res_mask_p is not None and int(dist_res_mask_p.sum().item()) == 0:
+                dist_bias_lp = None
+                dist_res_target_p = None
+                dist_res_mask_p = None
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -404,13 +437,11 @@ def collate_fn(
         y_aff=y_aff,
         aff_mask=aff_mask,
         pdbid=pdbid_list,
-        dist_ok=dist_ok,
         dist_bias_pl=dist_bias_pl,
         dist_bias_lp=dist_bias_lp,
         dist_res_target_p=dist_res_target_p,
         dist_res_mask_p=dist_res_mask_p,
     )
-
 # -----------------------------
 # Utilities: vocab meta + safe loading
 # -----------------------------
@@ -1052,15 +1083,19 @@ def train_one_epoch(
             else:
                 kl = None
 
-        # ---- debug（最初の数stepだけ）
         if use_kl and step < 3:
             rk = aux.get("res_kl", None)
             print("[dbg] res_kl:", None if rk is None else float(torch.nan_to_num(rk).detach().cpu()))
-            print("[dbg] dist_ok sum:", int(batch.dist_ok.sum().item()))
+
             m = batch.dist_res_mask_p
             t = batch.dist_res_target_p
+            b = batch.dist_bias_lp
+
+            print("[dbg] have_bias_lp:", b is not None)
             print("[dbg] mask sum:", int(m.sum().item()) if m is not None else None)
             print("[dbg] target sum:", float(t.sum().item()) if t is not None else None)
+            print("[dbg] pdbid_with_npz:",
+                  sum(1 for pid in batch.pdbid if pid and os.path.isfile(os.path.join(args.dist_dir, f"{pid}.npz"))))
 
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
