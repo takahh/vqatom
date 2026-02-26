@@ -1570,15 +1570,11 @@ def main():
         # TEST (optional)
         # -------------------------
         if test_loader is not None:
-            logit_t, yb_t, yhat_aff_t, y_aff_t, m_aff_t = predict(
-                model, test_loader, device, return_aff=True
-            )
-            t_m = eval_metrics(logit_t, yb_t)
-            t_cls_rank = ranking_cls_metrics(logit_t, yb_t, fracs=(0.01, 0.05, 0.1))
-            t_aff_rank = ranking_aff_metrics(yhat_aff_t, y_aff_t, m_aff_t, ks=(20, 50, 100))
-            print(f"         test_AP={t_m['ap']:.4f} test_AUROC={t_m['auroc']:.4f} test_F1={t_m['f1']:.4f}")
-            print("         [TEST ranking cls]", t_cls_rank)
-            print("         [TEST ranking aff]", t_aff_rank)
+            logit_t, yb_t, yhat_aff_t, y_aff_t, m_aff_t = predict(model, test_loader, device, return_aff=True)
+            mt = eval_metrics(logit_t, yb_t)
+            print("[TEST ]", mt)
+            print("[TEST ranking cls]", ranking_cls_metrics(logit_t, yb_t, fracs=(0.01, 0.05, 0.1)))
+            print("[TEST ranking aff]", ranking_aff_metrics(yhat_aff_t, y_aff_t, m_aff_t, ks=(20, 50, 100)))
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
