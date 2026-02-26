@@ -112,26 +112,6 @@ def pearsonr(pred: np.ndarray, y: np.ndarray) -> float:
         return 0.0
     return float((pred * y).sum() / denom)
 
-
-# -----------------------------
-# Calibration (no leakage)
-# -----------------------------
-def fit_linear_calibration(pred: np.ndarray, y: np.ndarray) -> Tuple[float, float]:
-    pred = pred.astype(np.float64)
-    y = y.astype(np.float64)
-    vx = float(np.var(pred))
-    if vx < 1e-12:
-        return 0.0, float(np.mean(y))
-    cov = float(np.mean((pred - pred.mean()) * (y - y.mean())))
-    a = cov / vx
-    b = float(np.mean(y) - a * np.mean(pred))
-    return float(a), float(b)
-
-
-def apply_linear_calibration(pred: np.ndarray, a: float, b: float) -> np.ndarray:
-    return (a * pred + b).astype(np.float64)
-
-
 # -----------------------------
 # Simple CSV reader
 # -----------------------------
@@ -155,27 +135,6 @@ def parse_lig_tokens(s: str) -> List[int]:
     if not s:
         return []
     return [int(x) for x in s.split()]
-
-
-def _load_dist_D_npz(pdbid: str, dist_dir: str):
-    """
-    returns D: (n_res, n_lig) float32 or None
-    """
-    if not pdbid:
-        return None
-    path = os.path.join(dist_dir, f"{pdbid}.npz")
-    if not os.path.isfile(path):
-        return None
-    try:
-        z = np.load(path, allow_pickle=False)
-        if "D" not in z:
-            return None
-        D = z["D"].astype(np.float32, copy=False)
-        if D.ndim != 2:
-            return None
-        return D
-    except Exception:
-        return None
 
 @dataclass
 class Batch:
@@ -1131,7 +1090,6 @@ def save_dti_checkpoint(
     lig_enc: PretrainedLigandEncoder,
     epoch: int,
     best: dict,
-    calib: dict,
 ):
     torch.save(
         {
@@ -1139,7 +1097,6 @@ def save_dti_checkpoint(
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
-            "calibration": calib,
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -1297,10 +1254,6 @@ def main():
     ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
 
-    # calibration
-    ap.add_argument("--calib_frac", type=float, default=0.1)
-    ap.add_argument("--calib_every", type=int, default=1)
-
     # cross attn
     ap.add_argument("--cross_nhead", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
@@ -1345,8 +1298,6 @@ def main():
 
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
-    if not (0.0 <= args.calib_frac < 0.5):
-        raise ValueError("--calib_frac must be in [0, 0.5).")
 
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
@@ -1418,24 +1369,15 @@ def main():
         )
 
     train_loader = None
-    calib_loader = None
-    train_ds = None
 
     if not args.eval_only:
         train_ds = DTIDataset(args.train_csv)
-        valid_ds = DTIDataset(args.valid_csv)  # 既に作ってるならこの再定義は削除でもOK
         n = len(train_ds)
         idx = np.arange(n)
         rng = np.random.default_rng(args.seed)
         rng.shuffle(idx)
-
-        n_cal = int(round(n * args.calib_frac))
-        n_cal = max(0, min(n_cal, n - 1))
-        cal_idx = idx[:n_cal]
-        tr_idx = idx[n_cal:]
-
         train_loader = DataLoader(
-            Subset(train_ds, tr_idx),
+            train_ds,
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
@@ -1452,25 +1394,6 @@ def main():
                 attn_sigma=float(args.attn_sigma),
             ),
         )
-        calib_loader = DataLoader(
-            Subset(train_ds, cal_idx),
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=0,
-            collate_fn=lambda xs: collate_fn(
-                xs,
-                esm_tokenizer=esm_tokenizer,
-                lig_pad=lig_pad,
-                use_dist_profile=bool(args.use_dist_profile),
-                dist_dir=str(args.dist_dir),
-                dist_sigma=float(args.dist_sigma),
-                dist_beta=float(args.dist_beta),
-                dist_cut=float(args.dist_cut),
-                dist_bidir=bool(args.dist_bidir),
-                attn_sigma=float(args.attn_sigma),
-            ),
-        )
-        print(f"[split] train={len(tr_idx)}  calib={len(cal_idx)}  valid={len(valid_ds)}")
 
     # protein encoder
     prot_enc = ESMProteinEncoder(
@@ -1496,7 +1419,6 @@ def main():
     ).to(device)
 
     # optionally load DTI checkpoint
-    loaded_calib = None
     if args.dti_ckpt is not None:
         ckpt_obj, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
         print(f"Loaded DTI checkpoint: {args.dti_ckpt}")
@@ -1504,10 +1426,6 @@ def main():
             print("  [warn] missing keys (up to 20):", missing[:20])
         if unexpected:
             print("  [warn] unexpected keys (up to 20):", unexpected[:20])
-        loaded_calib = ckpt_obj.get("calibration", None) if isinstance(ckpt_obj, dict) else None
-        if loaded_calib is not None:
-            print(f"Loaded calibration: a={loaded_calib.get('a')} b={loaded_calib.get('b')} (epoch={loaded_calib.get('epoch')})")
-
     # eval-only
     if args.eval_only:
         logit_v, yb_v, yhat_aff_v, y_aff_v, m_aff_v = predict(model, valid_loader, device, return_aff=True)
@@ -1517,7 +1435,7 @@ def main():
         print("[VALID ranking aff]", ranking_aff_metrics(yhat_aff_v, y_aff_v, m_aff_v, ks=(20, 50, 100)))
 
         if test_loader is not None:
-            logit_t, y_t, y_aff_v, m_aff_v = predict(model, test_loader, device)
+            logit_t, y_t, yhat_aff_t, y_aff_t, m_aff_t = predict(model, test_loader, device, return_aff=True)
             mt = eval_metrics(logit_t, y_t)
             print(f"[TEST ] AP={mt['ap']:.4f} AUROC={mt['auroc']:.4f} F1={mt['f1']:.4f} (thr={mt['thr']:.3f})")
 
@@ -1595,11 +1513,11 @@ def main():
         if cur_val > best_val:
             best.update({"ap": float(v_m["ap"]), "auroc": float(v_m["auroc"]), "f1": float(v_m["f1"]), "epoch": ep})
             save_path = os.path.join(args.out_dir, "best.pt")
-            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best, calib={})
+            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
             print("  saved:", save_path)
 
         last_path = os.path.join(args.out_dir, "last.pt")
-        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best, calib={})
+        save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best)
 
         # -------------------------
         # TEST (optional)
