@@ -321,10 +321,12 @@ def collate_fn(
     dist_res_mask_p = None
 
     if use_dist_profile:
-        # Find which entries actually have an NPZ
+        # ---- gate dist usage by (label==1) AND (dist_ok==1) AND (pdbid+npz exists)
         has_npz = []
-        for pid in pdbid_list:
-            if not pid:
+        for s, pid in zip(samples, pdbid_list):
+            yb = float(s["y_bin"].item())  # 0/1
+            dok = int(s.get("dist_ok", 0))  # 0/1
+            if (yb <= 0.5) or (dok != 1) or (not pid):
                 has_npz.append(False)
                 continue
             path = os.path.join(dist_dir, f"{pid}.npz")
@@ -703,12 +705,18 @@ class DTIDataset(Dataset):
             seq = r["seq"].strip()
             lig = r["lig_tok"].strip()
 
-            # --- binary label (required)
             if "label" not in r:
                 raise KeyError("CSV must contain 'label' (0/1) for binding classification.")
             y_bin = float(r["label"])
 
-            # --- affinity (optional)
+            # dist_ok (optional, default 0)
+            dist_ok = 0
+            if "dist_ok" in r and str(r["dist_ok"]).strip() != "":
+                try:
+                    dist_ok = int(float(r["dist_ok"]))
+                except Exception:
+                    dist_ok = 0
+
             y_aff = float("nan")
             y_aff_ok = 0.0
             if "y" in r and str(r["y"]).strip() != "":
@@ -720,21 +728,22 @@ class DTIDataset(Dataset):
 
             pdbid = r.get("pdbid", "").strip()
 
-            self.samples.append((seq, lig, y_bin, y_aff, y_aff_ok, pdbid))
+            self.samples.append((seq, lig, y_bin, y_aff, y_aff_ok, pdbid, dist_ok))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y_bin, y_aff, y_aff_ok, pdbid = self.samples[idx]
+        seq, lig_str, y_bin, y_aff, y_aff_ok, pdbid, dist_ok = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y_bin": torch.tensor(y_bin, dtype=torch.float32),
             "y_aff": torch.tensor(y_aff, dtype=torch.float32),
-            "aff_mask": torch.tensor(y_aff_ok, dtype=torch.float32),  # 1 if y_aff valid else 0
+            "aff_mask": torch.tensor(y_aff_ok, dtype=torch.float32),
             "pdbid": pdbid,
+            "dist_ok": int(dist_ok),  # ★追加
         }
 
 class CrossAttnDTIRegressor(nn.Module):
@@ -1372,10 +1381,6 @@ def main():
 
     if not args.eval_only:
         train_ds = DTIDataset(args.train_csv)
-        n = len(train_ds)
-        idx = np.arange(n)
-        rng = np.random.default_rng(args.seed)
-        rng.shuffle(idx)
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
@@ -1395,6 +1400,12 @@ def main():
             ),
         )
 
+    def pos_rate(ds):
+        ys = [float(ds[i]["y_bin"].item()) for i in range(len(ds))]
+        return sum(1 for y in ys if y > 0.5) / max(1, len(ys))
+
+    print("train n:", len(train_ds), "pos_rate:", pos_rate(train_ds))
+    print("valid n:", len(valid_ds), "pos_rate:", pos_rate(valid_ds))
     # protein encoder
     prot_enc = ESMProteinEncoder(
         model_name=args.esm_model,
@@ -1485,6 +1496,10 @@ def main():
         logit_v, yb_v, yhat_aff_v, y_aff_v, m_aff_v = predict(
             model, valid_loader, device, return_aff=True
         )
+        prob = 1 / (1 + np.exp(-logit_v))
+        print("pos_rate(valid):", (yb_v > 0.5).mean())
+        print("pred_pos_rate@0.5:", (prob >= 0.5).mean())
+        print("prob min/mean/max:", prob.min(), prob.mean(), prob.max())
 
         v_m = eval_metrics(logit_v, yb_v)
         m_cls_rank = ranking_cls_metrics(logit_v, yb_v, fracs=(0.01, 0.05, 0.1))
