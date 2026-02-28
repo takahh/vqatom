@@ -1906,6 +1906,36 @@ class EuclideanCodebook(nn.Module):
 
         return True
 
+    def _resolve_existing_safe_key(self, skey: str) -> str | None:
+        """
+        Infer時に「既存キーしか使わない」ための safe key 解決。
+
+        返すのは self.embed に実在する safe key だけ。
+        ここでは絶対に Parameter を新規作成しない（= _get_or_create_safe_key を呼ばない）。
+        """
+        skey = str(skey)
+
+        # 1) すでに mapping があるならそれを最優先（これが最も安全）
+        safe = None
+        if hasattr(self, "key_to_safe") and isinstance(self.key_to_safe, dict):
+            safe = self.key_to_safe.get(skey, None)
+            if safe is not None and safe in self.embed:
+                return safe
+
+        # 2) “規則変換” した safe 候補が実在すれば採用（作成はしない）
+        cand = self._safe_key(skey)
+        if cand in self.embed:
+            return cand
+
+        # 3) 最後の保険：safe_to_key があれば逆引き（skeyに一致するものを探す）
+        if hasattr(self, "safe_to_key") and isinstance(self.safe_to_key, dict):
+            for s, orig in self.safe_to_key.items():
+                if str(orig) == skey and s in self.embed:
+                    return s
+
+        # 4) それでも無理なら諦める（inferでは「unknown key」としてスキップ）
+        return None
+
     # ------------------------------------------------------------------
     # Forward: ここで EMA update を dtype 安全 & safe-key 化
     # ------------------------------------------------------------------
@@ -2072,12 +2102,18 @@ class EuclideanCodebook(nn.Module):
                 self._id2safe[sid] = safe
             return sid
 
-        def _get_safe_and_code(skey: str):
-            # K_e is stored per skey; safe depends on (skey,K_e,D,device)
-            K_e = int(self.cb_dict.get(skey, self.codebook_size))
-            safe = self._get_or_create_safe_key(skey, K_e=K_e, D=D, device=flatten.device)
-            code_param = self.embed[safe]  # (1,K,D) or (K,D)
-            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param  # (K,D)
+        def _get_safe_and_code_existing_only(skey: str):
+            """
+            infer 専用：
+              - safe key を解決するが、既存しか使わない
+              - 見つからなければ (None, None, None) を返す
+            """
+            safe = self._resolve_existing_safe_key(skey)
+            if safe is None:
+                return None, None, None
+
+            code_param = self.embed[safe]  # ParameterDict の既存キー参照のみ
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
             return safe, code_param, code
 
         # ------------------------------------------------------------------
@@ -2124,7 +2160,14 @@ class EuclideanCodebook(nn.Module):
                     continue
 
                 skey = str(key)
-                safe, _code_param, C = _get_safe_and_code(skey)
+
+                safe, _code_param, C = _get_safe_and_code_existing_only(skey)
+                if safe is None:
+                    # unknown / not present in checkpoint codebook => skip (leave -1)
+                    if logger is not None:
+                        logger.warning(f"[infer] unknown skey not in existing codebook: {skey} (skipped)")
+                    continue
+
                 sid = _safe_id(safe)
 
                 with torch.no_grad():
@@ -2140,6 +2183,21 @@ class EuclideanCodebook(nn.Module):
 
                 # global_id = offset[safe] + cid
                 off = offsets.get(safe, None)
+                if off is None:
+                    # safe は存在するが offsets に無い = offsets 構築時の embed keys とズレてる
+                    # → ここではスキップして -1 のままにする（安全側）
+                    if logger is not None:
+                        logger.warning(f"[infer] safe exists but missing in global_offsets: {safe} (skipped)")
+                    continue
+
+                global_id_full.index_copy_(
+                    0, idx_local,
+                    (idx_code.to(dtype=torch.int64) + off)
+                )
+
+                # contract for debugging
+                self.embed_ind_dict[skey] = {"ind": idx_code, "safe": safe}
+
                 if off is None:
                     # unknown key for this checkpoint: mark as UNK and continue
                     # (keep -1 in key_id/cluster_id/global_id)
