@@ -112,16 +112,22 @@ def parse_smiles(txt: str) -> List[str]:
 # Load token stream
 # =============================================================================
 d = torch.load(path1, map_location="cpu")
-if "cluster_id" not in d:
-    raise KeyError(f"{path1} missing key 'cluster_id'. keys={list(d.keys())}")
 
-cluster_stream = d["cluster_id"].to(torch.int64)  # global IDs (flattened over all real atoms)
-if cluster_stream.numel() == 0:
-    raise RuntimeError("cluster_stream is empty")
+# ここを cluster_id ではなく global_id にする
+if "global_id" not in d:
+    raise KeyError(f"{path1} missing key 'global_id'. keys={list(d.keys())}")
 
-base_vocab = int(cluster_stream.max().item()) + 1
-print("cluster_stream_len:", int(cluster_stream.numel()), "base_vocab:", base_vocab)
+token_stream = d["global_id"].to(torch.int64).reshape(-1)
 
+# -1 を除外（超重要）
+token_stream = token_stream[token_stream >= 0]
+if token_stream.numel() == 0:
+    raise RuntimeError("token_stream is empty after filtering >=0")
+
+# vocab は VQ ckpt から固定取得（これが “真実”）
+vq = torch.load("/Users/taka/Downloads/model_epoch_3.pt", map_location="cpu", weights_only=False)
+base_vocab = int(vq["base_vocab"])   # 180678
+print("token_stream_len:", int(token_stream.numel()), "base_vocab:", base_vocab)
 
 # =============================================================================
 # Inspect tar & detect prefix/batches
@@ -187,14 +193,14 @@ with tarfile.open(path0, "r:gz") as tar:
             )
 
         need = int(lengths.sum())
-        remain = int(cluster_stream.numel()) - pos
+        remain = int(token_stream.numel()) - pos
         if need > remain:
             raise RuntimeError(
-                f"token stream exhausted at batch {b}: need {need}, remain {remain}, stream_len={int(cluster_stream.numel())}"
+                f"token stream exhausted at batch {b}: need {need}, remain {remain}, stream_len={int(token_stream.numel())}"
             )
 
         # --- slice flat tokens for this batch
-        tokens_flat = cluster_stream[pos:pos + need].clone()
+        tokens_flat = token_stream[pos:pos + need]
         pos += need
 
         # --- offsets (ragged)
@@ -217,10 +223,10 @@ with tarfile.open(path0, "r:gz") as tar:
 
         print(
             f"saved {out_path} | mols={n_mols} need={need} "
-            f"| pos={pos}/{int(cluster_stream.numel())} "
+            f"| pos={pos}/{int(token_stream.numel())} "
             f"| len[min/mean/max]={int(lengths.min())}/{float(lengths.mean()):.2f}/{int(lengths.max())}"
         )
 
-print("DONE consumed:", pos, "/", int(cluster_stream.numel()))
-if pos != int(cluster_stream.numel()):
+print("DONE consumed:", pos, "/", int(token_stream.numel()))
+if pos != int(token_stream.numel()):
     print("WARNING: consumed != stream_len (ordering mismatch? extra tokens? different padding rule?)")
