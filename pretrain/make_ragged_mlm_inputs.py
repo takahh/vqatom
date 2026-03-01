@@ -120,7 +120,7 @@ if "global_id" not in d:
 token_stream = d["global_id"].to(torch.int64).reshape(-1)
 
 # -1 を除外（超重要）
-token_stream = token_stream[token_stream >= 0]
+# token_stream = token_stream[token_stream >= 0]
 if token_stream.numel() == 0:
     raise RuntimeError("token_stream is empty after filtering >=0")
 
@@ -194,13 +194,23 @@ with tarfile.open(path0, "r:gz") as tar:
 
         need = int(lengths.sum())
         remain = int(token_stream.numel()) - pos
+        total_tokens = d["global_id"].numel()
+        neg_tokens = int((d["global_id"].reshape(-1) < 0).sum().item())
         if need > remain:
+            print("total_tokens_raw:", total_tokens, "neg_tokens:", neg_tokens, "after_filter:",
+                  int(token_stream.numel()))
             raise RuntimeError(
                 f"token stream exhausted at batch {b}: need {need}, remain {remain}, stream_len={int(token_stream.numel())}"
             )
 
         # --- slice flat tokens for this batch
-        tokens_flat = token_stream[pos:pos + need]
+        PAD_ID = int(base_vocab + 0)
+        MASK_ID = int(base_vocab + 1)
+
+        tokens_flat = token_stream[pos:pos + need].clone()
+        # -1 を MASK へ
+        tokens_flat = torch.where(tokens_flat >= 0, tokens_flat, torch.tensor(MASK_ID, dtype=tokens_flat.dtype))
+        tokens_flat = tokens_flat.to(torch.int32)
         pos += need
 
         # --- offsets (ragged)
