@@ -122,7 +122,7 @@ token_stream = d["global_id"].to(torch.int64).reshape(-1)
 # -1 を除外（超重要）
 # token_stream = token_stream[token_stream >= 0]
 if token_stream.numel() == 0:
-    raise RuntimeError("token_stream is empty after filtering >=0")
+    raise RuntimeError("token_stream is empty (global_id has zero elements)")
 
 # vocab は VQ ckpt から固定取得（これが “真実”）
 vq = torch.load("/Users/taka/Downloads/model_epoch_3.pt", map_location="cpu", weights_only=False)
@@ -155,7 +155,8 @@ with tarfile.open(path0, "r:gz") as tar:
     for b in batches:
         attr_name = f"{prefix}attr_{b}.npy"
         smiles_name = f"{prefix}smiles_{b}.txt"
-
+        neg_in_slice = int((token_stream[pos:pos + need] < 0).sum().item())
+        print("neg_in_batch:", neg_in_slice, "/", need, f"({neg_in_slice / need:.6f})")
         # --- load attr
         raw_attr = read_bytes_from_tar(tar, attr_name)
         try:
