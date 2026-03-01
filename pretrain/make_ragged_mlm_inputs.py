@@ -5,18 +5,20 @@ import os
 import re
 import tarfile
 import io
-from typing import List, Tuple, Optional
+import tempfile
+from typing import List, Tuple
 
 import numpy as np
 import torch
 
 
 # =============================================================================
-# Paths (user says path0/path1/path2 are correct)
+# Paths
 # =============================================================================
 path0 = "/Users/taka/Downloads/pretrain_no_id.tar.gz"      # tar.gz with attr_*.npy + smiles_*.txt
-path1 = "/Users/taka/Downloads/infer_token_ids.pt"         # has d["cluster_id"] (global IDs)
-out_dir = "/Users/taka/Documents/pretrain_ragged"          # output directory
+path1 = "/Users/taka/Downloads/infer_token_ids.pt"         # has d["global_id"] (flat or any shape)
+vq_ckpt = "/Users/taka/Downloads/model_epoch_3.pt"         # to get base_vocab (PAD/MASK)
+out_dir = "/Users/taka/Documents/pretrain_ragged"
 os.makedirs(out_dir, exist_ok=True)
 
 # =============================================================================
@@ -44,7 +46,6 @@ def detect_prefix_and_batches(names: List[str]) -> Tuple[str, List[int]]:
       - "pretrain_ragged/attr_0.npy"
       - "attr_0.npy" (no prefix)
     """
-    # find first attr_###.npy
     first = None
     for n in names:
         m = re.search(r"^(?P<prefix>.*/)?attr_(?P<idx>\d+)\.npy$", n)
@@ -52,13 +53,10 @@ def detect_prefix_and_batches(names: List[str]) -> Tuple[str, List[int]]:
             first = m
             break
     if first is None:
-        # give a hint
-        sample = "\n".join(names[:50])
-        raise RuntimeError(
-            "No attr_###.npy found in tar. First 50 entries:\n" + sample
-        )
+        sample = "\n".join(names[:80])
+        raise RuntimeError("No attr_###.npy found in tar. First entries:\n" + sample)
 
-    prefix = first.group("prefix") or ""  # e.g. "discret_50k/" or ""
+    prefix = first.group("prefix") or ""
     pat = re.compile(r"^" + re.escape(prefix) + r"attr_(\d+)\.npy$")
     batches = sorted({int(pat.search(n).group(1)) for n in names if pat.search(n)})
     if not batches:
@@ -67,8 +65,6 @@ def detect_prefix_and_batches(names: List[str]) -> Tuple[str, List[int]]:
 
 
 def load_attr_from_bytes(raw: bytes) -> np.ndarray:
-    """Load .npy from bytes (no pickle unless needed)."""
-    # If your npy truly needs pickle, change allow_pickle to True.
     return np.load(io.BytesIO(raw), allow_pickle=False)
 
 
@@ -108,26 +104,50 @@ def parse_smiles(txt: str) -> List[str]:
     return [x.strip() for x in txt.splitlines() if x.strip()]
 
 
+def atomic_torch_save(obj, path: str):
+    """
+    Write to temp file then rename (atomic on same filesystem).
+    Prevents partially-written .pt that causes "unexpected pos" errors.
+    """
+    d = os.path.dirname(os.path.abspath(path))
+    os.makedirs(d, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=".pt", dir=d)
+    os.close(fd)
+    try:
+        torch.save(obj, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 # =============================================================================
 # Load token stream
 # =============================================================================
 d = torch.load(path1, map_location="cpu")
-
-# ここを cluster_id ではなく global_id にする
 if "global_id" not in d:
     raise KeyError(f"{path1} missing key 'global_id'. keys={list(d.keys())}")
 
-token_stream = d["global_id"].to(torch.int64).reshape(-1)
+token_stream_raw = d["global_id"]
+token_stream = token_stream_raw.to(torch.int64).reshape(-1).clone()
 
-# -1 を除外（超重要）
-# token_stream = token_stream[token_stream >= 0]
-if token_stream.numel() == 0:
-    raise RuntimeError("token_stream is empty (global_id has zero elements)")
+total_tokens = int(token_stream.numel())
+neg_tokens_total = int((token_stream < 0).sum().item())
 
-# vocab は VQ ckpt から固定取得（これが “真実”）
-vq = torch.load("/Users/taka/Downloads/model_epoch_3.pt", map_location="cpu", weights_only=False)
-base_vocab = int(vq["base_vocab"])   # 180678
-print("token_stream_len:", int(token_stream.numel()), "base_vocab:", base_vocab)
+# =============================================================================
+# Load vocab info
+# =============================================================================
+vq = torch.load(vq_ckpt, map_location="cpu", weights_only=False)
+base_vocab = int(vq["base_vocab"])   # e.g. 180678
+PAD_ID = int(base_vocab + 0)
+MASK_ID = int(base_vocab + 1)
+
+print("[token_stream] total_tokens:", total_tokens, "neg_tokens_total:", neg_tokens_total)
+print("[vocab] base_vocab:", base_vocab, "PAD_ID:", PAD_ID, "MASK_ID:", MASK_ID)
+
 
 # =============================================================================
 # Inspect tar & detect prefix/batches
@@ -136,12 +156,11 @@ with tarfile.open(path0, "r:gz") as tar:
     names = tar.getnames()
 
 prefix, batches = detect_prefix_and_batches(names)
-print("Detected prefix in tar:", repr(prefix))
-print("num batches:", len(batches), "first/last:", batches[:3], batches[-3:])
+print("[tar] prefix:", repr(prefix))
+print("[tar] num batches:", len(batches), "first/last:", batches[:3], batches[-3:])
 
-# Optional: quick existence sanity
-need_files = [f"{prefix}attr_{batches[0]}.npy", f"{prefix}smiles_{batches[0]}.txt"]
-for nf in need_files:
+# sanity for first batch
+for nf in [f"{prefix}attr_{batches[0]}.npy", f"{prefix}smiles_{batches[0]}.txt"]:
     if nf not in names:
         raise RuntimeError(f"Expected file not found in tar: {nf}")
 
@@ -149,20 +168,18 @@ for nf in need_files:
 # =============================================================================
 # Main conversion
 # =============================================================================
-pos = 0  # position in cluster_stream
+pos = 0  # cursor in token_stream
 
 with tarfile.open(path0, "r:gz") as tar:
     for b in batches:
         attr_name = f"{prefix}attr_{b}.npy"
         smiles_name = f"{prefix}smiles_{b}.txt"
-        neg_in_slice = int((token_stream[pos:pos + need] < 0).sum().item())
-        print("neg_in_batch:", neg_in_slice, "/", need, f"({neg_in_slice / need:.6f})")
+
         # --- load attr
         raw_attr = read_bytes_from_tar(tar, attr_name)
         try:
             attr = load_attr_from_bytes(raw_attr)
         except ValueError as e:
-            # If allow_pickle=False fails, you can switch to True above.
             raise RuntimeError(
                 f"Failed to np.load {attr_name}. If this npy requires pickle, set allow_pickle=True. Original error: {e}"
             )
@@ -173,46 +190,45 @@ with tarfile.open(path0, "r:gz") as tar:
         raw_smiles = read_bytes_from_tar(tar, smiles_name).decode("utf-8", errors="replace")
         smiles = parse_smiles(raw_smiles)
         if len(smiles) != n_mols:
-            raise RuntimeError(
-                f"batch {b}: smiles count != n_mols : smiles={len(smiles)} n_mols={n_mols}"
-            )
+            raise RuntimeError(f"batch {b}: smiles count != n_mols : smiles={len(smiles)} n_mols={n_mols}")
 
-        # --- compute per-mol atom lengths via zero-row detection
-        # safer than !=0 for floats: use >0 threshold
+        # --- compute lengths by "non-zero row" detection
         row_is_real = (np.abs(attr3).sum(axis=2) > 0)  # (n_mols, MAX_ATOMS)
         lengths = row_is_real.sum(axis=1).astype(np.int64)  # (n_mols,)
 
         if (lengths <= 0).any():
             bad = np.where(lengths <= 0)[0][:10].tolist()
-            raise RuntimeError(
-                f"batch {b}: found molecules with length<=0 at indices {bad}. "
-                f"This usually means your 'real atom' detection is wrong or attr is all-zeros."
-            )
+            raise RuntimeError(f"batch {b}: found molecules with length<=0 at indices {bad}. attr may be all-zero.")
         if int(lengths.max()) > MAX_ATOMS:
-            raise RuntimeError(
-                f"batch {b}: length exceeds MAX_ATOMS? max_length={int(lengths.max())} MAX_ATOMS={MAX_ATOMS}"
-            )
+            raise RuntimeError(f"batch {b}: length exceeds MAX_ATOMS? max_length={int(lengths.max())} MAX_ATOMS={MAX_ATOMS}")
 
         need = int(lengths.sum())
-        remain = int(token_stream.numel()) - pos
-        total_tokens = d["global_id"].numel()
-        neg_tokens = int((d["global_id"].reshape(-1) < 0).sum().item())
-        if need > remain:
-            print("total_tokens_raw:", total_tokens, "neg_tokens:", neg_tokens, "after_filter:",
-                  int(token_stream.numel()))
+        remain = total_tokens - pos
+
+        # debug: how many -1 are in this slice (before replacement)
+        slice_end = pos + need
+        if slice_end > total_tokens:
+            # print diagnostics then fail
+            print("[exhaust] batch", b, "need", need, "pos", pos, "remain", remain, "total_tokens", total_tokens)
             raise RuntimeError(
-                f"token stream exhausted at batch {b}: need {need}, remain {remain}, stream_len={int(token_stream.numel())}"
+                f"token stream exhausted at batch {b}: need {need}, remain {remain}, stream_len={total_tokens}"
             )
 
-        # --- slice flat tokens for this batch
-        PAD_ID = int(base_vocab + 0)
-        MASK_ID = int(base_vocab + 1)
+        neg_in_slice = int((token_stream[pos:slice_end] < 0).sum().item())
 
-        tokens_flat = token_stream[pos:pos + need].clone()
-        # -1 を MASK へ
-        tokens_flat = torch.where(tokens_flat >= 0, tokens_flat, torch.tensor(MASK_ID, dtype=tokens_flat.dtype))
+        # --- slice tokens for this batch
+        tokens_flat = token_stream[pos:slice_end].clone()
+        pos = slice_end
+
+        # -1 を MASK に置換（削除しない）
+        if neg_in_slice > 0:
+            tokens_flat = torch.where(
+                tokens_flat >= 0,
+                tokens_flat,
+                torch.full_like(tokens_flat, MASK_ID),
+            )
+
         tokens_flat = tokens_flat.to(torch.int32)
-        pos += need
 
         # --- offsets (ragged)
         offsets_np = np.zeros(n_mols + 1, dtype=np.int64)
@@ -220,24 +236,28 @@ with tarfile.open(path0, "r:gz") as tar:
         offsets = torch.from_numpy(offsets_np)
 
         out_path = os.path.join(out_dir, f"pretrain_ragged_batch{b:03d}.pt")
-        torch.save(
+        atomic_torch_save(
             {
                 "batch": int(b),
                 "tokens_flat": tokens_flat,              # (sum(lengths),)
                 "offsets": offsets,                      # (n_mols+1,)
                 "lengths": torch.from_numpy(lengths),    # (n_mols,)
                 "base_vocab": int(base_vocab),
+                "pad_id": int(PAD_ID),
+                "mask_id": int(MASK_ID),
                 "smiles": smiles,                        # list[str]
+                "neg_in_slice": int(neg_in_slice),
             },
             out_path,
         )
 
         print(
-            f"saved {out_path} | mols={n_mols} need={need} "
-            f"| pos={pos}/{int(token_stream.numel())} "
+            f"[saved] {os.path.basename(out_path)} | mols={n_mols} need={need} "
+            f"| neg_in_slice={neg_in_slice} "
+            f"| pos={pos}/{total_tokens} "
             f"| len[min/mean/max]={int(lengths.min())}/{float(lengths.mean()):.2f}/{int(lengths.max())}"
         )
 
-print("DONE consumed:", pos, "/", int(token_stream.numel()))
-if pos != int(token_stream.numel()):
-    print("WARNING: consumed != stream_len (ordering mismatch? extra tokens? different padding rule?)")
+print("[DONE] consumed:", pos, "/", total_tokens)
+if pos != total_tokens:
+    print("[WARN] consumed != total_tokens (ordering mismatch? extra tokens?)")
