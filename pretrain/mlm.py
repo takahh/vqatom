@@ -347,6 +347,11 @@ def main():
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     start_epoch = 1
     global_step = 0  # resumeしない場合の初期値
+
+    resume_step0 = 0
+    resume_lr0 = args.lr
+    resume_last_epoch = 0
+
     if args.resume is not None:
         print(f"[resume] loading: {args.resume}")
         ckpt = torch.load(args.resume, map_location="cpu")
@@ -380,11 +385,40 @@ def main():
         global_step = int(ckpt.get("global_step", 0))
         last_epoch = int(ckpt.get("epoch", 0))
         start_epoch = last_epoch + 1
-        print(f"[resume] resumed at global_step={global_step}, will start from epoch {start_epoch}")
+        resume_step0 = global_step
+        resume_last_epoch = last_epoch
+        resume_lr0 = float(optim.param_groups[0]["lr"])  # ← ckptから復元された現在lr
+        print(f"[resume] resumed at global_step={global_step}, lr0={resume_lr0:.3e}, will start from epoch {start_epoch}")
 
     # cosine schedule with warmup
-    total_steps = args.epochs * len(train_loader)
-    warmup = max(10, int(0.05 * total_steps))
+    steps_per_epoch = len(train_loader)
+
+    if args.resume is None:
+        # fresh run: 元のcosine+warmup
+        total_steps = args.epochs * steps_per_epoch
+        warmup = max(10, int(0.05 * total_steps))
+
+        def lr_now(step: int) -> float:
+            if step < warmup:
+                fac = (step + 1) / warmup
+            else:
+                t = (step - warmup) / max(1, (total_steps - warmup))
+                fac = 0.5 * (1.0 + math.cos(math.pi * t))
+            return args.lr * fac
+    else:
+        # resume: 「今のlr(resume_lr0)」を起点に、残りepochsでcosine decay（LRが上がらない）
+        remaining_epochs = args.epochs - resume_last_epoch
+        if remaining_epochs <= 0:
+            raise RuntimeError(f"--epochs must be > ckpt epoch. ckpt={resume_last_epoch} args.epochs={args.epochs}")
+
+        remaining_steps = remaining_epochs * steps_per_epoch
+
+        def lr_now(step: int) -> float:
+            # step == resume_step0 で progress=0 → lr=resume_lr0
+            prog = (step - resume_step0) / max(1, remaining_steps)
+            prog = min(max(prog, 0.0), 1.0)
+            fac = 0.5 * (1.0 + math.cos(math.pi * prog))
+            return resume_lr0 * fac
 
     def lr_factor(step: int) -> float:
         if step < warmup:
@@ -446,9 +480,9 @@ def main():
             global_step += 1  # increment first
 
             # lr schedule
-            lr_now = args.lr * lr_factor(global_step)
+            lr_now_val = lr_now(global_step)
             for pg in optim.param_groups:
-                pg["lr"] = lr_now
+                pg["lr"] = lr_now_val
 
             # stats
             with torch.no_grad():
