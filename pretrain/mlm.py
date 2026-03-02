@@ -245,7 +245,10 @@ def main():
     ap.add_argument("--weight_decay", type=float, default=0.01)
     ap.add_argument("--num_workers", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
-
+    ap.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pt to resume from")
+    ap.add_argument("--reset_optim", action="store_true", help="When resuming, re-init optimizer state")
+    ap.add_argument("--reset_lr", action="store_true",
+                    help="When resuming, ignore ckpt lr state and use args.lr schedule from current global_step")
     # model
     ap.add_argument("--d_model", type=int, default=256)
     ap.add_argument("--nhead", type=int, default=8)
@@ -342,6 +345,42 @@ def main():
     ).to(device)
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    start_epoch = 1
+    global_step = 0  # resumeしない場合の初期値
+    if args.resume is not None:
+        print(f"[resume] loading: {args.resume}")
+        ckpt = torch.load(args.resume, map_location="cpu")
+
+        # vocab安全チェック（事故防止）
+        if int(ckpt.get("base_vocab", -1)) != int(base_vocab):
+            raise RuntimeError(f"[resume] base_vocab mismatch: ckpt={ckpt.get('base_vocab')} current={base_vocab}")
+        if int(ckpt.get("vocab_size", -1)) != int(vocab_size):
+            raise RuntimeError(f"[resume] vocab_size mismatch: ckpt={ckpt.get('vocab_size')} current={vocab_size}")
+
+        model.load_state_dict(ckpt["model"], strict=True)
+
+        if (not args.reset_optim) and ("optim" in ckpt):
+            try:
+                optim.load_state_dict(ckpt["optim"])
+                print("[resume] optimizer state loaded")
+            except Exception as e:
+                print(f"[resume] failed to load optimizer state: {e} (continuing with fresh optim)")
+
+        # RNG復元（厳密に続きからやりたいなら）
+        if "rng" in ckpt:
+            try:
+                random.setstate(ckpt["rng"]["python"])
+                torch.set_rng_state(ckpt["rng"]["torch"])
+                if torch.cuda.is_available() and ckpt["rng"].get("cuda") is not None:
+                    torch.cuda.set_rng_state_all(ckpt["rng"]["cuda"])
+                print("[resume] RNG state restored")
+            except Exception as e:
+                print(f"[resume] failed to restore RNG: {e}")
+
+        global_step = int(ckpt.get("global_step", 0))
+        last_epoch = int(ckpt.get("epoch", 0))
+        start_epoch = last_epoch + 1
+        print(f"[resume] resumed at global_step={global_step}, will start from epoch {start_epoch}")
 
     # cosine schedule with warmup
     total_steps = args.epochs * len(train_loader)
@@ -353,7 +392,12 @@ def main():
         t = (step - warmup) / max(1, (total_steps - warmup))
         return 0.5 * (1.0 + math.cos(math.pi * t))
 
-    global_step = 0
+    # set lr according to current global_step (so first step doesn't jump weirdly)
+    if args.resume is not None and args.reset_lr:
+        lr_now = args.lr * lr_factor(global_step)
+        for pg in optim.param_groups:
+            pg["lr"] = lr_now
+        print(f"[resume] reset_lr: lr set to {lr_now:.3e} at step={global_step}")
     model.train()
 
     # helper for deterministic masking
@@ -361,7 +405,7 @@ def main():
     if args.deterministic_masking:
         mask_gen = torch.Generator(device=device)
 
-    for ep in range(1, args.epochs + 1):
+    for ep in range(start_epoch, args.epochs + 1):
         running_loss = 0.0
         running_tok = 0
 
@@ -496,6 +540,13 @@ def main():
             "epoch": ep,
             "global_step": global_step,
             "model": model.state_dict(),
+            "optim": optim.state_dict(),
+            # RNG（再現性を上げたいなら）
+            "rng": {
+                "python": random.getstate(),
+                "torch": torch.get_rng_state(),
+                "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            },
             "base_vocab": base_vocab,
             "vocab_size": vocab_size,
             "config": vars(args),
