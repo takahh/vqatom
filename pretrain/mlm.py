@@ -344,9 +344,13 @@ def main():
         dropout=args.dropout,
     ).to(device)
 
+    # ------------------------------------------------------------
+    # Optim / Resume
+    # ------------------------------------------------------------
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
     start_epoch = 1
-    global_step = 0  # resumeしない場合の初期値
+    global_step = 0
 
     resume_step0 = 0
     resume_lr0 = args.lr
@@ -356,7 +360,7 @@ def main():
         print(f"[resume] loading: {args.resume}")
         ckpt = torch.load(args.resume, map_location="cpu")
 
-        # vocab安全チェック（事故防止）
+        # safety: vocab mismatch = disaster
         if int(ckpt.get("base_vocab", -1)) != int(base_vocab):
             raise RuntimeError(f"[resume] base_vocab mismatch: ckpt={ckpt.get('base_vocab')} current={base_vocab}")
         if int(ckpt.get("vocab_size", -1)) != int(vocab_size):
@@ -371,7 +375,7 @@ def main():
             except Exception as e:
                 print(f"[resume] failed to load optimizer state: {e} (continuing with fresh optim)")
 
-        # RNG復元（厳密に続きからやりたいなら）
+        # restore RNG for strict continuation (optional but nice)
         if "rng" in ckpt:
             try:
                 random.setstate(ckpt["rng"]["python"])
@@ -383,18 +387,25 @@ def main():
                 print(f"[resume] failed to restore RNG: {e}")
 
         global_step = int(ckpt.get("global_step", 0))
-        last_epoch = int(ckpt.get("epoch", 0))
-        start_epoch = last_epoch + 1
         resume_step0 = global_step
-        resume_last_epoch = last_epoch
-        resume_lr0 = float(optim.param_groups[0]["lr"])  # ← ckptから復元された現在lr
-        print(f"[resume] resumed at global_step={global_step}, lr0={resume_lr0:.3e}, will start from epoch {start_epoch}")
 
-    # cosine schedule with warmup
+        resume_last_epoch = int(ckpt.get("epoch", 0))
+        start_epoch = resume_last_epoch + 1
+
+        # lr0: if optimizer state was loaded, this is the true current lr
+        resume_lr0 = float(optim.param_groups[0].get("lr", args.lr))
+
+        print(f"[resume] resumed at epoch={resume_last_epoch}, global_step={global_step}, lr0={resume_lr0:.3e}")
+
+    # ------------------------------------------------------------
+    # LR schedule
+    #  - fresh: warmup + cosine to zero over ALL epochs
+    #  - resume: cosine decay from current lr0 to zero over REMAINING epochs
+    #    (never increases lr at resume)
+    # ------------------------------------------------------------
     steps_per_epoch = len(train_loader)
 
     if args.resume is None:
-        # fresh run: 元のcosine+warmup
         total_steps = args.epochs * steps_per_epoch
         warmup = max(10, int(0.05 * total_steps))
 
@@ -405,33 +416,32 @@ def main():
                 t = (step - warmup) / max(1, (total_steps - warmup))
                 fac = 0.5 * (1.0 + math.cos(math.pi * t))
             return args.lr * fac
+
+        total_steps_disp = total_steps
+
     else:
-        # resume: 「今のlr(resume_lr0)」を起点に、残りepochsでcosine decay（LRが上がらない）
         remaining_epochs = args.epochs - resume_last_epoch
         if remaining_epochs <= 0:
-            raise RuntimeError(f"--epochs must be > ckpt epoch. ckpt={resume_last_epoch} args.epochs={args.epochs}")
+            raise RuntimeError(
+                f"--epochs must be > ckpt epoch. ckpt={resume_last_epoch} args.epochs={args.epochs}"
+            )
 
         remaining_steps = remaining_epochs * steps_per_epoch
+        total_steps_disp = int(resume_step0 + remaining_steps)
 
         def lr_now(step: int) -> float:
-            # step == resume_step0 で progress=0 → lr=resume_lr0
+            # step == resume_step0 -> lr = resume_lr0
             prog = (step - resume_step0) / max(1, remaining_steps)
             prog = min(max(prog, 0.0), 1.0)
             fac = 0.5 * (1.0 + math.cos(math.pi * prog))
             return resume_lr0 * fac
 
-    def lr_factor(step: int) -> float:
-        if step < warmup:
-            return (step + 1) / warmup
-        t = (step - warmup) / max(1, (total_steps - warmup))
-        return 0.5 * (1.0 + math.cos(math.pi * t))
-
-    # set lr according to current global_step (so first step doesn't jump weirdly)
-    if args.resume is not None and args.reset_lr:
-        lr_now = args.lr * lr_factor(global_step)
-        for pg in optim.param_groups:
-            pg["lr"] = lr_now
-        print(f"[resume] reset_lr: lr set to {lr_now:.3e} at step={global_step}")
+        # optional: override lr right now (useful when you loaded optim but want schedule-defined lr)
+        if args.reset_lr:
+            lr0 = lr_now(global_step)
+            for pg in optim.param_groups:
+                pg["lr"] = lr0
+            print(f"[resume] reset_lr: lr set to {lr0:.3e} at step={global_step}")
     model.train()
 
     # helper for deterministic masking
@@ -495,8 +505,8 @@ def main():
                 avg_loss = running_loss / max(1, running_tok)
                 ppl = math.exp(min(20.0, avg_loss))
 
-                msg = (f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps} "
-                       f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now:.2e} "
+                msg = (f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps_disp} "
+                       f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now_val:.2e} "
                        f"masked_tokens={running_tok}")
                 print(msg)
 
@@ -504,10 +514,10 @@ def main():
                     "time": time.time(),
                     "epoch": ep,
                     "step": global_step,
-                    "total_steps": total_steps,
+                    "total_steps": total_steps_disp,
                     "mlm_loss": avg_loss,
                     "ppl": ppl,
-                    "lr": lr_now,
+                    "lr": lr_now_val,
                     "masked_tokens": running_tok,
                     "batch_size": args.batch_size,
                     "mask_prob": args.mask_prob,
