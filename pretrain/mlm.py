@@ -65,8 +65,6 @@ def mlm_mask_tokens(
         )
 
     return masked, labels, vocab_size
-
-
 # ============================================================
 # Dataset: molecule-level sampling from many batch files
 # ============================================================
@@ -75,14 +73,30 @@ class RaggedMolDataset(Dataset):
     Loads pretrain_ragged_batchXXX.pt files and exposes each molecule as one item.
     Each item returns a 1D token sequence (len = num_atoms_in_mol).
     """
-    def __init__(self, root_dir, pattern="pretrain_ragged_batch*.pt", limit_files=None):
-        self.files = sorted(glob.glob(os.path.join(root_dir, pattern)))
+
+    def __init__(self, root_dir,
+                 pattern="pretrain_ragged_batch*.pt",
+                 limit_files=None,
+                 file_list=None):
+
+        if file_list is not None:
+            # file_list can contain relative paths
+            self.files = []
+            for p in file_list:
+                if os.path.isabs(p):
+                    self.files.append(p)
+                else:
+                    self.files.append(os.path.join(root_dir, p))
+            self.files = sorted(self.files)
+        else:
+            self.files = sorted(glob.glob(os.path.join(root_dir, pattern)))
+
         if not self.files:
-            raise FileNotFoundError(f"No files matched: {os.path.join(root_dir, pattern)}")
+            raise FileNotFoundError(f"No files found in {root_dir}")
+
         if limit_files is not None:
             self.files = self.files[:int(limit_files)]
 
-        # Build index: global_idx -> (file_i, mol_i)
         self.index = []
         self.file_meta = []
         base_vocab_set = set()
@@ -92,15 +106,17 @@ class RaggedMolDataset(Dataset):
             offsets = d["offsets"].to(torch.int64)
             n_mols = offsets.numel() - 1
             self.file_meta.append((fp, offsets))
+
             for mi in range(n_mols):
                 self.index.append((fi, mi))
+
             base_vocab_set.add(int(d["base_vocab"]))
 
         if len(base_vocab_set) != 1:
             raise RuntimeError(f"base_vocab differs across files: {sorted(base_vocab_set)}")
+
         self.base_vocab = base_vocab_set.pop()
 
-        # simple cache: keep last loaded file in memory
         self._cache_fi = None
         self._cache_data = None
 
@@ -119,6 +135,7 @@ class RaggedMolDataset(Dataset):
     def __getitem__(self, idx):
         fi, mi = self.index[idx]
         d = self._load_file(fi)
+
         tokens_flat = d["tokens_flat"].to(torch.int64)
         offsets = d["offsets"].to(torch.int64)
 
@@ -126,7 +143,6 @@ class RaggedMolDataset(Dataset):
         e = int(offsets[mi + 1].item())
         seq = tokens_flat[s:e].clone()
         return seq
-
 
 def collate_pad(batch, base_vocab: int):
     """
@@ -215,7 +231,12 @@ def main():
     # data
     ap.add_argument("--data_dir", type=str, required=True)
     ap.add_argument("--limit_files", type=int, default=None)
-
+    ap.add_argument(
+        "--split_json",
+        type=str,
+        default=None,
+        help="Path to split.json (with train/valid file lists)"
+    )
     # training
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--mask_prob", type=float, default=0.30)
@@ -249,21 +270,46 @@ def main():
 
     write_log, log_fh = make_log_writer(args.log_file)
 
-    # dataset
-    ds = RaggedMolDataset(args.data_dir, limit_files=args.limit_files)
-    base_vocab = ds.base_vocab
+    # dataset / split
+    train_files = None
+    valid_files = None
+    if args.split_json is not None:
+        print(f"[info] loading split from {args.split_json}")
+        with open(args.split_json, "r", encoding="utf-8") as f:
+            split = json.load(f)
+        train_files = split.get("train", [])
+        valid_files = split.get("valid", [])
+        print(f"[split] train_files={len(train_files)} valid_files={len(valid_files)}")
+
+    train_ds = RaggedMolDataset(
+        args.data_dir,
+        limit_files=args.limit_files,
+        file_list=train_files
+    )
+
+    valid_ds = None
+    if valid_files:
+        valid_ds = RaggedMolDataset(
+            args.data_dir,
+            file_list=valid_files
+        )
+
+    # vocab info from train dataset
+    base_vocab = train_ds.base_vocab
     PAD_ID = base_vocab + 0
     MASK_ID = base_vocab + 1
     vocab_size = base_vocab + 2
 
-    print(f"Loaded {len(ds)} molecules from {args.data_dir}")
+    print(f"Loaded {len(train_ds)} train molecules from {args.data_dir}")
+    if valid_ds is not None:
+        print(f"Loaded {len(valid_ds)} valid molecules")
     print(f"base_vocab={base_vocab} PAD_ID={PAD_ID} MASK_ID={MASK_ID} vocab_size={vocab_size}")
     if args.log_file:
         print(f"logging to: {args.log_file}")
 
-    # dataloader
-    dl = DataLoader(
-        ds,
+    # dataloaders
+    train_loader = DataLoader(
+        train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
@@ -271,6 +317,18 @@ def main():
         collate_fn=lambda batch: collate_pad(batch, base_vocab),
         drop_last=True,
     )
+
+    valid_loader = None
+    if valid_ds is not None:
+        valid_loader = DataLoader(
+            valid_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=lambda batch: collate_pad(batch, base_vocab),
+            drop_last=False,
+        )
 
     # device/model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -286,7 +344,7 @@ def main():
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # cosine schedule with warmup
-    total_steps = args.epochs * len(dl)
+    total_steps = args.epochs * len(train_loader)
     warmup = max(10, int(0.05 * total_steps))
 
     def lr_factor(step: int) -> float:
@@ -301,14 +359,13 @@ def main():
     # helper for deterministic masking
     mask_gen = None
     if args.deterministic_masking:
-        # We'll reseed this generator every step based on (seed, epoch, global_step)
         mask_gen = torch.Generator(device=device)
 
     for ep in range(1, args.epochs + 1):
         running_loss = 0.0
         running_tok = 0
 
-        for it, (input_ids, attn_keep, lens) in enumerate(dl, start=1):
+        for it, (input_ids, attn_keep, lens) in enumerate(train_loader, start=1):
             input_ids = input_ids.to(device, non_blocking=True)
             attn_keep = attn_keep.to(device, non_blocking=True)
 
@@ -342,6 +399,8 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optim.step()
 
+            global_step += 1  # increment first
+
             # lr schedule
             lr_now = args.lr * lr_factor(global_step)
             for pg in optim.param_groups:
@@ -353,8 +412,6 @@ def main():
 
             running_loss += float(loss.item()) * masked_positions
             running_tok += masked_positions
-
-            global_step += 1
 
             if global_step % args.log_every == 0:
                 avg_loss = running_loss / max(1, running_tok)
@@ -380,6 +437,58 @@ def main():
                 })
 
                 running_loss, running_tok = 0.0, 0
+        # -------------------------
+        # VALID
+        # -------------------------
+        if valid_loader is not None:
+            model.eval()
+            v_loss_sum = 0.0
+            v_tok = 0
+
+            with torch.no_grad():
+                for v_it, (v_input_ids, v_attn_keep, v_lens) in enumerate(valid_loader, start=1):
+                    v_input_ids = v_input_ids.to(device, non_blocking=True)
+                    v_attn_keep = v_attn_keep.to(device, non_blocking=True)
+                    v_key_padding_mask = ~v_attn_keep
+
+                    # deterministic masking option (use different stream than train)
+                    if mask_gen is not None:
+                        step_seed = int(args.seed + 9_000_000 + v_it)
+                        mask_gen.manual_seed(step_seed)
+
+                    v_masked, v_labels, _ = mlm_mask_tokens(
+                        v_input_ids,
+                        base_vocab=base_vocab,
+                        mask_prob=args.mask_prob,
+                        generator=mask_gen,
+                    )
+
+                    v_logits = model(v_masked, key_padding_mask=v_key_padding_mask)
+                    v_loss = F.cross_entropy(
+                        v_logits.reshape(-1, vocab_size),
+                        v_labels.reshape(-1),
+                        ignore_index=-100,
+                    )
+
+                    v_masked_positions = int((v_labels != -100).sum().item())
+                    v_loss_sum += float(v_loss.item()) * v_masked_positions
+                    v_tok += v_masked_positions
+
+            v_avg = v_loss_sum / max(1, v_tok)
+            v_ppl = math.exp(min(20.0, v_avg))
+            print(f"[ep {ep}/{args.epochs}] VALID mlm_loss={v_avg:.4f} ppl~{v_ppl:.2f} masked_tokens={v_tok}")
+
+            write_log({
+                "time": time.time(),
+                "event": "valid",
+                "epoch": ep,
+                "step": global_step,
+                "mlm_loss": v_avg,
+                "ppl": v_ppl,
+                "masked_tokens": v_tok,
+            })
+
+            model.train()
 
         # save checkpoint each epoch
         ckpt_path = os.path.join(args.save_dir, f"mlm_ep{ep:02d}.pt")
