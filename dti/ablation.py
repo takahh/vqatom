@@ -380,64 +380,57 @@ class BiasedCrossAttention(nn.Module):
 
 class DTIDataset(Dataset):
     """
-    Drops non-binders (label==0), keeps binders only,
-    and defines y_bin = (y >= Y_THR).
+    label-free dataset:
+      - requires: seq, lig_tok, y
+      - defines binary label as (y >= y_thr)
     """
-    def __init__(self, csv_path: str, y_thr: float = Y_THR):
+    def __init__(self, csv_path: str, y_thr: float = 7.0, drop_missing_y: bool = True):
         rows = read_csv_rows(csv_path)
         self.samples = []
-        dropped_nonbinder = 0
+
         dropped_no_y = 0
-        dropped_parse_y = 0
+        dropped_bad = 0
 
         for r in rows:
-            if "seq" not in r or "lig_tok" not in r:
-                continue
-            seq = str(r["seq"]).strip()
-            lig = str(r["lig_tok"]).strip()
-            if not seq or not lig:
-                continue
-
-            if "label" not in r:
-                raise KeyError("CSV must contain 'label' (0/1).")
             try:
-                is_binder = float(r["label"]) > 0.5
+                seq = str(r["seq"]).strip()
+                lig = str(r["lig_tok"]).strip()
             except Exception:
-                is_binder = False
-
-            if not is_binder:
-                dropped_nonbinder += 1
+                dropped_bad += 1
                 continue
 
-            if "y" not in r or str(r["y"]).strip() == "":
-                dropped_no_y += 1
-                continue
-            try:
-                y = float(r["y"])
-            except Exception:
-                dropped_parse_y += 1
-                continue
+            y_str = str(r.get("y", "")).strip()
+            if y_str == "":
+                if drop_missing_y:
+                    dropped_no_y += 1
+                    continue
+                y_val = float("-inf")
+            else:
+                y_val = float(y_str)
 
-            y_bin = 1.0 if (y >= float(y_thr)) else 0.0
-            self.samples.append((seq, lig, y_bin))
+            y_bin = 1.0 if y_val >= float(y_thr) else 0.0
+            pdbid = str(r.get("pdbid", "")).strip()
+
+            self.samples.append((seq, lig, y_bin, y_val, pdbid))
 
         print(
             f"[DTIDataset] {csv_path}: kept={len(self.samples)} "
-            f"dropped_nonbinder={dropped_nonbinder} dropped_no_y={dropped_no_y} dropped_parse_y={dropped_parse_y}"
+            f"dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}"
         )
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y_bin = self.samples[idx]
+        seq, lig_str, y_bin, y_val, pdbid = self.samples[idx]
         l_ids = parse_lig_tokens(lig_str)
         return {
             "seq": seq,
             "l_ids": torch.tensor(l_ids, dtype=torch.long),
             "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
+            "y": torch.tensor(float(y_val), dtype=torch.float32),
+            "pdbid": pdbid,
         }
-
 
 class CrossAttnDTIClassifier(nn.Module):
     def __init__(
