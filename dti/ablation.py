@@ -811,7 +811,7 @@ def main():
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
 
-    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr))
+    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
     valid_loader = DataLoader(
         valid_ds,
         batch_size=args.batch_size,
@@ -834,7 +834,7 @@ def main():
     train_loader = None
     train_ds = None
     if not args.eval_only:
-        train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr))
+        train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
