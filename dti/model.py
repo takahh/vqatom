@@ -1239,7 +1239,7 @@ def main():
     ap.add_argument("--cross_layers", type=int, default=1, help="Number of cross-attention blocks")
 
     # ligand MLM weights ckpt
-    ap.add_argument("--lig_ckpt", type=str, default="/vqatom/data/mlm_ep05.pt", help="Ligand MLM checkpoint")
+    ap.add_argument("--lig_ckpt", type=str, default=None, help="Ligand MLM checkpoint")
 
     # discretization ckpt (vocab meta source)
     ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")

@@ -1,76 +1,94 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import json
+import re
 from pathlib import Path
+from collections import defaultdict
 import matplotlib.pyplot as plt
 
-LOG_PATH = Path("/Users/taka/Downloads/train_log.jsonl")
+LOG_PATH = Path("/Users/taka/Downloads/train_console.log")  # ←ここ変えて
+OUT_PNG = LOG_PATH.with_suffix(".epoch_loss.png")
 
-# 表示を滑らかにしたいなら。0ならスムージング無し。
-SMOOTH_WINDOW = 200  # 例: 200ステップ移動平均
+# train の集計で masked_tokens が小さすぎる行を捨てたい場合（例: 5000）
+MIN_MASKED_TOKENS_TRAIN = 0  # 0ならフィルタ無し。例: 5000
+# valid は通常まとまって大きいのでフィルタ不要（必要なら同様に追加可）
 
-# 出力画像（不要なら None）
-OUT_PNG = LOG_PATH.with_suffix(".loss.png")
+# 例:
+# [ep 18/30] step 269150/448770 mlm_loss=3.7127 ... masked_tokens=13292
+# [ep 18/30] VALID mlm_loss=3.6573 ... masked_tokens=210274
 
-def moving_average(x, w: int):
-    if w <= 1 or len(x) < w:
-        return x
-    s = [0.0]
-    for v in x:
-        s.append(s[-1] + float(v))
-    out = []
-    half = w // 2
-    # centered MA (端は短くなる)
-    for i in range(len(x)):
-        lo = max(0, i - half)
-        hi = min(len(x), i + half + 1)
-        out.append((s[hi] - s[lo]) / (hi - lo))
-    return out
+RE_EP = re.compile(r"\[ep\s+(\d+)/(\d+)\]")
+RE_LOSS = re.compile(r"mlm_loss=([0-9]*\.[0-9]+|[0-9]+)")
+RE_MASKED = re.compile(r"masked_tokens=(\d+)")
+RE_IS_VALID = re.compile(r"\bVALID\b")
 
 def main():
     if not LOG_PATH.exists():
         raise FileNotFoundError(f"not found: {LOG_PATH}")
 
-    train_step, train_loss = [], []
-    valid_step, valid_loss = [], []
-    epoch_end_steps = []  # 目印が欲しければ
+    train_losses = defaultdict(list)   # ep -> [loss...]
+    valid_loss = {}                    # ep -> loss (最後のVALIDを採用)
+    valid_masked = {}                  # ep -> masked_tokens (参考)
 
-    with LOG_PATH.open("r", encoding="utf-8") as f:
+    with LOG_PATH.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            r = json.loads(line)
 
-            ev = r.get("event", None)
+            m_ep = RE_EP.search(line)
+            if not m_ep:
+                continue
+            ep = int(m_ep.group(1))
 
-            if ev is None and "mlm_loss" in r and "step" in r:
-                # train
-                train_step.append(int(r["step"]))
-                train_loss.append(float(r["mlm_loss"]))
+            m_loss = RE_LOSS.search(line)
+            if not m_loss:
+                continue
+            loss = float(m_loss.group(1))
 
-            elif ev == "valid" and "mlm_loss" in r and "step" in r:
-                valid_step.append(int(r["step"]))
-                valid_loss.append(float(r["mlm_loss"]))
+            m_masked = RE_MASKED.search(line)
+            masked = int(m_masked.group(1)) if m_masked else None
 
-            elif ev == "epoch_end" and "step" in r:
-                epoch_end_steps.append(int(r["step"]))
+            is_valid = bool(RE_IS_VALID.search(line))
 
-    # smoothing
-    train_loss_s = moving_average(train_loss, SMOOTH_WINDOW)
+            if is_valid:
+                # VALID mlm_loss は valid としてそのまま1点
+                valid_loss[ep] = loss
+                if masked is not None:
+                    valid_masked[ep] = masked
+            else:
+                # それ以外の mlm_loss は train
+                if masked is not None and masked < MIN_MASKED_TOKENS_TRAIN:
+                    continue
+                train_losses[ep].append(loss)
+
+    if not train_losses:
+        raise RuntimeError("No train losses parsed. Check LOG_PATH and log format.")
+
+    epochs = sorted(train_losses.keys())
+    train_mean = []
+    for ep in epochs:
+        xs = train_losses[ep]
+        train_mean.append(sum(xs) / len(xs))
+
+    # valid はあるepochだけ
+    x_valid = []
+    y_valid = []
+    for ep in epochs:
+        if ep in valid_loss:
+            x_valid.append(ep)
+            y_valid.append(valid_loss[ep])
 
     plt.figure()
-    plt.plot(train_step, train_loss_s, label=f"train (MA{SMOOTH_WINDOW})" if SMOOTH_WINDOW > 1 else "train")
-    plt.plot(valid_step, valid_loss, marker="o", linestyle="-", label="valid")
+    plt.plot(epochs, train_mean, marker="o", label="train (epoch mean)")
+    if x_valid:
+        plt.plot(x_valid, y_valid, marker="o", label="valid (raw)")
+    else:
+        print("warning: no VALID lines parsed")
 
-    # epoch end 縦線（邪魔なら消してOK）
-    for s in epoch_end_steps:
-        plt.axvline(s, linewidth=0.5, alpha=0.2)
-
-    plt.xlabel("Step")
+    plt.xlabel("Epoch")
     plt.ylabel("MLM Loss")
-    plt.title("MLM Train / Valid Loss")
+    plt.title("MLM Loss (Train=Epoch Mean, Valid=Raw)")
     plt.legend()
     plt.tight_layout()
 
@@ -80,11 +98,13 @@ def main():
 
     plt.show()
 
-    # ついでに最終値も表示
-    if train_loss:
-        print(f"train last: step={train_step[-1]} loss={train_loss[-1]:.4f}")
-    if valid_loss:
-        print(f"valid last: step={valid_step[-1]} loss={valid_loss[-1]:.4f}")
+    last_ep = epochs[-1]
+    print(f"train last epoch={last_ep} mean_loss={train_mean[-1]:.4f} (n={len(train_losses[last_ep])})")
+    if x_valid:
+        print(f"valid last epoch={x_valid[-1]} loss={y_valid[-1]:.4f}")
+        vm = valid_masked.get(x_valid[-1])
+        if vm is not None:
+            print(f"valid last masked_tokens={vm}")
 
 if __name__ == "__main__":
     main()
