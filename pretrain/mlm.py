@@ -333,6 +333,9 @@ def main():
             drop_last=False,
         )
 
+    steps_per_epoch = len(train_loader)
+    total_steps = steps_per_epoch * args.epochs
+
     # device/model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TransformerMLM(
