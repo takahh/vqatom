@@ -475,6 +475,12 @@ class CrossAttnDTIClassifier(nn.Module):
         self.ffn_p = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
         self.ffn_l = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
 
+        self.ln_p_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+        self.ln_l_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+        self.ln_p_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+        self.ln_l_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+        self.drop = nn.Dropout(dropout)
+
         self.shared = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
@@ -501,22 +507,27 @@ class CrossAttnDTIClassifier(nn.Module):
         prot_pad_mask = (p_attn_mask == 0)           # (B,Lp) True=PAD ignore as keys
         lig_pad_mask  = (l_ids == self.lig_pad_id)   # (B,Ll) True=PAD ignore as keys
 
+        # forward で
         for li in range(self.cross_layers):
-            # --- p <- l (residual)
+            # p <- l (PreNorm + Residual)
             p_attn = self.cross_p_from_l[li](
-                q=p_h, k=l_h, v=l_h,
+                q=self.ln_p_attn[li](p_h),
+                k=self.ln_l_attn[li](l_h),
+                v=self.ln_l_attn[li](l_h),
                 key_padding_mask=lig_pad_mask,
             )
-            p_h = self.post_ln_p[li](p_h + p_attn)  # ★ residual + LN
-            p_h = self.ffn_p[li](p_h)  # ★ FFN 内で residual
+            p_h = p_h + self.drop(p_attn)
+            p_h = p_h + self.ffn_p[li](self.ln_p_ffn[li](p_h))
 
-            # --- l <- p (residual)
+            # l <- p (PreNorm + Residual)
             l_attn = self.cross_l_from_p[li](
-                q=l_h, k=p_h, v=p_h,
+                q=self.ln_l_attn[li](l_h),
+                k=self.ln_p_attn[li](p_h),
+                v=self.ln_p_attn[li](p_h),
                 key_padding_mask=prot_pad_mask,
             )
-            l_h = self.post_ln_l[li](l_h + l_attn)  # ★ residual + LN
-            l_h = self.ffn_l[li](l_h)  # ★ FFN 内で residual
+            l_h = l_h + self.drop(l_attn)
+            l_h = l_h + self.ffn_l[li](self.ln_l_ffn[li](l_h))
 
         # pool & head
         # Protein CLS: token 0
