@@ -318,7 +318,7 @@ class TinyFFNBlock(nn.Module):
         h = self.drop1(h)
         h = self.fc2(h)
         h = self.drop2(h)
-        return x + h
+        return h
 
 
 class BiasedCrossAttention(nn.Module):
@@ -500,7 +500,7 @@ class CrossAttnDTIClassifier(nn.Module):
                 q=p_h, k=l_h, v=l_h,
                 key_padding_mask=lig_pad_mask,
             )
-            p_h = self.post_ln_p[li](p_h + p_from_l)
+            p_h = self.post_ln_p[li](p_from_l)
             p_h = self.ffn_p[li](p_h)
 
             # l <- p
@@ -508,7 +508,7 @@ class CrossAttnDTIClassifier(nn.Module):
                 q=l_h, k=p_h, v=p_h,
                 key_padding_mask=prot_pad_mask,
             )
-            l_h = self.post_ln_l[li](l_h + l_from_p)
+            l_h = self.post_ln_l[li](l_from_p)
             l_h = self.ffn_l[li](l_h)
 
         # pool & head
