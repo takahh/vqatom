@@ -326,8 +326,7 @@ class TinyFFNBlock(nn.Module):
         h = self.drop1(h)
         h = self.fc2(h)
         h = self.drop2(h)
-        return h
-
+        return x + h   # ★ residual を戻す
 
 class BiasedCrossAttention(nn.Module):
     """Cross-attention using SDPA (scaled_dot_product_attention)."""
@@ -503,21 +502,21 @@ class CrossAttnDTIClassifier(nn.Module):
         lig_pad_mask  = (l_ids == self.lig_pad_id)   # (B,Ll) True=PAD ignore as keys
 
         for li in range(self.cross_layers):
-            # p <- l
-            p_from_l = self.cross_p_from_l[li](
+            # --- p <- l (residual)
+            p_attn = self.cross_p_from_l[li](
                 q=p_h, k=l_h, v=l_h,
                 key_padding_mask=lig_pad_mask,
             )
-            p_h = self.post_ln_p[li](p_from_l)
-            p_h = self.ffn_p[li](p_h)
+            p_h = self.post_ln_p[li](p_h + p_attn)  # ★ residual + LN
+            p_h = self.ffn_p[li](p_h)  # ★ FFN 内で residual
 
-            # l <- p
-            l_from_p = self.cross_l_from_p[li](
+            # --- l <- p (residual)
+            l_attn = self.cross_l_from_p[li](
                 q=l_h, k=p_h, v=p_h,
                 key_padding_mask=prot_pad_mask,
             )
-            l_h = self.post_ln_l[li](l_from_p)
-            l_h = self.ffn_l[li](l_h)
+            l_h = self.post_ln_l[li](l_h + l_attn)  # ★ residual + LN
+            l_h = self.ffn_l[li](l_h)  # ★ FFN 内で residual
 
         # pool & head
         # Protein CLS: token 0
