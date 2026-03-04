@@ -633,8 +633,9 @@ def train_one_epoch(
         y_bin = batch.y_bin.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        logit, _ = model(p_ids, p_msk, l_ids)
-        loss = F.binary_cross_entropy_with_logits(logit, y_bin)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logit, _ = model(p_ids, p_msk, l_ids)
+            loss = F.binary_cross_entropy_with_logits(logit, y_bin)
         loss.backward()
 
         if grad_clip and float(grad_clip) > 0.0:
