@@ -94,26 +94,28 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     return out
 
 
-def collate_fn(samples: List[Dict[str, object]], esm_tokenizer, lig_pad: int) -> Batch:
-    # Protein tokenize
+def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
+    # Protein tokenize (unchanged)
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
-    # Ligand pad
-    l_ids_list = [s["l_ids"] for s in samples]
+    # Ligand: prepend CLS then pad
+    l_ids_list = []
+    for s in samples:
+        x = s["l_ids"]
+        if x.numel() == 0:
+            x = torch.tensor([lig_cls], dtype=torch.long)
+        else:
+            x = torch.cat([torch.tensor([lig_cls], dtype=torch.long), x], dim=0)
+        l_ids_list.append(x)
+
     l_ids = pad_1d(l_ids_list, lig_pad)
 
-    # Labels
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
 
-    return Batch(
-        p_input_ids=p_input_ids,
-        p_attn_mask=p_attn_mask,
-        l_ids=l_ids,
-        y_bin=y_bin,
-    )
+    return Batch(p_input_ids=p_input_ids, p_attn_mask=p_attn_mask, l_ids=l_ids, y_bin=y_bin)
 
 
 # -----------------------------
@@ -207,6 +209,12 @@ class PretrainedLigandEncoder(nn.Module):
             self.pad_id = self.base_vocab + 0
             self.mask_id = self.base_vocab + 1
             self.vocab_source = f"mlm_ckpt:{ckpt_path}"
+        # PretrainedLigandEncoder.__init__ の vocab meta 部分の後ろに追加
+
+        # 既存: vocab_size includes PAD+MASK の想定
+        # ここに CLS を追加する
+        self.cls_id = int(self.vocab_size)  # new id at end
+        self.vocab_size = int(self.vocab_size) + 1
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
@@ -512,9 +520,11 @@ class CrossAttnDTIClassifier(nn.Module):
             l_h = self.ffn_l[li](l_h)
 
         # pool & head
-        p_pool = masked_mean_by_attn(p_h, p_attn_mask)              # (B,D)
-        l_attn_mask = (~lig_pad_mask).long()                        # (B,Ll)
-        l_pool = masked_mean_by_attn(l_h, l_attn_mask)              # (B,D)
+        # Protein CLS: token 0
+        p_pool = p_h[:, 0, :]  # (B,D)
+
+        # Ligand CLS: token 0 (collateで prepend した)
+        l_pool = l_h[:, 0, :]  # (B,D)
 
         z = self.shared(torch.cat([p_pool, l_pool], dim=-1))         # (B,D)
         logit = self.head_cls(z).squeeze(-1)                         # (B,)
@@ -612,6 +622,7 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, l
             "lig_vocab_size": lig_enc.vocab_size,
             "lig_pad_id": lig_enc.pad_id,
             "lig_mask_id": lig_enc.mask_id,
+            "lig_cls_id": lig_enc.cls_id,
         },
         path,
     )
@@ -810,6 +821,9 @@ def main():
     lig_pad = lig_enc.pad_id
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
+    print(f"[ligand] CLS={lig_enc.cls_id} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id} vocab={lig_enc.vocab_size}")
+    assert lig_enc.cls_id != lig_enc.pad_id
+    assert lig_enc.cls_id != lig_enc.mask_id
 
     valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
     valid_loader = DataLoader(
@@ -817,7 +831,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
     )
 
     test_loader = None
@@ -828,7 +842,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     train_loader = None
@@ -840,7 +854,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
         def pos_rate(ds):
