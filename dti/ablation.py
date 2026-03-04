@@ -549,30 +549,61 @@ def predict(model, loader, device):
     return logit, yb
 
 
-def eval_metrics(logit: np.ndarray, y: np.ndarray, thr: float = 0.5) -> Dict[str, float]:
+def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    """
+    - Computes AUROC / AP (threshold-free)
+    - Finds best-F1 threshold on a grid, and reports that best F1 + thr.
+    """
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+
+    if logit.size == 0:
+        return {
+            "auroc": 0.0, "ap": 0.0,
+            "f1": 0.0, "thr": 0.5,
+            "prob_mean": 0.0, "prob_std": 0.0,
+        }
 
     prob = 1.0 / (1.0 + np.exp(-logit))
     y01 = (y > 0.5).astype(np.int32)
 
     if len(np.unique(y01)) <= 1:
         return {
-            "auroc": 0.0, "ap": 0.0, "f1": 0.0, "thr": float(thr),
-            "prob_mean": float(prob.mean()) if prob.size else 0.0,
-            "prob_std": float(prob.std()) if prob.size else 0.0,
+            "auroc": 0.0, "ap": 0.0,
+            "f1": 0.0, "thr": 0.5,
+            "prob_mean": float(prob.mean()), "prob_std": float(prob.std()),
         }
 
     auroc = roc_auc_score(y01, prob)
     ap = average_precision_score(y01, prob)
-    pred01 = (prob >= float(thr)).astype(np.int32)
-    f1 = f1_score(y01, pred01)
+
+    # --- threshold search for best F1 ---
+    # avoid degenerate ends; include 0.5 anyway
+    thrs = np.unique(np.concatenate([
+        np.linspace(0.05, 0.95, 181),  # ~0.005 step
+        np.array([0.5], dtype=np.float64),
+    ]))
+
+    best_f1 = -1.0
+    best_thr = 0.5
+    for t in thrs:
+        pred01 = (prob >= float(t)).astype(np.int32)
+        f1 = f1_score(y01, pred01)
+        if f1 > best_f1:
+            best_f1 = float(f1)
+            best_thr = float(t)
 
     return {
-        "auroc": float(auroc), "ap": float(ap), "f1": float(f1), "thr": float(thr),
-        "prob_mean": float(prob.mean()), "prob_std": float(prob.std()),
+        "auroc": float(auroc),
+        "ap": float(ap),
+        "f1": float(best_f1),
+        "thr": float(best_thr),
+        "prob_mean": float(prob.mean()),
+        "prob_std": float(prob.std()),
+        "prob_min": float(prob.min()),
+        "prob_max": float(prob.max()),
+        "pos_rate": float(y01.mean()),
+        "pred_pos_rate@thr": float((prob >= best_thr).mean()),
     }
-
-
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
