@@ -498,6 +498,8 @@ class CrossAttnDTIClassifier(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
+        self.mix_logit = nn.Parameter(torch.tensor(0.0))  # sigmoid(0)=0.5
+
     def forward(
             self,
             p_input_ids: torch.Tensor,
@@ -597,7 +599,9 @@ class CrossAttnDTIClassifier(nn.Module):
 
         z_cls = self.shared(torch.cat([p_cls, l_cls], dim=-1))  # (B,D)
         z_int = self.int_head(int_vec)  # (B,D)
-        z = z_cls + z_int  # (B,D)
+        alpha = torch.sigmoid(self.mix_logit)  # 0..1
+        z = (1 - alpha) * z_cls + alpha * z_int
+        aux["mix_alpha"] = alpha.detach()
 
         logit = self.head_cls(z).squeeze(-1)  # (B,)
         return logit, aux
