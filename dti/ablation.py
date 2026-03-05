@@ -326,7 +326,7 @@ class TinyFFNBlock(nn.Module):
         h = self.drop1(h)
         h = self.fc2(h)
         h = self.drop2(h)
-        return x + h   # ★ residual を戻す
+        return h   # ★ residual を戻す
 
 class BiasedCrossAttention(nn.Module):
     """Cross-attention using SDPA (scaled_dot_product_attention)."""
