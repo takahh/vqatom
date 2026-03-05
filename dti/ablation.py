@@ -373,12 +373,16 @@ class BiasedCrossAttention(nn.Module):
         if logits_bias is not None:
             attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
 
+        attn_mask = None
+        if logits_bias is not None:
+            attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
+
         if key_padding_mask is not None:
-            kpm2 = key_padding_mask.to(device=device).unsqueeze(1).unsqueeze(1)  # (B,1,1,Lk)
+            kpm2 = key_padding_mask.to(device=device).unsqueeze(1).unsqueeze(1)  # bool
             if attn_mask is None:
-                attn_mask = kpm2
-            else:
-                attn_mask = attn_mask.masked_fill(kpm2, float("-inf"))
+                # make float mask
+                attn_mask = torch.zeros((B, 1, Lq, kh.size(2)), device=device, dtype=qh.dtype)
+            attn_mask = attn_mask.masked_fill(kpm2, torch.finfo(qh.dtype).min)
 
         out = F.scaled_dot_product_attention(
             qh, kh, vh,
@@ -525,7 +529,11 @@ class CrossAttnDTIClassifier(nn.Module):
 
         prot_pad_mask = (p_attn_mask == 0)  # (B,Lp) True=PAD (ignore as keys)
         lig_pad_mask = (l_ids == self.lig_pad_id)  # (B,Ll) True=PAD (ignore as keys)
-
+        # safety: never allow all-keys-masked (keep CLS key always unmasked)
+        if prot_pad_mask.numel() > 0:
+            prot_pad_mask[:, 0] = False
+        if lig_pad_mask.numel() > 0:
+            lig_pad_mask[:, 0] = False
         # ----------------------------
         # Cross-attention blocks (PreNorm + Residual)
         # NOTE: this assumes TinyFFNBlock returns FFN(x) (no internal residual)
@@ -664,6 +672,11 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         }
 
     prob = 1.0 / (1.0 + np.exp(-logit))
+    prob = 1.0 / (1.0 + np.exp(-logit))
+    if not np.isfinite(prob).all():
+        nbad = np.sum(~np.isfinite(prob))
+        print(f"[warn] prob has non-finite: {nbad}/{prob.size}; applying nan_to_num")
+        prob = np.nan_to_num(prob, nan=0.5, posinf=1.0, neginf=0.0)
     y01 = (y > 0.5).astype(np.int32)
 
     if len(np.unique(y01)) <= 1:
