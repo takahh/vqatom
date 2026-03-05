@@ -575,6 +575,15 @@ class CrossAttnDTIClassifier(nn.Module):
         S = S.masked_fill(p_pad.unsqueeze(-1), float("-inf"))
         S = S.masked_fill(l_pad.unsqueeze(1), float("-inf"))
 
+        # after masking S with -inf
+        # If a whole row/col is fully masked, max becomes -inf; clamp them to 0.
+        p_all_pad = p_pad.all(dim=1)  # (B,)
+        l_all_pad = l_pad.all(dim=1)  # (B,)
+        if p_all_pad.any() or l_all_pad.any():
+            # For samples with all-pad tokens, just zero out S so pooled features become 0.
+            bad = (p_all_pad | l_all_pad).view(-1, 1, 1)
+            S = torch.where(bad, torch.zeros_like(S), S)
+
         # "best match" pooling
         p_best = S.max(dim=2).values  # (B, Lp-1)
         l_best = S.max(dim=1).values  # (B, Ll-1)
