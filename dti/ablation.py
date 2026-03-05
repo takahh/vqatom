@@ -81,6 +81,7 @@ class Batch:
     p_attn_mask: torch.Tensor   # (B, Lp)
     l_ids: torch.Tensor         # (B, Ll)
     y_bin: torch.Tensor         # (B,)
+    y: torch.Tensor
 
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
@@ -114,10 +115,15 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
     l_ids = pad_1d(l_ids_list, lig_pad)
 
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
+    y = torch.stack([s["y"] for s in samples], dim=0).float()
 
-    return Batch(p_input_ids=p_input_ids, p_attn_mask=p_attn_mask, l_ids=l_ids, y_bin=y_bin)
-
-
+    return Batch(
+        p_input_ids=p_input_ids,
+        p_attn_mask=p_attn_mask,
+        l_ids=l_ids,
+        y_bin=y_bin,
+        y=y
+    )
 # -----------------------------
 # Utilities: vocab meta + safe loading
 # -----------------------------
@@ -488,6 +494,7 @@ class CrossAttnDTIClassifier(nn.Module):
             nn.Dropout(dropout),
         )
         self.head_cls = nn.Linear(d_model, 1)
+        self.head_reg = nn.Linear(d_model, 1)
 
         self.lig_pad_id = int(self.lig.pad_id)
         self.int_proj_p = nn.Linear(d_model, d_model, bias=False)
@@ -560,6 +567,7 @@ class CrossAttnDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z = self.shared(torch.cat([p_cls, l_cls], dim=-1))
             logit = self.head_cls(z).squeeze(-1)
+            aux["y_hat"] = self.head_reg(z).squeeze(-1)
             return logit, aux
 
         # Score matrix S: (B, Lp-1, Ll-1)
@@ -696,6 +704,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     grad_clip: float = 1.0,
+    reg_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
     losses: List[float] = []
@@ -708,8 +717,12 @@ def train_one_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            logit, _ = model(p_ids, p_msk, l_ids)
-            loss = F.binary_cross_entropy_with_logits(logit, y_bin)
+            logit, aux = model(p_ids, p_msk, l_ids)
+            loss_cls = F.binary_cross_entropy_with_logits(logit, y_bin)
+            y = batch.y.to(device)
+            y_hat = aux["y_hat"]
+            loss_reg = F.smooth_l1_loss(y_hat, y)
+            loss = loss_cls + reg_lambda * loss_reg
         loss.backward()
 
         if grad_clip and float(grad_clip) > 0.0:
@@ -886,7 +899,7 @@ def main():
     # cross attn
     ap.add_argument("--cross_nhead", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
-
+    ap.add_argument("--reg_lambda", type=float, default=0.0)
     # finetune ligand
     ap.add_argument("--finetune_lig", action="store_true")
     ap.add_argument("--lig_debug_index", action="store_true")
@@ -1045,6 +1058,7 @@ def main():
             optimizer=optimizer,
             device=device,
             grad_clip=float(args.grad_clip),
+            reg_lambda=args.reg_lambda,
         )
 
         logit_tr, yb_tr = predict(model, train_loader, device)
