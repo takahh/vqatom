@@ -621,6 +621,7 @@ class CrossAttnDTIClassifier(nn.Module):
         aux["mix_alpha"] = alpha.detach()
 
         logit = self.head_cls(z).squeeze(-1)  # (B,)
+        aux["y_hat"] = self.head_reg(z).squeeze(-1)
         return logit, aux
 
 # -----------------------------
