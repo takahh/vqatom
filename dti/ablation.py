@@ -490,26 +490,40 @@ class CrossAttnDTIClassifier(nn.Module):
         self.head_cls = nn.Linear(d_model, 1)
 
         self.lig_pad_id = int(self.lig.pad_id)
+        self.int_proj_p = nn.Linear(d_model, d_model, bias=False)
+        self.int_proj_l = nn.Linear(d_model, d_model, bias=False)
+        self.int_ln = nn.LayerNorm(2 * d_model)
+        self.int_mlp = nn.Sequential(
+            nn.Linear(2 * d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
 
     def forward(
-        self,
-        p_input_ids: torch.Tensor,
-        p_attn_mask: torch.Tensor,
-        l_ids: torch.Tensor,
+            self,
+            p_input_ids: torch.Tensor,
+            p_attn_mask: torch.Tensor,
+            l_ids: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         aux: Dict[str, torch.Tensor] = {}
 
+        # ----------------------------
+        # Encode
+        # ----------------------------
         p_h = self.prot(p_input_ids, p_attn_mask)  # (B,Lp,Hp)
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)                 # (B,Lp,D)
-        l_h = self.lig(l_ids)                      # (B,Ll,D)
+            p_h = self.p_proj(p_h)  # (B,Lp,D)
+        l_h = self.lig(l_ids)  # (B,Ll,D)
 
-        prot_pad_mask = (p_attn_mask == 0)           # (B,Lp) True=PAD ignore as keys
-        lig_pad_mask  = (l_ids == self.lig_pad_id)   # (B,Ll) True=PAD ignore as keys
+        prot_pad_mask = (p_attn_mask == 0)  # (B,Lp) True=PAD (ignore as keys)
+        lig_pad_mask = (l_ids == self.lig_pad_id)  # (B,Ll) True=PAD (ignore as keys)
 
-        # forward で
+        # ----------------------------
+        # Cross-attention blocks (PreNorm + Residual)
+        # NOTE: this assumes TinyFFNBlock returns FFN(x) (no internal residual)
+        # ----------------------------
         for li in range(self.cross_layers):
-            # p <- l (PreNorm + Residual)
+            # p <- l
             p_attn = self.cross_p_from_l[li](
                 q=self.ln_p_attn[li](p_h),
                 k=self.ln_l_attn[li](l_h),
@@ -519,7 +533,7 @@ class CrossAttnDTIClassifier(nn.Module):
             p_h = p_h + self.drop(p_attn)
             p_h = p_h + self.ffn_p[li](self.ln_p_ffn[li](p_h))
 
-            # l <- p (PreNorm + Residual)
+            # l <- p
             l_attn = self.cross_l_from_p[li](
                 q=self.ln_l_attn[li](l_h),
                 k=self.ln_p_attn[li](p_h),
@@ -529,17 +543,65 @@ class CrossAttnDTIClassifier(nn.Module):
             l_h = l_h + self.drop(l_attn)
             l_h = l_h + self.ffn_l[li](self.ln_l_ffn[li](l_h))
 
-        # pool & head
-        # Protein CLS: token 0
-        p_pool = p_h[:, 0, :]  # (B,D)
+        # ----------------------------
+        # Interaction pooling (token-level) + CLS pooling
+        # ----------------------------
+        p_cls = p_h[:, 0, :]  # (B,D)
+        l_cls = l_h[:, 0, :]  # (B,D)
 
-        # Ligand CLS: token 0 (collateで prepend した)
-        l_pool = l_h[:, 0, :]  # (B,D)
+        # Optional: drop special tokens (protein CLS; ligand CLS) from interaction map
+        p_tok = p_h[:, 1:, :]  # (B,Lp-1,D)
+        l_tok = l_h[:, 1:, :]  # (B,Ll-1,D)
+        p_pad = prot_pad_mask[:, 1:]  # (B,Lp-1)
+        l_pad = lig_pad_mask[:, 1:]  # (B,Ll-1)
 
-        z = self.shared(torch.cat([p_pool, l_pool], dim=-1))         # (B,D)
-        logit = self.head_cls(z).squeeze(-1)                         # (B,)
+        # If sequence becomes empty (rare), fall back to CLS-only
+        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
+            z = self.shared(torch.cat([p_cls, l_cls], dim=-1))
+            logit = self.head_cls(z).squeeze(-1)
+            return logit, aux
+
+        # Score matrix S: (B, Lp-1, Ll-1)
+        # Uses bilinear-ish form; set up these layers in __init__:
+        #   self.int_proj_p = nn.Linear(D, D, bias=False)
+        #   self.int_proj_l = nn.Linear(D, D, bias=False)
+        #   self.int_head   = nn.Sequential(LN(2D), Linear(2D,D), GELU(), Dropout)
+        p_i = self.int_proj_p(p_tok)
+        l_i = self.int_proj_l(l_tok)
+        S = torch.matmul(p_i, l_i.transpose(1, 2))
+
+        # Mask pads -> -inf so max ignores them
+        S = S.masked_fill(p_pad.unsqueeze(-1), float("-inf"))
+        S = S.masked_fill(l_pad.unsqueeze(1), float("-inf"))
+
+        # "best match" pooling
+        p_best = S.max(dim=2).values  # (B, Lp-1)
+        l_best = S.max(dim=1).values  # (B, Ll-1)
+
+        # mask-aware mean of best-match scores -> scalars (B,)
+        p_best = p_best.masked_fill(p_pad, 0.0)
+        l_best = l_best.masked_fill(l_pad, 0.0)
+        p_den = (~p_pad).sum(dim=1).clamp(min=1)
+        l_den = (~l_pad).sum(dim=1).clamp(min=1)
+        p_feat = p_best.sum(dim=1) / p_den
+        l_feat = l_best.sum(dim=1) / l_den
+
+        aux["int_p_feat"] = p_feat.detach()
+        aux["int_l_feat"] = l_feat.detach()
+
+        # Turn (B,) scalars into a (B,2D) vector and fuse with CLS head
+        D = p_cls.size(-1)
+        int_vec = torch.cat(
+            [p_feat.unsqueeze(-1).expand(-1, D), l_feat.unsqueeze(-1).expand(-1, D)],
+            dim=-1,
+        )  # (B, 2D)
+
+        z_cls = self.shared(torch.cat([p_cls, l_cls], dim=-1))  # (B,D)
+        z_int = self.int_head(int_vec)  # (B,D)
+        z = z_cls + z_int  # (B,D)
+
+        logit = self.head_cls(z).squeeze(-1)  # (B,)
         return logit, aux
-
 
 # -----------------------------
 # Eval / Train
