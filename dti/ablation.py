@@ -492,13 +492,12 @@ class CrossAttnDTIClassifier(nn.Module):
         self.lig_pad_id = int(self.lig.pad_id)
         self.int_proj_p = nn.Linear(d_model, d_model, bias=False)
         self.int_proj_l = nn.Linear(d_model, d_model, bias=False)
-        self.int_ln = nn.LayerNorm(2 * d_model)
-        self.int_mlp = nn.Sequential(
+        self.int_head = nn.Sequential(
+            nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
         )
-
     def forward(
             self,
             p_input_ids: torch.Tensor,
