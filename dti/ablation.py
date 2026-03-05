@@ -636,6 +636,12 @@ def predict(model, loader, device):
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         logit, _ = model(p_ids, p_msk, l_ids)
+        if not torch.isfinite(logit).all():
+            bad = (~torch.isfinite(logit)).nonzero(as_tuple=False)[:10]
+            print("[nan] non-finite logits at:", bad.cpu().tolist())
+            print("[nan] logit stats:", float(torch.nanmin(logit)), float(torch.nanmean(logit)),
+                  float(torch.nanmax(logit)))
+            raise RuntimeError("Non-finite logits detected")
         logits.append(logit.detach().cpu().numpy())
         ybins.append(batch.y_bin.detach().cpu().numpy())
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
