@@ -651,14 +651,14 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        self.cls_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
+        # self.cls_head = nn.Sequential(
+        #     nn.LayerNorm(2 * d_model),
+        #     nn.Linear(2 * d_model, d_model),
+        #     nn.GELU(),
+        #     nn.Dropout(dropout),
+        # )
 
-        self.mix_logit = nn.Parameter(torch.tensor(-1.0))  # start mostly qk or mostly cls
+        # self.mix_logit = nn.Parameter(torch.tensor(-1.0))  # start mostly qk or mostly cls
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
@@ -680,13 +680,7 @@ class QKOnlyDTIClassifier(nn.Module):
 
         # fallback
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            p_cls = p_h[:, 0, :]
-            l_cls = l_h[:, 0, :]
-            z_qk = torch.cat([p_cls, l_cls], dim=-1)
-            z_cls = self.cls_head(torch.cat([p_h[:, 0, :], l_h[:, 0, :]], dim=-1))
-
-            alpha = torch.sigmoid(self.mix_logit)
-            z = (1 - alpha) * z_cls + alpha * z_qk
+            z = torch.cat([p_h[:, 0, :], l_h[:, 0, :]], dim=-1)  # (B, 2D)
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
