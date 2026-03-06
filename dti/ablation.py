@@ -730,8 +730,13 @@ def predict(model, loader, device):
         if not torch.isfinite(logit).all():
             bad = (~torch.isfinite(logit)).nonzero(as_tuple=False)[:10]
             print("[nan] non-finite logits at:", bad.cpu().tolist())
-            print("[nan] logit stats:", float(torch.nanmin(logit)), float(torch.nanmean(logit)),
-                  float(torch.nanmax(logit)))
+            x = logit.detach().float().cpu()
+            finite = torch.isfinite(x)
+            if finite.any():
+                xf = x[finite]
+                print("[nan] finite logit stats:", float(xf.min()), float(xf.mean()), float(xf.max()))
+            else:
+                print("[nan] all logits are non-finite")
             raise RuntimeError("Non-finite logits detected")
         logits.append(logit.detach().cpu().numpy())
         ybins.append(batch.y_bin.detach().cpu().numpy())
