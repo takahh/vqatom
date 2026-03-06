@@ -445,174 +445,274 @@ class DTIDataset(Dataset):
             "pdbid": pdbid,
         }
 
-class CrossAttnDTIClassifier(nn.Module):
+# class CrossAttnDTIClassifier(nn.Module):
+#     def __init__(
+#         self,
+#         protein_encoder: ESMProteinEncoder,
+#         ligand_encoder: PretrainedLigandEncoder,
+#         cross_nhead: int,
+#         dropout: float,
+#         cross_layers: int = 1,
+#     ):
+#         super().__init__()
+#         self.prot = protein_encoder
+#         self.lig = ligand_encoder
+#
+#         d_model = self.lig.d_model
+#         self.cross_layers = int(cross_layers)
+#         assert self.cross_layers >= 1
+#
+#         self.p_proj = None
+#         if self.prot.hidden_size != d_model:
+#             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
+#
+#         self.cross_p_from_l = nn.ModuleList([
+#             BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
+#             for _ in range(self.cross_layers)
+#         ])
+#
+#         self.ffn_p = nn.ModuleList([
+#             TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
+#             for _ in range(self.cross_layers)
+#         ])
+#
+#         self.ln_p_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+#         self.ln_l_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+#         self.ln_p_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+#
+#         self.drop = nn.Dropout(dropout)
+#
+#         self.shared = nn.Sequential(
+#             nn.LayerNorm(2 * d_model),
+#             nn.Linear(2 * d_model, d_model),
+#             nn.GELU(),
+#             nn.Dropout(dropout),
+#         )
+#         self.head_cls = nn.Linear(d_model, 1)
+#         self.head_reg = nn.Linear(d_model, 1)
+#
+#         self.lig_pad_id = int(self.lig.pad_id)
+#         self.int_proj_p = nn.Linear(d_model, d_model, bias=False)
+#         self.int_proj_l = nn.Linear(d_model, d_model, bias=False)
+#         self.int_head = nn.Sequential(
+#             nn.LayerNorm(2 * d_model),
+#             nn.Linear(2 * d_model, d_model),
+#             nn.GELU(),
+#             nn.Dropout(dropout),
+#         )
+#         self.mix_logit = nn.Parameter(torch.tensor(0.0))  # sigmoid(0)=0.5
+#
+#     def forward(
+#             self,
+#             p_input_ids: torch.Tensor,
+#             p_attn_mask: torch.Tensor,
+#             l_ids: torch.Tensor,
+#     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+#         aux: Dict[str, torch.Tensor] = {}
+#
+#         # ----------------------------
+#         # Encode
+#         # ----------------------------
+#         p_h = self.prot(p_input_ids, p_attn_mask)  # (B,Lp,Hp)
+#         if self.p_proj is not None:
+#             p_h = self.p_proj(p_h)  # (B,Lp,D)
+#         l_h = self.lig(l_ids)  # (B,Ll,D)
+#
+#         prot_pad_mask = (p_attn_mask == 0)  # (B,Lp) True=PAD (ignore as keys)
+#         lig_pad_mask = (l_ids == self.lig_pad_id)  # (B,Ll) True=PAD (ignore as keys)
+#         # safety: never allow all-keys-masked (keep CLS key always unmasked)
+#         if prot_pad_mask.numel() > 0:
+#             prot_pad_mask[:, 0] = False
+#         if lig_pad_mask.numel() > 0:
+#             lig_pad_mask[:, 0] = False
+#         # ----------------------------
+#         # Cross-attention blocks (PreNorm + Residual)
+#         # NOTE: this assumes TinyFFNBlock returns FFN(x) (no internal residual)
+#         # ----------------------------
+#         for li in range(self.cross_layers):
+#             # only one cross-attention: protein queries ligand
+#             p_attn = self.cross_p_from_l[li](
+#                 q=self.ln_p_attn[li](p_h),
+#                 k=self.ln_l_attn[li](l_h),
+#                 v=self.ln_l_attn[li](l_h),
+#                 key_padding_mask=lig_pad_mask,
+#             )
+#             p_h = p_h + self.drop(p_attn)
+#             p_h = p_h + self.ffn_p[li](self.ln_p_ffn[li](p_h))
+#
+#         # l_h is left as ligand-encoder output
+#
+#         # ----------------------------
+#         # Interaction pooling (token-level) + CLS pooling
+#         # ----------------------------
+#         p_cls = p_h[:, 0, :]  # (B,D)
+#         l_cls = l_h[:, 0, :]  # (B,D)
+#
+#         # Optional: drop special tokens (protein CLS; ligand CLS) from interaction map
+#         p_tok = p_h[:, 1:, :]  # (B,Lp-1,D)
+#         l_tok = l_h[:, 1:, :]  # (B,Ll-1,D)
+#         p_pad = prot_pad_mask[:, 1:]  # (B,Lp-1)
+#         l_pad = lig_pad_mask[:, 1:]  # (B,Ll-1)
+#
+#         # If sequence becomes empty (rare), fall back to CLS-only
+#         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
+#             z = self.shared(torch.cat([p_cls, l_cls], dim=-1))
+#             logit = self.head_cls(z).squeeze(-1)
+#             aux["y_hat"] = self.head_reg(z).squeeze(-1)
+#             return logit, aux
+#
+#         # Score matrix S: (B, Lp-1, Ll-1)
+#         # Uses bilinear-ish form; set up these layers in __init__:
+#         #   self.int_proj_p = nn.Linear(D, D, bias=False)
+#         #   self.int_proj_l = nn.Linear(D, D, bias=False)
+#         #   self.int_head   = nn.Sequential(LN(2D), Linear(2D,D), GELU(), Dropout)
+#         p_i = self.int_proj_p(p_tok)
+#         l_i = self.int_proj_l(l_tok)
+#         S = torch.matmul(p_i, l_i.transpose(1, 2))
+#
+#         # Mask pads -> -inf so max ignores them
+#         S = S.masked_fill(p_pad.unsqueeze(-1), float("-inf"))
+#         S = S.masked_fill(l_pad.unsqueeze(1), float("-inf"))
+#
+#         # after masking S with -inf
+#         # If a whole row/col is fully masked, max becomes -inf; clamp them to 0.
+#         p_all_pad = p_pad.all(dim=1)  # (B,)
+#         l_all_pad = l_pad.all(dim=1)  # (B,)
+#         if p_all_pad.any() or l_all_pad.any():
+#             # For samples with all-pad tokens, just zero out S so pooled features become 0.
+#             bad = (p_all_pad | l_all_pad).view(-1, 1, 1)
+#             S = torch.where(bad, torch.zeros_like(S), S)
+#
+#         # "best match" pooling
+#         p_best = S.max(dim=2).values  # (B, Lp-1)
+#         l_best = S.max(dim=1).values  # (B, Ll-1)
+#
+#         # mask-aware mean of best-match scores -> scalars (B,)
+#         p_best = p_best.masked_fill(p_pad, 0.0)
+#         l_best = l_best.masked_fill(l_pad, 0.0)
+#         p_den = (~p_pad).sum(dim=1).clamp(min=1)
+#         l_den = (~l_pad).sum(dim=1).clamp(min=1)
+#         p_feat = p_best.sum(dim=1) / p_den
+#         l_feat = l_best.sum(dim=1) / l_den
+#
+#         aux["int_p_feat"] = p_feat.detach()
+#         aux["int_l_feat"] = l_feat.detach()
+#
+#         # Turn (B,) scalars into a (B,2D) vector and fuse with CLS head
+#         D = p_cls.size(-1)
+#         int_vec = torch.cat(
+#             [p_feat.unsqueeze(-1).expand(-1, D), l_feat.unsqueeze(-1).expand(-1, D)],
+#             dim=-1,
+#         )  # (B, 2D)
+#
+#         z_cls = self.shared(torch.cat([p_cls, l_cls], dim=-1))  # (B,D)
+#         z_int = self.int_head(int_vec)  # (B,D)
+#         alpha = torch.sigmoid(self.mix_logit)  # 0..1
+#         z = (1 - alpha) * z_cls + alpha * z_int
+#         aux["mix_alpha"] = alpha.detach()
+#
+#         logit = self.head_cls(z).squeeze(-1)  # (B,)
+#         aux["y_hat"] = self.head_reg(z).squeeze(-1)
+#         return logit, aux
+
+class QKOnlyDTIClassifier(nn.Module):
     def __init__(
         self,
         protein_encoder: ESMProteinEncoder,
         ligand_encoder: PretrainedLigandEncoder,
-        cross_nhead: int,
         dropout: float,
-        cross_layers: int = 1,
     ):
         super().__init__()
         self.prot = protein_encoder
         self.lig = ligand_encoder
 
         d_model = self.lig.d_model
-        self.cross_layers = int(cross_layers)
-        assert self.cross_layers >= 1
 
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        self.cross_p_from_l = nn.ModuleList([
-            BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
-            for _ in range(self.cross_layers)
-        ])
+        self.q_proj = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj = nn.Linear(d_model, d_model, bias=False)
 
-        self.ffn_p = nn.ModuleList([
-            TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
-            for _ in range(self.cross_layers)
-        ])
-
-        self.ln_p_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-        self.ln_l_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-        self.ln_p_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-
-        self.drop = nn.Dropout(dropout)
-
-        self.shared = nn.Sequential(
+        self.head = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
         )
-        self.head_cls = nn.Linear(d_model, 1)
-        self.head_reg = nn.Linear(d_model, 1)
+
+        self.reg_head = nn.Sequential(
+            nn.LayerNorm(2 * d_model),
+            nn.Linear(2 * d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
 
         self.lig_pad_id = int(self.lig.pad_id)
-        self.int_proj_p = nn.Linear(d_model, d_model, bias=False)
-        self.int_proj_l = nn.Linear(d_model, d_model, bias=False)
-        self.int_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-        self.mix_logit = nn.Parameter(torch.tensor(0.0))  # sigmoid(0)=0.5
 
-    def forward(
-            self,
-            p_input_ids: torch.Tensor,
-            p_attn_mask: torch.Tensor,
-            l_ids: torch.Tensor,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        aux: Dict[str, torch.Tensor] = {}
+    def forward(self, p_input_ids, p_attn_mask, l_ids):
+        aux = {}
 
-        # ----------------------------
-        # Encode
-        # ----------------------------
-        p_h = self.prot(p_input_ids, p_attn_mask)  # (B,Lp,Hp)
+        p_h = self.prot(p_input_ids, p_attn_mask)   # (B,Lp,Hp)
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)  # (B,Lp,D)
-        l_h = self.lig(l_ids)  # (B,Ll,D)
+            p_h = self.p_proj(p_h)                  # (B,Lp,D)
 
-        prot_pad_mask = (p_attn_mask == 0)  # (B,Lp) True=PAD (ignore as keys)
-        lig_pad_mask = (l_ids == self.lig_pad_id)  # (B,Ll) True=PAD (ignore as keys)
-        # safety: never allow all-keys-masked (keep CLS key always unmasked)
-        if prot_pad_mask.numel() > 0:
-            prot_pad_mask[:, 0] = False
-        if lig_pad_mask.numel() > 0:
-            lig_pad_mask[:, 0] = False
-        # ----------------------------
-        # Cross-attention blocks (PreNorm + Residual)
-        # NOTE: this assumes TinyFFNBlock returns FFN(x) (no internal residual)
-        # ----------------------------
-        for li in range(self.cross_layers):
-            # only one cross-attention: protein queries ligand
-            p_attn = self.cross_p_from_l[li](
-                q=self.ln_p_attn[li](p_h),
-                k=self.ln_l_attn[li](l_h),
-                v=self.ln_l_attn[li](l_h),
-                key_padding_mask=lig_pad_mask,
-            )
-            p_h = p_h + self.drop(p_attn)
-            p_h = p_h + self.ffn_p[li](self.ln_p_ffn[li](p_h))
+        l_h = self.lig(l_ids)                       # (B,Ll,D)
 
-        # l_h is left as ligand-encoder output
+        prot_pad_mask = (p_attn_mask == 0)
+        lig_pad_mask = (l_ids == self.lig_pad_id)
 
-        # ----------------------------
-        # Interaction pooling (token-level) + CLS pooling
-        # ----------------------------
-        p_cls = p_h[:, 0, :]  # (B,D)
-        l_cls = l_h[:, 0, :]  # (B,D)
+        p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
+        p_pad = prot_pad_mask[:, 1:]
+        l_pad = lig_pad_mask[:, 1:]
 
-        # Optional: drop special tokens (protein CLS; ligand CLS) from interaction map
-        p_tok = p_h[:, 1:, :]  # (B,Lp-1,D)
-        l_tok = l_h[:, 1:, :]  # (B,Ll-1,D)
-        p_pad = prot_pad_mask[:, 1:]  # (B,Lp-1)
-        l_pad = lig_pad_mask[:, 1:]  # (B,Ll-1)
-
-        # If sequence becomes empty (rare), fall back to CLS-only
+        # fallback
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z = self.shared(torch.cat([p_cls, l_cls], dim=-1))
-            logit = self.head_cls(z).squeeze(-1)
-            aux["y_hat"] = self.head_reg(z).squeeze(-1)
+            p_cls = p_h[:, 0, :]
+            l_cls = l_h[:, 0, :]
+            z = torch.cat([p_cls, l_cls], dim=-1)
+            logit = self.head(z).squeeze(-1)
+            aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
 
-        # Score matrix S: (B, Lp-1, Ll-1)
-        # Uses bilinear-ish form; set up these layers in __init__:
-        #   self.int_proj_p = nn.Linear(D, D, bias=False)
-        #   self.int_proj_l = nn.Linear(D, D, bias=False)
-        #   self.int_head   = nn.Sequential(LN(2D), Linear(2D,D), GELU(), Dropout)
-        p_i = self.int_proj_p(p_tok)
-        l_i = self.int_proj_l(l_tok)
-        S = torch.matmul(p_i, l_i.transpose(1, 2))
+        q = self.q_proj(p_tok)                      # (B,Lp-1,D)
+        k = self.k_proj(l_tok)                      # (B,Ll-1,D)
 
-        # Mask pads -> -inf so max ignores them
+        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))   # (B,Lp-1,Ll-1)
+
         S = S.masked_fill(p_pad.unsqueeze(-1), float("-inf"))
         S = S.masked_fill(l_pad.unsqueeze(1), float("-inf"))
 
-        # after masking S with -inf
-        # If a whole row/col is fully masked, max becomes -inf; clamp them to 0.
-        p_all_pad = p_pad.all(dim=1)  # (B,)
-        l_all_pad = l_pad.all(dim=1)  # (B,)
-        if p_all_pad.any() or l_all_pad.any():
-            # For samples with all-pad tokens, just zero out S so pooled features become 0.
-            bad = (p_all_pad | l_all_pad).view(-1, 1, 1)
-            S = torch.where(bad, torch.zeros_like(S), S)
+        bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
+        S = torch.where(bad, torch.zeros_like(S), S)
 
-        # "best match" pooling
-        p_best = S.max(dim=2).values  # (B, Lp-1)
-        l_best = S.max(dim=1).values  # (B, Ll-1)
+        A = torch.softmax(S, dim=-1)   # protein -> ligand attention map
 
-        # mask-aware mean of best-match scores -> scalars (B,)
-        p_best = p_best.masked_fill(p_pad, 0.0)
-        l_best = l_best.masked_fill(l_pad, 0.0)
-        p_den = (~p_pad).sum(dim=1).clamp(min=1)
-        l_den = (~l_pad).sum(dim=1).clamp(min=1)
-        p_feat = p_best.sum(dim=1) / p_den
-        l_feat = l_best.sum(dim=1) / l_den
+        # token importance from map
+        p_imp = A.max(dim=-1).values   # (B,Lp-1)
+        l_imp = A.max(dim=1).values    # (B,Ll-1)
 
-        aux["int_p_feat"] = p_feat.detach()
-        aux["int_l_feat"] = l_feat.detach()
+        p_imp = p_imp.masked_fill(p_pad, 0.0)
+        l_imp = l_imp.masked_fill(l_pad, 0.0)
 
-        # Turn (B,) scalars into a (B,2D) vector and fuse with CLS head
-        D = p_cls.size(-1)
-        int_vec = torch.cat(
-            [p_feat.unsqueeze(-1).expand(-1, D), l_feat.unsqueeze(-1).expand(-1, D)],
-            dim=-1,
-        )  # (B, 2D)
+        p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        z_cls = self.shared(torch.cat([p_cls, l_cls], dim=-1))  # (B,D)
-        z_int = self.int_head(int_vec)  # (B,D)
-        alpha = torch.sigmoid(self.mix_logit)  # 0..1
-        z = (1 - alpha) * z_cls + alpha * z_int
-        aux["mix_alpha"] = alpha.detach()
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
-        logit = self.head_cls(z).squeeze(-1)  # (B,)
-        aux["y_hat"] = self.head_reg(z).squeeze(-1)
+        z = torch.cat([p_sum, l_sum], dim=-1)
+        logit = self.head(z).squeeze(-1)
+        aux["y_hat"] = self.reg_head(z).squeeze(-1)
+
+        aux["attn_mean"] = A.mean(dim=(1, 2)).detach()
+        aux["p_imp_mean"] = p_imp.mean(dim=1).detach()
+        aux["l_imp_mean"] = l_imp.mean(dim=1).detach()
+
         return logit, aux
 
 # -----------------------------
@@ -741,13 +841,15 @@ def save_json(path: str, obj: dict):
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: PretrainedLigandEncoder, epoch: int, best: dict):
+def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace,
+                        lig_enc: PretrainedLigandEncoder, epoch: int, best: dict):
     torch.save(
         {
             "epoch": epoch,
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
+            "model_type": getattr(args, "model_type", "cross"),
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -771,7 +873,7 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
 # -----------------------------
 # Optimizer with LLRD (ESM)
 # -----------------------------
-def build_optimizer_with_llrd(model: CrossAttnDTIClassifier, args: argparse.Namespace) -> torch.optim.Optimizer:
+def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
     base_lr = float(args.lr)
     lig_lr = base_lr * float(args.lig_lr_mult)
 
@@ -924,7 +1026,8 @@ def main():
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
     ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-
+    ap.add_argument("--model_type", type=str, default="qkonly",
+                    choices=["qkonly"])
     args = ap.parse_args()
 
     if not args.eval_only and not args.train_csv:
@@ -1003,19 +1106,32 @@ def main():
         device=device,
         finetune=args.finetune_esm,
     )
+    print("model_type:", args.model_type)
+    if args.model_type == "cross":
+        print("cross_layers:", args.cross_layers)
+        print("cross_nhead:", args.cross_nhead)
     print("finetune_esm:", args.finetune_esm)
     esm = prot_enc.esm
     n_train = sum(p.requires_grad for p in esm.parameters())
     n_all = sum(1 for _ in esm.parameters())
     print(f"[debug] ESM requires_grad: {n_train}/{n_all}")
 
-    model = CrossAttnDTIClassifier(
-        protein_encoder=prot_enc,
-        ligand_encoder=lig_enc,
-        cross_nhead=args.cross_nhead,
-        dropout=args.dropout,
-        cross_layers=int(args.cross_layers),
-    ).to(device)
+    if args.model_type == "cross":
+        model = CrossAttnDTIClassifier(
+            protein_encoder=prot_enc,
+            ligand_encoder=lig_enc,
+            cross_nhead=args.cross_nhead,
+            dropout=args.dropout,
+            cross_layers=int(args.cross_layers),
+        ).to(device)
+    elif args.model_type == "qkonly":
+        model = QKOnlyDTIClassifier(
+            protein_encoder=prot_enc,
+            ligand_encoder=lig_enc,
+            dropout=args.dropout,
+        ).to(device)
+    else:
+        raise ValueError(f"Unknown model_type: {args.model_type}")
 
     if args.dti_ckpt is not None:
         _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
