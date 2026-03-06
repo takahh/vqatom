@@ -620,8 +620,7 @@ class QKOnlyDTIClassifier(nn.Module):
         protein_encoder: ESMProteinEncoder,
         ligand_encoder: PretrainedLigandEncoder,
         dropout: float,
-        topk_prot: int = 8,
-        topk_lig: int = 4,
+        imp_alpha: float = 0.5,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -651,8 +650,7 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        self.topk_prot = int(topk_prot)
-        self.topk_lig = int(topk_lig)
+        self.imp_alpha = float(imp_alpha)
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
@@ -704,42 +702,25 @@ class QKOnlyDTIClassifier(nn.Module):
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
         # token importance from map
-        # token importance from map
-        p_imp = A.max(dim=-1).values  # (B,Lp-1)
-        l_imp = A.max(dim=1).values  # (B,Ll-1)
+        # token importance from map: mix max and mean
+        p_imp_max = A.max(dim=-1).values    # (B,Lp-1)
+        l_imp_max = A.max(dim=1).values     # (B,Ll-1)
+
+        p_imp_mean = A.mean(dim=-1)         # (B,Lp-1)
+        l_imp_mean = A.mean(dim=1)          # (B,Ll-1)
+
+        alpha = self.imp_alpha
+        p_imp = alpha * p_imp_max + (1.0 - alpha) * p_imp_mean
+        l_imp = alpha * l_imp_max + (1.0 - alpha) * l_imp_mean
 
         p_imp = p_imp.masked_fill(p_pad, 0.0)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
 
-        # -------------------------
-        # top-k pooling
-        # -------------------------
-        p_len = (~p_pad).sum(dim=1)  # (B,)
-        l_len = (~l_pad).sum(dim=1)  # (B,)
-
-        p_keep = torch.zeros_like(p_imp, dtype=torch.bool)
-        l_keep = torch.zeros_like(l_imp, dtype=torch.bool)
-
-        for b in range(p_imp.size(0)):
-            kp = min(self.topk_prot, int(p_len[b].item()))
-            kl = min(self.topk_lig, int(l_len[b].item()))
-
-            if kp > 0:
-                idx = torch.topk(p_imp[b], k=kp, dim=0).indices
-                p_keep[b, idx] = True
-
-            if kl > 0:
-                idx = torch.topk(l_imp[b], k=kl, dim=0).indices
-                l_keep[b, idx] = True
-
-        p_imp = p_imp.masked_fill(~p_keep, 0.0)
-        l_imp = l_imp.masked_fill(~l_keep, 0.0)
-
         p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)  # (B,D)
-        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)  # (B,D)
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
         z = torch.cat([p_sum, l_sum], dim=-1)
         logit = self.head(z).squeeze(-1)
@@ -1052,10 +1033,10 @@ def main():
     # finetune ligand
     ap.add_argument("--finetune_lig", action="store_true")
     ap.add_argument("--lig_debug_index", action="store_true")
-    ap.add_argument("--topk_prot", type=int, default=8)
-    ap.add_argument("--topk_lig", type=int, default=4)
+
     # loss
     ap.add_argument("--grad_clip", type=float, default=1.0)
+    ap.add_argument("--imp_alpha", type=float, default=0.5)
 
     # scheduler
     ap.add_argument("--plateau", action="store_true")
@@ -1175,8 +1156,7 @@ def main():
             protein_encoder=prot_enc,
             ligand_encoder=lig_enc,
             dropout=args.dropout,
-            topk_prot=args.topk_prot,
-            topk_lig=args.topk_lig,
+            imp_alpha=args.imp_alpha,
         ).to(device)
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
