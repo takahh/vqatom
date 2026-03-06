@@ -620,6 +620,7 @@ class QKOnlyDTIClassifier(nn.Module):
         protein_encoder: ESMProteinEncoder,
         ligand_encoder: PretrainedLigandEncoder,
         dropout: float,
+        imp_alpha: float = 0.5,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -649,7 +650,7 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-
+        self.imp_alpha = float(imp_alpha)
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
@@ -708,7 +709,7 @@ class QKOnlyDTIClassifier(nn.Module):
         p_imp_mean = A.mean(dim=-1)         # (B,Lp-1)
         l_imp_mean = A.mean(dim=1)          # (B,Ll-1)
 
-        alpha = 0.5
+        alpha = self.imp_alpha
         p_imp = alpha * p_imp_max + (1.0 - alpha) * p_imp_mean
         l_imp = alpha * l_imp_max + (1.0 - alpha) * l_imp_mean
 
@@ -1035,6 +1036,7 @@ def main():
 
     # loss
     ap.add_argument("--grad_clip", type=float, default=1.0)
+    ap.add_argument("--imp_alpha", type=float, default=0.5)
 
     # scheduler
     ap.add_argument("--plateau", action="store_true")
@@ -1154,6 +1156,7 @@ def main():
             protein_encoder=prot_enc,
             ligand_encoder=lig_enc,
             dropout=args.dropout,
+            imp_alpha=args.imp_alpha,
         ).to(device)
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
