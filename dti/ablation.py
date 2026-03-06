@@ -373,10 +373,6 @@ class BiasedCrossAttention(nn.Module):
         if logits_bias is not None:
             attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
 
-        attn_mask = None
-        if logits_bias is not None:
-            attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
-
         if key_padding_mask is not None:
             kpm2 = key_padding_mask.to(device=device).unsqueeze(1).unsqueeze(1)  # bool
             if attn_mask is None:
@@ -658,7 +654,6 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
             "prob_mean": 0.0, "prob_std": 0.0,
         }
 
-    prob = 1.0 / (1.0 + np.exp(-logit))
     prob = 1.0 / (1.0 + np.exp(-logit))
     if not np.isfinite(prob).all():
         nbad = np.sum(~np.isfinite(prob))
