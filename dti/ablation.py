@@ -728,9 +728,9 @@ class QKOnlyDTIClassifier(nn.Module):
         #
         # p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
         # l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
-        #
-        # p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
-        # l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
+
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
         z = torch.cat([p_sum, l_sum], dim=-1)
         logit = self.head(z).squeeze(-1)
