@@ -620,7 +620,9 @@ class QKOnlyDTIClassifier(nn.Module):
         protein_encoder: ESMProteinEncoder,
         ligand_encoder: PretrainedLigandEncoder,
         dropout: float,
-        imp_alpha: float = 0.5,
+        topk_prot: int = 8,
+        topk_lig: int = 4,
+        topk_dim: int = 128,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -635,23 +637,30 @@ class QKOnlyDTIClassifier(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
 
+        self.lig_pad_id = int(self.lig.pad_id)
+        self.topk_prot = int(topk_prot)
+        self.topk_lig = int(topk_lig)
+        self.topk_dim = int(topk_dim)
+
+        self.topk_proj = nn.Linear(d_model, self.topk_dim)
+
+        head_in_dim = (2 * d_model) + (self.topk_prot * self.topk_dim) + (self.topk_lig * self.topk_dim)
+
         self.head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
+            nn.LayerNorm(head_in_dim),
+            nn.Linear(head_in_dim, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
 
         self.reg_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
+            nn.LayerNorm(head_in_dim),
+            nn.Linear(head_in_dim, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        self.imp_alpha = float(imp_alpha)
-        self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
         aux = {}
@@ -674,7 +683,20 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             p_cls = p_h[:, 0, :]
             l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
+
+            B = p_cls.size(0)
+            p_topk_flat = torch.zeros(
+                (B, self.topk_prot * self.topk_dim),
+                device=p_cls.device,
+                dtype=p_cls.dtype,
+            )
+            l_topk_flat = torch.zeros(
+                (B, self.topk_lig * self.topk_dim),
+                device=l_cls.device,
+                dtype=l_cls.dtype,
+            )
+
+            z = torch.cat([p_cls, l_cls, p_topk_flat, l_topk_flat], dim=-1)
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
@@ -700,29 +722,81 @@ class QKOnlyDTIClassifier(nn.Module):
         # zero out invalid positions AFTER softmax
         A = A.masked_fill(p_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
-
         # token importance from map
-        # token importance from map: mix max and mean
-        p_imp_max = A.max(dim=-1).values    # (B,Lp-1)
-        l_imp_max = A.max(dim=1).values     # (B,Ll-1)
-
-        p_imp_mean = A.mean(dim=-1)         # (B,Lp-1)
-        l_imp_mean = A.mean(dim=1)          # (B,Ll-1)
-
-        alpha = self.imp_alpha
-        p_imp = alpha * p_imp_max + (1.0 - alpha) * p_imp_mean
-        l_imp = alpha * l_imp_max + (1.0 - alpha) * l_imp_mean
+        p_imp = A.max(dim=-1).values   # (B, Lp-1)
+        l_imp = A.max(dim=1).values    # (B, Ll-1)
 
         p_imp = p_imp.masked_fill(p_pad, 0.0)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
 
-        p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
-        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        # ----------------------------------
+        # global weighted summaries
+        # ----------------------------------
+        p_imp_norm = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        l_imp_norm = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
-        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
+        p_sum = torch.bmm(p_imp_norm.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
+        l_sum = torch.bmm(l_imp_norm.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
-        z = torch.cat([p_sum, l_sum], dim=-1)
+        # ----------------------------------
+        # top-k latent: rank-ordered + projected + flattened
+        # ----------------------------------
+        B, _, D = p_tok.shape
+        td = self.topk_dim
+
+        p_topk_flat = torch.zeros(
+            (B, self.topk_prot * td),
+            device=p_tok.device,
+            dtype=p_tok.dtype,
+        )
+        l_topk_flat = torch.zeros(
+            (B, self.topk_lig * td),
+            device=l_tok.device,
+            dtype=l_tok.dtype,
+        )
+
+        p_score = p_imp.masked_fill(p_pad, -1e9)
+        l_score = l_imp.masked_fill(l_pad, -1e9)
+
+        p_len = (~p_pad).sum(dim=1)   # (B,)
+        l_len = (~l_pad).sum(dim=1)   # (B,)
+
+        for b in range(B):
+            kp = min(self.topk_prot, int(p_len[b].item()))
+            kl = min(self.topk_lig, int(l_len[b].item()))
+
+            if kp > 0:
+                p_idx = torch.topk(p_score[b], k=kp, dim=0).indices   # importance-desc
+                p_sel = p_tok[b, p_idx, :]                            # (kp, D)
+                p_sel = self.topk_proj(p_sel)                         # (kp, td)
+
+                if kp < self.topk_prot:
+                    pad = torch.zeros(
+                        (self.topk_prot - kp, td),
+                        device=p_sel.device,
+                        dtype=p_sel.dtype,
+                    )
+                    p_sel = torch.cat([p_sel, pad], dim=0)
+
+                p_topk_flat[b] = p_sel.reshape(-1)
+
+            if kl > 0:
+                l_idx = torch.topk(l_score[b], k=kl, dim=0).indices   # importance-desc
+                l_sel = l_tok[b, l_idx, :]                            # (kl, D)
+                l_sel = self.topk_proj(l_sel)                         # (kl, td)
+
+                if kl < self.topk_lig:
+                    pad = torch.zeros(
+                        (self.topk_lig - kl, td),
+                        device=l_sel.device,
+                        dtype=l_sel.dtype,
+                    )
+                    l_sel = torch.cat([l_sel, pad], dim=0)
+
+                l_topk_flat[b] = l_sel.reshape(-1)
+
+        z = torch.cat([p_sum, l_sum, p_topk_flat, l_topk_flat], dim=-1)
+
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
 
@@ -1043,7 +1117,9 @@ def main():
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
     ap.add_argument("--min_lr", type=float, default=1e-6)
-
+    ap.add_argument("--topk_prot", type=int, default=8)
+    ap.add_argument("--topk_lig", type=int, default=4)
+    ap.add_argument("--topk_dim", type=int, default=128)
     # selection criterion
     ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
 
@@ -1156,7 +1232,9 @@ def main():
             protein_encoder=prot_enc,
             ligand_encoder=lig_enc,
             dropout=args.dropout,
-            imp_alpha=args.imp_alpha,
+            topk_prot=args.topk_prot,
+            topk_lig=args.topk_lig,
+            topk_dim=args.topk_dim,
         ).to(device)
     else:
         raise ValueError(f"Unknown model_type: {args.model_type}")
