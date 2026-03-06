@@ -701,8 +701,16 @@ class QKOnlyDTIClassifier(nn.Module):
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
         # token importance from map
-        p_imp = A.max(dim=-1).values   # (B,Lp-1)
-        l_imp = A.max(dim=1).values    # (B,Ll-1)
+        # token importance from map: mix max and mean
+        p_imp_max = A.max(dim=-1).values    # (B,Lp-1)
+        l_imp_max = A.max(dim=1).values     # (B,Ll-1)
+
+        p_imp_mean = A.mean(dim=-1)         # (B,Lp-1)
+        l_imp_mean = A.mean(dim=1)          # (B,Ll-1)
+
+        alpha = 0.5
+        p_imp = alpha * p_imp_max + (1.0 - alpha) * p_imp_mean
+        l_imp = alpha * l_imp_max + (1.0 - alpha) * l_imp_mean
 
         p_imp = p_imp.masked_fill(p_pad, 0.0)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
