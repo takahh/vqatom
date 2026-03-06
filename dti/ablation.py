@@ -474,21 +474,16 @@ class CrossAttnDTIClassifier(nn.Module):
             BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
             for _ in range(self.cross_layers)
         ])
-        self.cross_l_from_p = nn.ModuleList([
-            BiasedCrossAttention(d_model=d_model, nhead=cross_nhead, dropout=dropout)
+
+        self.ffn_p = nn.ModuleList([
+            TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4)
             for _ in range(self.cross_layers)
         ])
-
-        self.post_ln_p = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-        self.post_ln_l = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-
-        self.ffn_p = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
-        self.ffn_l = nn.ModuleList([TinyFFNBlock(d_model=d_model, dropout=dropout, mult=4) for _ in range(self.cross_layers)])
 
         self.ln_p_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
         self.ln_l_attn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
         self.ln_p_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
-        self.ln_l_ffn = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.cross_layers)])
+
         self.drop = nn.Dropout(dropout)
 
         self.shared = nn.Sequential(
@@ -539,7 +534,7 @@ class CrossAttnDTIClassifier(nn.Module):
         # NOTE: this assumes TinyFFNBlock returns FFN(x) (no internal residual)
         # ----------------------------
         for li in range(self.cross_layers):
-            # p <- l
+            # only one cross-attention: protein queries ligand
             p_attn = self.cross_p_from_l[li](
                 q=self.ln_p_attn[li](p_h),
                 k=self.ln_l_attn[li](l_h),
@@ -549,15 +544,7 @@ class CrossAttnDTIClassifier(nn.Module):
             p_h = p_h + self.drop(p_attn)
             p_h = p_h + self.ffn_p[li](self.ln_p_ffn[li](p_h))
 
-            # l <- p
-            l_attn = self.cross_l_from_p[li](
-                q=self.ln_l_attn[li](l_h),
-                k=self.ln_p_attn[li](p_h),
-                v=self.ln_p_attn[li](p_h),
-                key_padding_mask=prot_pad_mask,
-            )
-            l_h = l_h + self.drop(l_attn)
-            l_h = l_h + self.ffn_l[li](self.ln_l_ffn[li](l_h))
+        # l_h is left as ligand-encoder output
 
         # ----------------------------
         # Interaction pooling (token-level) + CLS pooling
