@@ -682,15 +682,24 @@ class QKOnlyDTIClassifier(nn.Module):
         q = self.q_proj(p_tok)                      # (B,Lp-1,D)
         k = self.k_proj(l_tok)                      # (B,Ll-1,D)
 
-        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))   # (B,Lp-1,Ll-1)
+        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))  # (B,Lp-1,Ll-1)
 
-        S = S.masked_fill(p_pad.unsqueeze(-1), float("-inf"))
-        S = S.masked_fill(l_pad.unsqueeze(1), float("-inf"))
+        # mask ligand PAD columns only with large negative value
+        S = S.masked_fill(l_pad.unsqueeze(1), -1e9)
 
+        # protein PAD rows must NOT become all -inf before softmax
+        # set them to 0 first, then zero them out after softmax
+        S = S.masked_fill(p_pad.unsqueeze(-1), 0.0)
+
+        # if ligand side is all-pad for a sample, keep whole matrix zero
         bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
         S = torch.where(bad, torch.zeros_like(S), S)
 
-        A = torch.softmax(S, dim=-1)   # protein -> ligand attention map
+        A = torch.softmax(S, dim=-1)  # (B,Lp-1,Ll-1)
+
+        # zero out invalid positions AFTER softmax
+        A = A.masked_fill(p_pad.unsqueeze(-1), 0.0)
+        A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
         # token importance from map
         p_imp = A.max(dim=-1).values   # (B,Lp-1)
@@ -727,18 +736,27 @@ def predict(model, loader, device):
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         logit, _ = model(p_ids, p_msk, l_ids)
+
         if not torch.isfinite(logit).all():
             bad = (~torch.isfinite(logit)).nonzero(as_tuple=False)[:10]
             print("[nan] non-finite logits at:", bad.cpu().tolist())
-            print("[nan] logit stats:", float(torch.nanmin(logit)), float(torch.nanmean(logit)),
-                  float(torch.nanmax(logit)))
+
+            x = logit.detach().float().cpu()
+            finite = torch.isfinite(x)
+            if finite.any():
+                xf = x[finite]
+                print("[nan] finite logit stats:", float(xf.min()), float(xf.mean()), float(xf.max()))
+            else:
+                print("[nan] all logits are non-finite")
+
             raise RuntimeError("Non-finite logits detected")
+
         logits.append(logit.detach().cpu().numpy())
         ybins.append(batch.y_bin.detach().cpu().numpy())
+
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
     yb = np.concatenate(ybins, axis=0) if ybins else np.array([], dtype=np.float64)
     return logit, yb
-
 
 def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     """
