@@ -94,22 +94,17 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, : x.numel()] = x
     return out
 
-
-def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
-    # Protein tokenize (unchanged)
+def collate_fn(samples, esm_tokenizer, lig_pad) -> Batch:
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
-    # Ligand: prepend CLS then pad
     l_ids_list = []
     for s in samples:
         x = s["l_ids"]
         if x.numel() == 0:
-            x = torch.tensor([lig_cls], dtype=torch.long)
-        else:
-            x = torch.cat([torch.tensor([lig_cls], dtype=torch.long), x], dim=0)
+            x = torch.empty((0,), dtype=torch.long)
         l_ids_list.append(x)
 
     l_ids = pad_1d(l_ids_list, lig_pad)
@@ -122,8 +117,9 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
         y_bin=y_bin,
-        y=y
+        y=y,
     )
+
 # -----------------------------
 # Utilities: vocab meta + safe loading
 # -----------------------------
@@ -217,10 +213,6 @@ class PretrainedLigandEncoder(nn.Module):
             self.vocab_source = f"mlm_ckpt:{ckpt_path}"
         # PretrainedLigandEncoder.__init__ の vocab meta 部分の後ろに追加
 
-        # 既存: vocab_size includes PAD+MASK の想定
-        # ここに CLS を追加する
-        self.cls_id = int(self.vocab_size)  # new id at end
-        self.vocab_size = int(self.vocab_size) + 1
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
