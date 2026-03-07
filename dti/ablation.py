@@ -94,19 +94,13 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, : x.numel()] = x
     return out
 
-def collate_fn(samples, esm_tokenizer, lig_pad) -> Batch:
+def collate_fn(samples, esm_tokenizer, lig_pad: int) -> Batch:
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
-    l_ids_list = []
-    for s in samples:
-        x = s["l_ids"]
-        if x.numel() == 0:
-            x = torch.empty((0,), dtype=torch.long)
-        l_ids_list.append(x)
-
+    l_ids_list = [s["l_ids"] for s in samples]
     l_ids = pad_1d(l_ids_list, lig_pad)
 
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
@@ -866,7 +860,6 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace,
             "lig_vocab_size": lig_enc.vocab_size,
             "lig_pad_id": lig_enc.pad_id,
             "lig_mask_id": lig_enc.mask_id,
-            "lig_cls_id": lig_enc.cls_id,
         },
         path,
     )
@@ -1066,9 +1059,6 @@ def main():
     lig_pad = lig_enc.pad_id
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
-    print(f"[ligand] CLS={lig_enc.cls_id} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id} vocab={lig_enc.vocab_size}")
-    assert lig_enc.cls_id != lig_enc.pad_id
-    assert lig_enc.cls_id != lig_enc.mask_id
 
     valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
     valid_loader = DataLoader(
@@ -1076,8 +1066,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
-    )
+        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad))
 
     test_loader = None
     if args.test_csv:
@@ -1087,8 +1076,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
-        )
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad))
 
     train_loader = None
     train_ds = None
