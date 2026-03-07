@@ -652,15 +652,16 @@ class QKOnlyDTIClassifier(nn.Module):
         lig_pad_mask = (l_ids == self.lig_pad_id)
 
         p_tok = p_h[:, 1:, :]
-        l_tok = l_h[:, 1:, :]
         p_pad = prot_pad_mask[:, 1:]
-        l_pad = lig_pad_mask[:, 1:]
 
-        # fallback
+        l_tok = l_h
+        l_pad = lig_pad_mask
+
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            p_cls = p_h[:, 0, :]
-            l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
+            p_sum = masked_mean_by_attn(p_h, p_attn_mask)
+            l_valid = (~lig_pad_mask).long()
+            l_sum = masked_mean_by_attn(l_h, l_valid)
+            z = torch.cat([p_sum, l_sum], dim=-1)
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
