@@ -1087,7 +1087,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
         )
 
         def pos_rate(ds):
