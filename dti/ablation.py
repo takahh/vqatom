@@ -94,13 +94,24 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, : x.numel()] = x
     return out
 
-def collate_fn(samples, esm_tokenizer, lig_pad: int) -> Batch:
+
+def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
+    # Protein tokenize (unchanged)
     seqs = [str(s["seq"]) for s in samples]
     enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
-    l_ids_list = [s["l_ids"] for s in samples]
+    # Ligand: prepend CLS then pad
+    l_ids_list = []
+    for s in samples:
+        x = s["l_ids"]
+        if x.numel() == 0:
+            x = torch.tensor([lig_cls], dtype=torch.long)
+        else:
+            x = torch.cat([torch.tensor([lig_cls], dtype=torch.long), x], dim=0)
+        l_ids_list.append(x)
+
     l_ids = pad_1d(l_ids_list, lig_pad)
 
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
@@ -111,9 +122,8 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int) -> Batch:
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
         y_bin=y_bin,
-        y=y,
+        y=y
     )
-
 # -----------------------------
 # Utilities: vocab meta + safe loading
 # -----------------------------
@@ -207,6 +217,10 @@ class PretrainedLigandEncoder(nn.Module):
             self.vocab_source = f"mlm_ckpt:{ckpt_path}"
         # PretrainedLigandEncoder.__init__ の vocab meta 部分の後ろに追加
 
+        # 既存: vocab_size includes PAD+MASK の想定
+        # ここに CLS を追加する
+        self.cls_id = int(self.vocab_size)  # new id at end
+        self.vocab_size = int(self.vocab_size) + 1
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
@@ -652,16 +666,15 @@ class QKOnlyDTIClassifier(nn.Module):
         lig_pad_mask = (l_ids == self.lig_pad_id)
 
         p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
         p_pad = prot_pad_mask[:, 1:]
+        l_pad = lig_pad_mask[:, 1:]
 
-        l_tok = l_h
-        l_pad = lig_pad_mask
-
+        # fallback
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            p_sum = masked_mean_by_attn(p_h, p_attn_mask)
-            l_valid = (~lig_pad_mask).long()
-            l_sum = masked_mean_by_attn(l_h, l_valid)
-            z = torch.cat([p_sum, l_sum], dim=-1)
+            p_cls = p_h[:, 0, :]
+            l_cls = l_h[:, 0, :]
+            z = torch.cat([p_cls, l_cls], dim=-1)
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
@@ -723,11 +736,9 @@ def predict(model, loader, device):
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         logit, _ = model(p_ids, p_msk, l_ids)
-
         if not torch.isfinite(logit).all():
             bad = (~torch.isfinite(logit)).nonzero(as_tuple=False)[:10]
             print("[nan] non-finite logits at:", bad.cpu().tolist())
-
             x = logit.detach().float().cpu()
             finite = torch.isfinite(x)
             if finite.any():
@@ -735,15 +746,13 @@ def predict(model, loader, device):
                 print("[nan] finite logit stats:", float(xf.min()), float(xf.mean()), float(xf.max()))
             else:
                 print("[nan] all logits are non-finite")
-
             raise RuntimeError("Non-finite logits detected")
-
         logits.append(logit.detach().cpu().numpy())
         ybins.append(batch.y_bin.detach().cpu().numpy())
-
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
     yb = np.concatenate(ybins, axis=0) if ybins else np.array([], dtype=np.float64)
     return logit, yb
+
 
 def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     """
@@ -861,6 +870,7 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace,
             "lig_vocab_size": lig_enc.vocab_size,
             "lig_pad_id": lig_enc.pad_id,
             "lig_mask_id": lig_enc.mask_id,
+            "lig_cls_id": lig_enc.cls_id,
         },
         path,
     )
@@ -1060,6 +1070,9 @@ def main():
     lig_pad = lig_enc.pad_id
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
     print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
+    print(f"[ligand] CLS={lig_enc.cls_id} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id} vocab={lig_enc.vocab_size}")
+    assert lig_enc.cls_id != lig_enc.pad_id
+    assert lig_enc.cls_id != lig_enc.mask_id
 
     valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
     valid_loader = DataLoader(
@@ -1067,7 +1080,8 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad))
+        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+    )
 
     test_loader = None
     if args.test_csv:
@@ -1077,7 +1091,8 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad))
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+        )
 
     train_loader = None
     train_ds = None
@@ -1088,7 +1103,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
         def pos_rate(ds):
