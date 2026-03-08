@@ -657,31 +657,50 @@ def train_one_epoch(
 ) -> Dict[str, float]:
     model.train()
     losses: List[float] = []
+    losses_cls: List[float] = []
+    losses_reg: List[float] = []
+
+    use_amp = (device.type == "cuda")
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         y_bin = batch.y_bin.to(device)
+        y = batch.y.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+
+        if use_amp:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logit, aux = model(p_ids, p_msk, l_ids)
+                loss_cls = F.binary_cross_entropy_with_logits(logit, y_bin)
+                y_hat = aux["y_hat"]
+                loss_reg = F.smooth_l1_loss(y_hat, y)
+                loss = loss_cls + reg_lambda * loss_reg
+        else:
             logit, aux = model(p_ids, p_msk, l_ids)
             loss_cls = F.binary_cross_entropy_with_logits(logit, y_bin)
-            y = batch.y.to(device)
             y_hat = aux["y_hat"]
             loss_reg = F.smooth_l1_loss(y_hat, y)
             loss = loss_cls + reg_lambda * loss_reg
+
         loss.backward()
 
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
 
         optimizer.step()
+
         losses.append(float(loss.detach().cpu().item()))
+        losses_cls.append(float(loss_cls.detach().cpu().item()))
+        losses_reg.append(float(loss_reg.detach().cpu().item()))
 
-    return {"loss": float(sum(losses) / max(1, len(losses)))}
-
+    return {
+        "loss": float(sum(losses) / max(1, len(losses))),
+        "loss_cls": float(sum(losses_cls) / max(1, len(losses_cls))),
+        "loss_reg": float(sum(losses_reg) / max(1, len(losses_reg))),
+    }
 
 def save_json(path: str, obj: dict):
     with open(path, "w", encoding="utf-8") as f:
@@ -1041,6 +1060,9 @@ def main():
         print(
             f"[ep {ep:03d}] "
             f"train_loss={tr_stat['loss']:.4f} "
+            f"train_loss_cls={tr_stat['loss_cls']:.4f} "
+            f"train_loss_reg={tr_stat['loss_reg']:.4f} "
+            f"(lambda={args.reg_lambda:.3f}, reg*lambda={args.reg_lambda * tr_stat['loss_reg']:.4f}) "
             f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
             f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f})"
         )
