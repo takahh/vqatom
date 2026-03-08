@@ -589,16 +589,36 @@ def predict(model, loader, device):
 
 def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     """
-    - Computes AUROC / AP (threshold-free)
-    - Finds best-F1 threshold on a grid, and reports that best F1 + thr.
+    - Computes AUROC / AP
+    - Finds best-F1 threshold on a grid
+    - Computes EF at 1%, 5%, 10%
     """
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+
+    def enrichment_factor(prob: np.ndarray, y01: np.ndarray, frac: float) -> float:
+        n = int(len(y01))
+        if n == 0:
+            return 0.0
+
+        n_pos = int(y01.sum())
+        if n_pos == 0:
+            return 0.0
+
+        k = max(1, int(math.ceil(n * float(frac))))
+        order = np.argsort(-prob)   # descending
+        top_idx = order[:k]
+        hits_topk = int(y01[top_idx].sum())
+
+        hit_rate_topk = hits_topk / float(k)
+        base_rate = n_pos / float(n)
+        return float(hit_rate_topk / base_rate) if base_rate > 0 else 0.0
 
     if logit.size == 0:
         return {
             "auroc": 0.0, "ap": 0.0,
             "f1": 0.0, "thr": 0.5,
             "prob_mean": 0.0, "prob_std": 0.0,
+            "ef1": 0.0, "ef5": 0.0, "ef10": 0.0,
         }
 
     prob = 1.0 / (1.0 + np.exp(-logit))
@@ -606,22 +626,33 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         nbad = np.sum(~np.isfinite(prob))
         print(f"[warn] prob has non-finite: {nbad}/{prob.size}; applying nan_to_num")
         prob = np.nan_to_num(prob, nan=0.5, posinf=1.0, neginf=0.0)
+
     y01 = (y > 0.5).astype(np.int32)
+
+    ef1 = enrichment_factor(prob, y01, 0.01)
+    ef5 = enrichment_factor(prob, y01, 0.05)
+    ef10 = enrichment_factor(prob, y01, 0.10)
 
     if len(np.unique(y01)) <= 1:
         return {
             "auroc": 0.0, "ap": 0.0,
             "f1": 0.0, "thr": 0.5,
-            "prob_mean": float(prob.mean()), "prob_std": float(prob.std()),
+            "prob_mean": float(prob.mean()),
+            "prob_std": float(prob.std()),
+            "prob_min": float(prob.min()),
+            "prob_max": float(prob.max()),
+            "pos_rate": float(y01.mean()) if y01.size else 0.0,
+            "pred_pos_rate@thr": 0.0,
+            "ef1": float(ef1),
+            "ef5": float(ef5),
+            "ef10": float(ef10),
         }
 
     auroc = roc_auc_score(y01, prob)
     ap = average_precision_score(y01, prob)
 
-    # --- threshold search for best F1 ---
-    # avoid degenerate ends; include 0.5 anyway
     thrs = np.unique(np.concatenate([
-        np.linspace(0.05, 0.95, 181),  # ~0.005 step
+        np.linspace(0.05, 0.95, 181),
         np.array([0.5], dtype=np.float64),
     ]))
 
@@ -645,6 +676,9 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         "prob_max": float(prob.max()),
         "pos_rate": float(y01.mean()),
         "pred_pos_rate@thr": float((prob >= best_thr).mean()),
+        "ef1": float(ef1),
+        "ef5": float(ef5),
+        "ef10": float(ef10),
     }
 
 def train_one_epoch(
@@ -1064,7 +1098,9 @@ def main():
             f"train_loss_reg={tr_stat['loss_reg']:.4f} "
             f"(lambda={args.reg_lambda:.3f}, reg*lambda={args.reg_lambda * tr_stat['loss_reg']:.4f}) "
             f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
-            f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f})"
+            f"train_EF1={tr_m['ef1']:.3f} train_EF5={tr_m['ef5']:.3f} train_EF10={tr_m['ef10']:.3f} "
+            f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f}) "
+            f"val_EF1={v_m['ef1']:.3f} val_EF5={v_m['ef5']:.3f} val_EF10={v_m['ef10']:.3f}"
         )
 
         if scheduler is not None:
