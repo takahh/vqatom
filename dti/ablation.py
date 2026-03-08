@@ -472,14 +472,15 @@ class QKOnlyDTIClassifier(nn.Module):
         #     nn.Linear(d_model, 1),
         # )
         self.head = nn.Linear(2 * d_model, 1)
-        self.reg_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
-        )
+        # self.reg_head = nn.Sequential(
+        #     nn.LayerNorm(2 * d_model),
+        #     nn.Linear(2 * d_model, d_model),
+        #     nn.GELU(),
+        #     nn.Dropout(dropout),
+        #     nn.Linear(d_model, 1),
+        # )
 
+        self.reg_head = nn.Linear(2 * d_model, 1)
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
