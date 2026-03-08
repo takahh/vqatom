@@ -531,10 +531,10 @@ class QKOnlyDTIClassifier(nn.Module):
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
         # token importance from map
-        # p_imp = A.max(dim=-1).values   # (B,Lp-1)
-        # l_imp = A.max(dim=1).values    # (B,Ll-1)
-        p_imp = 0.5 * A.max(dim=-1).values + 0.5 * A.mean(dim=-1)
-        l_imp = 0.5 * A.max(dim=1).values + 0.5 * A.mean(dim=1)
+        p_imp = A.max(dim=-1).values   # (B,Lp-1)
+        l_imp = A.max(dim=1).values    # (B,Ll-1)
+        # p_imp = 0.5 * A.max(dim=-1).values + 0.5 * A.mean(dim=-1)
+        # l_imp = 0.5 * A.max(dim=1).values + 0.5 * A.mean(dim=1)
 
         p_imp = p_imp.masked_fill(p_pad, 0.0)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
