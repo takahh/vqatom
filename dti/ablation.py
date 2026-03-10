@@ -456,6 +456,7 @@ class QKOnlyDTIClassifier(nn.Module):
         self.lig = ligand_encoder
 
         d_model = self.lig.d_model
+        self.z_dim = 3 * d_model   # [p_sum ; l_sum ; p_sum*l_sum]
 
         self.p_proj = None
         if self.prot.hidden_size != d_model:
@@ -464,23 +465,22 @@ class QKOnlyDTIClassifier(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
 
-        # self.head = nn.Sequential(
-        #     nn.LayerNorm(2 * d_model),
-        #     nn.Linear(2 * d_model, d_model),
-        #     nn.GELU(),
-        #     nn.Dropout(dropout),
-        #     nn.Linear(d_model, 1),
-        # )
-        self.head = nn.Linear(2 * d_model, 1)
-        # self.reg_head = nn.Sequential(
-        #     nn.LayerNorm(2 * d_model),
-        #     nn.Linear(2 * d_model, d_model),
-        #     nn.GELU(),
-        #     nn.Dropout(dropout),
-        #     nn.Linear(d_model, 1),
-        # )
+        self.head = nn.Sequential(
+            nn.LayerNorm(self.z_dim),
+            nn.Linear(self.z_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
 
-        self.reg_head = nn.Linear(2 * d_model, 1)
+        self.reg_head = nn.Sequential(
+            nn.LayerNorm(self.z_dim),
+            nn.Linear(self.z_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
@@ -504,7 +504,9 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             p_cls = p_h[:, 0, :]
             l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
+            prod = p_cls * l_cls
+            z = torch.cat([p_cls, l_cls, prod], dim=-1)
+
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
@@ -518,10 +520,9 @@ class QKOnlyDTIClassifier(nn.Module):
         S = S.masked_fill(l_pad.unsqueeze(1), -1e9)
 
         # protein PAD rows must NOT become all -inf before softmax
-        # set them to 0 first, then zero them out after softmax
         S = S.masked_fill(p_pad.unsqueeze(-1), 0.0)
 
-        # if ligand side is all-pad for a sample, keep whole matrix zero
+        # if either side is effectively all-pad, keep whole matrix zero
         bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
         S = torch.where(bad, torch.zeros_like(S), S)
 
@@ -534,6 +535,7 @@ class QKOnlyDTIClassifier(nn.Module):
         # token importance from map
         p_imp = A.max(dim=-1).values   # (B,Lp-1)
         l_imp = A.max(dim=1).values    # (B,Ll-1)
+        # 代わりに試すなら:
         # p_imp = 0.5 * A.max(dim=-1).values + 0.5 * A.mean(dim=-1)
         # l_imp = 0.5 * A.max(dim=1).values + 0.5 * A.mean(dim=1)
 
@@ -546,13 +548,16 @@ class QKOnlyDTIClassifier(nn.Module):
         p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
         l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
-        z = torch.cat([p_sum, l_sum], dim=-1)
+        prod = p_sum * l_sum                                      # (B,D)
+        z = torch.cat([p_sum, l_sum, prod], dim=-1)               # (B,3D)
+
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
 
         aux["attn_mean"] = A.mean(dim=(1, 2)).detach()
         aux["p_imp_mean"] = p_imp.mean(dim=1).detach()
         aux["l_imp_mean"] = l_imp.mean(dim=1).detach()
+        aux["prod_abs_mean"] = prod.abs().mean(dim=1).detach()
 
         return logit, aux
 
