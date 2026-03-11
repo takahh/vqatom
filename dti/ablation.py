@@ -503,7 +503,9 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             p_cls = p_h[:, 0, :]
             l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
+            prod = p_cls * l_cls
+            z = torch.cat([p_cls, l_cls, prod], dim=-1)
+
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
