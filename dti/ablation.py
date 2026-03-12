@@ -464,16 +464,16 @@ class QKOnlyDTIClassifier(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.head = nn.Sequential(
-            nn.LayerNorm(4 * d_model),
-            nn.Linear(4 * d_model, d_model),
+            nn.LayerNorm(2 * d_model),
+            nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
 
         self.reg_head = nn.Sequential(
-            nn.LayerNorm(4 * d_model),
-            nn.Linear(4 * d_model, d_model),
+            nn.LayerNorm(2 * d_model),
+            nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
@@ -548,7 +548,10 @@ class QKOnlyDTIClassifier(nn.Module):
         l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
         # z = torch.cat([p_sum, l_sum], dim=-1)
-        z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
+        alpha = 0.2
+        p_mix = p_cls + alpha * p_sum
+        l_mix = l_cls + alpha * l_sum
+        z = torch.cat([p_mix, l_mix], dim=-1)
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
 
