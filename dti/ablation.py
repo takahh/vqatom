@@ -546,12 +546,12 @@ class QKOnlyDTIClassifier(nn.Module):
 
         p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)  # (B,D)
         l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)  # (B,D)
+        self.aux_scale = nn.Parameter(torch.tensor(1.0))
+        z = torch.cat([p_cls, l_cls,
+                       self.aux_scale * p_sum,
+                       self.aux_scale * l_sum], dim=-1)
 
-        alpha = 0.2
-        p_mix = p_cls + alpha * p_sum
-        l_mix = l_cls + alpha * l_sum
-
-        z = torch.cat([p_mix, l_mix], dim=-1)  # (B, 2D)
+        # z = torch.cat([p_mix, l_mix], dim=-1)  # (B, 2D)
 
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
