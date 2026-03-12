@@ -496,6 +496,8 @@ class QKOnlyDTIClassifier(nn.Module):
 
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
+        p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
@@ -547,7 +549,8 @@ class QKOnlyDTIClassifier(nn.Module):
         p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
         l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
 
-        z = torch.cat([p_sum, l_sum], dim=-1)
+        # z = torch.cat([p_sum, l_sum], dim=-1)
+        z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
 
