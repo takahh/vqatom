@@ -463,18 +463,17 @@ class QKOnlyDTIClassifier(nn.Module):
 
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
-
         self.head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
+            nn.LayerNorm(4 * d_model),
+            nn.Linear(4 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        # self.head = nn.Linear(2 * d_model, 1)
+
         self.reg_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
+            nn.LayerNorm(4 * d_model),
+            nn.Linear(4 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
