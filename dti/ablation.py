@@ -544,20 +544,22 @@ class QKOnlyDTIClassifier(nn.Module):
         p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)   # (B,D)
-        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B,D)
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)  # (B,D)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)  # (B,D)
 
-        # z = torch.cat([p_sum, l_sum], dim=-1)
         alpha = 0.2
         p_mix = p_cls + alpha * p_sum
         l_mix = l_cls + alpha * l_sum
-        z = torch.cat([p_mix, l_mix], dim=-1)
+
+        z = torch.cat([p_mix, l_mix], dim=-1)  # (B, 2D)
+
         logit = self.head(z).squeeze(-1)
         aux["y_hat"] = self.reg_head(z).squeeze(-1)
 
-        aux["attn_mean"] = A.mean(dim=(1, 2)).detach()
-        aux["p_imp_mean"] = p_imp.mean(dim=1).detach()
-        aux["l_imp_mean"] = l_imp.mean(dim=1).detach()
+        aux["p_cls_norm"] = p_cls.norm(dim=-1).detach()
+        aux["l_cls_norm"] = l_cls.norm(dim=-1).detach()
+        aux["p_sum_norm"] = p_sum.norm(dim=-1).detach()
+        aux["l_sum_norm"] = l_sum.norm(dim=-1).detach()
 
         return logit, aux
 
