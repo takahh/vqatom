@@ -396,7 +396,15 @@ class DTIDataset(Dataset):
       - requires: seq, lig_tok, y
       - defines binary label as (y >= y_thr)
     """
-    def __init__(self, csv_path: str, y_thr: float = 7.0, drop_missing_y: bool = True):
+    def __init__(
+        self,
+        csv_path: str,
+        y_thr: float = 7.0,
+        drop_missing_y: bool = True,
+        max_samples: Optional[int] = None,
+        seed: int = 0,
+        stratified: bool = True,
+    ):
         rows = read_csv_rows(csv_path)
         self.samples = []
 
@@ -425,24 +433,45 @@ class DTIDataset(Dataset):
 
             self.samples.append((seq, lig, y_bin, y_val, pdbid))
 
+        # ---- optional downsampling
+        if max_samples is not None and max_samples > 0 and len(self.samples) > max_samples:
+            rng = random.Random(seed)
+
+            if stratified:
+                pos_idx = [i for i, s in enumerate(self.samples) if s[2] > 0.5]
+                neg_idx = [i for i, s in enumerate(self.samples) if s[2] <= 0.5]
+
+                n_total = len(self.samples)
+                n_pos = len(pos_idx)
+                n_neg = len(neg_idx)
+
+                target_pos = int(round(max_samples * (n_pos / n_total)))
+                target_neg = max_samples - target_pos
+
+                target_pos = min(target_pos, n_pos)
+                target_neg = min(target_neg, n_neg)
+
+                # 端数や不足を補正
+                cur = target_pos + target_neg
+                if cur < max_samples:
+                    remain = max_samples - cur
+                    extra_pos = min(remain, n_pos - target_pos)
+                    target_pos += extra_pos
+                    remain -= extra_pos
+                    extra_neg = min(remain, n_neg - target_neg)
+                    target_neg += extra_neg
+
+                keep_idx = rng.sample(pos_idx, target_pos) + rng.sample(neg_idx, target_neg)
+                rng.shuffle(keep_idx)
+                self.samples = [self.samples[i] for i in keep_idx]
+            else:
+                keep_idx = rng.sample(range(len(self.samples)), max_samples)
+                self.samples = [self.samples[i] for i in keep_idx]
+
         print(
             f"[DTIDataset] {csv_path}: kept={len(self.samples)} "
             f"dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}"
         )
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx: int):
-        seq, lig_str, y_bin, y_val, pdbid = self.samples[idx]
-        l_ids = parse_lig_tokens(lig_str)
-        return {
-            "seq": seq,
-            "l_ids": torch.tensor(l_ids, dtype=torch.long),
-            "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
-            "y": torch.tensor(float(y_val), dtype=torch.float32),
-            "pdbid": pdbid,
-        }
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
@@ -881,7 +910,10 @@ def main():
     ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
     ap.add_argument("--y_thr", type=float, default=Y_THR, help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
     ap.add_argument("--cross_layers", type=int, default=1)
-
+    ap.add_argument("--train_max_samples", type=int, default=None,
+                    help="If set, randomly subsample train dataset to this many samples")
+    ap.add_argument("--train_stratified", action="store_true",
+                    help="Use stratified subsampling for train set")
     # ligand MLM weights ckpt
     ap.add_argument("--lig_ckpt", type=str, required=True, help="Ligand MLM checkpoint")
 
@@ -990,7 +1022,14 @@ def main():
     train_loader = None
     train_ds = None
     if not args.eval_only:
-        train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        train_ds = DTIDataset(
+            args.train_csv,
+            y_thr=float(args.y_thr),
+            drop_missing_y=True,
+            max_samples=args.train_max_samples,
+            seed=args.seed,
+            stratified=args.train_stratified,
+        )
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
