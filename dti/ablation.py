@@ -910,71 +910,106 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-
-    # data
-    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
-    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
-    ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
-    ap.add_argument("--y_thr", type=float, default=Y_THR, help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
-    ap.add_argument("--cross_layers", type=int, default=1)
-
-    # ligand MLM weights ckpt
-    ap.add_argument("--lig_ckpt", type=str, required=True, help="Ligand MLM checkpoint")
-
-    # discretization ckpt (vocab meta source)
-    ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")
-
-    # protein ESM-2
-    ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
-    ap.add_argument("--finetune_esm", action="store_true")
-
-    # DTI ckpt
-    ap.add_argument("--dti_ckpt", type=str, default=None)
-
-    # io
+    # -----------------------------
+    # I/O
+    # -----------------------------
     ap.add_argument("--out_dir", type=str, default="./dti_out")
     ap.add_argument("--eval_only", action="store_true")
 
-    # train
+    # -----------------------------
+    # Dataset
+    # -----------------------------
+    ap.add_argument("--train_csv", type=str, default=None,
+                    help="Train CSV (required unless --eval_only)")
+    ap.add_argument("--valid_csv", type=str, required=True,
+                    help="Validation CSV")
+    ap.add_argument("--test_csv", type=str, default=None,
+                    help="Optional test CSV")
+
+    ap.add_argument("--y_thr", type=float, default=Y_THR,
+                    help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
+
     ap.add_argument("--batch_size", type=int, default=16)
-    ap.add_argument("--epochs", type=int, default=10)
-    ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
-    ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
 
-    # cross attn
-    ap.add_argument("--cross_nhead", type=int, default=8)
-    ap.add_argument("--dropout", type=float, default=0.1)
-    ap.add_argument("--reg_lambda", type=float, default=0.0)
-    # finetune ligand
+    # -----------------------------
+    # Pretrained models
+    # -----------------------------
+    ap.add_argument("--lig_ckpt", type=str, required=True,
+                    help="Ligand MLM checkpoint")
+
+    ap.add_argument("--vq_ckpt", type=str, default=None,
+                    help="Discretization ckpt to source vocab meta")
+
+    ap.add_argument("--esm_model", type=str,
+                    default="facebook/esm2_t33_650M_UR50D")
+
+    ap.add_argument("--dti_ckpt", type=str, default=None)
+
+    # -----------------------------
+    # Finetuning options
+    # -----------------------------
     ap.add_argument("--finetune_lig", action="store_true")
+    ap.add_argument("--finetune_esm", action="store_true")
+
+    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
     ap.add_argument("--lig_debug_index", action="store_true")
 
-    # loss
+    # -----------------------------
+    # Model architecture
+    # -----------------------------
+    ap.add_argument("--model_type", type=str,
+                    default="qkonly",
+                    choices=["qkonly"])
+
+    ap.add_argument("--cross_layers", type=int, default=1)
+    ap.add_argument("--cross_nhead", type=int, default=8)
+    ap.add_argument("--dropout", type=float, default=0.1)
+
+    # -----------------------------
+    # Training
+    # -----------------------------
+    ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
-    # scheduler
+    # -----------------------------
+    # Optimizer / LR
+    # -----------------------------
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--weight_decay", type=float, default=1e-2)
+
+    ap.add_argument("--head_lr_mult", type=float, default=1.0)
+    ap.add_argument("--qk_lr_mult", type=float, default=0.3)
+    ap.add_argument("--esm_lr_mult", type=float, default=0.3)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.03)
+
+    # -----------------------------
+    # ESM LLRD
+    # -----------------------------
+    ap.add_argument("--llrd", action="store_true")
+    ap.add_argument("--llrd_decay", type=float, default=0.95)
+
+    # -----------------------------
+    # Scheduler
+    # -----------------------------
     ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
     ap.add_argument("--min_lr", type=float, default=1e-6)
 
-    # selection criterion
-    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
+    # -----------------------------
+    # Loss
+    # -----------------------------
+    ap.add_argument("--reg_lambda", type=float, default=0.0)
 
-    # ESM LLRD
-    ap.add_argument("--llrd", action="store_true")
-    ap.add_argument("--llrd_decay", type=float, default=0.95)
-    ap.add_argument("--head_lr_mult", type=float, default=1.0)
-    ap.add_argument("--qk_lr_mult", type=float, default=0.3)
-    ap.add_argument("--esm_lr_mult", type=float, default=0.3)
-    ap.add_argument("--lig_lr_mult", type=float, default=0.03)
-    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-    ap.add_argument("--model_type", type=str, default="qkonly",
-                    choices=["qkonly"])
+    # -----------------------------
+    # Model selection
+    # -----------------------------
+    ap.add_argument("--select_on", type=str,
+                    default="ap",
+                    choices=["ap", "auroc", "f1"])
+
     args = ap.parse_args()
-
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
 
