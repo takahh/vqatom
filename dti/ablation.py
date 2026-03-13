@@ -984,7 +984,8 @@ def main():
                         help="Minimum LR for scheduler")
     ap.add_argument("--warmup_ratio", type=float, default=0.05,
                         help="Warmup ratio for cosine scheduler")
-    ap.add_argument("--sched_start_auroc", type=float, default=0.80)
+    ap.add_argument("--sched_trigger_auroc", type=float, default=0.80)
+    ap.add_argument("--sched_trigger_factor", type=float, default=0.5)
     # -----------------------------
     # ESM LLRD
     # -----------------------------
@@ -1001,10 +1002,6 @@ def main():
     # -----------------------------
     # Scheduler
     # -----------------------------
-    ap.add_argument("--plateau", action="store_true")
-    ap.add_argument("--plateau_factor", type=float, default=0.5)
-    ap.add_argument("--plateau_patience", type=int, default=2)
-    ap.add_argument("--min_lr", type=float, default=1e-6)
 
     # -----------------------------
     # Loss
@@ -1158,6 +1155,7 @@ def main():
             scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
+    lr_dropped_on_threshold = False
     for ep in range(1, args.epochs + 1):
         tr_stat = train_one_epoch(
             model=model,
@@ -1181,7 +1179,17 @@ def main():
             print("prob min/mean/max:", float(prob.min()), float(prob.mean()), float(prob.max()))
 
         v_m = eval_metrics(logit_v, yb_v)
+        if args.use_scheduler and args.scheduler_type == "plateau" and \
+                (not lr_dropped_on_threshold) and (v_m["auroc"] >= args.sched_trigger_auroc):
+            for pg in optimizer.param_groups:
+                old_lr = pg["lr"]
+                pg["lr"] = max(old_lr * args.sched_trigger_factor, args.sched_min_lr)
+            lr_dropped_on_threshold = True
+            print(f"[lr trigger] immediate LR drop at val_AUROC={v_m['auroc']:.4f}")
 
+        if scheduler is not None and args.scheduler_type == "plateau":
+            if lr_dropped_on_threshold:
+                scheduler.step(v_m["auroc"])
         print(
             f"[ep {ep:03d}] "
             f"train_loss={tr_stat['loss']:.4f} "
@@ -1194,9 +1202,6 @@ def main():
             f"val_EF1={v_m['ef1']:.3f} val_EF5={v_m['ef5']:.3f} val_EF10={v_m['ef10']:.3f}"
         )
 
-        if scheduler is not None and args.scheduler_type == "plateau":
-            if v_m["auroc"] >= args.sched_start_auroc:
-                scheduler.step(v_m["auroc"])
         current_lrs = [pg["lr"] for pg in optimizer.param_groups]
         print("current_lrs:", [f"{x:.2e}" for x in current_lrs])
         cur_key = args.select_on
