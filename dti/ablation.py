@@ -963,9 +963,9 @@ def main():
 
     ap.add_argument("--head_lr_mult", type=float, default=1.0)
     ap.add_argument("--qk_lr_mult", type=float, default=0.3)
-    ap.add_argument("--esm_lr_mult", type=float, default=0.3)
-    ap.add_argument("--lig_lr_mult", type=float, default=0.03)
-    ap.add_argument("--esm_min_lr_mult", type=float, default=0.1)
+    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
 
     # -----------------------------
     # ESM LLRD
