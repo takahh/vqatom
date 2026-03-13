@@ -761,55 +761,69 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
     add_group(head_named, head_lr, "head")
 
     # -------------------------
-    # 4) ESM with LLRD
+    # 4) ESM
     # -------------------------
     esm = model.prot.esm
-    decay = float(args.llrd_decay)
-    min_mult = float(args.esm_min_lr_mult)
 
-    # freeze bottom N layers if requested
-    if int(args.freeze_esm_bottom) > 0:
-        n_freeze = int(args.freeze_esm_bottom)
+    if args.llrd:
+        decay = float(args.llrd_decay)
+        min_mult = float(args.esm_min_lr_mult)
+
+        # freeze bottom N layers if requested
+        if int(args.freeze_esm_bottom) > 0:
+            n_freeze = int(args.freeze_esm_bottom)
+            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+                layers = esm.encoder.layer
+                for i in range(min(n_freeze, len(layers))):
+                    for p in layers[i].parameters():
+                        p.requires_grad = False
+            else:
+                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
+
         if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-            layers = esm.encoder.layer
-            for i in range(min(n_freeze, len(layers))):
-                for p in layers[i].parameters():
-                    p.requires_grad = False
+            layers = list(esm.encoder.layer)
+            n_layers = len(layers)
+
+            # embeddings
+            if hasattr(esm, "embeddings"):
+                emb_named = [(f"prot.esm.embeddings.{n}", p) for n, p in esm.embeddings.named_parameters()]
+                lr_emb = max(esm_top_lr * (decay ** n_layers), esm_top_lr * min_mult)
+                add_group(emb_named, lr_emb, f"esm.emb lr={lr_emb:g}")
+
+            # encoder layers: bottom -> top
+            for i, layer in enumerate(layers):
+                depth_from_top = (n_layers - 1) - i
+                lr_i = max(esm_top_lr * (decay ** depth_from_top), esm_top_lr * min_mult)
+                layer_named = [(f"prot.esm.encoder.layer.{i}.{n}", p) for n, p in layer.named_parameters()]
+                add_group(layer_named, lr_i, f"esm.layer{i} lr={lr_i:g}")
+
+            # other ESM params
+            other_named = []
+            for n, p in esm.named_parameters():
+                if n.startswith("embeddings."):
+                    continue
+                if n.startswith("encoder.layer."):
+                    continue
+                other_named.append((f"prot.esm.{n}", p))
+            add_group(other_named, esm_top_lr, f"esm.other lr={esm_top_lr:g}")
+
         else:
-            print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
-
-    if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-        layers = list(esm.encoder.layer)
-        n_layers = len(layers)
-
-        # embeddings
-        if hasattr(esm, "embeddings"):
-            emb_named = [(f"prot.esm.embeddings.{n}", p) for n, p in esm.embeddings.named_parameters()]
-            lr_emb = max(esm_top_lr * (decay ** n_layers), esm_top_lr * min_mult)
-            add_group(emb_named, lr_emb, f"esm.emb lr={lr_emb:g}")
-
-        # encoder layers: bottom -> top
-        for i, layer in enumerate(layers):
-            depth_from_top = (n_layers - 1) - i
-            lr_i = esm_top_lr * (decay ** depth_from_top)
-            lr_i = max(lr_i, esm_top_lr * min_mult)
-
-            layer_named = [(f"prot.esm.encoder.layer.{i}.{n}", p) for n, p in layer.named_parameters()]
-            add_group(layer_named, lr_i, f"esm.layer{i} lr={lr_i:g}")
-
-        # other ESM params
-        other_named = []
-        for n, p in esm.named_parameters():
-            if n.startswith("embeddings."):
-                continue
-            if n.startswith("encoder.layer."):
-                continue
-            other_named.append((f"prot.esm.{n}", p))
-        add_group(other_named, esm_top_lr, f"esm.other lr={esm_top_lr:g}")
+            esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
+            add_group(esm_named, esm_top_lr, f"esm.all lr={esm_top_lr:g}")
 
     else:
+        if int(args.freeze_esm_bottom) > 0:
+            n_freeze = int(args.freeze_esm_bottom)
+            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+                layers = esm.encoder.layer
+                for i in range(min(n_freeze, len(layers))):
+                    for p in layers[i].parameters():
+                        p.requires_grad = False
+            else:
+                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
+
         esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
-        add_group(esm_named, esm_top_lr, f"esm.all lr={esm_top_lr:g}")
+        add_group(esm_named, esm_top_lr, "esm")
 
     # -------------------------
     # 5) any leftover trainable params
