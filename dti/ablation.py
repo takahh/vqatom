@@ -984,6 +984,7 @@ def main():
                         help="Minimum LR for scheduler")
     ap.add_argument("--warmup_ratio", type=float, default=0.05,
                         help="Warmup ratio for cosine scheduler")
+    ap.add_argument("--sched_start_auroc", type=float, default=0.80)
     # -----------------------------
     # ESM LLRD
     # -----------------------------
@@ -1194,7 +1195,8 @@ def main():
         )
 
         if scheduler is not None and args.scheduler_type == "plateau":
-            scheduler.step(v_m['auroc'])
+            if v_m["auroc"] >= args.sched_start_auroc:
+                scheduler.step(v_m["auroc"])
         current_lrs = [pg["lr"] for pg in optimizer.param_groups]
         print("current_lrs:", [f"{x:.2e}" for x in current_lrs])
         cur_key = args.select_on
