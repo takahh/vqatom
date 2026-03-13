@@ -776,36 +776,76 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
     return ckpt, missing, unexpected
 
 
-# -----------------------------
-# Optimizer with LLRD (ESM)
-# -----------------------------
 def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
     base_lr = float(args.lr)
+
     lig_lr = base_lr * float(args.lig_lr_mult)
+    qk_lr = base_lr * float(args.qk_lr_mult)
+    head_lr = base_lr * float(args.head_lr_mult)
+    esm_top_lr = base_lr * float(args.esm_lr_mult)
 
-    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
+    param_groups = []
 
-    non_esm_params = []
-    for n, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if n.startswith("lig."):
-            continue
-        if n.startswith("prot.esm."):
-            continue
-        non_esm_params.append(p)
+    used = set()
 
-    param_groups = [
-        {"params": lig_params, "lr": lig_lr, "name": "lig"},
-        {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
-    ]
+    def add_group(named_params, lr, name):
+        params = []
+        names = []
+        for n, p in named_params:
+            if (not p.requires_grad) or (id(p) in used):
+                continue
+            params.append(p)
+            names.append(n)
+            used.add(id(p))
+        if params:
+            param_groups.append({
+                "params": params,
+                "lr": lr,
+                "name": name,
+                "param_names": names,
+            })
 
+    # -------------------------
+    # 1) ligand encoder
+    # -------------------------
+    add_group(
+        list(model.lig.named_parameters()),
+        lig_lr,
+        "lig",
+    )
+
+    # -------------------------
+    # 2) task-specific q/k/proj
+    # -------------------------
+    qk_named = []
+    if hasattr(model, "q_proj") and model.q_proj is not None:
+        qk_named += [(f"q_proj.{n}", p) for n, p in model.q_proj.named_parameters()]
+    if hasattr(model, "k_proj") and model.k_proj is not None:
+        qk_named += [(f"k_proj.{n}", p) for n, p in model.k_proj.named_parameters()]
+    if hasattr(model, "p_proj") and model.p_proj is not None:
+        qk_named += [(f"p_proj.{n}", p) for n, p in model.p_proj.named_parameters()]
+
+    add_group(qk_named, qk_lr, "qk_proj")
+
+    # -------------------------
+    # 3) classifier / reg heads
+    # -------------------------
+    head_named = []
+    if hasattr(model, "head") and model.head is not None:
+        head_named += [(f"head.{n}", p) for n, p in model.head.named_parameters()]
+    if hasattr(model, "reg_head") and model.reg_head is not None:
+        head_named += [(f"reg_head.{n}", p) for n, p in model.reg_head.named_parameters()]
+
+    add_group(head_named, head_lr, "head")
+
+    # -------------------------
+    # 4) ESM with LLRD
+    # -------------------------
     esm = model.prot.esm
-    top_lr = base_lr * float(args.esm_lr_mult)
     decay = float(args.llrd_decay)
     min_mult = float(args.esm_min_lr_mult)
 
-    # freeze bottom N layers
+    # freeze bottom N layers if requested
     if int(args.freeze_esm_bottom) > 0:
         n_freeze = int(args.freeze_esm_bottom)
         if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
@@ -816,57 +856,54 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
         else:
             print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
 
-    if args.llrd and any(p.requires_grad for p in esm.parameters()):
-        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-            layers = list(esm.encoder.layer)
-            n_layers = len(layers)
+    if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+        layers = list(esm.encoder.layer)
+        n_layers = len(layers)
 
-            # embeddings group
-            if hasattr(esm, "embeddings"):
-                emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
-                if emb_params:
-                    lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
-                    param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
+        # embeddings
+        if hasattr(esm, "embeddings"):
+            emb_named = [(f"prot.esm.embeddings.{n}", p) for n, p in esm.embeddings.named_parameters()]
+            lr_emb = max(esm_top_lr * (decay ** n_layers), esm_top_lr * min_mult)
+            add_group(emb_named, lr_emb, f"esm.emb lr={lr_emb:g}")
 
-            # encoder layers bottom->top
-            for i, layer in enumerate(layers):
-                layer_params = [p for p in layer.parameters() if p.requires_grad]
-                if not layer_params:
-                    continue
-                depth_from_top = (n_layers - 1) - i
-                lr_i = top_lr * (decay ** depth_from_top)
-                lr_i = max(lr_i, top_lr * min_mult)
-                param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
+        # encoder layers: bottom -> top
+        for i, layer in enumerate(layers):
+            depth_from_top = (n_layers - 1) - i
+            lr_i = esm_top_lr * (decay ** depth_from_top)
+            lr_i = max(lr_i, esm_top_lr * min_mult)
 
-            # other params
-            other = []
-            for n, p in esm.named_parameters():
-                if not p.requires_grad:
-                    continue
-                if n.startswith("embeddings."):
-                    continue
-                if n.startswith("encoder.layer."):
-                    continue
-                other.append(p)
-            if other:
-                param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
-        else:
-            print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
-            esm_params = [p for p in esm.parameters() if p.requires_grad]
-            if esm_params:
-                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+            layer_named = [(f"prot.esm.encoder.layer.{i}.{n}", p) for n, p in layer.named_parameters()]
+            add_group(layer_named, lr_i, f"esm.layer{i} lr={lr_i:g}")
+
+        # other ESM params
+        other_named = []
+        for n, p in esm.named_parameters():
+            if n.startswith("embeddings."):
+                continue
+            if n.startswith("encoder.layer."):
+                continue
+            other_named.append((f"prot.esm.{n}", p))
+        add_group(other_named, esm_top_lr, f"esm.other lr={esm_top_lr:g}")
+
     else:
-        esm_params = [p for p in esm.parameters() if p.requires_grad]
-        if esm_params:
-            param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+        esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
+        add_group(esm_named, esm_top_lr, f"esm.all lr={esm_top_lr:g}")
+
+    # -------------------------
+    # 5) any leftover trainable params
+    # -------------------------
+    leftover = []
+    for n, p in model.named_parameters():
+        if p.requires_grad and id(p) not in used:
+            leftover.append((n, p))
+    add_group(leftover, head_lr, "leftover")
 
     print("[opt groups]")
     for g in param_groups:
         nparam = sum(p.numel() for p in g["params"])
-        print(f"  - {g.get('name','group')}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
+        print(f"  - {g['name']}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
-
 
 # -----------------------------
 # Main
@@ -929,8 +966,10 @@ def main():
     # ESM LLRD
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
-    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
-    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
+    ap.add_argument("--head_lr_mult", type=float, default=1.0)
+    ap.add_argument("--qk_lr_mult", type=float, default=0.3)
+    ap.add_argument("--esm_lr_mult", type=float, default=0.3)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.03)
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
     ap.add_argument("--model_type", type=str, default="qkonly",
                     choices=["qkonly"])
