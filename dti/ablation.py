@@ -730,11 +730,66 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
     # -------------------------
     # 1) ligand encoder
     # -------------------------
-    add_group(
-        list(model.lig.named_parameters()),
-        lig_lr,
-        "lig",
-    )
+    lig = model.lig
+
+    if args.lig_llrd:
+        lig_decay = float(args.lig_llrd_decay)
+        lig_min_mult = float(args.lig_min_lr_mult)
+
+        # optional freeze bottom N layers
+        if int(args.freeze_lig_bottom) > 0:
+            n_freeze = int(args.freeze_lig_bottom)
+            if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
+                lig_layers = lig.enc.layers
+                for i in range(min(n_freeze, len(lig_layers))):
+                    for p in lig_layers[i].parameters():
+                        p.requires_grad = False
+            else:
+                print("[warn] ligand layer freezing requested, but enc.layers not found; skipping.")
+
+        if hasattr(lig, "tok") and lig.tok is not None:
+            tok_named = [(f"lig.tok.{n}", p) for n, p in lig.tok.named_parameters()]
+            # embedding is treated as slightly below the bottom layer
+            if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
+                n_lig_layers = len(lig.enc.layers)
+                lr_tok = max(lig_lr * (lig_decay ** n_lig_layers), lig_lr * lig_min_mult)
+            else:
+                lr_tok = lig_lr
+            add_group(tok_named, lr_tok, f"lig.tok lr={lr_tok:g}")
+
+        if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
+            lig_layers = list(lig.enc.layers)
+            n_lig_layers = len(lig_layers)
+
+            for i, layer in enumerate(lig_layers):
+                depth_from_top = (n_lig_layers - 1) - i
+                lr_i = max(lig_lr * (lig_decay ** depth_from_top), lig_lr * lig_min_mult)
+                layer_named = [(f"lig.enc.layers.{i}.{n}", p) for n, p in layer.named_parameters()]
+                add_group(layer_named, lr_i, f"lig.layer{i} lr={lr_i:g}")
+
+            # any other ligand params
+            other_named = []
+            for n, p in lig.named_parameters():
+                if n.startswith("tok."):
+                    continue
+                if n.startswith("enc.layers."):
+                    continue
+                other_named.append((f"lig.{n}", p))
+            add_group(other_named, lig_lr, f"lig.other lr={lig_lr:g}")
+
+        else:
+            add_group(
+                [(f"lig.{n}", p) for n, p in lig.named_parameters()],
+                lig_lr,
+                f"lig.all lr={lig_lr:g}",
+            )
+
+    else:
+        add_group(
+            [(f"lig.{n}", p) for n, p in lig.named_parameters()],
+            lig_lr,
+            "lig",
+        )
 
     # -------------------------
     # 2) task-specific q/k/proj
@@ -769,7 +824,6 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
         decay = float(args.llrd_decay)
         min_mult = float(args.esm_min_lr_mult)
 
-        # freeze bottom N layers if requested
         if int(args.freeze_esm_bottom) > 0:
             n_freeze = int(args.freeze_esm_bottom)
             if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
@@ -784,20 +838,17 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
             layers = list(esm.encoder.layer)
             n_layers = len(layers)
 
-            # embeddings
             if hasattr(esm, "embeddings"):
                 emb_named = [(f"prot.esm.embeddings.{n}", p) for n, p in esm.embeddings.named_parameters()]
                 lr_emb = max(esm_top_lr * (decay ** n_layers), esm_top_lr * min_mult)
                 add_group(emb_named, lr_emb, f"esm.emb lr={lr_emb:g}")
 
-            # encoder layers: bottom -> top
             for i, layer in enumerate(layers):
                 depth_from_top = (n_layers - 1) - i
                 lr_i = max(esm_top_lr * (decay ** depth_from_top), esm_top_lr * min_mult)
                 layer_named = [(f"prot.esm.encoder.layer.{i}.{n}", p) for n, p in layer.named_parameters()]
                 add_group(layer_named, lr_i, f"esm.layer{i} lr={lr_i:g}")
 
-            # other ESM params
             other_named = []
             for n, p in esm.named_parameters():
                 if n.startswith("embeddings."):
@@ -806,7 +857,6 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
                     continue
                 other_named.append((f"prot.esm.{n}", p))
             add_group(other_named, esm_top_lr, f"esm.other lr={esm_top_lr:g}")
-
         else:
             esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
             add_group(esm_named, esm_top_lr, f"esm.all lr={esm_top_lr:g}")
@@ -819,8 +869,6 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
                 for i in range(min(n_freeze, len(layers))):
                     for p in layers[i].parameters():
                         p.requires_grad = False
-            else:
-                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
 
         esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
         add_group(esm_named, esm_top_lr, "esm")
@@ -925,6 +973,13 @@ def main():
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
 
+    # -----------------------------
+    # LIG LLRD
+    # -----------------------------
+    ap.add_argument("--lig_llrd", action="store_true")
+    ap.add_argument("--lig_llrd_decay", type=float, default=0.9)
+    ap.add_argument("--lig_min_lr_mult", type=float, default=0.3)
+    ap.add_argument("--freeze_lig_bottom", type=int, default=0)
     # -----------------------------
     # Scheduler
     # -----------------------------
