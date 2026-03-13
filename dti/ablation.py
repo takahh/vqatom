@@ -478,6 +478,7 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
+        # self.reg_head = nn.Linear(2 * d_model, 1)
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
