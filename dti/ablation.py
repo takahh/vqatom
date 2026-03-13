@@ -313,6 +313,83 @@ class ESMProteinEncoder(nn.Module):
         return out.last_hidden_state
 
 
+class TinyFFNBlock(nn.Module):
+    """Transformer-style FFN residual block (PreNorm)."""
+    def __init__(self, d_model: int, dropout: float = 0.1, mult: int = 4):
+        super().__init__()
+        self.ln = nn.LayerNorm(d_model)
+        self.fc1 = nn.Linear(d_model, mult * d_model)
+        self.act = nn.GELU()
+        self.drop1 = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(mult * d_model, d_model)
+        self.drop2 = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.ln(x)
+        h = self.fc1(h)
+        h = self.act(h)
+        h = self.drop1(h)
+        h = self.fc2(h)
+        h = self.drop2(h)
+        return h   # ★ residual を戻す
+
+class BiasedCrossAttention(nn.Module):
+    """Cross-attention using SDPA (scaled_dot_product_attention)."""
+    def __init__(self, d_model: int, nhead: int, dropout: float):
+        super().__init__()
+        assert d_model % nhead == 0
+        self.d_model = d_model
+        self.nhead = nhead
+        self.d_head = d_model // nhead
+        self.dropout = float(dropout)
+
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.o_proj = nn.Linear(d_model, d_model)
+
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B,L,D) -> (B,H,L,Dh)
+        B, L, D = x.shape
+        return x.view(B, L, self.nhead, self.d_head).transpose(1, 2).contiguous()
+
+    def forward(
+        self,
+        q: torch.Tensor,                   # (B, Lq, D)
+        k: torch.Tensor,                   # (B, Lk, D)
+        v: torch.Tensor,                   # (B, Lk, D)
+        key_padding_mask: Optional[torch.Tensor] = None,  # (B, Lk) True=ignore keys
+        logits_bias: Optional[torch.Tensor] = None,        # (B, Lq, Lk) additive bias
+    ) -> torch.Tensor:
+        B, Lq, _ = q.shape
+        device = q.device
+
+        qh = self._split_heads(self.q_proj(q))  # (B,H,Lq,Dh)
+        kh = self._split_heads(self.k_proj(k))  # (B,H,Lk,Dh)
+        vh = self._split_heads(self.v_proj(v))  # (B,H,Lk,Dh)
+
+        attn_mask = None
+        if logits_bias is not None:
+            attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
+
+        if key_padding_mask is not None:
+            kpm2 = key_padding_mask.to(device=device).unsqueeze(1).unsqueeze(1)  # bool
+            if attn_mask is None:
+                # make float mask
+                attn_mask = torch.zeros((B, 1, Lq, kh.size(2)), device=device, dtype=qh.dtype)
+            attn_mask = attn_mask.masked_fill(kpm2, torch.finfo(qh.dtype).min)
+
+        out = F.scaled_dot_product_attention(
+            qh, kh, vh,
+            attn_mask=attn_mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=False,
+        )  # (B,H,Lq,Dh)
+
+        out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
+        return self.o_proj(out)
+
+
 class DTIDataset(Dataset):
     """
     label-free dataset:
@@ -426,7 +503,8 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             p_cls = p_h[:, 0, :]
             l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls, p_cls, l_cls], dim=-1)
+            z = torch.cat([p_cls, l_cls], dim=-1)
+
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
@@ -616,8 +694,6 @@ def train_one_epoch(
     device: torch.device,
     grad_clip: float = 1.0,
     reg_lambda: float = 0.0,
-    scheduler=None,
-    scheduler_type: str = "plateau",
 ) -> Dict[str, float]:
     model.train()
     losses: List[float] = []
@@ -656,9 +732,6 @@ def train_one_epoch(
 
         optimizer.step()
 
-        if scheduler is not None and scheduler_type == "cosine":
-            scheduler.step()
-
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
@@ -682,7 +755,7 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace,
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
-            "model_type": getattr(args, "model_type", "qkonly"),
+            "model_type": getattr(args, "model_type", "cross"),
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -703,194 +776,94 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
     return ckpt, missing, unexpected
 
 
+# -----------------------------
+# Optimizer with LLRD (ESM)
+# -----------------------------
 def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
     base_lr = float(args.lr)
-
     lig_lr = base_lr * float(args.lig_lr_mult)
-    qk_lr = base_lr * float(args.qk_lr_mult)
-    head_lr = base_lr * float(args.head_lr_mult)
-    esm_top_lr = base_lr * float(args.esm_lr_mult)
 
-    param_groups = []
+    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
 
-    used = set()
+    non_esm_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if n.startswith("lig."):
+            continue
+        if n.startswith("prot.esm."):
+            continue
+        non_esm_params.append(p)
 
-    def add_group(named_params, lr, name):
-        params = []
-        names = []
-        for n, p in named_params:
-            if (not p.requires_grad) or (id(p) in used):
-                continue
-            params.append(p)
-            names.append(n)
-            used.add(id(p))
-        if params:
-            param_groups.append({
-                "params": params,
-                "lr": lr,
-                "name": name,
-                "param_names": names,
-            })
+    param_groups = [
+        {"params": lig_params, "lr": lig_lr, "name": "lig"},
+        {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
+    ]
 
-    # -------------------------
-    # 1) ligand encoder
-    # -------------------------
-    lig = model.lig
-
-    if args.lig_llrd:
-        lig_decay = float(args.lig_llrd_decay)
-        lig_min_mult = float(args.lig_min_lr_mult)
-
-        # optional freeze bottom N layers
-        if int(args.freeze_lig_bottom) > 0:
-            n_freeze = int(args.freeze_lig_bottom)
-            if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
-                lig_layers = lig.enc.layers
-                for i in range(min(n_freeze, len(lig_layers))):
-                    for p in lig_layers[i].parameters():
-                        p.requires_grad = False
-            else:
-                print("[warn] ligand layer freezing requested, but enc.layers not found; skipping.")
-
-        if hasattr(lig, "tok") and lig.tok is not None:
-            tok_named = [(f"lig.tok.{n}", p) for n, p in lig.tok.named_parameters()]
-            # embedding is treated as slightly below the bottom layer
-            if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
-                n_lig_layers = len(lig.enc.layers)
-                lr_tok = max(lig_lr * (lig_decay ** n_lig_layers), lig_lr * lig_min_mult)
-            else:
-                lr_tok = lig_lr
-            add_group(tok_named, lr_tok, f"lig.tok lr={lr_tok:g}")
-
-        if hasattr(lig, "enc") and hasattr(lig.enc, "layers"):
-            lig_layers = list(lig.enc.layers)
-            n_lig_layers = len(lig_layers)
-
-            for i, layer in enumerate(lig_layers):
-                depth_from_top = (n_lig_layers - 1) - i
-                lr_i = max(lig_lr * (lig_decay ** depth_from_top), lig_lr * lig_min_mult)
-                layer_named = [(f"lig.enc.layers.{i}.{n}", p) for n, p in layer.named_parameters()]
-                add_group(layer_named, lr_i, f"lig.layer{i} lr={lr_i:g}")
-
-            # any other ligand params
-            other_named = []
-            for n, p in lig.named_parameters():
-                if n.startswith("tok."):
-                    continue
-                if n.startswith("enc.layers."):
-                    continue
-                other_named.append((f"lig.{n}", p))
-            add_group(other_named, lig_lr, f"lig.other lr={lig_lr:g}")
-
-        else:
-            add_group(
-                [(f"lig.{n}", p) for n, p in lig.named_parameters()],
-                lig_lr,
-                f"lig.all lr={lig_lr:g}",
-            )
-
-    else:
-        add_group(
-            [(f"lig.{n}", p) for n, p in lig.named_parameters()],
-            lig_lr,
-            "lig",
-        )
-
-    # -------------------------
-    # 2) task-specific q/k/proj
-    # -------------------------
-    qk_named = []
-    if hasattr(model, "q_proj") and model.q_proj is not None:
-        qk_named += [(f"q_proj.{n}", p) for n, p in model.q_proj.named_parameters()]
-    if hasattr(model, "k_proj") and model.k_proj is not None:
-        qk_named += [(f"k_proj.{n}", p) for n, p in model.k_proj.named_parameters()]
-    if hasattr(model, "p_proj") and model.p_proj is not None:
-        qk_named += [(f"p_proj.{n}", p) for n, p in model.p_proj.named_parameters()]
-
-    add_group(qk_named, qk_lr, "qk_proj")
-
-    # -------------------------
-    # 3) classifier / reg heads
-    # -------------------------
-    head_named = []
-    if hasattr(model, "head") and model.head is not None:
-        head_named += [(f"head.{n}", p) for n, p in model.head.named_parameters()]
-    if hasattr(model, "reg_head") and model.reg_head is not None:
-        head_named += [(f"reg_head.{n}", p) for n, p in model.reg_head.named_parameters()]
-
-    add_group(head_named, head_lr, "head")
-
-    # -------------------------
-    # 4) ESM
-    # -------------------------
     esm = model.prot.esm
+    top_lr = base_lr * float(args.esm_lr_mult)
+    decay = float(args.llrd_decay)
+    min_mult = float(args.esm_min_lr_mult)
 
-    if args.llrd:
-        decay = float(args.llrd_decay)
-        min_mult = float(args.esm_min_lr_mult)
+    # freeze bottom N layers
+    if int(args.freeze_esm_bottom) > 0:
+        n_freeze = int(args.freeze_esm_bottom)
+        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+            layers = esm.encoder.layer
+            for i in range(min(n_freeze, len(layers))):
+                for p in layers[i].parameters():
+                    p.requires_grad = False
+        else:
+            print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
 
-        if int(args.freeze_esm_bottom) > 0:
-            n_freeze = int(args.freeze_esm_bottom)
-            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-                layers = esm.encoder.layer
-                for i in range(min(n_freeze, len(layers))):
-                    for p in layers[i].parameters():
-                        p.requires_grad = False
-            else:
-                print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
-
+    if args.llrd and any(p.requires_grad for p in esm.parameters()):
         if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
             layers = list(esm.encoder.layer)
             n_layers = len(layers)
 
+            # embeddings group
             if hasattr(esm, "embeddings"):
-                emb_named = [(f"prot.esm.embeddings.{n}", p) for n, p in esm.embeddings.named_parameters()]
-                lr_emb = max(esm_top_lr * (decay ** n_layers), esm_top_lr * min_mult)
-                add_group(emb_named, lr_emb, f"esm.emb lr={lr_emb:g}")
+                emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
+                if emb_params:
+                    lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
+                    param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
 
+            # encoder layers bottom->top
             for i, layer in enumerate(layers):
+                layer_params = [p for p in layer.parameters() if p.requires_grad]
+                if not layer_params:
+                    continue
                 depth_from_top = (n_layers - 1) - i
-                lr_i = max(esm_top_lr * (decay ** depth_from_top), esm_top_lr * min_mult)
-                layer_named = [(f"prot.esm.encoder.layer.{i}.{n}", p) for n, p in layer.named_parameters()]
-                add_group(layer_named, lr_i, f"esm.layer{i} lr={lr_i:g}")
+                lr_i = top_lr * (decay ** depth_from_top)
+                lr_i = max(lr_i, top_lr * min_mult)
+                param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
 
-            other_named = []
+            # other params
+            other = []
             for n, p in esm.named_parameters():
+                if not p.requires_grad:
+                    continue
                 if n.startswith("embeddings."):
                     continue
                 if n.startswith("encoder.layer."):
                     continue
-                other_named.append((f"prot.esm.{n}", p))
-            add_group(other_named, esm_top_lr, f"esm.other lr={esm_top_lr:g}")
+                other.append(p)
+            if other:
+                param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
         else:
-            esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
-            add_group(esm_named, esm_top_lr, f"esm.all lr={esm_top_lr:g}")
-
+            print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
+            esm_params = [p for p in esm.parameters() if p.requires_grad]
+            if esm_params:
+                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
     else:
-        if int(args.freeze_esm_bottom) > 0:
-            n_freeze = int(args.freeze_esm_bottom)
-            if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
-                layers = esm.encoder.layer
-                for i in range(min(n_freeze, len(layers))):
-                    for p in layers[i].parameters():
-                        p.requires_grad = False
-
-        esm_named = [(f"prot.esm.{n}", p) for n, p in esm.named_parameters()]
-        add_group(esm_named, esm_top_lr, "esm")
-
-    # -------------------------
-    # 5) any leftover trainable params
-    # -------------------------
-    leftover = []
-    for n, p in model.named_parameters():
-        if p.requires_grad and id(p) not in used:
-            leftover.append((n, p))
-    add_group(leftover, head_lr, "leftover")
+        esm_params = [p for p in esm.parameters() if p.requires_grad]
+        if esm_params:
+            param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
 
     print("[opt groups]")
     for g in param_groups:
         nparam = sum(p.numel() for p in g["params"])
-        print(f"  - {g['name']}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
+        print(f"  - {g.get('name','group')}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
@@ -900,122 +873,69 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-    # -----------------------------
-    # I/O
-    # -----------------------------
+
+    # data
+    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
+    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
+    ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
+    ap.add_argument("--y_thr", type=float, default=Y_THR, help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
+    ap.add_argument("--cross_layers", type=int, default=1)
+
+    # ligand MLM weights ckpt
+    ap.add_argument("--lig_ckpt", type=str, required=True, help="Ligand MLM checkpoint")
+
+    # discretization ckpt (vocab meta source)
+    ap.add_argument("--vq_ckpt", type=str, default=None, help="Discretization ckpt to source vocab meta (has global_id_meta).")
+
+    # protein ESM-2
+    ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
+    ap.add_argument("--finetune_esm", action="store_true")
+
+    # DTI ckpt
+    ap.add_argument("--dti_ckpt", type=str, default=None)
+
+    # io
     ap.add_argument("--out_dir", type=str, default="./dti_out")
     ap.add_argument("--eval_only", action="store_true")
 
-    # -----------------------------
-    # Dataset
-    # -----------------------------
-    ap.add_argument("--train_csv", type=str, default=None,
-                    help="Train CSV (required unless --eval_only)")
-    ap.add_argument("--valid_csv", type=str, required=True,
-                    help="Validation CSV")
-    ap.add_argument("--test_csv", type=str, default=None,
-                    help="Optional test CSV")
-
-    ap.add_argument("--y_thr", type=float, default=Y_THR,
-                    help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
-
+    # train
     ap.add_argument("--batch_size", type=int, default=16)
+    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
+    ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
 
-    # -----------------------------
-    # Pretrained models
-    # -----------------------------
-    ap.add_argument("--lig_ckpt", type=str, required=True,
-                    help="Ligand MLM checkpoint")
-
-    ap.add_argument("--vq_ckpt", type=str, default=None,
-                    help="Discretization ckpt to source vocab meta")
-
-    ap.add_argument("--esm_model", type=str,
-                    default="facebook/esm2_t33_650M_UR50D")
-
-    ap.add_argument("--dti_ckpt", type=str, default=None)
-
-    # -----------------------------
-    # Finetuning options
-    # -----------------------------
-    ap.add_argument("--finetune_lig", action="store_true")
-    ap.add_argument("--finetune_esm", action="store_true")
-
-    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-    ap.add_argument("--lig_debug_index", action="store_true")
-
-    # -----------------------------
-    # Model architecture
-    # -----------------------------
-    ap.add_argument("--model_type", type=str,
-                    default="qkonly",
-                    choices=["qkonly"])
+    # cross attn
     ap.add_argument("--cross_nhead", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--reg_lambda", type=float, default=0.0)
+    # finetune ligand
+    ap.add_argument("--finetune_lig", action="store_true")
+    ap.add_argument("--lig_debug_index", action="store_true")
 
-    # -----------------------------
-    # Training
-    # -----------------------------
-    ap.add_argument("--epochs", type=int, default=10)
+    # loss
     ap.add_argument("--grad_clip", type=float, default=1.0)
 
-    # -----------------------------
-    # Optimizer / LR
-    # -----------------------------
-    ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--weight_decay", type=float, default=1e-2)
+    # scheduler
+    ap.add_argument("--plateau", action="store_true")
+    ap.add_argument("--plateau_factor", type=float, default=0.5)
+    ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--min_lr", type=float, default=1e-6)
 
-    ap.add_argument("--head_lr_mult", type=float, default=1.0)
-    ap.add_argument("--qk_lr_mult", type=float, default=0.3)
-    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
-    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
-    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
-    ap.add_argument("--use_scheduler", action="store_true",
-                        help="Enable LR scheduler")
-    ap.add_argument("--scheduler_type", type=str, default="plateau",
-                        choices=["plateau", "cosine"],
-                        help="Scheduler type")
-    ap.add_argument("--sched_factor", type=float, default=0.5,
-                        help="ReduceLROnPlateau factor")
-    ap.add_argument("--sched_patience", type=int, default=2,
-                        help="ReduceLROnPlateau patience")
-    ap.add_argument("--sched_min_lr", type=float, default=1e-6,
-                        help="Minimum LR for scheduler")
-    ap.add_argument("--warmup_ratio", type=float, default=0.05,
-                        help="Warmup ratio for cosine scheduler")
-    ap.add_argument("--sched_trigger_auroc", type=float, default=0.80)
-    ap.add_argument("--sched_trigger_factor", type=float, default=0.5)
-    # -----------------------------
+    # selection criterion
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
+
     # ESM LLRD
-    # -----------------------------
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
-
-    # -----------------------------
-    # LIG LLRD
-    # -----------------------------
-    ap.add_argument("--lig_llrd", action="store_true")
-    ap.add_argument("--lig_llrd_decay", type=float, default=0.9)
-    ap.add_argument("--lig_min_lr_mult", type=float, default=0.3)
-    ap.add_argument("--freeze_lig_bottom", type=int, default=0)
-    # -----------------------------
-    # Scheduler
-    # -----------------------------
-
-    # -----------------------------
-    # Loss
-    # -----------------------------
-    ap.add_argument("--reg_lambda", type=float, default=0.0)
-
-    # -----------------------------
-    # Model selection
-    # -----------------------------
-    ap.add_argument("--select_on", type=str,
-                    default="ap",
-                    choices=["ap", "auroc", "f1"])
-
+    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
+    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
+    ap.add_argument("--model_type", type=str, default="qkonly",
+                    choices=["qkonly"])
     args = ap.parse_args()
+
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
 
@@ -1093,17 +1013,31 @@ def main():
         finetune=args.finetune_esm,
     )
     print("model_type:", args.model_type)
+    if args.model_type == "cross":
+        print("cross_layers:", args.cross_layers)
+        print("cross_nhead:", args.cross_nhead)
     print("finetune_esm:", args.finetune_esm)
     esm = prot_enc.esm
     n_train = sum(p.requires_grad for p in esm.parameters())
     n_all = sum(1 for _ in esm.parameters())
     print(f"[debug] ESM requires_grad: {n_train}/{n_all}")
 
-    model = QKOnlyDTIClassifier(
-        protein_encoder=prot_enc,
-        ligand_encoder=lig_enc,
-        dropout=args.dropout,
-    ).to(device)
+    if args.model_type == "cross":
+        model = CrossAttnDTIClassifier(
+            protein_encoder=prot_enc,
+            ligand_encoder=lig_enc,
+            cross_nhead=args.cross_nhead,
+            dropout=args.dropout,
+            cross_layers=int(args.cross_layers),
+        ).to(device)
+    elif args.model_type == "qkonly":
+        model = QKOnlyDTIClassifier(
+            protein_encoder=prot_enc,
+            ligand_encoder=lig_enc,
+            dropout=args.dropout,
+        ).to(device)
+    else:
+        raise ValueError(f"Unknown model_type: {args.model_type}")
 
     if args.dti_ckpt is not None:
         _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
@@ -1131,31 +1065,16 @@ def main():
     optimizer = build_optimizer_with_llrd(model, args)
 
     scheduler = None
-
-    if args.use_scheduler:
-        if args.scheduler_type == "plateau":
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode="max",  # val_AUROC: higher is better
-                factor=args.sched_factor,
-                patience=args.sched_patience,
-                threshold=1e-3,
-                min_lr=args.sched_min_lr,
-            )
-        elif args.scheduler_type == "cosine":
-            total_steps = len(train_loader) * args.epochs
-            warmup_steps = int(args.warmup_ratio * total_steps)
-
-            def lr_lambda(step):
-                if step < warmup_steps:
-                    return float(step) / max(1, warmup_steps)
-                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-                return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    if args.plateau:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=float(args.plateau_factor),
+            patience=int(args.plateau_patience),
+            min_lr=float(args.min_lr),
+        )
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
-    lr_dropped_on_threshold = False
     for ep in range(1, args.epochs + 1):
         tr_stat = train_one_epoch(
             model=model,
@@ -1164,8 +1083,6 @@ def main():
             device=device,
             grad_clip=float(args.grad_clip),
             reg_lambda=args.reg_lambda,
-            scheduler=scheduler,
-            scheduler_type=args.scheduler_type,
         )
 
         logit_tr, yb_tr = predict(model, train_loader, device)
@@ -1179,17 +1096,7 @@ def main():
             print("prob min/mean/max:", float(prob.min()), float(prob.mean()), float(prob.max()))
 
         v_m = eval_metrics(logit_v, yb_v)
-        if args.use_scheduler and args.scheduler_type == "plateau" and \
-                (not lr_dropped_on_threshold) and (v_m["auroc"] >= args.sched_trigger_auroc):
-            for pg in optimizer.param_groups:
-                old_lr = pg["lr"]
-                pg["lr"] = max(old_lr * args.sched_trigger_factor, args.sched_min_lr)
-            lr_dropped_on_threshold = True
-            print(f"[lr trigger] immediate LR drop at val_AUROC={v_m['auroc']:.4f}")
 
-        if scheduler is not None and args.scheduler_type == "plateau":
-            if lr_dropped_on_threshold:
-                scheduler.step(v_m["auroc"])
         print(
             f"[ep {ep:03d}] "
             f"train_loss={tr_stat['loss']:.4f} "
@@ -1202,8 +1109,9 @@ def main():
             f"val_EF1={v_m['ef1']:.3f} val_EF5={v_m['ef5']:.3f} val_EF10={v_m['ef10']:.3f}"
         )
 
-        current_lrs = [pg["lr"] for pg in optimizer.param_groups]
-        print("current_lrs:", [f"{x:.2e}" for x in current_lrs])
+        if scheduler is not None:
+            scheduler.step(float(v_m[args.select_on]))
+
         cur_key = args.select_on
         cur_val = float(v_m[cur_key])
         best_val = float(best[cur_key])
