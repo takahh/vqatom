@@ -616,6 +616,8 @@ def train_one_epoch(
     device: torch.device,
     grad_clip: float = 1.0,
     reg_lambda: float = 0.0,
+    scheduler=None,
+    scheduler_type: str = "plateau",
 ) -> Dict[str, float]:
     model.train()
     losses: List[float] = []
@@ -653,6 +655,9 @@ def train_one_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
 
         optimizer.step()
+
+        if scheduler is not None and scheduler_type == "cosine":
+            scheduler.step()
 
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
@@ -966,7 +971,19 @@ def main():
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
     ap.add_argument("--lig_lr_mult", type=float, default=0.1)
     ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
-
+    ap.add_argument("--use_scheduler", action="store_true",
+                        help="Enable LR scheduler")
+    ap.add_argument("--scheduler_type", type=str, default="plateau",
+                        choices=["plateau", "cosine"],
+                        help="Scheduler type")
+    ap.add_argument("--sched_factor", type=float, default=0.5,
+                        help="ReduceLROnPlateau factor")
+    ap.add_argument("--sched_patience", type=int, default=2,
+                        help="ReduceLROnPlateau patience")
+    ap.add_argument("--sched_min_lr", type=float, default=1e-6,
+                        help="Minimum LR for scheduler")
+    ap.add_argument("--warmup_ratio", type=float, default=0.05,
+                        help="Warmup ratio for cosine scheduler")
     # -----------------------------
     # ESM LLRD
     # -----------------------------
@@ -1116,14 +1133,28 @@ def main():
     optimizer = build_optimizer_with_llrd(model, args)
 
     scheduler = None
-    if args.plateau:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="max",
-            factor=float(args.plateau_factor),
-            patience=int(args.plateau_patience),
-            min_lr=float(args.min_lr),
-        )
+
+    if args.use_scheduler:
+        if args.scheduler_type == "plateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="max",  # val_AUROC: higher is better
+                factor=args.sched_factor,
+                patience=args.sched_patience,
+                threshold=1e-3,
+                min_lr=args.sched_min_lr,
+            )
+        elif args.scheduler_type == "cosine":
+            total_steps = len(train_loader) * args.epochs
+            warmup_steps = int(args.warmup_ratio * total_steps)
+
+            def lr_lambda(step):
+                if step < warmup_steps:
+                    return float(step) / max(1, warmup_steps)
+                progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+                return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
@@ -1134,6 +1165,8 @@ def main():
             device=device,
             grad_clip=float(args.grad_clip),
             reg_lambda=args.reg_lambda,
+            scheduler=scheduler,
+            scheduler_type=args.scheduler_type,
         )
 
         logit_tr, yb_tr = predict(model, train_loader, device)
@@ -1160,9 +1193,10 @@ def main():
             f"val_EF1={v_m['ef1']:.3f} val_EF5={v_m['ef5']:.3f} val_EF10={v_m['ef10']:.3f}"
         )
 
-        if scheduler is not None:
-            scheduler.step(float(v_m[args.select_on]))
-
+        if scheduler is not None and args.scheduler_type == "plateau":
+            scheduler.step(v_m['auroc'])
+        current_lrs = [pg["lr"] for pg in optimizer.param_groups]
+        print("current_lrs:", [f"{x:.2e}" for x in current_lrs])
         cur_key = args.select_on
         cur_val = float(v_m[cur_key])
         best_val = float(best[cur_key])
