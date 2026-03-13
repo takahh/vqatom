@@ -313,83 +313,6 @@ class ESMProteinEncoder(nn.Module):
         return out.last_hidden_state
 
 
-class TinyFFNBlock(nn.Module):
-    """Transformer-style FFN residual block (PreNorm)."""
-    def __init__(self, d_model: int, dropout: float = 0.1, mult: int = 4):
-        super().__init__()
-        self.ln = nn.LayerNorm(d_model)
-        self.fc1 = nn.Linear(d_model, mult * d_model)
-        self.act = nn.GELU()
-        self.drop1 = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(mult * d_model, d_model)
-        self.drop2 = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.ln(x)
-        h = self.fc1(h)
-        h = self.act(h)
-        h = self.drop1(h)
-        h = self.fc2(h)
-        h = self.drop2(h)
-        return h   # ★ residual を戻す
-
-class BiasedCrossAttention(nn.Module):
-    """Cross-attention using SDPA (scaled_dot_product_attention)."""
-    def __init__(self, d_model: int, nhead: int, dropout: float):
-        super().__init__()
-        assert d_model % nhead == 0
-        self.d_model = d_model
-        self.nhead = nhead
-        self.d_head = d_model // nhead
-        self.dropout = float(dropout)
-
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
-        self.o_proj = nn.Linear(d_model, d_model)
-
-    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
-        # (B,L,D) -> (B,H,L,Dh)
-        B, L, D = x.shape
-        return x.view(B, L, self.nhead, self.d_head).transpose(1, 2).contiguous()
-
-    def forward(
-        self,
-        q: torch.Tensor,                   # (B, Lq, D)
-        k: torch.Tensor,                   # (B, Lk, D)
-        v: torch.Tensor,                   # (B, Lk, D)
-        key_padding_mask: Optional[torch.Tensor] = None,  # (B, Lk) True=ignore keys
-        logits_bias: Optional[torch.Tensor] = None,        # (B, Lq, Lk) additive bias
-    ) -> torch.Tensor:
-        B, Lq, _ = q.shape
-        device = q.device
-
-        qh = self._split_heads(self.q_proj(q))  # (B,H,Lq,Dh)
-        kh = self._split_heads(self.k_proj(k))  # (B,H,Lk,Dh)
-        vh = self._split_heads(self.v_proj(v))  # (B,H,Lk,Dh)
-
-        attn_mask = None
-        if logits_bias is not None:
-            attn_mask = logits_bias.to(device=device, dtype=qh.dtype).unsqueeze(1)  # (B,1,Lq,Lk)
-
-        if key_padding_mask is not None:
-            kpm2 = key_padding_mask.to(device=device).unsqueeze(1).unsqueeze(1)  # bool
-            if attn_mask is None:
-                # make float mask
-                attn_mask = torch.zeros((B, 1, Lq, kh.size(2)), device=device, dtype=qh.dtype)
-            attn_mask = attn_mask.masked_fill(kpm2, torch.finfo(qh.dtype).min)
-
-        out = F.scaled_dot_product_attention(
-            qh, kh, vh,
-            attn_mask=attn_mask,
-            dropout_p=self.dropout if self.training else 0.0,
-            is_causal=False,
-        )  # (B,H,Lq,Dh)
-
-        out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
-        return self.o_proj(out)
-
-
 class DTIDataset(Dataset):
     """
     label-free dataset:
@@ -1074,8 +997,6 @@ def main():
     ap.add_argument("--model_type", type=str,
                     default="qkonly",
                     choices=["qkonly"])
-
-    ap.add_argument("--cross_layers", type=int, default=1)
     ap.add_argument("--cross_nhead", type=int, default=8)
     ap.add_argument("--dropout", type=float, default=0.1)
 
