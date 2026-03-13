@@ -503,8 +503,7 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             p_cls = p_h[:, 0, :]
             l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
-
+            z = torch.cat([p_cls, l_cls, p_cls, l_cls], dim=-1)
             logit = self.head(z).squeeze(-1)
             aux["y_hat"] = self.reg_head(z).squeeze(-1)
             return logit, aux
@@ -905,6 +904,120 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
+def collect_param_groups(model, args):
+
+    head_params = []
+    qk_params = []
+    lig_params = []
+    esm_layers = []
+
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+
+        # classification head
+        if "head" in name:
+            head_params.append(p)
+
+        # cross attention QK
+        elif "q_proj" in name or "k_proj" in name:
+            qk_params.append(p)
+
+        # ligand encoder
+        elif "lig_encoder" in name:
+            lig_params.append(p)
+
+        # esm
+        elif "esm" in name:
+            esm_layers.append((name, p))
+
+        else:
+            head_params.append(p)
+
+    return head_params, qk_params, lig_params, esm_layers
+
+def build_esm_groups(esm_layers, base_lr, decay, freeze_bottom):
+
+    groups = []
+
+    # esm layers index 推定
+    layer_map = {}
+
+    for name, p in esm_layers:
+        if "layers." in name:
+            idx = int(name.split("layers.")[1].split(".")[0])
+        else:
+            idx = 999
+        layer_map.setdefault(idx, []).append(p)
+
+    max_layer = max(layer_map.keys())
+
+    for layer_id, params in layer_map.items():
+
+        if layer_id < freeze_bottom:
+            for p in params:
+                p.requires_grad = False
+            continue
+
+        scale = decay ** (max_layer - layer_id)
+
+        groups.append({
+            "params": params,
+            "lr": base_lr * scale
+        })
+
+    return groups
+
+def build_optimizer(model, args):
+
+    head_params, qk_params, lig_params, esm_layers = collect_param_groups(model, args)
+
+    param_groups = []
+
+    # head
+    param_groups.append({
+        "params": head_params,
+        "lr": args.lr * args.head_lr_mult
+    })
+
+    # qk
+    param_groups.append({
+        "params": qk_params,
+        "lr": args.lr * args.qk_lr_mult
+    })
+
+    # ligand
+    if args.finetune_lig:
+        param_groups.append({
+            "params": lig_params,
+            "lr": args.lr * args.lig_lr_mult
+        })
+
+    # esm
+    if args.finetune_esm:
+
+        if args.llrd:
+            esm_groups = build_esm_groups(
+                esm_layers,
+                args.lr * args.esm_lr_mult,
+                args.llrd_decay,
+                args.freeze_esm_bottom
+            )
+            param_groups.extend(esm_groups)
+
+        else:
+            param_groups.append({
+                "params": [p for _, p in esm_layers],
+                "lr": args.lr * args.esm_lr_mult
+            })
+
+    optimizer = torch.optim.AdamW(
+        param_groups,
+        weight_decay=args.weight_decay
+    )
+
+    return optimizer
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -982,6 +1095,7 @@ def main():
     ap.add_argument("--qk_lr_mult", type=float, default=0.3)
     ap.add_argument("--esm_lr_mult", type=float, default=0.3)
     ap.add_argument("--lig_lr_mult", type=float, default=0.03)
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.1)
 
     # -----------------------------
     # ESM LLRD
@@ -1087,31 +1201,17 @@ def main():
         finetune=args.finetune_esm,
     )
     print("model_type:", args.model_type)
-    if args.model_type == "cross":
-        print("cross_layers:", args.cross_layers)
-        print("cross_nhead:", args.cross_nhead)
     print("finetune_esm:", args.finetune_esm)
     esm = prot_enc.esm
     n_train = sum(p.requires_grad for p in esm.parameters())
     n_all = sum(1 for _ in esm.parameters())
     print(f"[debug] ESM requires_grad: {n_train}/{n_all}")
 
-    if args.model_type == "cross":
-        model = CrossAttnDTIClassifier(
-            protein_encoder=prot_enc,
-            ligand_encoder=lig_enc,
-            cross_nhead=args.cross_nhead,
-            dropout=args.dropout,
-            cross_layers=int(args.cross_layers),
-        ).to(device)
-    elif args.model_type == "qkonly":
-        model = QKOnlyDTIClassifier(
-            protein_encoder=prot_enc,
-            ligand_encoder=lig_enc,
-            dropout=args.dropout,
-        ).to(device)
-    else:
-        raise ValueError(f"Unknown model_type: {args.model_type}")
+    model = QKOnlyDTIClassifier(
+        protein_encoder=prot_enc,
+        ligand_encoder=lig_enc,
+        dropout=args.dropout,
+    ).to(device)
 
     if args.dti_ckpt is not None:
         _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
