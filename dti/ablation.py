@@ -389,7 +389,6 @@ class BiasedCrossAttention(nn.Module):
         out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         return self.o_proj(out)
 
-
 class DTIDataset(Dataset):
     """
     label-free dataset:
@@ -433,7 +432,7 @@ class DTIDataset(Dataset):
 
             self.samples.append((seq, lig, y_bin, y_val, pdbid))
 
-        # ---- optional downsampling
+        # optional downsampling
         if max_samples is not None and max_samples > 0 and len(self.samples) > max_samples:
             rng = random.Random(seed)
 
@@ -451,7 +450,6 @@ class DTIDataset(Dataset):
                 target_pos = min(target_pos, n_pos)
                 target_neg = min(target_neg, n_neg)
 
-                # 端数や不足を補正
                 cur = target_pos + target_neg
                 if cur < max_samples:
                     remain = max_samples - cur
@@ -472,6 +470,20 @@ class DTIDataset(Dataset):
             f"[DTIDataset] {csv_path}: kept={len(self.samples)} "
             f"dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}"
         )
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        seq, lig_str, y_bin, y_val, pdbid = self.samples[idx]
+        l_ids = parse_lig_tokens(lig_str)
+        return {
+            "seq": seq,
+            "l_ids": torch.tensor(l_ids, dtype=torch.long),
+            "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
+            "y": torch.tensor(float(y_val), dtype=torch.float32),
+            "pdbid": pdbid,
+        }
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
