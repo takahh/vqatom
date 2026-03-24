@@ -909,6 +909,126 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
+def rows_to_dataset(rows, y_thr: float = 7.0):
+    samples = []
+    dropped_no_y = 0
+    dropped_bad = 0
+
+    for r in rows:
+        try:
+            seq = str(r["seq"]).strip()
+            lig = str(r["lig_tok"]).strip()
+        except Exception:
+            dropped_bad += 1
+            continue
+
+        y_str = str(r.get("y", "")).strip()
+        if y_str == "":
+            dropped_no_y += 1
+            continue
+
+        y_val = float(y_str)
+        y_bin = 1.0 if y_val >= float(y_thr) else 0.0
+        pdbid = str(r.get("pdbid", "")).strip()
+        samples.append((seq, lig, y_bin, y_val, pdbid))
+
+    ds = DTIDataset.__new__(DTIDataset)
+    ds.samples = samples
+    print(f"[rows_to_dataset] kept={len(samples)} dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}")
+    return ds
+
+
+def split_rows_train_valid(
+    rows,
+    val_ratio: float = 0.15,
+    seed: int = 0,
+    stratified: bool = False,
+):
+    rng = random.Random(seed)
+    val_ratio = max(0.10, min(0.20, float(val_ratio)))
+
+    if not stratified:
+        rows = rows[:]
+        rng.shuffle(rows)
+        n_val = max(1, int(round(len(rows) * val_ratio)))
+        n_val = min(n_val, max(1, len(rows) - 1))
+        valid_rows = rows[:n_val]
+        train_rows = rows[n_val:]
+        return train_rows, valid_rows
+
+    pos_rows = []
+    neg_rows = []
+    bad_rows = []
+
+    for r in rows:
+        try:
+            y = float(str(r.get("y", "")).strip())
+            y_bin = 1 if y >= Y_THR else 0
+            if y_bin == 1:
+                pos_rows.append(r)
+            else:
+                neg_rows.append(r)
+        except Exception:
+            bad_rows.append(r)
+
+    rng.shuffle(pos_rows)
+    rng.shuffle(neg_rows)
+
+    n_val_pos = max(1, int(round(len(pos_rows) * val_ratio))) if len(pos_rows) > 1 else 0
+    n_val_neg = max(1, int(round(len(neg_rows) * val_ratio))) if len(neg_rows) > 1 else 0
+
+    valid_rows = pos_rows[:n_val_pos] + neg_rows[:n_val_neg]
+    train_rows = pos_rows[n_val_pos:] + neg_rows[n_val_neg:]
+
+    rng.shuffle(train_rows)
+    rng.shuffle(valid_rows)
+    return train_rows, valid_rows
+
+
+def downsample_rows(rows, max_samples: Optional[int], seed: int = 0, stratified: bool = False):
+    if max_samples is None or max_samples <= 0 or len(rows) <= max_samples:
+        return rows
+
+    rng = random.Random(seed)
+
+    if not stratified:
+        idx = rng.sample(range(len(rows)), max_samples)
+        return [rows[i] for i in idx]
+
+    pos_rows = []
+    neg_rows = []
+    for r in rows:
+        try:
+            y = float(str(r.get("y", "")).strip())
+            y_bin = 1 if y >= Y_THR else 0
+            if y_bin == 1:
+                pos_rows.append(r)
+            else:
+                neg_rows.append(r)
+        except Exception:
+            continue
+
+    n_total = len(pos_rows) + len(neg_rows)
+    if n_total == 0:
+        return []
+
+    target_pos = int(round(max_samples * (len(pos_rows) / n_total)))
+    target_neg = max_samples - target_pos
+    target_pos = min(target_pos, len(pos_rows))
+    target_neg = min(target_neg, len(neg_rows))
+
+    cur = target_pos + target_neg
+    if cur < max_samples:
+        remain = max_samples - cur
+        extra_pos = min(remain, len(pos_rows) - target_pos)
+        target_pos += extra_pos
+        remain -= extra_pos
+        extra_neg = min(remain, len(neg_rows) - target_neg)
+        target_neg += extra_neg
+
+    keep = rng.sample(pos_rows, target_pos) + rng.sample(neg_rows, target_neg)
+    rng.shuffle(keep)
+    return keep
 
 # -----------------------------
 # Main
@@ -917,9 +1037,20 @@ def main():
     ap = argparse.ArgumentParser()
 
     # data
-    ap.add_argument("--train_csv", type=str, default=None, help="Train CSV (required unless --eval_only)")
-    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV")
-    ap.add_argument("--test_csv", type=str, default=None, help="Optional test CSV")
+    ap.add_argument("--train_csv", type=str, default=None, help="Base train CSV (required unless --eval_only)")
+    ap.add_argument("--valid_csv", type=str, default=None, help="Optional external validation CSV")
+    ap.add_argument("--final_eval_csv", type=str, default=None, help="Final evaluation CSV run every epoch")
+    ap.add_argument("--auto_split_val", action="store_true",
+                    help="Split validation from train_csv instead of using --valid_csv")
+    ap.add_argument("--val_ratio", type=float, default=0.15,
+                    help="Validation ratio when --auto_split_val is used (recommended 0.10-0.20)")
+    ap.add_argument("--train_size", type=int, default=None,
+                    help="If set, use only this many training rows after split")
+    ap.add_argument("--split_seed", type=int, default=0,
+                    help="Seed for train/val splitting")
+    ap.add_argument("--stratified_split", action="store_true",
+                    help="Preserve class balance when splitting train/val")
+    ap.add_argument("--test_csv", type=str, default=None, help="Optional extra test CSV")
     ap.add_argument("--y_thr", type=float, default=Y_THR, help="Strong threshold: y>=y_thr => y_bin=1 (binders only)")
     ap.add_argument("--cross_layers", type=int, default=1)
     ap.add_argument("--train_max_samples", type=int, default=None,
@@ -984,6 +1115,9 @@ def main():
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
 
+    if not args.eval_only and (not args.auto_split_val) and (not args.valid_csv):
+        raise ValueError("Provide --valid_csv, or use --auto_split_val.")
+
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1006,12 +1140,53 @@ def main():
     )
     lig_pad = lig_enc.pad_id
     print(f"[ligand] vocab_source={lig_enc.vocab_source}")
-    print(f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
+    print(
+        f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
     print(f"[ligand] CLS={lig_enc.cls_id} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id} vocab={lig_enc.vocab_size}")
     assert lig_enc.cls_id != lig_enc.pad_id
     assert lig_enc.cls_id != lig_enc.mask_id
 
-    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+    # -----------------------------
+    # datasets
+    # -----------------------------
+    train_ds = None
+    valid_ds = None
+
+    if args.eval_only:
+        if not args.valid_csv:
+            raise ValueError("--eval_only requires --valid_csv")
+        valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+
+    else:
+        if args.auto_split_val:
+            base_rows = read_csv_rows(args.train_csv)
+            train_rows, valid_rows = split_rows_train_valid(
+                base_rows,
+                val_ratio=float(args.val_ratio),
+                seed=int(args.split_seed),
+                stratified=bool(args.stratified_split),
+            )
+
+            train_rows = downsample_rows(
+                train_rows,
+                max_samples=args.train_size,
+                seed=args.seed,
+                stratified=args.train_stratified,
+            )
+
+            train_ds = rows_to_dataset(train_rows, y_thr=float(args.y_thr))
+            valid_ds = rows_to_dataset(valid_rows, y_thr=float(args.y_thr))
+        else:
+            valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+            train_ds = DTIDataset(
+                args.train_csv,
+                y_thr=float(args.y_thr),
+                drop_missing_y=True,
+                max_samples=args.train_size if args.train_size is not None else args.train_max_samples,
+                seed=args.seed,
+                stratified=args.train_stratified,
+            )
+
     valid_loader = DataLoader(
         valid_ds,
         batch_size=args.batch_size,
@@ -1020,28 +1195,8 @@ def main():
         collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
     )
 
-    test_loader = None
-    if args.test_csv:
-        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr))
-        test_loader = DataLoader(
-            test_ds,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
-        )
-
     train_loader = None
-    train_ds = None
-    if not args.eval_only:
-        train_ds = DTIDataset(
-            args.train_csv,
-            y_thr=float(args.y_thr),
-            drop_missing_y=True,
-            max_samples=args.train_max_samples,
-            seed=args.seed,
-            stratified=args.train_stratified,
-        )
+    if train_ds is not None:
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
@@ -1050,14 +1205,37 @@ def main():
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
-        def pos_rate(ds):
-            ys = [float(ds[i]["y_bin"].item()) for i in range(len(ds))]
-            return sum(1 for y in ys if y > 0.5) / max(1, len(ys))
+    final_eval_loader = None
+    if args.final_eval_csv:
+        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        final_eval_loader = DataLoader(
+            final_eval_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+        )
 
+    test_loader = None
+    if args.test_csv:
+        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        test_loader = DataLoader(
+            test_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+        )
+
+    def pos_rate(ds):
+        ys = [float(ds[i]["y_bin"].item()) for i in range(len(ds))]
+        return sum(1 for y in ys if y > 0.5) / max(1, len(ys))
+
+    if train_ds is not None:
         print("train n:", len(train_ds), "pos_rate:", pos_rate(train_ds))
-        print("valid n:", len(valid_ds), "pos_rate:", pos_rate(valid_ds))
-    else:
-        print("valid n:", len(valid_ds))
+    print("valid n:", len(valid_ds), "pos_rate:", pos_rate(valid_ds))
+    if final_eval_loader is not None:
+        print("final_eval n:", len(final_eval_ds), "pos_rate:", pos_rate(final_eval_ds))
 
     prot_enc = ESMProteinEncoder(
         model_name=args.esm_model,
@@ -1181,6 +1359,28 @@ def main():
             logit_t, yb_t = predict(model, test_loader, device)
             mt = eval_metrics(logit_t, yb_t)
             print("[TEST ]", mt)
+        final_m = None
+
+        if final_eval_loader is not None:
+            logit_f, yb_f = predict(model, final_eval_loader, device)
+            final_m = eval_metrics(logit_f, yb_f)
+            print(
+                f"[FINAL] ep={ep:03d} "
+                f"AP={final_m['ap']:.4f} "
+                f"AUROC={final_m['auroc']:.4f} "
+                f"F1={final_m['f1']:.4f} "
+                f"EF1={final_m['ef1']:.3f} "
+                f"EF5={final_m['ef5']:.3f} "
+                f"EF10={final_m['ef10']:.3f}"
+            )
+        epoch_summary = {
+            "epoch": ep,
+            "train_stat": tr_stat,
+            "train_metrics": tr_m,
+            "valid_metrics": v_m,
+            "final_eval_metrics": final_m,
+        }
+        save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), epoch_summary)
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
