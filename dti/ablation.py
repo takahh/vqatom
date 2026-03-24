@@ -94,14 +94,10 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     return out
 
 
-def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
-    # Protein tokenize (unchanged)
-    seqs = [str(s["seq"]) for s in samples]
-    enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
-    p_input_ids = enc["input_ids"].long()
-    p_attn_mask = enc["attention_mask"].long()
+def collate_fn(samples, lig_pad: int, lig_cls: int) -> Batch:
+    p_input_ids = pad_1d([s["p_input_ids"] for s in samples], pad_value=1)  # ESM pad token id は tokenizer から取るのが本当は安全
+    p_attn_mask = pad_1d([s["p_attn_mask"] for s in samples], pad_value=0)
 
-    # Ligand: prepend CLS then pad
     l_ids_list = []
     for s in samples:
         x = s["l_ids"]
@@ -112,7 +108,6 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
         l_ids_list.append(x)
 
     l_ids = pad_1d(l_ids_list, lig_pad)
-
     y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
     y = torch.stack([s["y"] for s in samples], dim=0).float()
 
@@ -121,8 +116,9 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
         y_bin=y_bin,
-        y=y
+        y=y,
     )
+
 # -----------------------------
 # Utilities: vocab meta + safe loading
 # -----------------------------
@@ -390,14 +386,10 @@ class BiasedCrossAttention(nn.Module):
         return self.o_proj(out)
 
 class DTIDataset(Dataset):
-    """
-    label-free dataset:
-      - requires: seq, lig_tok, y
-      - defines binary label as (y >= y_thr)
-    """
     def __init__(
         self,
         csv_path: str,
+        esm_tokenizer,
         y_thr: float = 7.0,
         drop_missing_y: bool = True,
         max_samples: Optional[int] = None,
@@ -430,60 +422,26 @@ class DTIDataset(Dataset):
             y_bin = 1.0 if y_val >= float(y_thr) else 0.0
             pdbid = str(r.get("pdbid", "")).strip()
 
-            self.samples.append((seq, lig, y_bin, y_val, pdbid))
+            # protein tokenize once
+            enc = esm_tokenizer(seq, return_tensors="pt", truncation=True)
+            p_input_ids = enc["input_ids"][0].long()
+            p_attn_mask = enc["attention_mask"][0].long()
 
-        # optional downsampling
-        if max_samples is not None and max_samples > 0 and len(self.samples) > max_samples:
-            rng = random.Random(seed)
+            # ligand parse once
+            l_ids = torch.tensor(parse_lig_tokens(lig), dtype=torch.long)
 
-            if stratified:
-                pos_idx = [i for i, s in enumerate(self.samples) if s[2] > 0.5]
-                neg_idx = [i for i, s in enumerate(self.samples) if s[2] <= 0.5]
-
-                n_total = len(self.samples)
-                n_pos = len(pos_idx)
-                n_neg = len(neg_idx)
-
-                target_pos = int(round(max_samples * (n_pos / n_total)))
-                target_neg = max_samples - target_pos
-
-                target_pos = min(target_pos, n_pos)
-                target_neg = min(target_neg, n_neg)
-
-                cur = target_pos + target_neg
-                if cur < max_samples:
-                    remain = max_samples - cur
-                    extra_pos = min(remain, n_pos - target_pos)
-                    target_pos += extra_pos
-                    remain -= extra_pos
-                    extra_neg = min(remain, n_neg - target_neg)
-                    target_neg += extra_neg
-
-                keep_idx = rng.sample(pos_idx, target_pos) + rng.sample(neg_idx, target_neg)
-                rng.shuffle(keep_idx)
-                self.samples = [self.samples[i] for i in keep_idx]
-            else:
-                keep_idx = rng.sample(range(len(self.samples)), max_samples)
-                self.samples = [self.samples[i] for i in keep_idx]
-
-        print(
-            f"[DTIDataset] {csv_path}: kept={len(self.samples)} "
-            f"dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}"
-        )
-
-    def __len__(self):
-        return len(self.samples)
+            self.samples.append({
+                "p_input_ids": p_input_ids,
+                "p_attn_mask": p_attn_mask,
+                "l_ids": l_ids,
+                "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
+                "y": torch.tensor(float(y_val), dtype=torch.float32),
+                "pdbid": pdbid,
+            })
 
     def __getitem__(self, idx: int):
-        seq, lig_str, y_bin, y_val, pdbid = self.samples[idx]
-        l_ids = parse_lig_tokens(lig_str)
-        return {
-            "seq": seq,
-            "l_ids": torch.tensor(l_ids, dtype=torch.long),
-            "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
-            "y": torch.tensor(float(y_val), dtype=torch.float32),
-            "pdbid": pdbid,
-        }
+        return self.samples[idx]
+
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
@@ -604,32 +562,25 @@ class QKOnlyDTIClassifier(nn.Module):
 # -----------------------------
 # Eval / Train
 # -----------------------------
-@torch.no_grad()
 def predict(model, loader, device):
     model.eval()
     logits, ybins = [], []
-    for batch in loader:
-        p_ids = batch.p_input_ids.to(device)
-        p_msk = batch.p_attn_mask.to(device)
-        l_ids = batch.l_ids.to(device)
-        logit, _ = model(p_ids, p_msk, l_ids)
+    use_amp = (device.type == "cuda")
 
-        if not torch.isfinite(logit).all():
-            bad = (~torch.isfinite(logit)).nonzero(as_tuple=False)[:10]
-            print("[nan] non-finite logits at:", bad.cpu().tolist())
+    with torch.inference_mode():
+        for batch in loader:
+            p_ids = batch.p_input_ids.to(device, non_blocking=True)
+            p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+            l_ids = batch.l_ids.to(device, non_blocking=True)
 
-            x = logit.detach().float().cpu()
-            finite = torch.isfinite(x)
-            if finite.any():
-                xf = x[finite]
-                print("[nan] finite logit stats:", float(xf.min()), float(xf.mean()), float(xf.max()))
+            if use_amp:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    logit, _ = model(p_ids, p_msk, l_ids)
             else:
-                print("[nan] all logits are non-finite")
+                logit, _ = model(p_ids, p_msk, l_ids)
 
-            raise RuntimeError("Non-finite logits detected")
-
-        logits.append(logit.detach().cpu().numpy())
-        ybins.append(batch.y_bin.detach().cpu().numpy())
+            logits.append(logit.detach().cpu().numpy())
+            ybins.append(batch.y_bin.detach().cpu().numpy())
 
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
     yb = np.concatenate(ybins, axis=0) if ybins else np.array([], dtype=np.float64)
@@ -909,7 +860,7 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
-def rows_to_dataset(rows, y_thr: float = 7.0):
+def rows_to_dataset(rows, esm_tokenizer, y_thr: float = 7.0):
     samples = []
     dropped_no_y = 0
     dropped_bad = 0
@@ -930,13 +881,25 @@ def rows_to_dataset(rows, y_thr: float = 7.0):
         y_val = float(y_str)
         y_bin = 1.0 if y_val >= float(y_thr) else 0.0
         pdbid = str(r.get("pdbid", "")).strip()
-        samples.append((seq, lig, y_bin, y_val, pdbid))
+
+        enc = esm_tokenizer(seq, return_tensors="pt", truncation=True)
+        p_input_ids = enc["input_ids"][0].long()
+        p_attn_mask = enc["attention_mask"][0].long()
+        l_ids = torch.tensor(parse_lig_tokens(lig), dtype=torch.long)
+
+        samples.append({
+            "p_input_ids": p_input_ids,
+            "p_attn_mask": p_attn_mask,
+            "l_ids": l_ids,
+            "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
+            "y": torch.tensor(float(y_val), dtype=torch.float32),
+            "pdbid": pdbid,
+        })
 
     ds = DTIDataset.__new__(DTIDataset)
     ds.samples = samples
     print(f"[rows_to_dataset] kept={len(samples)} dropped_no_y={dropped_no_y} dropped_bad={dropped_bad}")
     return ds
-
 
 def split_rows_train_valid(
     rows,
@@ -1111,6 +1074,12 @@ def main():
     ap.add_argument("--model_type", type=str, default="qkonly",
                     choices=["qkonly"])
     args = ap.parse_args()
+    import time
+    t_global0 = time.perf_counter()
+
+    def tlog(name, t0):
+        dt = time.perf_counter() - t0
+        print(f"[time] {name}: {dt:.2f} sec")
 
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
@@ -1155,27 +1124,42 @@ def main():
     if args.eval_only:
         if not args.valid_csv:
             raise ValueError("--eval_only requires --valid_csv")
-        valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        valid_ds = DTIDataset(
+            args.valid_csv,
+            esm_tokenizer=esm_tokenizer,
+            y_thr=float(args.y_thr),
+            drop_missing_y=True,
+        )
 
     else:
+        import time
         if args.auto_split_val:
+            t0 = time.perf_counter()
             base_rows = read_csv_rows(args.train_csv)
+            tlog("read train_csv rows", t0)
+
+            t0 = time.perf_counter()
             train_rows, valid_rows = split_rows_train_valid(
                 base_rows,
                 val_ratio=float(args.val_ratio),
                 seed=int(args.split_seed),
                 stratified=bool(args.stratified_split),
             )
+            tlog("split train/valid rows", t0)
 
+            t0 = time.perf_counter()
             train_rows = downsample_rows(
                 train_rows,
                 max_samples=args.train_size,
                 seed=args.seed,
                 stratified=args.train_stratified,
             )
+            tlog("downsample train rows", t0)
 
-            train_ds = rows_to_dataset(train_rows, y_thr=float(args.y_thr))
-            valid_ds = rows_to_dataset(valid_rows, y_thr=float(args.y_thr))
+            t0 = time.perf_counter()
+            train_ds = rows_to_dataset(train_rows, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr))
+            valid_ds = rows_to_dataset(valid_rows, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr))
+            tlog("rows_to_dataset train+valid", t0)
         else:
             valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
             train_ds = DTIDataset(
@@ -1192,17 +1176,20 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+        collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
     )
 
     train_loader = None
+    loader_num_workers = min(4, os.cpu_count() or 1)
+    pin_memory = (device.type == "cuda")
     if train_ds is not None:
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch_size,
             shuffle=True,
-            num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            num_workers=loader_num_workers,
+            pin_memory=pin_memory,
+            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     final_eval_loader = None
@@ -1213,7 +1200,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     test_loader = None
@@ -1224,7 +1211,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     def pos_rate(ds):
@@ -1315,8 +1302,14 @@ def main():
             reg_lambda=args.reg_lambda,
         )
 
-        logit_tr, yb_tr = predict(model, train_loader, device)
-        tr_m = eval_metrics(logit_tr, yb_tr)
+        do_train_eval = (ep == 1 or ep == args.epochs or ep % 5 == 0)
+
+        if do_train_eval:
+            logit_tr, yb_tr = predict(model, train_loader, device)
+            tr_m = eval_metrics(logit_tr, yb_tr)
+        else:
+            tr_m = {"ap": float("nan"), "auroc": float("nan"), "f1": float("nan"),
+                    "ef1": float("nan"), "ef5": float("nan"), "ef10": float("nan")}
 
         logit_v, yb_v = predict(model, valid_loader, device)
         prob = 1.0 / (1.0 + np.exp(-logit_v))
