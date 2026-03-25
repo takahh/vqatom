@@ -1262,7 +1262,7 @@ def main():
 
     final_eval_loader = None
     if args.final_eval_csv:
-        final_eval_ds = DTIDataset(args.final_eval_csv, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr), drop_missing_y=True)
+        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True)
         final_eval_loader = DataLoader(
             final_eval_ds,
             batch_size=args.batch_size,
