@@ -1488,6 +1488,7 @@ def main():
                 train_size=int(args.train_size),
                 shard_size=int(args.train_shard_size),
                 epoch=ep,
+                seed=int(args.seed),
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
 
