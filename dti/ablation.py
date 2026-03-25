@@ -1211,7 +1211,6 @@ def main():
             raise ValueError("--eval_only requires --valid_csv")
         valid_ds = DTIDataset(
             args.valid_csv,
-            esm_tokenizer=esm_tokenizer,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
         )
