@@ -173,13 +173,22 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
 
 
 def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
+    import time, random
+
+    t0 = time.perf_counter()
+
     seqs = [s["seq"] for s in samples]
+
+    t1 = time.perf_counter()
     enc = esm_tokenizer(
         seqs,
         return_tensors="pt",
         padding=True,
         truncation=True,
     )
+    t_tok = time.perf_counter() - t1
+
+    t1 = time.perf_counter()
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
@@ -195,6 +204,14 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
     l_ids = pad_1d(l_ids_list, lig_pad)
     y_bin = torch.tensor([s["y_bin"] for s in samples], dtype=torch.float32)
     y = torch.tensor([s["y"] for s in samples], dtype=torch.float32)
+    t_rest = time.perf_counter() - t1
+
+    total = time.perf_counter() - t0
+    if random.random() < 0.01:
+        print(
+            f"[collate] batch={len(samples)} "
+            f"total={total:.4f}s tokenizer={t_tok:.4f}s rest={t_rest:.4f}s"
+        )
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -761,23 +778,44 @@ def train_one_epoch(
     device: torch.device,
     grad_clip: float = 1.0,
     reg_lambda: float = 0.0,
+    log_interval: int = 50,
 ) -> Dict[str, float]:
-    model.train()
-    losses: List[float] = []
-    losses_cls: List[float] = []
-    losses_reg: List[float] = []
+    import time
 
+    model.train()
+    losses, losses_cls, losses_reg = [], [], []
     use_amp = (device.type == "cuda")
 
-    for batch in loader:
-        p_ids = batch.p_input_ids.to(device)
-        p_msk = batch.p_attn_mask.to(device)
-        l_ids = batch.l_ids.to(device)
-        y_bin = batch.y_bin.to(device)
-        y = batch.y.to(device)
+    t_data = 0.0
+    t_h2d = 0.0
+    t_fwd = 0.0
+    t_bwd = 0.0
+    t_opt = 0.0
+    n_steps = 0
+
+    it = iter(loader)
+
+    while True:
+        t0 = time.perf_counter()
+        try:
+            batch = next(it)
+        except StopIteration:
+            break
+        t_data += time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        p_ids = batch.p_input_ids.to(device, non_blocking=True)
+        p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+        l_ids = batch.l_ids.to(device, non_blocking=True)
+        y_bin = batch.y_bin.to(device, non_blocking=True)
+        y = batch.y.to(device, non_blocking=True)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_h2d += time.perf_counter() - t0
 
         optimizer.zero_grad(set_to_none=True)
 
+        t0 = time.perf_counter()
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logit, aux = model(p_ids, p_msk, l_ids)
@@ -791,17 +829,48 @@ def train_one_epoch(
             y_hat = aux["y_hat"]
             loss_reg = F.smooth_l1_loss(y_hat, y)
             loss = loss_cls + reg_lambda * loss_reg
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_fwd += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         loss.backward()
-
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_bwd += time.perf_counter() - t0
 
+        t0 = time.perf_counter()
         optimizer.step()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t_opt += time.perf_counter() - t0
 
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
+        n_steps += 1
+
+        if n_steps % log_interval == 0:
+            print(
+                f"[train step {n_steps}] "
+                f"data={t_data/n_steps:.3f}s "
+                f"h2d={t_h2d/n_steps:.3f}s "
+                f"fwd={t_fwd/n_steps:.3f}s "
+                f"bwd={t_bwd/n_steps:.3f}s "
+                f"opt={t_opt/n_steps:.3f}s"
+            )
+
+    print(
+        f"[train epoch timing] "
+        f"data={t_data:.2f}s "
+        f"h2d={t_h2d:.2f}s "
+        f"fwd={t_fwd:.2f}s "
+        f"bwd={t_bwd:.2f}s "
+        f"opt={t_opt:.2f}s "
+        f"steps={n_steps}"
+    )
 
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
@@ -1066,6 +1135,16 @@ def downsample_rows(rows, max_samples: Optional[int], seed: int = 0, stratified:
     keep = rng.sample(pos_rows, target_pos) + rng.sample(neg_rows, target_neg)
     rng.shuffle(keep)
     return keep
+
+import time
+
+def tsec():
+    return time.perf_counter()
+
+def tprint(name: str, t0: float):
+    dt = time.perf_counter() - t0
+    print(f"[TIMER] {name}: {dt:.3f}s")
+    return dt
 
 # -----------------------------
 # Main
@@ -1364,35 +1443,48 @@ def main():
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
+        t_ep = tsec()
 
         if train_shard_paths is not None:
+            t0 = tsec()
             chosen_shards = pick_epoch_shards_sequential(
                 train_shard_paths,
                 train_size=int(args.train_size),
                 shard_size=int(args.train_shard_size),
                 epoch=ep,
             )
+            tprint(f"ep{ep:03d} pick_epoch_shards_sequential", t0)
 
             print(f"[epoch {ep:03d}] chosen train shards:")
             for p in chosen_shards:
                 print("   ", os.path.basename(p))
 
+            t0 = tsec()
             epoch_train_ds = build_train_dataset_from_shards(
                 chosen_shards,
                 y_thr=float(args.y_thr),
             )
+            tprint(f"ep{ep:03d} build_train_dataset_from_shards", t0)
 
+            t0 = tsec()
             train_loader = DataLoader(
                 epoch_train_ds,
                 batch_size=args.batch_size,
                 shuffle=True,
                 num_workers=loader_num_workers,
                 pin_memory=pin_memory,
-                collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+                collate_fn=lambda xs: collate_fn(
+                    xs,
+                    esm_tokenizer=esm_tokenizer,
+                    lig_pad=lig_pad,
+                    lig_cls=lig_enc.cls_id,
+                ),
             )
+            tprint(f"ep{ep:03d} build_train_loader", t0)
 
             print("epoch train n:", len(epoch_train_ds))
 
+        t0 = tsec()
         tr_stat = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -1401,24 +1493,43 @@ def main():
             grad_clip=float(args.grad_clip),
             reg_lambda=args.reg_lambda,
         )
+        t_train = tprint(f"ep{ep:03d} train_one_epoch", t0)
 
         do_train_eval = (ep == 1 or ep == args.epochs or ep % 5 == 0)
 
         if do_train_eval:
+            t0 = tsec()
             logit_tr, yb_tr = predict(model, train_loader, device)
-            tr_m = eval_metrics(logit_tr, yb_tr)
-        else:
-            tr_m = {"ap": float("nan"), "auroc": float("nan"), "f1": float("nan"),
-                    "ef1": float("nan"), "ef5": float("nan"), "ef10": float("nan")}
+            tprint(f"ep{ep:03d} predict_train", t0)
 
+            t0 = tsec()
+            tr_m = eval_metrics(logit_tr, yb_tr)
+            tprint(f"ep{ep:03d} eval_metrics_train", t0)
+        else:
+            tr_m = {
+                "ap": float("nan"),
+                "auroc": float("nan"),
+                "f1": float("nan"),
+                "ef1": float("nan"),
+                "ef5": float("nan"),
+                "ef10": float("nan"),
+            }
+
+        t0 = tsec()
         logit_v, yb_v = predict(model, valid_loader, device)
+        tprint(f"ep{ep:03d} predict_valid", t0)
+
+        t0 = tsec()
         prob = 1.0 / (1.0 + np.exp(-logit_v))
         print("pos_rate(valid):", float((yb_v > 0.5).mean()) if yb_v.size else 0.0)
         print("pred_pos_rate@0.5:", float((prob >= 0.5).mean()) if prob.size else 0.0)
         if prob.size:
             print("prob min/mean/max:", float(prob.min()), float(prob.mean()), float(prob.max()))
+        tprint(f"ep{ep:03d} valid_prob_stats", t0)
 
+        t0 = tsec()
         v_m = eval_metrics(logit_v, yb_v)
+        tprint(f"ep{ep:03d} eval_metrics_valid", t0)
 
         print(
             f"[ep {ep:03d}] "
@@ -1433,30 +1544,52 @@ def main():
         )
 
         if scheduler is not None:
+            t0 = tsec()
             scheduler.step(float(v_m[args.select_on]))
+            tprint(f"ep{ep:03d} scheduler_step", t0)
 
         cur_key = args.select_on
         cur_val = float(v_m[cur_key])
         best_val = float(best[cur_key])
 
         if cur_val > best_val:
-            best.update({"ap": float(v_m["ap"]), "auroc": float(v_m["auroc"]), "f1": float(v_m["f1"]), "epoch": ep})
+            t0 = tsec()
+            best.update({
+                "ap": float(v_m["ap"]),
+                "auroc": float(v_m["auroc"]),
+                "f1": float(v_m["f1"]),
+                "epoch": ep
+            })
             save_path = os.path.join(args.out_dir, "best.pt")
             save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
             print("  saved:", save_path)
+            tprint(f"ep{ep:03d} save_best_ckpt", t0)
 
+        t0 = tsec()
         last_path = os.path.join(args.out_dir, "last.pt")
         save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best)
+        tprint(f"ep{ep:03d} save_last_ckpt", t0)
 
         if test_loader is not None:
+            t0 = tsec()
             logit_t, yb_t = predict(model, test_loader, device)
-            mt = eval_metrics(logit_t, yb_t)
-            print("[TEST ]", mt)
-        final_m = None
+            tprint(f"ep{ep:03d} predict_test", t0)
 
+            t0 = tsec()
+            mt = eval_metrics(logit_t, yb_t)
+            tprint(f"ep{ep:03d} eval_metrics_test", t0)
+            print("[TEST ]", mt)
+
+        final_m = None
         if final_eval_loader is not None:
+            t0 = tsec()
             logit_f, yb_f = predict(model, final_eval_loader, device)
+            tprint(f"ep{ep:03d} predict_final_eval", t0)
+
+            t0 = tsec()
             final_m = eval_metrics(logit_f, yb_f)
+            tprint(f"ep{ep:03d} eval_metrics_final_eval", t0)
+
             print(
                 f"[FINAL] ep={ep:03d} "
                 f"AP={final_m['ap']:.4f} "
@@ -1466,6 +1599,8 @@ def main():
                 f"EF5={final_m['ef5']:.3f} "
                 f"EF10={final_m['ef10']:.3f}"
             )
+
+        t0 = tsec()
         epoch_summary = {
             "epoch": ep,
             "train_stat": tr_stat,
@@ -1474,6 +1609,9 @@ def main():
             "final_eval_metrics": final_m,
         }
         save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), epoch_summary)
+        tprint(f"ep{ep:03d} save_epoch_json", t0)
+
+        tprint(f"ep{ep:03d} TOTAL", t_ep)
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
