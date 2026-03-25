@@ -105,7 +105,6 @@ def pick_epoch_shards_sequential(
 
 def build_train_dataset_from_shards(
     shard_paths: List[str],
-    esm_tokenizer,
     y_thr: float,
 ):
     ds_list = []
@@ -115,7 +114,6 @@ def build_train_dataset_from_shards(
         print(f"[train shard] loading {p}")
         ds = DTIDataset(
             p,
-            esm_tokenizer=esm_tokenizer,
             y_thr=float(y_thr),
             drop_missing_y=True,
         )
@@ -1382,7 +1380,6 @@ def main():
 
             epoch_train_ds = build_train_dataset_from_shards(
                 chosen_shards,
-                esm_tokenizer=esm_tokenizer,
                 y_thr=float(args.y_thr),
             )
 
