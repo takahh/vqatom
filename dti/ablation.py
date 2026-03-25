@@ -521,6 +521,8 @@ class DTIDataset(Dataset):
     def __getitem__(self, idx: int):
         return self.samples[idx]
 
+    def __len__(self):
+        return len(self.samples)
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
