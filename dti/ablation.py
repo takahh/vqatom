@@ -1479,10 +1479,8 @@ def main():
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
-        t_ep = tsec()
 
         if train_shard_paths is not None:
-            t0 = tsec()
             chosen_shards = pick_epoch_shards_random(
                 train_shard_paths,
                 train_size=int(args.train_size),
@@ -1492,20 +1490,15 @@ def main():
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
 
-            tprint(f"ep{ep:03d} pick_epoch_shards_random", t0)
-
             print(f"[epoch {ep:03d}] chosen train shards:")
             for p in chosen_shards:
                 print("   ", os.path.basename(p))
 
-            t0 = tsec()
             epoch_train_ds = build_train_dataset_from_shards(
                 chosen_shards,
                 y_thr=float(args.y_thr),
             )
-            tprint(f"ep{ep:03d} build_train_dataset_from_shards", t0)
 
-            t0 = tsec()
             train_loader = DataLoader(
                 epoch_train_ds,
                 batch_size=args.batch_size,
@@ -1519,11 +1512,9 @@ def main():
                     lig_cls=lig_enc.cls_id,
                 ),
             )
-            tprint(f"ep{ep:03d} build_train_loader", t0)
 
             print("epoch train n:", len(epoch_train_ds))
 
-        t0 = tsec()
         tr_stat = train_one_epoch(
             model=model,
             loader=train_loader,
@@ -1532,18 +1523,13 @@ def main():
             grad_clip=float(args.grad_clip),
             reg_lambda=args.reg_lambda,
         )
-        t_train = tprint(f"ep{ep:03d} train_one_epoch", t0)
 
         do_train_eval = True
 
         if do_train_eval:
-            t0 = tsec()
             logit_tr, yb_tr = predict(model, train_loader, device)
-            tprint(f"ep{ep:03d} predict_train", t0)
 
-            t0 = tsec()
             tr_m = eval_metrics(logit_tr, yb_tr)
-            tprint(f"ep{ep:03d} eval_metrics_train", t0)
         else:
             tr_m = {
                 "ap": float("nan"),
@@ -1554,21 +1540,15 @@ def main():
                 "ef10": float("nan"),
             }
 
-        t0 = tsec()
         logit_v, yb_v = predict(model, valid_loader, device)
-        tprint(f"ep{ep:03d} predict_valid", t0)
 
-        t0 = tsec()
         prob = 1.0 / (1.0 + np.exp(-logit_v))
         print("pos_rate(valid):", float((yb_v > 0.5).mean()) if yb_v.size else 0.0)
         print("pred_pos_rate@0.5:", float((prob >= 0.5).mean()) if prob.size else 0.0)
         if prob.size:
             print("prob min/mean/max:", float(prob.min()), float(prob.mean()), float(prob.max()))
-        tprint(f"ep{ep:03d} valid_prob_stats", t0)
 
-        t0 = tsec()
         v_m = eval_metrics(logit_v, yb_v)
-        tprint(f"ep{ep:03d} eval_metrics_valid", t0)
 
         print(
             f"[ep {ep:03d}] "
@@ -1583,16 +1563,13 @@ def main():
         )
 
         if scheduler is not None:
-            t0 = tsec()
             scheduler.step(float(v_m[args.select_on]))
-            tprint(f"ep{ep:03d} scheduler_step", t0)
 
         cur_key = args.select_on
         cur_val = float(v_m[cur_key])
         best_val = float(best[cur_key])
 
         if cur_val > best_val:
-            t0 = tsec()
             best.update({
                 "ap": float(v_m["ap"]),
                 "auroc": float(v_m["auroc"]),
@@ -1602,32 +1579,21 @@ def main():
             save_path = os.path.join(args.out_dir, "best.pt")
             save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
             print("  saved:", save_path)
-            tprint(f"ep{ep:03d} save_best_ckpt", t0)
 
-        t0 = tsec()
         last_path = os.path.join(args.out_dir, "last.pt")
         save_dti_checkpoint(last_path, model, args, lig_enc, epoch=ep, best=best)
-        tprint(f"ep{ep:03d} save_last_ckpt", t0)
 
         if test_loader is not None:
-            t0 = tsec()
             logit_t, yb_t = predict(model, test_loader, device)
-            tprint(f"ep{ep:03d} predict_test", t0)
 
-            t0 = tsec()
             mt = eval_metrics(logit_t, yb_t)
-            tprint(f"ep{ep:03d} eval_metrics_test", t0)
             print("[TEST ]", mt)
 
         final_m = None
         if final_eval_loader is not None:
-            t0 = tsec()
             logit_f, yb_f = predict(model, final_eval_loader, device)
-            tprint(f"ep{ep:03d} predict_final_eval", t0)
 
-            t0 = tsec()
             final_m = eval_metrics(logit_f, yb_f)
-            tprint(f"ep{ep:03d} eval_metrics_final_eval", t0)
 
             print(
                 f"[FINAL] ep={ep:03d} "
@@ -1639,7 +1605,6 @@ def main():
                 f"EF10={final_m['ef10']:.3f}"
             )
 
-        t0 = tsec()
         epoch_summary = {
             "epoch": ep,
             "train_stat": tr_stat,
@@ -1648,9 +1613,38 @@ def main():
             "final_eval_metrics": final_m,
         }
         save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), epoch_summary)
-        tprint(f"ep{ep:03d} save_epoch_json", t0)
 
-        tprint(f"ep{ep:03d} TOTAL", t_ep)
+        print(f"\n===== Epoch {ep} =====")
+
+        print(
+            "[train]",
+            f"AUC={tr_m['auroc']:.4f}",
+            f"AP={tr_m['ap']:.4f}",
+            f"F1={tr_m['f1']:.4f}",
+            f"EF1={tr_m['ef1']:.3f}",
+            f"EF5={tr_metrics['ef5']:.3f}",
+            f"EF10={tr_m['ef10']:.3f}",
+        )
+
+        print(
+            "[valid]",
+            f"AUC={v_m['auroc']:.4f}",
+            f"AP={v_m['ap']:.4f}",
+            f"F1={v_m['f1']:.4f}",
+            f"EF1={v_m['ef1']:.3f}",
+            f"EF5={v_m['ef5']:.3f}",
+            f"EF10={v_m['ef10']:.3f}",
+        )
+
+        print(
+            "[final]",
+            f"AUC={final_m['auroc']:.4f}",
+            f"AP={final_m['ap']:.4f}",
+            f"F1={final_m['f1']:.4f}",
+            f"EF1={final_m['ef1']:.3f}",
+            f"EF5={final_m['ef5']:.3f}",
+            f"EF10={final_m['ef10']:.3f}",
+        )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
