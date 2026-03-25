@@ -1273,7 +1273,7 @@ def main():
 
     test_loader = None
     if args.test_csv:
-        test_ds = DTIDataset(args.test_csv, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr), drop_missing_y=True)
+        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True)
         test_loader = DataLoader(
             test_ds,
             batch_size=args.batch_size,
