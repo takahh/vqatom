@@ -521,23 +521,23 @@ class DTIDataset(Dataset):
 
         self.rows = []
         n_all = 0
-        n_drop_label = 0
+        n_drop_seq = 0
+        n_drop_lig = 0
         n_drop_y = 0
 
         for r in raw_rows:
             n_all += 1
 
-            try:
-                label = float(r.get("label", 0))
-            except Exception:
-                n_drop_label += 1
-                continue
-
-            if label <= 0:
-                n_drop_label += 1
-                continue
-
+            seq = (r.get("seq") or "").strip()
+            lig_tok = (r.get("lig_tok") or "").strip()
             y_raw = r.get("y", "")
+
+            if not seq:
+                n_drop_seq += 1
+                continue
+            if not lig_tok:
+                n_drop_lig += 1
+                continue
             if y_raw in ("", None):
                 if drop_missing_y:
                     n_drop_y += 1
@@ -551,7 +551,10 @@ class DTIDataset(Dataset):
             rr["y_bin"] = 1 if y >= float(y_thr) else 0
             self.rows.append(rr)
 
-        print(f"[DTIDataset] total={n_all} kept={len(self.rows)} drop_label={n_drop_label} drop_y={n_drop_y}")
+        print(
+            f"[DTIDataset] total={n_all} kept={len(self.rows)} "
+            f"drop_seq={n_drop_seq} drop_lig={n_drop_lig} drop_y={n_drop_y}"
+        )
 
         if not self.rows:
             raise ValueError("No usable rows in dataset")
