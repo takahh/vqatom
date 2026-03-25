@@ -77,7 +77,7 @@ def compute_valid_size_from_train_size(train_size: int, val_ratio: float) -> int
         raise ValueError("train_size must be positive")
     if not (0.0 < float(val_ratio) < 1.0):
         raise ValueError("val_ratio must be in (0, 1)")
-    return max(1, int(round(float(train_size) * float(val_ratio) / (1.0 - float(val_ratio)))))
+    return int(round(float(train_size) * float(val_ratio)))
 
 def read_csv_head_rows(path: str, n_rows: int) -> List[Dict[str, str]]:
     import csv
