@@ -1283,7 +1283,14 @@ def main():
         )
 
     def pos_rate(ds):
-        ys = [float(ds[i]["y_bin"].item()) for i in range(len(ds))]
+        ys = []
+        for i in range(len(ds)):
+            v = ds[i]["y_bin"]
+            if hasattr(v, "item"):
+                v = float(v.item())
+            else:
+                v = float(v)
+            ys.append(v)
         return sum(1 for y in ys if y > 0.5) / max(1, len(ys))
 
     if train_ds is not None:
