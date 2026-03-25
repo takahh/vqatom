@@ -1622,7 +1622,7 @@ def main():
             f"AP={tr_m['ap']:.4f}",
             f"F1={tr_m['f1']:.4f}",
             f"EF1={tr_m['ef1']:.3f}",
-            f"EF5={tr_metrics['ef5']:.3f}",
+            f"EF5={tr_m['ef5']:.3f}",
             f"EF10={tr_m['ef10']:.3f}",
         )
 
