@@ -660,7 +660,7 @@ def predict(model, loader, device):
             else:
                 logit, _ = model(p_ids, p_msk, l_ids)
 
-            logits.append(logit.detach().cpu().numpy())
+            logits.append(logit.detach().float().cpu().numpy())
             ybins.append(batch.y_bin.detach().cpu().numpy())
 
     logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
