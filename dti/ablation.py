@@ -20,7 +20,8 @@ No distance, no KL, no D.
 Outputs:
   model.forward(...) -> (logit (B,), aux={})
 """
-
+from glob import glob
+from torch.utils.data import ConcatDataset
 import os
 import json
 import math
@@ -48,6 +49,84 @@ def seed_all(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+def list_train_shards(shard_dir: str, pattern: str = "train_part_*.csv") -> List[str]:
+    paths = sorted(glob(os.path.join(shard_dir, pattern)))
+    if not paths:
+        raise ValueError(f"No shard files found: dir={shard_dir} pattern={pattern}")
+    return paths
+
+def compute_valid_size_from_train_size(train_size: int, val_ratio: float) -> int:
+    if train_size is None or train_size <= 0:
+        raise ValueError("train_size must be positive")
+    if not (0.0 < float(val_ratio) < 1.0):
+        raise ValueError("val_ratio must be in (0, 1)")
+    return max(1, int(round(float(train_size) * float(val_ratio) / (1.0 - float(val_ratio)))))
+
+def read_csv_head_rows(path: str, n_rows: int) -> List[Dict[str, str]]:
+    import csv
+    rows = []
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for i, r in enumerate(reader):
+            if i >= n_rows:
+                break
+            rows.append(r)
+    if not rows:
+        raise ValueError(f"No rows found in {path}")
+    return rows
+
+def pick_epoch_shards_sequential(
+    shard_paths: List[str],
+    train_size: int,
+    shard_size: int,
+    epoch: int,
+) -> List[str]:
+    if train_size is None or train_size <= 0:
+        raise ValueError("train_size must be positive when using shard training")
+
+    if shard_size <= 0:
+        raise ValueError("shard_size must be positive")
+
+    num_shards = int(math.ceil(float(train_size) / float(shard_size)))
+    total = len(shard_paths)
+    if total == 0:
+        raise ValueError("No shard files found")
+
+    start = (epoch - 1) * num_shards
+
+    # 末尾を超えたら wrap
+    chosen = []
+    for i in range(num_shards):
+        idx = (start + i) % total
+        chosen.append(shard_paths[idx])
+
+    return chosen
+
+def build_train_dataset_from_shards(
+    shard_paths: List[str],
+    esm_tokenizer,
+    y_thr: float,
+):
+    ds_list = []
+    total_rows = 0
+
+    for p in shard_paths:
+        print(f"[train shard] loading {p}")
+        ds = DTIDataset(
+            p,
+            esm_tokenizer=esm_tokenizer,
+            y_thr=float(y_thr),
+            drop_missing_y=True,
+        )
+        ds_list.append(ds)
+        total_rows += len(ds)
+
+    if not ds_list:
+        raise ValueError("No train shards were loaded.")
+
+    print(f"[train shard] loaded {len(ds_list)} shards, total samples={total_rows:,}")
+    return ConcatDataset(ds_list)
 
 # -----------------------------
 # Simple CSV reader
@@ -998,13 +1077,12 @@ def downsample_rows(rows, max_samples: Optional[int], seed: int = 0, stratified:
 # -----------------------------
 def main():
     ap = argparse.ArgumentParser()
-
+    ap.add_argument("--train_shard_size", type=int, default=1000,
+                    help="Rows per train shard CSV")
     # data
     ap.add_argument("--train_csv", type=str, default=None, help="Base train CSV (required unless --eval_only)")
     ap.add_argument("--valid_csv", type=str, default=None, help="Optional external validation CSV")
     ap.add_argument("--final_eval_csv", type=str, default=None, help="Final evaluation CSV run every epoch")
-    ap.add_argument("--auto_split_val", action="store_true",
-                    help="Split validation from train_csv instead of using --valid_csv")
     ap.add_argument("--val_ratio", type=float, default=0.15,
                     help="Validation ratio when --auto_split_val is used (recommended 0.10-0.20)")
     ap.add_argument("--train_size", type=int, default=None,
@@ -1055,7 +1133,16 @@ def main():
 
     # loss
     ap.add_argument("--grad_clip", type=float, default=1.0)
-
+    from glob import glob
+    from torch.utils.data import ConcatDataset
+    ap.add_argument("--train_shard_dir", type=str, default=None,
+                    help="Directory containing sharded train CSVs, e.g. train_part_*.csv")
+    ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv",
+                    help="Glob pattern inside --train_shard_dir")
+    ap.add_argument("--train_num_shards_per_epoch", type=int, default=10,
+                    help="How many random train shards to load per epoch")
+    ap.add_argument("--train_shuffle_shards", action="store_true",
+                    help="Shuffle shard order every epoch")
     # scheduler
     ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
@@ -1084,7 +1171,7 @@ def main():
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
 
-    if not args.eval_only and (not args.auto_split_val) and (not args.valid_csv):
+    if not args.eval_only and (not args.valid_csv):
         raise ValueError("Provide --valid_csv, or use --auto_split_val.")
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -1120,6 +1207,7 @@ def main():
     # -----------------------------
     train_ds = None
     valid_ds = None
+    train_shard_paths = None
 
     if args.eval_only:
         if not args.valid_csv:
@@ -1130,46 +1218,28 @@ def main():
             y_thr=float(args.y_thr),
             drop_missing_y=True,
         )
-
     else:
-        import time
-        if args.auto_split_val:
-            t0 = time.perf_counter()
-            base_rows = read_csv_rows(args.train_csv)
-            tlog("read train_csv rows", t0)
+        if not args.valid_csv:
+            raise ValueError("Provide --valid_csv")
 
-            t0 = time.perf_counter()
-            train_rows, valid_rows = split_rows_train_valid(
-                base_rows,
-                val_ratio=float(args.val_ratio),
-                seed=int(args.split_seed),
-                stratified=bool(args.stratified_split),
-            )
-            tlog("split train/valid rows", t0)
+        valid_size = compute_valid_size_from_train_size(
+            train_size=int(args.train_size),
+            val_ratio=float(args.val_ratio),
+        )
+        print(f"[valid] using first {valid_size:,} rows from {args.valid_csv}")
 
-            t0 = time.perf_counter()
-            train_rows = downsample_rows(
-                train_rows,
-                max_samples=args.train_size,
-                seed=args.seed,
-                stratified=args.train_stratified,
-            )
-            tlog("downsample train rows", t0)
+        valid_rows = read_csv_head_rows(args.valid_csv, valid_size)
+        valid_ds = rows_to_dataset(
+            valid_rows,
+            esm_tokenizer=esm_tokenizer,
+            y_thr=float(args.y_thr),
+        )
 
-            t0 = time.perf_counter()
-            train_ds = rows_to_dataset(train_rows, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr))
-            valid_ds = rows_to_dataset(valid_rows, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr))
-            tlog("rows_to_dataset train+valid", t0)
+        if args.train_shard_dir:
+            train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
+            print(f"[train shards] found {len(train_shard_paths)} shard files")
         else:
-            valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
-            train_ds = DTIDataset(
-                args.train_csv,
-                y_thr=float(args.y_thr),
-                drop_missing_y=True,
-                max_samples=args.train_size if args.train_size is not None else args.train_max_samples,
-                seed=args.seed,
-                stratified=args.train_stratified,
-            )
+            raise ValueError("This mode requires --train_shard_dir")
 
     valid_loader = DataLoader(
         valid_ds,
@@ -1182,6 +1252,7 @@ def main():
     train_loader = None
     loader_num_workers = min(4, os.cpu_count() or 1)
     pin_memory = (device.type == "cuda")
+
     if train_ds is not None:
         train_loader = DataLoader(
             train_ds,
@@ -1194,7 +1265,7 @@ def main():
 
     final_eval_loader = None
     if args.final_eval_csv:
-        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        final_eval_ds = DTIDataset(args.final_eval_csv, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr), drop_missing_y=True)
         final_eval_loader = DataLoader(
             final_eval_ds,
             batch_size=args.batch_size,
@@ -1205,7 +1276,7 @@ def main():
 
     test_loader = None
     if args.test_csv:
-        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        test_ds = DTIDataset(args.test_csv, esm_tokenizer=esm_tokenizer, y_thr=float(args.y_thr), drop_missing_y=True)
         test_loader = DataLoader(
             test_ds,
             batch_size=args.batch_size,
@@ -1293,6 +1364,36 @@ def main():
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
+
+        if train_shard_paths is not None:
+            chosen_shards = pick_epoch_shards_sequential(
+                train_shard_paths,
+                train_size=int(args.train_size),
+                shard_size=int(args.train_shard_size),
+                epoch=ep,
+            )
+
+            print(f"[epoch {ep:03d}] chosen train shards:")
+            for p in chosen_shards:
+                print("   ", os.path.basename(p))
+
+            epoch_train_ds = build_train_dataset_from_shards(
+                chosen_shards,
+                esm_tokenizer=esm_tokenizer,
+                y_thr=float(args.y_thr),
+            )
+
+            train_loader = DataLoader(
+                epoch_train_ds,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=loader_num_workers,
+                pin_memory=pin_memory,
+                collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            )
+
+            print("epoch train n:", len(epoch_train_ds))
+
         tr_stat = train_one_epoch(
             model=model,
             loader=train_loader,
