@@ -50,6 +50,22 @@ def seed_all(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+def read_csv_random_rows(path: str, n_rows: int, seed: int) -> List[Dict[str, str]]:
+    import csv
+
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows:
+        raise ValueError(f"No rows found in {path}")
+
+    if n_rows >= len(rows):
+        return rows
+
+    rng = random.Random(seed)
+    idx = rng.sample(range(len(rows)), n_rows)
+    return [rows[i] for i in idx]
+
 def list_train_shards(shard_dir: str, pattern: str = "train_part_*.csv") -> List[str]:
     paths = sorted(glob(os.path.join(shard_dir, pattern)))
     if not paths:
@@ -76,11 +92,12 @@ def read_csv_head_rows(path: str, n_rows: int) -> List[Dict[str, str]]:
         raise ValueError(f"No rows found in {path}")
     return rows
 
-def pick_epoch_shards_sequential(
+def pick_epoch_shards_random(
     shard_paths: List[str],
     train_size: int,
     shard_size: int,
     epoch: int,
+    seed: int,
     num_shards_per_epoch: Optional[int] = None,
 ) -> List[str]:
     if shard_size <= 0:
@@ -99,14 +116,15 @@ def pick_epoch_shards_sequential(
             raise ValueError("train_size must be positive when num_shards_per_epoch is not set")
         num_shards = int(math.ceil(float(train_size) / float(shard_size)))
 
-    start = (epoch - 1) * num_shards
+    rng = random.Random(int(seed) + int(epoch))
 
-    chosen = []
-    for i in range(num_shards):
-        idx = (start + i) % total
-        chosen.append(shard_paths[idx])
+    if num_shards <= total:
+        chosen = rng.sample(shard_paths, num_shards)
+    else:
+        chosen = [rng.choice(shard_paths) for _ in range(num_shards)]
 
     return chosen
+
 
 def build_train_dataset_from_shards(
     shard_paths: List[str],
@@ -493,13 +511,7 @@ class BiasedCrossAttention(nn.Module):
         return self.o_proj(out)
 
 class DTIDataset(Dataset):
-    def __init__(
-        self,
-        csv_path: str = None,
-        rows: list = None,
-        y_thr: float = 7.0,
-        drop_missing_y: bool = True,
-    ):
+    def __init__(self, csv_path: str = None, rows: list = None, y_thr: float = 7.0, drop_missing_y: bool = True):
         if rows is not None:
             raw_rows = rows
         elif csv_path is not None:
@@ -508,14 +520,27 @@ class DTIDataset(Dataset):
             raise ValueError("Either csv_path or rows must be provided")
 
         self.rows = []
+        n_all = 0
+        n_drop_label = 0
+        n_drop_y = 0
+
         for r in raw_rows:
-            label = float(r.get("label", 0))
+            n_all += 1
+
+            try:
+                label = float(r.get("label", 0))
+            except Exception:
+                n_drop_label += 1
+                continue
+
             if label <= 0:
+                n_drop_label += 1
                 continue
 
             y_raw = r.get("y", "")
             if y_raw in ("", None):
                 if drop_missing_y:
+                    n_drop_y += 1
                     continue
                 y = float("nan")
             else:
@@ -526,14 +551,10 @@ class DTIDataset(Dataset):
             rr["y_bin"] = 1 if y >= float(y_thr) else 0
             self.rows.append(rr)
 
+        print(f"[DTIDataset] total={n_all} kept={len(self.rows)} drop_label={n_drop_label} drop_y={n_drop_y}")
+
         if not self.rows:
             raise ValueError("No usable rows in dataset")
-
-    def __len__(self):
-        return len(self.rows)
-
-    def __getitem__(self, i):
-        return self.rows[i]
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
@@ -1299,9 +1320,14 @@ def main():
             train_size=int(args.train_size),
             val_ratio=float(args.val_ratio),
         )
-        print(f"[valid] using first {valid_size:,} rows from {args.valid_csv}")
+        print(f"[valid] using random fixed {valid_size:,} rows from {args.valid_csv}")
 
-        valid_rows = read_csv_head_rows(args.valid_csv, valid_size)
+        valid_rows = read_csv_random_rows(
+            args.valid_csv,
+            valid_size,
+            seed=int(args.split_seed),
+        )
+
         valid_ds = DTIDataset(
             rows=valid_rows,
             y_thr=float(args.y_thr),
@@ -1448,7 +1474,7 @@ def main():
 
         if train_shard_paths is not None:
             t0 = tsec()
-            chosen_shards = pick_epoch_shards_sequential(
+            chosen_shards = pick_epoch_shards_random(
                 train_shard_paths,
                 train_size=int(args.train_size),
                 shard_size=int(args.train_shard_size),
@@ -1456,7 +1482,7 @@ def main():
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
 
-            tprint(f"ep{ep:03d} pick_epoch_shards_sequential", t0)
+            tprint(f"ep{ep:03d} pick_epoch_shards_random", t0)
 
             print(f"[epoch {ep:03d}] chosen train shards:")
             for p in chosen_shards:
