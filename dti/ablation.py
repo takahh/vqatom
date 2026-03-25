@@ -1222,11 +1222,10 @@ def main():
         )
         print(f"[valid] using first {valid_size:,} rows from {args.valid_csv}")
 
-        valid_rows = read_csv_head_rows(args.valid_csv, valid_size)
-        valid_ds = rows_to_dataset(
-            valid_rows,
-            esm_tokenizer=esm_tokenizer,
+        valid_ds = DTIDataset(
+            args.valid_csv,
             y_thr=float(args.y_thr),
+            drop_missing_y=True,
         )
 
         if args.train_shard_dir:
