@@ -1266,11 +1266,6 @@ def main():
                     choices=["qkonly"])
     args = ap.parse_args()
     import time
-    t_global0 = time.perf_counter()
-
-    def tlog(name, t0):
-        dt = time.perf_counter() - t0
-        print(f"[time] {name}: {dt:.2f} sec")
 
     if not args.eval_only and not args.train_csv:
         raise ValueError("--train_csv is required unless --eval_only is set.")
@@ -1281,12 +1276,6 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    print("device:", device)
-    print("lig_ckpt:", args.lig_ckpt)
-    print("vq_ckpt :", args.vq_ckpt)
-    print("esm_model:", args.esm_model)
-    print("y_thr:", float(args.y_thr))
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
@@ -1299,10 +1288,6 @@ def main():
         debug_index_check=bool(args.lig_debug_index),
     )
     lig_pad = lig_enc.pad_id
-    print(f"[ligand] vocab_source={lig_enc.vocab_source}")
-    print(
-        f"[ligand] vocab_size={lig_enc.vocab_size} base_vocab={lig_enc.base_vocab} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id}")
-    print(f"[ligand] CLS={lig_enc.cls_id} PAD={lig_enc.pad_id} MASK={lig_enc.mask_id} vocab={lig_enc.vocab_size}")
     assert lig_enc.cls_id != lig_enc.pad_id
     assert lig_enc.cls_id != lig_enc.mask_id
 
@@ -1329,7 +1314,6 @@ def main():
             train_size=int(args.train_size),
             val_ratio=float(args.val_ratio),
         )
-        print(f"[valid] using random fixed {valid_size:,} rows from {args.valid_csv}")
 
         valid_rows = read_csv_random_rows(
             args.valid_csv,
@@ -1345,7 +1329,6 @@ def main():
 
         if args.train_shard_dir:
             train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
-            print(f"[train shards] found {len(train_shard_paths)} shard files")
         else:
             raise ValueError("This mode requires --train_shard_dir")
 
@@ -1404,27 +1387,12 @@ def main():
             ys.append(v)
         return sum(1 for y in ys if y > 0.5) / max(1, len(ys))
 
-    if train_ds is not None:
-        print("train n:", len(train_ds), "pos_rate:", pos_rate(train_ds))
-    print("valid n:", len(valid_ds), "pos_rate:", pos_rate(valid_ds))
-    if final_eval_loader is not None:
-        print("final_eval n:", len(final_eval_ds), "pos_rate:", pos_rate(final_eval_ds))
-
     prot_enc = ESMProteinEncoder(
         model_name=args.esm_model,
         device=device,
         finetune=args.finetune_esm,
     )
-    print("model_type:", args.model_type)
-    if args.model_type == "cross":
-        print("cross_layers:", args.cross_layers)
-        print("cross_nhead:", args.cross_nhead)
-    print("finetune_esm:", args.finetune_esm)
     esm = prot_enc.esm
-    n_train = sum(p.requires_grad for p in esm.parameters())
-    n_all = sum(1 for _ in esm.parameters())
-    print(f"[debug] ESM requires_grad: {n_train}/{n_all}")
-
     if args.model_type == "cross":
         model = CrossAttnDTIClassifier(
             protein_encoder=prot_enc,
@@ -1453,7 +1421,6 @@ def main():
     if args.eval_only:
         logit_v, yb_v = predict(model, valid_loader, device)
         m = eval_metrics(logit_v, yb_v)
-        print("[VALID]", m)
 
         if test_loader is not None:
             logit_t, y_t = predict(model, test_loader, device)
@@ -1490,7 +1457,6 @@ def main():
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
 
-            print(f"[epoch {ep:03d}] chosen train shards:")
             for p in chosen_shards:
                 print("   ", os.path.basename(p))
 
@@ -1543,24 +1509,10 @@ def main():
         logit_v, yb_v = predict(model, valid_loader, device)
 
         prob = 1.0 / (1.0 + np.exp(-logit_v))
-        print("pos_rate(valid):", float((yb_v > 0.5).mean()) if yb_v.size else 0.0)
-        print("pred_pos_rate@0.5:", float((prob >= 0.5).mean()) if prob.size else 0.0)
         if prob.size:
             print("prob min/mean/max:", float(prob.min()), float(prob.mean()), float(prob.max()))
 
         v_m = eval_metrics(logit_v, yb_v)
-
-        print(
-            f"[ep {ep:03d}] "
-            f"train_loss={tr_stat['loss']:.4f} "
-            f"train_loss_cls={tr_stat['loss_cls']:.4f} "
-            f"train_loss_reg={tr_stat['loss_reg']:.4f} "
-            f"(lambda={args.reg_lambda:.3f}, reg*lambda={args.reg_lambda * tr_stat['loss_reg']:.4f}) "
-            f"train_AP={tr_m['ap']:.4f} train_AUROC={tr_m['auroc']:.4f} train_F1={tr_m['f1']:.4f} "
-            f"train_EF1={tr_m['ef1']:.3f} train_EF5={tr_m['ef5']:.3f} train_EF10={tr_m['ef10']:.3f} "
-            f"val_AP={v_m['ap']:.4f} val_AUROC={v_m['auroc']:.4f} val_F1={v_m['f1']:.4f} (thr={v_m['thr']:.3f}) "
-            f"val_EF1={v_m['ef1']:.3f} val_EF5={v_m['ef5']:.3f} val_EF10={v_m['ef10']:.3f}"
-        )
 
         if scheduler is not None:
             scheduler.step(float(v_m[args.select_on]))
@@ -1594,16 +1546,6 @@ def main():
             logit_f, yb_f = predict(model, final_eval_loader, device)
 
             final_m = eval_metrics(logit_f, yb_f)
-
-            print(
-                f"[FINAL] ep={ep:03d} "
-                f"AP={final_m['ap']:.4f} "
-                f"AUROC={final_m['auroc']:.4f} "
-                f"F1={final_m['f1']:.4f} "
-                f"EF1={final_m['ef1']:.3f} "
-                f"EF5={final_m['ef5']:.3f} "
-                f"EF10={final_m['ef10']:.3f}"
-            )
 
         epoch_summary = {
             "epoch": ep,
