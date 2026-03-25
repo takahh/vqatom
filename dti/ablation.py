@@ -173,13 +173,21 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     return out
 
 
-def collate_fn(samples, lig_pad: int, lig_cls: int) -> Batch:
-    p_input_ids = pad_1d([s["p_input_ids"] for s in samples], pad_value=1)  # ESM pad token id は tokenizer から取るのが本当は安全
-    p_attn_mask = pad_1d([s["p_attn_mask"] for s in samples], pad_value=0)
+
+def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
+    seqs = [s["seq"] for s in samples]
+    enc = esm_tokenizer(
+        seqs,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+    )
+    p_input_ids = enc["input_ids"].long()
+    p_attn_mask = enc["attention_mask"].long()
 
     l_ids_list = []
     for s in samples:
-        x = s["l_ids"]
+        x = torch.tensor(parse_lig_tokens(s["lig_tok"]), dtype=torch.long)
         if x.numel() == 0:
             x = torch.tensor([lig_cls], dtype=torch.long)
         else:
@@ -187,8 +195,8 @@ def collate_fn(samples, lig_pad: int, lig_cls: int) -> Batch:
         l_ids_list.append(x)
 
     l_ids = pad_1d(l_ids_list, lig_pad)
-    y_bin = torch.stack([s["y_bin"] for s in samples], dim=0).float()
-    y = torch.stack([s["y"] for s in samples], dim=0).float()
+    y_bin = torch.tensor([s["y_bin"] for s in samples], dtype=torch.float32)
+    y = torch.tensor([s["y"] for s in samples], dtype=torch.float32)
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -468,12 +476,8 @@ class DTIDataset(Dataset):
     def __init__(
         self,
         csv_path: str,
-        esm_tokenizer,
         y_thr: float = 7.0,
         drop_missing_y: bool = True,
-        max_samples: Optional[int] = None,
-        seed: int = 0,
-        stratified: bool = True,
     ):
         rows = read_csv_rows(csv_path)
         self.samples = []
@@ -501,20 +505,11 @@ class DTIDataset(Dataset):
             y_bin = 1.0 if y_val >= float(y_thr) else 0.0
             pdbid = str(r.get("pdbid", "")).strip()
 
-            # protein tokenize once
-            enc = esm_tokenizer(seq, return_tensors="pt", truncation=True)
-            p_input_ids = enc["input_ids"][0].long()
-            p_attn_mask = enc["attention_mask"][0].long()
-
-            # ligand parse once
-            l_ids = torch.tensor(parse_lig_tokens(lig), dtype=torch.long)
-
             self.samples.append({
-                "p_input_ids": p_input_ids,
-                "p_attn_mask": p_attn_mask,
-                "l_ids": l_ids,
-                "y_bin": torch.tensor(float(y_bin), dtype=torch.float32),
-                "y": torch.tensor(float(y_val), dtype=torch.float32),
+                "seq": seq,
+                "lig_tok": lig,
+                "y_bin": float(y_bin),
+                "y": float(y_val),
                 "pdbid": pdbid,
             })
 
@@ -1248,7 +1243,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+        collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
     )
 
     train_loader = None
@@ -1262,7 +1257,7 @@ def main():
             shuffle=True,
             num_workers=loader_num_workers,
             pin_memory=pin_memory,
-            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, esm_tokenizer=esm_tokenizer, lig_cls=lig_enc.cls_id),
         )
 
     final_eval_loader = None
@@ -1273,7 +1268,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     test_loader = None
@@ -1284,7 +1279,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=0,
-            collate_fn=lambda xs: collate_fn(xs, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     def pos_rate(ds):
