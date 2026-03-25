@@ -559,6 +559,12 @@ class DTIDataset(Dataset):
         if not self.rows:
             raise ValueError("No usable rows in dataset")
 
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, idx):
+        return self.rows[idx]
+
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
         self,
