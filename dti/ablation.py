@@ -134,7 +134,6 @@ def build_train_dataset_from_shards(
     total_rows = 0
 
     for p in shard_paths:
-        print(f"[train shard] loading {p}")
         ds = DTIDataset(
             p,
             y_thr=float(y_thr),
@@ -146,7 +145,6 @@ def build_train_dataset_from_shards(
     if not ds_list:
         raise ValueError("No train shards were loaded.")
 
-    print(f"[train shard] loaded {len(ds_list)} shards, total samples={total_rows:,}")
     return ConcatDataset(ds_list)
 
 # -----------------------------
@@ -230,11 +228,6 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
     t_rest = time.perf_counter() - t1
 
     total = time.perf_counter() - t0
-    if random.random() < 0.01:
-        print(
-            f"[collate] batch={len(samples)} "
-            f"total={total:.4f}s tokenizer={t_tok:.4f}s rest={t_rest:.4f}s"
-        )
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -371,10 +364,6 @@ class PretrainedLigandEncoder(nn.Module):
                 if overlap > 0:
                     with torch.no_grad():
                         self.tok.weight[:overlap].copy_(w[:overlap])
-                if verbose_load:
-                    print(f"[ligand] tok.weight overlap-copied rows: {overlap} / {self.tok.weight.shape[0]}")
-            elif verbose_load:
-                print("[ligand] tok.weight exists but shape is unexpected; skipped overlap copy.")
 
         self.to(device)
 
@@ -550,11 +539,6 @@ class DTIDataset(Dataset):
             rr["y"] = y
             rr["y_bin"] = 1 if y >= float(y_thr) else 0
             self.rows.append(rr)
-
-        print(
-            f"[DTIDataset] total={n_all} kept={len(self.rows)} "
-            f"drop_seq={n_drop_seq} drop_lig={n_drop_lig} drop_y={n_drop_y}"
-        )
 
         if not self.rows:
             raise ValueError("No usable rows in dataset")
@@ -1174,7 +1158,6 @@ def tsec():
 
 def tprint(name: str, t0: float):
     dt = time.perf_counter() - t0
-    print(f"[TIMER] {name}: {dt:.3f}s")
     return dt
 
 # -----------------------------
