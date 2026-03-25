@@ -1254,7 +1254,7 @@ def main():
             shuffle=True,
             num_workers=loader_num_workers,
             pin_memory=pin_memory,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, esm_tokenizer=esm_tokenizer, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
     final_eval_loader = None
