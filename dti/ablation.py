@@ -1169,10 +1169,8 @@ def main():
                     help="Rows per train shard CSV")
     # data
     ap.add_argument("--train_csv", type=str, default=None, help="Base train CSV (required unless --eval_only)")
-    ap.add_argument("--valid_csv", type=str, default=None, help="Optional external validation CSV")
+    ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV (all rows will be used)")
     ap.add_argument("--final_eval_csv", type=str, default=None, help="Final evaluation CSV run every epoch")
-    ap.add_argument("--val_ratio", type=float, default=0.15,
-                    help="Validation ratio when --auto_split_val is used (recommended 0.10-0.20)")
     ap.add_argument("--train_size", type=int, default=None,
                     help="If set, use only this many training rows after split")
     ap.add_argument("--split_seed", type=int, default=0,
@@ -1293,19 +1291,8 @@ def main():
         if not args.valid_csv:
             raise ValueError("Provide --valid_csv")
 
-        valid_size = compute_valid_size_from_train_size(
-            train_size=int(args.train_size),
-            val_ratio=float(args.val_ratio),
-        )
-
-        valid_rows = read_csv_random_rows(
-            args.valid_csv,
-            valid_size,
-            seed=int(args.split_seed),
-        )
-
         valid_ds = DTIDataset(
-            rows=valid_rows,
+            args.valid_csv,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
         )
