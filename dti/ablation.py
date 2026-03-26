@@ -1171,13 +1171,17 @@ def main():
     ap.add_argument(
         "--use_train_valid_csv",
         action="store_true",
-        help="Use train_csv/valid_csv directly instead of shard-based training"
+        help="Use train_csv/valid_csv directly instead of shard-based training. With --train_size, resample train rows each epoch; otherwise use all train_csv rows."
     )
     ap.add_argument("--train_csv", type=str, default=None, help="Base train CSV (required unless --eval_only)")
     ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV (all rows will be used)")
     ap.add_argument("--final_eval_csv", type=str, default=None, help="Final evaluation CSV run every epoch")
-    ap.add_argument("--train_size", type=int, default=None,
-                    help="If set, use only this many training rows after split")
+    ap.add_argument(
+        "--train_size",
+        type=int,
+        default=None,
+        help="If set with --use_train_valid_csv, sample this many training rows per epoch. If unset, use all rows in train_csv."
+    )
     ap.add_argument("--split_seed", type=int, default=0,
                     help="Seed for train/val splitting")
     ap.add_argument("--stratified_split", action="store_true",
@@ -1303,18 +1307,8 @@ def main():
         )
 
         if args.use_train_valid_csv:
-            if args.train_size is not None:
-                train_rows = read_csv_random_rows(
-                    args.train_csv,
-                    int(args.train_size),
-                    seed=int(args.split_seed),
-                )
-                train_ds = DTIDataset(
-                    rows=train_rows,
-                    y_thr=float(args.y_thr),
-                    drop_missing_y=True,
-                )
-            else:
+            # full-train fixed mode: build once outside epoch loop
+            if args.train_size is None:
                 train_ds = DTIDataset(
                     args.train_csv,
                     y_thr=float(args.y_thr),
@@ -1441,29 +1435,22 @@ def main():
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
 
-        if args.use_train_valid_csv:
-            if args.train_size is not None:
-                epoch_seed = int(args.split_seed) + int(ep)
+        if args.use_train_valid_csv and args.train_size is not None:
+            epoch_seed = int(args.split_seed) + int(ep)
 
-                train_rows = read_csv_random_rows(
-                    args.train_csv,
-                    int(args.train_size),
-                    seed=epoch_seed,
-                )
-                train_ds = DTIDataset(
-                    rows=train_rows,
-                    y_thr=float(args.y_thr),
-                    drop_missing_y=True,
-                )
-            else:
-                train_ds = DTIDataset(
-                    args.train_csv,
-                    y_thr=float(args.y_thr),
-                    drop_missing_y=True,
-                )
+            train_rows = read_csv_random_rows(
+                args.train_csv,
+                int(args.train_size),
+                seed=epoch_seed,
+            )
+            epoch_train_ds = DTIDataset(
+                rows=train_rows,
+                y_thr=float(args.y_thr),
+                drop_missing_y=True,
+            )
 
             train_loader = DataLoader(
-                train_ds,
+                epoch_train_ds,
                 batch_size=args.batch_size,
                 shuffle=True,
                 num_workers=loader_num_workers,
@@ -1476,6 +1463,10 @@ def main():
                 ),
             )
 
+            print("epoch train n:", len(epoch_train_ds))
+
+        elif args.use_train_valid_csv:
+            # fixed full-train mode; loader already built outside loop
             print("epoch train n:", len(train_ds))
 
         elif train_shard_paths is not None:
