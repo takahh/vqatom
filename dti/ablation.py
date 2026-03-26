@@ -1168,6 +1168,11 @@ def main():
     ap.add_argument("--train_shard_size", type=int, default=1000,
                     help="Rows per train shard CSV")
     # data
+    ap.add_argument(
+        "--use_train_valid_csv",
+        action="store_true",
+        help="Use train_csv/valid_csv directly instead of shard-based training"
+    )
     ap.add_argument("--train_csv", type=str, default=None, help="Base train CSV (required unless --eval_only)")
     ap.add_argument("--valid_csv", type=str, required=True, help="Validation CSV (all rows will be used)")
     ap.add_argument("--final_eval_csv", type=str, default=None, help="Final evaluation CSV run every epoch")
@@ -1297,10 +1302,29 @@ def main():
             drop_missing_y=True,
         )
 
-        if args.train_shard_dir:
-            train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
+        if args.use_train_valid_csv:
+            if args.train_size is not None:
+                train_rows = read_csv_random_rows(
+                    args.train_csv,
+                    int(args.train_size),
+                    seed=int(args.split_seed),
+                )
+                train_ds = DTIDataset(
+                    rows=train_rows,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                )
+            else:
+                train_ds = DTIDataset(
+                    args.train_csv,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                )
         else:
-            raise ValueError("This mode requires --train_shard_dir")
+            if args.train_shard_dir:
+                train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
+            else:
+                raise ValueError("This mode requires --train_shard_dir")
 
     valid_loader = DataLoader(
         valid_ds,
@@ -1417,7 +1441,44 @@ def main():
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
     for ep in range(1, args.epochs + 1):
 
-        if train_shard_paths is not None:
+        if args.use_train_valid_csv:
+            if args.train_size is not None:
+                epoch_seed = int(args.split_seed) + int(ep)
+
+                train_rows = read_csv_random_rows(
+                    args.train_csv,
+                    int(args.train_size),
+                    seed=epoch_seed,
+                )
+                train_ds = DTIDataset(
+                    rows=train_rows,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                )
+            else:
+                train_ds = DTIDataset(
+                    args.train_csv,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                )
+
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=args.batch_size,
+                shuffle=True,
+                num_workers=loader_num_workers,
+                pin_memory=pin_memory,
+                collate_fn=lambda xs: collate_fn(
+                    xs,
+                    esm_tokenizer=esm_tokenizer,
+                    lig_pad=lig_pad,
+                    lig_cls=lig_enc.cls_id,
+                ),
+            )
+
+            print("epoch train n:", len(train_ds))
+
+        elif train_shard_paths is not None:
             chosen_shards = pick_epoch_shards_random(
                 train_shard_paths,
                 train_size=int(args.train_size),
@@ -1426,9 +1487,6 @@ def main():
                 seed=int(args.seed),
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
-
-            # for p in chosen_shards:
-            #     print("   ", os.path.basename(p))
 
             epoch_train_ds = build_train_dataset_from_shards(
                 chosen_shards,
@@ -1450,6 +1508,8 @@ def main():
             )
 
             print("epoch train n:", len(epoch_train_ds))
+        else:
+            raise ValueError("No training data source configured")
 
         tr_stat = train_one_epoch(
             model=model,
@@ -1548,15 +1608,16 @@ def main():
             f"EF10={v_m['ef10']:.3f}",
         )
 
-        print(
-            "[final]",
-            f"AUC={final_m['auroc']:.4f}",
-            f"AP={final_m['ap']:.4f}",
-            f"F1={final_m['f1']:.4f}",
-            f"EF1={final_m['ef1']:.3f}",
-            f"EF5={final_m['ef5']:.3f}",
-            f"EF10={final_m['ef10']:.3f}",
-        )
+        if final_m is not None:
+            print(
+                "[final]",
+                f"AUC={final_m['auroc']:.4f}",
+                f"AP={final_m['ap']:.4f}",
+                f"F1={final_m['f1']:.4f}",
+                f"EF1={final_m['ef1']:.3f}",
+                f"EF5={final_m['ef5']:.3f}",
+                f"EF10={final_m['ef10']:.3f}",
+            )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
