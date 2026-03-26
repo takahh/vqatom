@@ -867,25 +867,25 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         n_steps += 1
 
-        if n_steps % log_interval == 0:
-            print(
-                f"[train step {n_steps}] "
-                f"data={t_data/n_steps:.3f}s "
-                f"h2d={t_h2d/n_steps:.3f}s "
-                f"fwd={t_fwd/n_steps:.3f}s "
-                f"bwd={t_bwd/n_steps:.3f}s "
-                f"opt={t_opt/n_steps:.3f}s"
-            )
+        # if n_steps % log_interval == 0:
+        #     print(
+        #         f"[train step {n_steps}] "
+        #         f"data={t_data/n_steps:.3f}s "
+        #         f"h2d={t_h2d/n_steps:.3f}s "
+        #         f"fwd={t_fwd/n_steps:.3f}s "
+        #         f"bwd={t_bwd/n_steps:.3f}s "
+        #         f"opt={t_opt/n_steps:.3f}s"
+        #     )
 
-    print(
-        f"[train epoch timing] "
-        f"data={t_data:.2f}s "
-        f"h2d={t_h2d:.2f}s "
-        f"fwd={t_fwd:.2f}s "
-        f"bwd={t_bwd:.2f}s "
-        f"opt={t_opt:.2f}s "
-        f"steps={n_steps}"
-    )
+    # print(
+    #     f"[train epoch timing] "
+    #     f"data={t_data:.2f}s "
+    #     f"h2d={t_h2d:.2f}s "
+    #     f"fwd={t_fwd:.2f}s "
+    #     f"bwd={t_bwd:.2f}s "
+    #     f"opt={t_opt:.2f}s "
+    #     f"steps={n_steps}"
+    # )
 
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
@@ -1440,8 +1440,8 @@ def main():
                 num_shards_per_epoch=args.train_num_shards_per_epoch,
             )
 
-            for p in chosen_shards:
-                print("   ", os.path.basename(p))
+            # for p in chosen_shards:
+            #     print("   ", os.path.basename(p))
 
             epoch_train_ds = build_train_dataset_from_shards(
                 chosen_shards,
