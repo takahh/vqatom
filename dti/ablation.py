@@ -786,6 +786,8 @@ def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
+from tqdm import tqdm
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
@@ -809,6 +811,9 @@ def train_one_epoch(
     n_steps = 0
 
     it = iter(loader)
+    total_steps = len(loader)
+
+    pbar = tqdm(total=total_steps, desc="train", leave=False)
 
     while True:
         t0 = time.perf_counter()
@@ -867,25 +872,13 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         n_steps += 1
 
-        # if n_steps % log_interval == 0:
-        #     print(
-        #         f"[train step {n_steps}] "
-        #         f"data={t_data/n_steps:.3f}s "
-        #         f"h2d={t_h2d/n_steps:.3f}s "
-        #         f"fwd={t_fwd/n_steps:.3f}s "
-        #         f"bwd={t_bwd/n_steps:.3f}s "
-        #         f"opt={t_opt/n_steps:.3f}s"
-        #     )
+        pbar.update(1)
+        pbar.set_postfix(
+            step=f"{n_steps}/{total_steps}",
+            loss=f"{losses[-1]:.4f}",
+        )
 
-    # print(
-    #     f"[train epoch timing] "
-    #     f"data={t_data:.2f}s "
-    #     f"h2d={t_h2d:.2f}s "
-    #     f"fwd={t_fwd:.2f}s "
-    #     f"bwd={t_bwd:.2f}s "
-    #     f"opt={t_opt:.2f}s "
-    #     f"steps={n_steps}"
-    # )
+    pbar.close()
 
     return {
         "loss": float(sum(losses) / max(1, len(losses))),
