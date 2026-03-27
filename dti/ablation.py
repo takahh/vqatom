@@ -1365,6 +1365,9 @@ def main():
             num_workers=0,
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
+    loader_num_workers = 0
+    pin_memory = False
+    do_train_eval = False
 
     def pos_rate(ds):
         ys = []
@@ -1487,11 +1490,11 @@ def main():
             )
 
             train_loader = DataLoader(
-                epoch_train_ds,
+                train_ds,
                 batch_size=args.batch_size,
                 shuffle=True,
-                num_workers=loader_num_workers,
-                pin_memory=pin_memory,
+                num_workers=0,
+                pin_memory=False,
                 collate_fn=lambda xs: collate_fn(
                     xs,
                     esm_tokenizer=esm_tokenizer,
