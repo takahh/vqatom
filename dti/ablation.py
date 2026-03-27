@@ -1325,21 +1325,19 @@ def main():
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=False,
         collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
     )
 
     train_loader = None
-    # loader_num_workers = min(3, os.cpu_count() or 1)
-    # pin_memory = (device.type == "cuda")
-    loader_num_workers = 0
-    pin_memory = False
+    loader_num_workers = min(2, os.cpu_count() or 1)
+    pin_memory = (device.type == "cuda")
+
     if train_ds is not None:
         train_loader = DataLoader(
-            epoch_train_ds,
+            train_ds,
             batch_size=args.batch_size,
             shuffle=True,
-            num_workers=0,
+            num_workers=loader_num_workers,
             pin_memory=False,
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
@@ -1365,9 +1363,6 @@ def main():
             num_workers=0,
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
-    loader_num_workers = 0
-    pin_memory = False
-    do_train_eval = False
 
     def pos_rate(ds):
         ys = []
@@ -1490,11 +1485,11 @@ def main():
             )
 
             train_loader = DataLoader(
-                train_ds,
+                epoch_train_ds,
                 batch_size=args.batch_size,
                 shuffle=True,
-                num_workers=0,
-                pin_memory=False,
+                num_workers=loader_num_workers,
+                pin_memory=pin_memory,
                 collate_fn=lambda xs: collate_fn(
                     xs,
                     esm_tokenizer=esm_tokenizer,
@@ -1516,7 +1511,7 @@ def main():
             reg_lambda=args.reg_lambda,
         )
 
-        do_train_eval = False
+        do_train_eval = True
 
         if do_train_eval:
             logit_tr, yb_tr = predict(model, train_loader, device)
