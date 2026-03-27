@@ -813,7 +813,7 @@ def train_one_epoch(
     it = iter(loader)
     total_steps = len(loader)
 
-    pbar = tqdm(total=total_steps, desc="train", leave=False)
+    pbar = tqdm(total=total_steps, desc="train", leave=False, dynamic_ncols=True)
 
     while True:
         t0 = time.perf_counter()
