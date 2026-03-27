@@ -1329,7 +1329,7 @@ def main():
     )
 
     train_loader = None
-    loader_num_workers = min(4, os.cpu_count() or 1)
+    loader_num_workers = min(2, os.cpu_count() or 1)
     pin_memory = (device.type == "cuda")
 
     if train_ds is not None:
@@ -1338,7 +1338,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=loader_num_workers,
-            pin_memory=pin_memory,
+            pin_memory=False,
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_pad, lig_cls=lig_enc.cls_id),
         )
 
