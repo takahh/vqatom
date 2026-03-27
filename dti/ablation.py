@@ -1329,8 +1329,8 @@ def main():
     )
 
     train_loader = None
-    loader_num_workers = min(2, os.cpu_count() or 1)
-    pin_memory = (device.type == "cuda")
+    loader_num_workers = 0
+    pin_memory = False
 
     if train_ds is not None:
         train_loader = DataLoader(
