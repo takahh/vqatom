@@ -172,14 +172,17 @@ def parse_lig_tokens(s: str) -> List[int]:
     return [int(x) for x in s.split()]
 
 
+from dataclasses import dataclass
+
 @dataclass
 class Batch:
-    p_input_ids: torch.Tensor   # (B, Lp)
-    p_attn_mask: torch.Tensor   # (B, Lp)
-    l_ids: torch.Tensor         # (B, Ll)
-    y_bin: torch.Tensor         # (B,)
+    p_input_ids: torch.Tensor
+    p_attn_mask: torch.Tensor
+    l_ids: torch.Tensor
+    y_bin: torch.Tensor
     y: torch.Tensor
-
+    y_avg: torch.Tensor
+    delta: torch.Tensor
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -191,25 +194,16 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, : x.numel()] = x
     return out
 
-
-
 def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
-    import time, random
-
-    t0 = time.perf_counter()
-
     seqs = [s["seq"] for s in samples]
 
-    t1 = time.perf_counter()
     enc = esm_tokenizer(
         seqs,
         return_tensors="pt",
         padding=True,
         truncation=True,
     )
-    t_tok = time.perf_counter() - t1
 
-    t1 = time.perf_counter()
     p_input_ids = enc["input_ids"].long()
     p_attn_mask = enc["attention_mask"].long()
 
@@ -225,9 +219,8 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
     l_ids = pad_1d(l_ids_list, lig_pad)
     y_bin = torch.tensor([s["y_bin"] for s in samples], dtype=torch.float32)
     y = torch.tensor([s["y"] for s in samples], dtype=torch.float32)
-    t_rest = time.perf_counter() - t1
-
-    total = time.perf_counter() - t0
+    y_avg = torch.tensor([s["y_avg_per_protein"] for s in samples], dtype=torch.float32)
+    delta = torch.tensor([s["delta"] for s in samples], dtype=torch.float32)
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -235,6 +228,8 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
         l_ids=l_ids,
         y_bin=y_bin,
         y=y,
+        y_avg=y_avg,
+        delta=delta,
     )
 
 # -----------------------------
@@ -543,6 +538,22 @@ class DTIDataset(Dataset):
         if not self.rows:
             raise ValueError("No usable rows in dataset")
 
+        y_avg_raw = r.get("y_avg_per_protein", "")
+        delta_raw = r.get("delta", "")
+
+        if y_avg_raw in ("", None):
+            y_avg = float("nan")
+        else:
+            y_avg = float(y_avg_raw)
+
+        if delta_raw in ("", None):
+            delta = y - y_avg if math.isfinite(y_avg) else float("nan")
+        else:
+            delta = float(delta_raw)
+
+        rr["y_avg_per_protein"] = y_avg
+        rr["delta"] = delta
+
     def __len__(self):
         return len(self.rows)
 
@@ -568,7 +579,18 @@ class QKOnlyDTIClassifier(nn.Module):
 
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
-        self.head = nn.Sequential(
+
+        # protein-only baseline head
+        self.base_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+
+        # protein+ligand delta head
+        self.delta_head = nn.Sequential(
             nn.LayerNorm(4 * d_model),
             nn.Linear(4 * d_model, d_model),
             nn.GELU(),
@@ -576,24 +598,16 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Linear(d_model, 1),
         )
 
-        self.reg_head = nn.Sequential(
-            nn.LayerNorm(4 * d_model),
-            nn.Linear(4 * d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
-        )
-        # self.reg_head = nn.Linear(2 * d_model, 1)
         self.lig_pad_id = int(self.lig.pad_id)
 
     def forward(self, p_input_ids, p_attn_mask, l_ids):
         aux = {}
 
-        p_h = self.prot(p_input_ids, p_attn_mask)   # (B,Lp,Hp)
+        p_h = self.prot(p_input_ids, p_attn_mask)
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)                  # (B,Lp,D)
+            p_h = self.p_proj(p_h)
 
-        l_h = self.lig(l_ids)                       # (B,Ll,D)
+        l_h = self.lig(l_ids)
 
         prot_pad_mask = (p_attn_mask == 0)
         lig_pad_mask = (l_ids == self.lig_pad_id)
@@ -605,43 +619,34 @@ class QKOnlyDTIClassifier(nn.Module):
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
-        # fallback
+        # baseline from protein only
+        y_base = self.base_head(p_cls).squeeze(-1)
+
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            p_cls = p_h[:, 0, :]
-            l_cls = l_h[:, 0, :]
-            z = torch.cat([p_cls, l_cls], dim=-1)
+            z = torch.cat([p_cls, l_cls, p_cls, l_cls], dim=-1)
+            y_delta = self.delta_head(z).squeeze(-1)
+            y_hat = y_base + y_delta
+            aux["y_base"] = y_base
+            aux["y_delta"] = y_delta
+            aux["y_hat"] = y_hat
+            return y_hat, aux
 
-            logit = self.head(z).squeeze(-1)
-            aux["y_hat"] = self.reg_head(z).squeeze(-1)
-            return logit, aux
+        q = self.q_proj(p_tok)
+        k = self.k_proj(l_tok)
 
-        q = self.q_proj(p_tok)                      # (B,Lp-1,D)
-        k = self.k_proj(l_tok)                      # (B,Ll-1,D)
-
-        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))  # (B,Lp-1,Ll-1)
-
-        # mask ligand PAD columns only with large negative value
+        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
         S = S.masked_fill(l_pad.unsqueeze(1), -1e9)
-
-        # protein PAD rows must NOT become all -inf before softmax
-        # set them to 0 first, then zero them out after softmax
         S = S.masked_fill(p_pad.unsqueeze(-1), 0.0)
 
-        # if ligand side is all-pad for a sample, keep whole matrix zero
         bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
         S = torch.where(bad, torch.zeros_like(S), S)
 
-        A = torch.softmax(S, dim=-1)  # (B,Lp-1,Ll-1)
-
-        # zero out invalid positions AFTER softmax
+        A = torch.softmax(S, dim=-1)
         A = A.masked_fill(p_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
-        # token importance from map
-        p_imp = A.max(dim=-1).values   # (B,Lp-1)
-        l_imp = A.max(dim=1).values    # (B,Ll-1)
-        # p_imp = 0.5 * A.max(dim=-1).values + 0.5 * A.mean(dim=-1)
-        # l_imp = 0.5 * A.max(dim=1).values + 0.5 * A.mean(dim=1)
+        p_imp = A.max(dim=-1).values
+        l_imp = A.max(dim=1).values
 
         p_imp = p_imp.masked_fill(p_pad, 0.0)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
@@ -649,28 +654,25 @@ class QKOnlyDTIClassifier(nn.Module):
         p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)  # (B,D)
-        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)  # (B,D)
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)
+
         z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
 
-        # z = torch.cat([p_mix, l_mix], dim=-1)  # (B, 2D)
+        y_delta = self.delta_head(z).squeeze(-1)
+        y_hat = y_base + y_delta
 
-        logit = self.head(z).squeeze(-1)
-        aux["y_hat"] = self.reg_head(z).squeeze(-1)
-
-        aux["p_cls_norm"] = p_cls.norm(dim=-1).detach()
-        aux["l_cls_norm"] = l_cls.norm(dim=-1).detach()
-        aux["p_sum_norm"] = p_sum.norm(dim=-1).detach()
-        aux["l_sum_norm"] = l_sum.norm(dim=-1).detach()
-
-        return logit, aux
+        aux["y_base"] = y_base
+        aux["y_delta"] = y_delta
+        aux["y_hat"] = y_hat
+        return y_hat, aux
 
 # -----------------------------
 # Eval / Train
 # -----------------------------
 def predict(model, loader, device):
     model.eval()
-    logits, ybins = [], []
+    yhat_list, ybin_list, y_list = [], [], []
     use_amp = (device.type == "cuda")
 
     with torch.inference_mode():
@@ -681,106 +683,84 @@ def predict(model, loader, device):
 
             if use_amp:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logit, _ = model(p_ids, p_msk, l_ids)
+                    y_hat, _ = model(p_ids, p_msk, l_ids)
             else:
-                logit, _ = model(p_ids, p_msk, l_ids)
+                y_hat, _ = model(p_ids, p_msk, l_ids)
 
-            logits.append(logit.detach().float().cpu().numpy())
-            ybins.append(batch.y_bin.detach().cpu().numpy())
+            yhat_list.append(y_hat.detach().float().cpu().numpy())
+            ybin_list.append(batch.y_bin.detach().cpu().numpy())
+            y_list.append(batch.y.detach().cpu().numpy())
 
-    logit = np.concatenate(logits, axis=0) if logits else np.array([], dtype=np.float64)
-    yb = np.concatenate(ybins, axis=0) if ybins else np.array([], dtype=np.float64)
-    return logit, yb
+    y_hat = np.concatenate(yhat_list, axis=0) if yhat_list else np.array([], dtype=np.float64)
+    y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
+    y = np.concatenate(y_list, axis=0) if y_list else np.array([], dtype=np.float64)
+    return y_hat, y_bin, y
 
-def eval_metrics(logit: np.ndarray, y: np.ndarray) -> Dict[str, float]:
-    """
-    - Computes AUROC / AP
-    - Finds best-F1 threshold on a grid
-    - Computes EF at 1%, 5%, 10%
-    """
+def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
-    def enrichment_factor(prob: np.ndarray, y01: np.ndarray, frac: float) -> float:
+    if y_pred.size == 0:
+        return {
+            "auroc": 0.0, "ap": 0.0,
+            "f1": 0.0, "thr": Y_THR,
+            "pred_mean": 0.0, "pred_std": 0.0,
+            "ef1": 0.0, "ef5": 0.0, "ef10": 0.0,
+        }
+
+    score = y_pred
+    y01 = (y_bin > 0.5).astype(np.int32)
+
+    def enrichment_factor(score: np.ndarray, y01: np.ndarray, frac: float) -> float:
         n = int(len(y01))
         if n == 0:
             return 0.0
-
         n_pos = int(y01.sum())
         if n_pos == 0:
             return 0.0
-
         k = max(1, int(math.ceil(n * float(frac))))
-        order = np.argsort(-prob)   # descending
+        order = np.argsort(-score)
         top_idx = order[:k]
         hits_topk = int(y01[top_idx].sum())
-
         hit_rate_topk = hits_topk / float(k)
         base_rate = n_pos / float(n)
         return float(hit_rate_topk / base_rate) if base_rate > 0 else 0.0
 
-    if logit.size == 0:
-        return {
-            "auroc": 0.0, "ap": 0.0,
-            "f1": 0.0, "thr": 0.5,
-            "prob_mean": 0.0, "prob_std": 0.0,
-            "ef1": 0.0, "ef5": 0.0, "ef10": 0.0,
-        }
-
-    prob = 1.0 / (1.0 + np.exp(-logit))
-    if not np.isfinite(prob).all():
-        nbad = np.sum(~np.isfinite(prob))
-        print(f"[warn] prob has non-finite: {nbad}/{prob.size}; applying nan_to_num")
-        prob = np.nan_to_num(prob, nan=0.5, posinf=1.0, neginf=0.0)
-
-    y01 = (y > 0.5).astype(np.int32)
-
-    ef1 = enrichment_factor(prob, y01, 0.01)
-    ef5 = enrichment_factor(prob, y01, 0.05)
-    ef10 = enrichment_factor(prob, y01, 0.10)
+    ef1 = enrichment_factor(score, y01, 0.01)
+    ef5 = enrichment_factor(score, y01, 0.05)
+    ef10 = enrichment_factor(score, y01, 0.10)
 
     if len(np.unique(y01)) <= 1:
         return {
             "auroc": 0.0, "ap": 0.0,
-            "f1": 0.0, "thr": 0.5,
-            "prob_mean": float(prob.mean()),
-            "prob_std": float(prob.std()),
-            "prob_min": float(prob.min()),
-            "prob_max": float(prob.max()),
+            "f1": 0.0, "thr": Y_THR,
+            "pred_mean": float(score.mean()),
+            "pred_std": float(score.std()),
+            "pred_min": float(score.min()),
+            "pred_max": float(score.max()),
             "pos_rate": float(y01.mean()) if y01.size else 0.0,
-            "pred_pos_rate@thr": 0.0,
+            "pred_pos_rate@thr": float((score >= Y_THR).mean()) if score.size else 0.0,
             "ef1": float(ef1),
             "ef5": float(ef5),
             "ef10": float(ef10),
         }
 
-    auroc = roc_auc_score(y01, prob)
-    ap = average_precision_score(y01, prob)
+    auroc = roc_auc_score(y01, score)
+    ap = average_precision_score(y01, score)
 
-    thrs = np.unique(np.concatenate([
-        np.linspace(0.05, 0.95, 181),
-        np.array([0.5], dtype=np.float64),
-    ]))
-
-    best_f1 = -1.0
-    best_thr = 0.5
-    for t in thrs:
-        pred01 = (prob >= float(t)).astype(np.int32)
-        f1 = f1_score(y01, pred01)
-        if f1 > best_f1:
-            best_f1 = float(f1)
-            best_thr = float(t)
+    pred01 = (score >= Y_THR).astype(np.int32)
+    f1 = f1_score(y01, pred01)
 
     return {
         "auroc": float(auroc),
         "ap": float(ap),
-        "f1": float(best_f1),
-        "thr": float(best_thr),
-        "prob_mean": float(prob.mean()),
-        "prob_std": float(prob.std()),
-        "prob_min": float(prob.min()),
-        "prob_max": float(prob.max()),
+        "f1": float(f1),
+        "thr": float(Y_THR),
+        "pred_mean": float(score.mean()),
+        "pred_std": float(score.std()),
+        "pred_min": float(score.min()),
+        "pred_max": float(score.max()),
         "pos_rate": float(y01.mean()),
-        "pred_pos_rate@thr": float((prob >= best_thr).mean()),
+        "pred_pos_rate@thr": float(pred01.mean()),
         "ef1": float(ef1),
         "ef5": float(ef5),
         "ef10": float(ef10),
@@ -794,96 +774,68 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     grad_clip: float = 1.0,
-    reg_lambda: float = 0.0,
-    log_interval: int = 50,
+    reg_lambda: float = 1.0,
+    base_lambda: float = 1.0,
+    delta_lambda: float = 1.0,
 ) -> Dict[str, float]:
-    import time
-
     model.train()
-    losses, losses_cls, losses_reg = [], [], []
+    losses, losses_y, losses_base, losses_delta = [], [], [], []
     use_amp = (device.type == "cuda")
 
-    t_data = 0.0
-    t_h2d = 0.0
-    t_fwd = 0.0
-    t_bwd = 0.0
-    t_opt = 0.0
-    n_steps = 0
+    pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
 
-    it = iter(loader)
-    total_steps = len(loader)
-
-    pbar = tqdm(total=total_steps, desc="train", leave=False, dynamic_ncols=True)
-
-    while True:
-        t0 = time.perf_counter()
-        try:
-            batch = next(it)
-        except StopIteration:
-            break
-        t_data += time.perf_counter() - t0
-
-        t0 = time.perf_counter()
+    for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
         p_msk = batch.p_attn_mask.to(device, non_blocking=True)
         l_ids = batch.l_ids.to(device, non_blocking=True)
-        y_bin = batch.y_bin.to(device, non_blocking=True)
         y = batch.y.to(device, non_blocking=True)
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        t_h2d += time.perf_counter() - t0
+        y_avg = batch.y_avg.to(device, non_blocking=True)
+        delta = batch.delta.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
 
-        t0 = time.perf_counter()
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logit, aux = model(p_ids, p_msk, l_ids)
-                loss_cls = F.binary_cross_entropy_with_logits(logit, y_bin)
-                y_hat = aux["y_hat"]
-                loss_reg = F.smooth_l1_loss(y_hat, y)
-                loss = loss_cls + reg_lambda * loss_reg
-        else:
-            logit, aux = model(p_ids, p_msk, l_ids)
-            loss_cls = F.binary_cross_entropy_with_logits(logit, y_bin)
-            y_hat = aux["y_hat"]
-            loss_reg = F.smooth_l1_loss(y_hat, y)
-            loss = loss_cls + reg_lambda * loss_reg
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        t_fwd += time.perf_counter() - t0
+                y_hat, aux = model(p_ids, p_msk, l_ids)
+                y_base = aux["y_base"]
+                y_delta = aux["y_delta"]
 
-        t0 = time.perf_counter()
+                loss_y = F.smooth_l1_loss(y_hat, y)
+                loss_base = F.smooth_l1_loss(y_base, y_avg)
+                loss_delta = F.smooth_l1_loss(y_delta, delta)
+
+                loss = reg_lambda * loss_y + base_lambda * loss_base + delta_lambda * loss_delta
+        else:
+            y_hat, aux = model(p_ids, p_msk, l_ids)
+            y_base = aux["y_base"]
+            y_delta = aux["y_delta"]
+
+            loss_y = F.smooth_l1_loss(y_hat, y)
+            loss_base = F.smooth_l1_loss(y_base, y_avg)
+            loss_delta = F.smooth_l1_loss(y_delta, delta)
+
+            loss = reg_lambda * loss_y + base_lambda * loss_base + delta_lambda * loss_delta
+
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        t_bwd += time.perf_counter() - t0
-
-        t0 = time.perf_counter()
         optimizer.step()
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        t_opt += time.perf_counter() - t0
 
         losses.append(float(loss.detach().cpu().item()))
-        losses_cls.append(float(loss_cls.detach().cpu().item()))
-        losses_reg.append(float(loss_reg.detach().cpu().item()))
-        n_steps += 1
+        losses_y.append(float(loss_y.detach().cpu().item()))
+        losses_base.append(float(loss_base.detach().cpu().item()))
+        losses_delta.append(float(loss_delta.detach().cpu().item()))
 
         pbar.update(1)
-        pbar.set_postfix(
-            step=f"{n_steps}/{total_steps}",
-            loss=f"{losses[-1]:.4f}",
-        )
+        pbar.set_postfix(loss=f"{losses[-1]:.4f}")
 
     pbar.close()
 
     return {
-        "loss": float(sum(losses) / max(1, len(losses))),
-        "loss_cls": float(sum(losses_cls) / max(1, len(losses_cls))),
-        "loss_reg": float(sum(losses_reg) / max(1, len(losses_reg))),
+        "loss": float(np.mean(losses)),
+        "loss_y": float(np.mean(losses_y)),
+        "loss_base": float(np.mean(losses_base)),
+        "loss_delta": float(np.mean(losses_delta)),
     }
 
 def save_json(path: str, obj: dict):
@@ -1507,9 +1459,8 @@ def main():
         do_train_eval = True
 
         if do_train_eval:
-            logit_tr, yb_tr = predict(model, train_loader, device)
-
-            tr_m = eval_metrics(logit_tr, yb_tr)
+            yhat_tr, yb_tr, y_tr = predict(model, train_loader, device)
+            tr_m = eval_metrics(yhat_tr, yb_tr)
         else:
             tr_m = {
                 "ap": float("nan"),
