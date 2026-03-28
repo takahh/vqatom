@@ -1504,7 +1504,7 @@ def main():
             reg_lambda=args.reg_lambda,
         )
 
-        do_train_eval = False
+        do_train_eval = True
 
         if do_train_eval:
             logit_tr, yb_tr = predict(model, train_loader, device)
