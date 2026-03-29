@@ -726,7 +726,7 @@ def train_one_epoch(
                 else:
                     loss = 0.3 * loss_base + 1.0 * loss_delta
                 # loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
-            else:
+        else:
                 y_hat, aux = model(p_ids, p_msk, l_ids)
                 y_base = aux["y_base"]
                 y_delta_norm = aux["y_delta_norm"]
