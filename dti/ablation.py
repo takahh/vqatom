@@ -671,20 +671,30 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 # Train
 # =========================================================
 def train_one_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    grad_clip: float = 1.0,
-    reg_lambda: float = 1.0,
-    base_lambda: float = 1.0,
-    delta_lambda: float = 1.0,
+        model: nn.Module,
+        loader: DataLoader,
+        optimizer: torch.optim.Optimizer,
+        device: torch.device,
+        epoch: int,
+        grad_clip: float = 1.0,
+        reg_lambda: float = 1.0,
+        base_lambda: float = 1.0,
+        delta_lambda: float = 1.0,
 ) -> Dict[str, float]:
     model.train()
     losses, losses_y, losses_base, losses_delta = [], [], [], []
     use_amp = (device.type == "cuda")
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
+    if epoch <= 4:
+        cur_base_lambda = 1.0
+        cur_delta_lambda = 0.1
+    elif epoch <= 7:
+        cur_base_lambda = 0.5
+        cur_delta_lambda = 0.5
+    else:
+        cur_base_lambda = 0.2
+        cur_delta_lambda = 1.0
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -704,8 +714,9 @@ def train_one_epoch(
 
                 loss_y = F.smooth_l1_loss(y_hat, y)
                 loss_base = F.smooth_l1_loss(y_base, y_avg)
-                loss_delta = F.smooth_l1_loss(y_delta, delta)
-                loss = reg_lambda * loss_y + base_lambda * loss_base + delta_lambda * loss_delta
+                delta_target = y - y_base.detach()
+                loss_delta = F.smooth_l1_loss(y_delta, delta_target)
+                loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
         else:
             y_hat, aux = model(p_ids, p_msk, l_ids)
             y_base = aux["y_base"]
@@ -713,9 +724,10 @@ def train_one_epoch(
 
             loss_y = F.smooth_l1_loss(y_hat, y)
             loss_base = F.smooth_l1_loss(y_base, y_avg)
-            loss_delta = F.smooth_l1_loss(y_delta, delta)
-            loss = reg_lambda * loss_y + base_lambda * loss_base + delta_lambda * loss_delta
-
+            delta_target = y - y_base.detach()
+            loss_delta = F.smooth_l1_loss(y_delta, delta_target)
+            loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
+            
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
@@ -1107,6 +1119,7 @@ def main():
             loader=train_loader,
             optimizer=optimizer,
             device=device,
+            epoch=ep,
             grad_clip=float(args.grad_clip),
             reg_lambda=float(args.reg_lambda),
             base_lambda=float(args.base_lambda),
