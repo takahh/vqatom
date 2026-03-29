@@ -441,7 +441,9 @@ class DTIDataset(Dataset):
                 y_avg = float(y_avg_raw)
 
             if delta_raw in ("", None):
-                delta = y - y_avg if math.isfinite(y_avg) else float("nan")
+                delta = y - y_avg
+                # normalize
+                delta = (delta - delta_mean) / delta_std
             else:
                 delta = float(delta_raw)
 
@@ -464,12 +466,16 @@ class DTIDataset(Dataset):
 
 class QKOnlyDTIClassifier(nn.Module):
     def __init__(
-        self,
-        protein_encoder: ESMProteinEncoder,
-        ligand_encoder: PretrainedLigandEncoder,
-        dropout: float,
+            self,
+            protein_encoder: ESMProteinEncoder,
+            ligand_encoder: PretrainedLigandEncoder,
+            dropout: float,
+            delta_mean: float = 0.0,
+            delta_std: float = 1.0,
     ):
         super().__init__()
+        self.delta_mean = float(delta_mean)
+        self.delta_std = float(delta_std)
         self.prot = protein_encoder
         self.lig = ligand_encoder
 
@@ -523,9 +529,12 @@ class QKOnlyDTIClassifier(nn.Module):
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z = torch.cat([p_cls, l_cls, p_cls, l_cls], dim=-1)
-            y_delta = self.delta_head(z).squeeze(-1)
+            y_delta_norm = self.delta_head(z).squeeze(-1)
+            y_delta = y_delta_norm * self.delta_std + self.delta_mean
             y_hat = y_base + y_delta
+
             aux["y_base"] = y_base
+            aux["y_delta_norm"] = y_delta_norm
             aux["y_delta"] = y_delta
             aux["y_hat"] = y_hat
             return y_hat, aux
@@ -703,13 +712,20 @@ def train_one_epoch(
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 y_hat, aux = model(p_ids, p_msk, l_ids)
                 y_base = aux["y_base"]
-                y_delta = aux["y_delta"]
+                y_delta_norm = aux["y_delta_norm"]
 
                 loss_y = F.smooth_l1_loss(y_hat, y)
                 loss_base = F.smooth_l1_loss(y_base, y_avg)
+
                 delta_target = y - y_base.detach()
-                loss_delta = F.smooth_l1_loss(y_delta, delta_target)
-                loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
+                delta_target_norm = (delta_target - model.delta_mean) / max(model.delta_std, 1e-6)
+
+                loss_delta = F.smooth_l1_loss(y_delta_norm, delta_target_norm)
+                if epoch < 3:
+                    loss = loss_base
+                else:
+                    loss = 0.3 * loss_base + 1.0 * loss_delta
+                # loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
         else:
             y_hat, aux = model(p_ids, p_msk, l_ids)
             y_base = aux["y_base"]
@@ -719,7 +735,11 @@ def train_one_epoch(
             loss_base = F.smooth_l1_loss(y_base, y_avg)
             delta_target = y - y_base.detach()
             loss_delta = F.smooth_l1_loss(y_delta, delta_target)
-            loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
+
+            if epoch < 3:
+                loss = loss_base
+            else:
+                loss = 0.3 * loss_base + 1.0 * loss_delta
 
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
@@ -934,8 +954,30 @@ def main():
 
     ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--y_thr", type=float, default=Y_THR)
-
+    ap.add_argument("--delta_mean", type=float, default=0.0)
+    ap.add_argument("--delta_std", type=float, default=1.0)
     args = ap.parse_args()
+
+    def compute_delta_stats_from_rows(rows: List[Dict[str, str]]) -> Tuple[float, float]:
+        vals = []
+        for r in rows:
+            y_raw = r.get("y", "")
+            y_avg_raw = r.get("y_avg_per_protein", "")
+            if y_raw in ("", None) or y_avg_raw in ("", None):
+                continue
+            y = float(y_raw)
+            y_avg = float(y_avg_raw)
+            vals.append(y - y_avg)
+
+        if not vals:
+            return 0.0, 1.0
+
+        arr = np.asarray(vals, dtype=np.float32)
+        mu = float(arr.mean())
+        sd = float(arr.std())
+        if sd < 1e-6:
+            sd = 1.0
+        return mu, sd
 
     if not args.eval_only and not args.train_csv and not args.train_shard_dir:
         raise ValueError("Provide --train_csv or --train_shard_dir unless --eval_only is set.")
@@ -943,6 +985,13 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if not args.eval_only and args.train_csv is not None:
+        train_rows_for_stats = read_csv_rows(args.train_csv)
+        delta_mean, delta_std = compute_delta_stats_from_rows(train_rows_for_stats)
+        print(f"[delta stats] mean={delta_mean:.4f} std={delta_std:.4f}")
+        args.delta_mean = delta_mean
+        args.delta_std = delta_std
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
@@ -965,6 +1014,8 @@ def main():
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
         dropout=args.dropout,
+        delta_mean=args.delta_mean,
+        delta_std=args.delta_std,
     ).to(device)
 
     if args.dti_ckpt is not None:
