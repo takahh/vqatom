@@ -686,15 +686,8 @@ def train_one_epoch(
     use_amp = (device.type == "cuda")
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-    if epoch <= 4:
-        cur_base_lambda = 1.0
-        cur_delta_lambda = 0.1
-    elif epoch <= 7:
-        cur_base_lambda = 0.5
-        cur_delta_lambda = 0.5
-    else:
-        cur_base_lambda = 0.2
-        cur_delta_lambda = 1.0
+    cur_base_lambda = 0.3
+    cur_delta_lambda = 1.0
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -727,7 +720,7 @@ def train_one_epoch(
             delta_target = y - y_base.detach()
             loss_delta = F.smooth_l1_loss(y_delta, delta_target)
             loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
-            
+
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
