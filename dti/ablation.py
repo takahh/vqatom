@@ -722,10 +722,9 @@ def train_one_epoch(
 
                 loss_delta = F.smooth_l1_loss(y_delta_norm, delta_target_norm)
                 if epoch < 3:
-                    loss = loss_base
+                    loss = 1.0 * loss_y + 1.0 * loss_base + 0.1 * loss_delta
                 else:
-                    loss = 0.3 * loss_base + 1.0 * loss_delta
-                # loss = reg_lambda * loss_y + cur_base_lambda * loss_base + cur_delta_lambda * loss_delta
+                    loss = 1.0 * loss_y + 0.1 * loss_base + 1.0 * loss_delta
         else:
                 y_hat, aux = model(p_ids, p_msk, l_ids)
                 y_base = aux["y_base"]
@@ -740,9 +739,9 @@ def train_one_epoch(
                 loss_delta = F.smooth_l1_loss(y_delta_norm, delta_target_norm)
 
                 if epoch < 3:
-                    loss = loss_base
+                    loss = 1.0 * loss_y + 1.0 * loss_base + 0.1 * loss_delta
                 else:
-                    loss = 0.3 * loss_base + 1.0 * loss_delta
+                    loss = 1.0 * loss_y + 0.1 * loss_base + 1.0 * loss_delta
 
         loss.backward()
         if grad_clip and float(grad_clip) > 0.0:
