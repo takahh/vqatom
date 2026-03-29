@@ -441,9 +441,7 @@ class DTIDataset(Dataset):
                 y_avg = float(y_avg_raw)
 
             if delta_raw in ("", None):
-                delta = y - y_avg
-                # normalize
-                delta = (delta - delta_mean) / delta_std
+                delta = y - y_avg if math.isfinite(y_avg) else float("nan")
             else:
                 delta = float(delta_raw)
 
@@ -567,10 +565,12 @@ class QKOnlyDTIClassifier(nn.Module):
 
         z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
 
-        y_delta = self.delta_head(z).squeeze(-1)
+        y_delta_norm = self.delta_head(z).squeeze(-1)
+        y_delta = y_delta_norm * self.delta_std + self.delta_mean
         y_hat = y_base + y_delta
 
         aux["y_base"] = y_base
+        aux["y_delta_norm"] = y_delta_norm
         aux["y_delta"] = y_delta
         aux["y_hat"] = y_hat
         return y_hat, aux
