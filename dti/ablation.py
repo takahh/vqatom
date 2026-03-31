@@ -440,3 +440,580 @@ class QKOnlyDTIClassifier(nn.Module):
             logit = z_base + z_delta
             aux["z_base"] = z_base
             aux["z_delta"] = z_delta
+            aux["logit"] = logit
+            return logit, aux
+
+        q = self.q_proj(p_tok)
+        k = self.k_proj(l_tok)
+
+        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
+        S = S.masked_fill(l_pad.unsqueeze(1), -1e9)
+        S = S.masked_fill(p_pad.unsqueeze(-1), 0.0)
+
+        bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
+        S = torch.where(bad, torch.zeros_like(S), S)
+
+        A = torch.softmax(S, dim=-1)
+        A = A.masked_fill(p_pad.unsqueeze(-1), 0.0)
+        A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
+
+        p_imp = A.max(dim=-1).values.masked_fill(p_pad, 0.0)
+        l_imp = A.max(dim=1).values.masked_fill(l_pad, 0.0)
+
+        p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+
+        p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)
+
+        z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
+        z_delta = self.delta_head(z).squeeze(-1)
+        logit = z_base + z_delta
+
+        aux["z_base"] = z_base
+        aux["z_delta"] = z_delta
+        aux["logit"] = logit
+        return logit, aux
+
+
+# =========================================================
+# Metrics / predict
+# =========================================================
+def compute_pos_weight_from_dataset(ds: Dataset) -> float:
+    labels = []
+    if isinstance(ds, ConcatDataset):
+        for sub in ds.datasets:
+            labels.extend(float(sub[i]["y_bin"]) for i in range(len(sub)))
+    else:
+        labels.extend(float(ds[i]["y_bin"]) for i in range(len(ds)))
+    arr = np.asarray(labels, dtype=np.float32)
+    pos = float(arr.sum())
+    neg = float(len(arr) - pos)
+    if pos <= 0:
+        return 1.0
+    return max(neg / pos, 1.0)
+
+
+def predict(model: nn.Module, loader: DataLoader, device: torch.device):
+    model.eval()
+    prob_list, ybin_list = [], []
+    use_amp = (device.type == "cuda")
+
+    with torch.inference_mode():
+        for batch in loader:
+            p_ids = batch.p_input_ids.to(device, non_blocking=True)
+            p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+            l_ids = batch.l_ids.to(device, non_blocking=True)
+
+            if use_amp:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    logit, _ = model(p_ids, p_msk, l_ids)
+            else:
+                logit, _ = model(p_ids, p_msk, l_ids)
+
+            prob = torch.sigmoid(logit)
+            prob_list.append(prob.detach().float().cpu().numpy())
+            ybin_list.append(batch.y_bin.detach().cpu().numpy())
+
+    y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
+    y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
+    return y_prob, y_bin
+
+
+def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
+    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+
+    def enrichment_factor(score: np.ndarray, y01: np.ndarray, frac: float) -> float:
+        n = int(len(y01))
+        if n == 0:
+            return 0.0
+        n_pos = int(y01.sum())
+        if n_pos == 0:
+            return 0.0
+        k = max(1, int(math.ceil(n * float(frac))))
+        order = np.argsort(-score)
+        top_idx = order[:k]
+        hits_topk = int(y01[top_idx].sum())
+        hit_rate_topk = hits_topk / float(k)
+        base_rate = n_pos / float(n)
+        return float(hit_rate_topk / base_rate) if base_rate > 0 else 0.0
+
+    if y_pred.size == 0:
+        return {
+            "auroc": 0.0,
+            "ap": 0.0,
+            "f1": 0.0,
+            "thr": CLS_THR,
+            "pred_mean": 0.0,
+            "pred_std": 0.0,
+            "ef1": 0.0,
+            "ef5": 0.0,
+            "ef10": 0.0,
+        }
+
+    score = y_pred
+    y01 = (y_bin > 0.5).astype(np.int32)
+    ef1 = enrichment_factor(score, y01, 0.01)
+    ef5 = enrichment_factor(score, y01, 0.05)
+    ef10 = enrichment_factor(score, y01, 0.10)
+
+    if len(np.unique(y01)) <= 1:
+        return {
+            "auroc": 0.0,
+            "ap": 0.0,
+            "f1": 0.0,
+            "thr": float(CLS_THR),
+            "pred_mean": float(score.mean()),
+            "pred_std": float(score.std()),
+            "pred_min": float(score.min()),
+            "pred_max": float(score.max()),
+            "pos_rate": float(y01.mean()) if y01.size else 0.0,
+            "pred_pos_rate@thr": float((score >= CLS_THR).mean()) if score.size else 0.0,
+            "ef1": float(ef1),
+            "ef5": float(ef5),
+            "ef10": float(ef10),
+        }
+
+    auroc = roc_auc_score(y01, score)
+    ap = average_precision_score(y01, score)
+    pred01 = (score >= CLS_THR).astype(np.int32)
+    f1 = f1_score(y01, pred01)
+
+    return {
+        "auroc": float(auroc),
+        "ap": float(ap),
+        "f1": float(f1),
+        "thr": float(CLS_THR),
+        "pred_mean": float(score.mean()),
+        "pred_std": float(score.std()),
+        "pred_min": float(score.min()),
+        "pred_max": float(score.max()),
+        "pos_rate": float(y01.mean()),
+        "pred_pos_rate@thr": float(pred01.mean()),
+        "ef1": float(ef1),
+        "ef5": float(ef5),
+        "ef10": float(ef10),
+    }
+
+
+# =========================================================
+# Train
+# =========================================================
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    pos_weight: float,
+    grad_clip: float = 1.0,
+    base_lambda: float = 0.1,
+) -> Dict[str, float]:
+    model.train()
+    losses, losses_main, losses_base = [], [], []
+    use_amp = (device.type == "cuda")
+    bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32))
+
+    pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
+    for batch in loader:
+        p_ids = batch.p_input_ids.to(device, non_blocking=True)
+        p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+        l_ids = batch.l_ids.to(device, non_blocking=True)
+        y_bin = batch.y_bin.to(device, non_blocking=True).float()
+
+        optimizer.zero_grad(set_to_none=True)
+
+        if use_amp:
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logit, aux = model(p_ids, p_msk, l_ids)
+                z_base = aux["z_base"]
+                loss_main = bce(logit, y_bin)
+                loss_base = bce(z_base, y_bin)
+                loss = loss_main + float(base_lambda) * loss_base
+        else:
+            logit, aux = model(p_ids, p_msk, l_ids)
+            z_base = aux["z_base"]
+            loss_main = bce(logit, y_bin)
+            loss_base = bce(z_base, y_bin)
+            loss = loss_main + float(base_lambda) * loss_base
+
+        loss.backward()
+        if grad_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        optimizer.step()
+
+        losses.append(float(loss.detach().cpu().item()))
+        losses_main.append(float(loss_main.detach().cpu().item()))
+        losses_base.append(float(loss_base.detach().cpu().item()))
+        pbar.update(1)
+        pbar.set_postfix(loss=f"{losses[-1]:.4f}")
+
+    pbar.close()
+    return {
+        "loss": float(np.mean(losses)),
+        "loss_main": float(np.mean(losses_main)),
+        "loss_base": float(np.mean(losses_base)),
+    }
+
+
+# =========================================================
+# Save/load
+# =========================================================
+def save_json(path: str, obj: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+
+
+def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: PretrainedLigandEncoder, epoch: int, best: dict) -> None:
+    torch.save(
+        {
+            "epoch": epoch,
+            "model": model.state_dict(),
+            "args": vars(args),
+            "best": best,
+            "model_type": getattr(args, "model_type", "qkonly_cls"),
+            "lig_config": lig_enc.conf,
+            "lig_vocab_source": lig_enc.vocab_source,
+            "lig_base_vocab": lig_enc.base_vocab,
+            "lig_vocab_size": lig_enc.vocab_size,
+            "lig_pad_id": lig_enc.pad_id,
+            "lig_mask_id": lig_enc.mask_id,
+            "lig_cls_id": lig_enc.cls_id,
+        },
+        path,
+    )
+
+
+def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    model.to(device)
+    return ckpt, missing, unexpected
+
+
+# =========================================================
+# Optimizer
+# =========================================================
+def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
+    base_lr = float(args.lr)
+    lig_lr = base_lr * float(args.lig_lr_mult)
+
+    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
+    non_esm_params = []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if n.startswith("lig."):
+            continue
+        if n.startswith("prot.esm."):
+            continue
+        non_esm_params.append(p)
+
+    param_groups = [
+        {"params": lig_params, "lr": lig_lr, "name": "lig"},
+        {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
+    ]
+
+    esm = model.prot.esm
+    top_lr = base_lr * float(args.esm_lr_mult)
+    decay = float(args.llrd_decay)
+    min_mult = float(args.esm_min_lr_mult)
+
+    if int(args.freeze_esm_bottom) > 0:
+        n_freeze = int(args.freeze_esm_bottom)
+        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+            layers = esm.encoder.layer
+            for i in range(min(n_freeze, len(layers))):
+                for p in layers[i].parameters():
+                    p.requires_grad = False
+        else:
+            print("[warn] ESM layer freezing requested, but encoder.layer not found; skipping.")
+
+    if args.llrd and any(p.requires_grad for p in esm.parameters()):
+        if hasattr(esm, "encoder") and hasattr(esm.encoder, "layer"):
+            layers = list(esm.encoder.layer)
+            n_layers = len(layers)
+
+            if hasattr(esm, "embeddings"):
+                emb_params = [p for p in esm.embeddings.parameters() if p.requires_grad]
+                if emb_params:
+                    lr_emb = max(top_lr * (decay ** n_layers), top_lr * min_mult)
+                    param_groups.append({"params": emb_params, "lr": lr_emb, "name": f"esm.emb lr={lr_emb:g}"})
+
+            for i, layer in enumerate(layers):
+                layer_params = [p for p in layer.parameters() if p.requires_grad]
+                if not layer_params:
+                    continue
+                depth_from_top = (n_layers - 1) - i
+                lr_i = max(top_lr * (decay ** depth_from_top), top_lr * min_mult)
+                param_groups.append({"params": layer_params, "lr": lr_i, "name": f"esm.layer{i} lr={lr_i:g}"})
+
+            other = []
+            for n, p in esm.named_parameters():
+                if not p.requires_grad:
+                    continue
+                if n.startswith("embeddings.") or n.startswith("encoder.layer."):
+                    continue
+                other.append(p)
+            if other:
+                param_groups.append({"params": other, "lr": top_lr, "name": f"esm.other lr={top_lr:g}"})
+        else:
+            print("[warn] args.llrd set, but esm.encoder.layer not found; using single ESM group.")
+            esm_params = [p for p in esm.parameters() if p.requires_grad]
+            if esm_params:
+                param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+    else:
+        esm_params = [p for p in esm.parameters() if p.requires_grad]
+        if esm_params:
+            param_groups.append({"params": esm_params, "lr": top_lr, "name": f"esm.all lr={top_lr:g}"})
+
+    print("[opt groups]")
+    for g in param_groups:
+        nparam = sum(p.numel() for p in g["params"])
+        print(f"  - {g.get('name', 'group')}: lr={g['lr']:.3g} params={len(g['params'])} numel={nparam}")
+
+    return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
+
+
+# =========================================================
+# Main
+# =========================================================
+def main():
+    ap = argparse.ArgumentParser()
+
+    ap.add_argument("--use_train_valid_csv", action="store_true")
+    ap.add_argument("--train_csv", type=str, default=None)
+    ap.add_argument("--valid_csv", type=str, required=True)
+    ap.add_argument("--final_eval_csv", type=str, default=None)
+    ap.add_argument("--test_csv", type=str, default=None)
+    ap.add_argument("--train_size", type=int, default=None)
+
+    ap.add_argument("--train_shard_dir", type=str, default=None)
+    ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
+    ap.add_argument("--train_shard_size", type=int, default=1000)
+    ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
+
+    ap.add_argument("--lig_ckpt", type=str, required=True)
+    ap.add_argument("--vq_ckpt", type=str, default=None)
+
+    ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
+    ap.add_argument("--finetune_esm", action="store_true")
+    ap.add_argument("--finetune_lig", action="store_true")
+    ap.add_argument("--lig_debug_index", action="store_true")
+
+    ap.add_argument("--dti_ckpt", type=str, default=None)
+    ap.add_argument("--out_dir", type=str, default="./dti_out")
+    ap.add_argument("--eval_only", action="store_true")
+
+    ap.add_argument("--batch_size", type=int, default=16)
+    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--lig_lr_mult", type=float, default=0.1)
+    ap.add_argument("--weight_decay", type=float, default=1e-2)
+    ap.add_argument("--seed", type=int, default=0)
+
+    ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--grad_clip", type=float, default=1.0)
+    ap.add_argument("--base_lambda", type=float, default=0.1)
+
+    ap.add_argument("--plateau", action="store_true")
+    ap.add_argument("--plateau_factor", type=float, default=0.5)
+    ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--min_lr", type=float, default=1e-6)
+
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
+
+    ap.add_argument("--llrd", action="store_true")
+    ap.add_argument("--llrd_decay", type=float, default=0.95)
+    ap.add_argument("--esm_lr_mult", type=float, default=1.0)
+    ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
+    ap.add_argument("--freeze_esm_bottom", type=int, default=0)
+
+    ap.add_argument("--split_seed", type=int, default=0)
+    ap.add_argument("--y_thr", type=float, default=Y_THR)
+    args = ap.parse_args()
+
+    if not args.eval_only and not args.train_csv and not args.train_shard_dir:
+        raise ValueError("Provide --train_csv or --train_shard_dir unless --eval_only is set.")
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    seed_all(args.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
+
+    lig_enc = PretrainedLigandEncoder(
+        ckpt_path=args.lig_ckpt,
+        device=device,
+        finetune=args.finetune_lig,
+        vq_ckpt_path=args.vq_ckpt,
+        verbose_load=True,
+        debug_index_check=bool(args.lig_debug_index),
+    )
+    prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+    model = QKOnlyDTIClassifier(protein_encoder=prot_enc, ligand_encoder=lig_enc, dropout=args.dropout).to(device)
+
+    if args.dti_ckpt is not None:
+        _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
+        print(f"Loaded DTI checkpoint: {args.dti_ckpt}")
+        if missing:
+            print("  [warn] missing keys (up to 20):", missing[:20])
+        if unexpected:
+            print("  [warn] unexpected keys (up to 20):", unexpected[:20])
+
+    def make_loader(ds: Dataset, shuffle: bool) -> DataLoader:
+        return DataLoader(
+            ds,
+            batch_size=args.batch_size,
+            shuffle=shuffle,
+            num_workers=0,
+            pin_memory=False,
+            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_enc.pad_id, lig_cls=lig_enc.cls_id),
+        )
+
+    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+    valid_loader = make_loader(valid_ds, shuffle=False)
+
+    final_eval_loader = None
+    if args.final_eval_csv:
+        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        final_eval_loader = make_loader(final_eval_ds, shuffle=False)
+
+    test_loader = None
+    if args.test_csv:
+        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        test_loader = make_loader(test_ds, shuffle=False)
+
+    optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
+    scheduler = None
+    if optimizer is not None and args.plateau:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",
+            factor=float(args.plateau_factor),
+            patience=int(args.plateau_patience),
+            min_lr=float(args.min_lr),
+        )
+
+    if args.eval_only:
+        yhat_v, yb_v = predict(model, valid_loader, device)
+        v_m = eval_metrics(yhat_v, yb_v)
+        print("[VALID]", v_m)
+
+        test_m = None
+        if test_loader is not None:
+            yhat_t, yb_t = predict(model, test_loader, device)
+            test_m = eval_metrics(yhat_t, yb_t)
+            print("[TEST ]", test_m)
+
+        save_json(os.path.join(args.out_dir, "eval_only.json"), {
+            "mode": "eval_only",
+            "valid": v_m,
+            "test": test_m,
+            "valid_csv": args.valid_csv,
+            "test_csv": args.test_csv,
+            "dti_ckpt": args.dti_ckpt,
+        })
+        return
+
+    best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
+    fixed_train_loader = None
+    fixed_train_ds = None
+    train_shard_paths = None
+
+    if args.use_train_valid_csv and args.train_size is None:
+        fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
+    elif not args.use_train_valid_csv:
+        train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
+
+    for ep in range(1, args.epochs + 1):
+        if args.use_train_valid_csv and args.train_size is not None:
+            epoch_seed = int(args.split_seed) + int(ep)
+            train_rows = read_csv_random_rows(args.train_csv, int(args.train_size), seed=epoch_seed)
+            epoch_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True)
+            train_loader = make_loader(epoch_train_ds, shuffle=True)
+        elif args.use_train_valid_csv:
+            epoch_train_ds = fixed_train_ds
+            train_loader = fixed_train_loader
+        else:
+            chosen_shards = pick_epoch_shards_random(
+                train_shard_paths,
+                train_size=int(args.train_size) if args.train_size is not None else len(train_shard_paths) * args.train_shard_size,
+                shard_size=int(args.train_shard_size),
+                epoch=ep,
+                seed=int(args.seed),
+                num_shards_per_epoch=args.train_num_shards_per_epoch,
+            )
+            epoch_train_ds = build_train_dataset_from_shards(chosen_shards, y_thr=float(args.y_thr))
+            train_loader = make_loader(epoch_train_ds, shuffle=True)
+
+        print("epoch train n:", len(epoch_train_ds))
+        pos_weight = compute_pos_weight_from_dataset(epoch_train_ds)
+        print(f"pos_weight={pos_weight:.4f}")
+
+        tr_stat = train_one_epoch(
+            model=model,
+            loader=train_loader,
+            optimizer=optimizer,
+            device=device,
+            pos_weight=pos_weight,
+            grad_clip=float(args.grad_clip),
+            base_lambda=float(args.base_lambda),
+        )
+
+        yhat_tr, yb_tr = predict(model, train_loader, device)
+        tr_m = eval_metrics(yhat_tr, yb_tr)
+
+        yhat_v, yb_v = predict(model, valid_loader, device)
+        v_m = eval_metrics(yhat_v, yb_v)
+
+        if scheduler is not None:
+            scheduler.step(float(v_m[args.select_on]))
+
+        if float(v_m[args.select_on]) > float(best[args.select_on]):
+            best.update({
+                "ap": float(v_m["ap"]),
+                "auroc": float(v_m["auroc"]),
+                "f1": float(v_m["f1"]),
+                "epoch": ep,
+            })
+            save_path = os.path.join(args.out_dir, "best.pt")
+            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
+            print("  saved:", save_path)
+
+        save_dti_checkpoint(os.path.join(args.out_dir, "last.pt"), model, args, lig_enc, epoch=ep, best=best)
+
+        test_m = None
+        if test_loader is not None:
+            yhat_t, yb_t = predict(model, test_loader, device)
+            test_m = eval_metrics(yhat_t, yb_t)
+            print("[TEST ]", test_m)
+
+        final_m = None
+        if final_eval_loader is not None:
+            yhat_f, yb_f = predict(model, final_eval_loader, device)
+            final_m = eval_metrics(yhat_f, yb_f)
+
+        save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), {
+            "epoch": ep,
+            "train_stat": tr_stat,
+            "train_metrics": tr_m,
+            "valid_metrics": v_m,
+            "final_eval_metrics": final_m,
+            "test_metrics": test_m,
+            "pos_weight": pos_weight,
+        })
+
+        print(f"\n===== Epoch {ep} =====")
+        print("[train]", f"AUC={tr_m['auroc']:.4f}", f"AP={tr_m['ap']:.4f}", f"F1={tr_m['f1']:.4f}", f"EF1={tr_m['ef1']:.3f}", f"EF5={tr_m['ef5']:.3f}", f"EF10={tr_m['ef10']:.3f}")
+        print("[valid]", f"AUC={v_m['auroc']:.4f}", f"AP={v_m['ap']:.4f}", f"F1={v_m['f1']:.4f}", f"EF1={v_m['ef1']:.3f}", f"EF5={v_m['ef5']:.3f}", f"EF10={v_m['ef10']:.3f}")
+        if final_m is not None:
+            print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
+
+    print("BEST:", best)
+    save_json(os.path.join(args.out_dir, "best.json"), best)
+
+
+if __name__ == "__main__":
+    main()
