@@ -437,7 +437,9 @@ class QKOnlyDTIClassifier(nn.Module):
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
             z_delta = self.delta_head(z_delta_in).squeeze(-1)
-            logit = z_base + z_delta
+            # logit = z_base + z_delta
+            # detach baseline
+            logit = z_base.detach() + z_delta
             aux["z_base"] = z_base
             aux["z_delta"] = z_delta
             aux["logit"] = logit
@@ -469,8 +471,8 @@ class QKOnlyDTIClassifier(nn.Module):
         # delta branch sees ligand-side global + protein-aware ligand summary
         z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         z_delta = self.delta_head(z_delta_in).squeeze(-1)
-        logit = z_base + z_delta
-
+        # detach baseline
+        logit = z_base.detach() + z_delta
         aux["z_base"] = z_base
         aux["z_delta"] = z_delta
         aux["logit"] = logit
