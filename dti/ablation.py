@@ -406,8 +406,8 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Linear(d_model, 1),
         )
         self.delta_head = nn.Sequential(
-            nn.LayerNorm(4 * d_model),
-            nn.Linear(4 * d_model, d_model),
+            nn.LayerNorm(2 * d_model),
+            nn.Linear(2 * d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
@@ -435,8 +435,8 @@ class QKOnlyDTIClassifier(nn.Module):
         z_base = self.base_head(p_cls).squeeze(-1)
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z = torch.cat([p_cls, l_cls, p_cls, l_cls], dim=-1)
-            z_delta = self.delta_head(z).squeeze(-1)
+            z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
+            z_delta = self.delta_head(z_delta_in).squeeze(-1)
             logit = z_base + z_delta
             aux["z_base"] = z_base
             aux["z_delta"] = z_delta
@@ -466,8 +466,9 @@ class QKOnlyDTIClassifier(nn.Module):
         p_sum = torch.bmm(p_imp.unsqueeze(1), p_tok).squeeze(1)
         l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)
 
-        z = torch.cat([p_cls, l_cls, p_sum, l_sum], dim=-1)
-        z_delta = self.delta_head(z).squeeze(-1)
+        # delta branch sees ligand-side global + protein-aware ligand summary
+        z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
+        z_delta = self.delta_head(z_delta_in).squeeze(-1)
         logit = z_base + z_delta
 
         aux["z_base"] = z_base
