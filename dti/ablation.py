@@ -596,7 +596,7 @@ def train_one_epoch(
     grad_clip: float = 1.0,
 ) -> Dict[str, float]:
     model.train()
-    losses, losses_main = [], [], []
+    losses, losses_main = [], []
     use_amp = (device.type == "cuda")
     bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32))
 
