@@ -415,6 +415,8 @@ class QKOnlyDTIClassifier(nn.Module):
 
         self.lig_pad_id = int(self.lig.pad_id)
 
+        self.v_proj = nn.Linear(d_model, d_model)
+
     def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor):
         aux = {}
         p_h = self.prot(p_input_ids, p_attn_mask)
