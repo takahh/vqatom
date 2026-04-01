@@ -459,8 +459,8 @@ class QKOnlyDTIClassifier(nn.Module):
         A = A.masked_fill(p_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(l_pad.unsqueeze(1), 0.0)
 
-        p_imp = A.max(dim=-1).values.masked_fill(p_pad, 0.0)
-        l_imp = A.max(dim=1).values.masked_fill(l_pad, 0.0)
+        p_imp = A.mean(dim=-1).masked_fill(p_pad, 0.0)
+        l_imp = A.mean(dim=1).masked_fill(l_pad, 0.0)
 
         p_imp = p_imp / p_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
