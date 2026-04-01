@@ -812,7 +812,9 @@ def main():
     ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     args = ap.parse_args()
-
+    print("DEBUG train_csv:", args.train_csv)
+    print("DEBUG train_size:", args.train_size)
+    print("DEBUG use_train_valid_csv:", args.use_train_valid_csv)
     if not args.eval_only and not args.train_csv and not args.train_shard_dir:
         raise ValueError("Provide --train_csv or --train_shard_dir unless --eval_only is set.")
 
