@@ -452,7 +452,7 @@ class QKOnlyDTIClassifier(nn.Module):
 
         # proteinを見て重みづけした ligand self-value
         # まず各 ligand token ごとに、proteinとの整合度を1スカラーに落とす
-        l_imp = A.max(dim=-1).masked_fill(l_pad, 0.0)                  # (B, Ll)
+        l_imp = A.max(dim=-1).values.masked_fill(l_pad, 0.0)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
         l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)             # (B, D)
