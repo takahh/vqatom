@@ -415,66 +415,67 @@ class QKOnlyDTIClassifier(nn.Module):
 
         self.lig_pad_id = int(self.lig.pad_id)
 
-def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor):
-    aux = {}
-    p_h = self.prot(p_input_ids, p_attn_mask)
-    if self.p_proj is not None:
-        p_h = self.p_proj(p_h)
-    l_h = self.lig(l_ids)
+    def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor):
+        aux = {}
+        p_h = self.prot(p_input_ids, p_attn_mask)
+        if self.p_proj is not None:
+            p_h = self.p_proj(p_h)
+        l_h = self.lig(l_ids)
 
-    prot_pad_mask = (p_attn_mask == 0)
-    lig_pad_mask = (l_ids == self.lig_pad_id)
+        prot_pad_mask = (p_attn_mask == 0)
+        lig_pad_mask = (l_ids == self.lig_pad_id)
 
-    p_tok = p_h[:, 1:, :]
-    l_tok = l_h[:, 1:, :]
-    p_cls = p_h[:, 0, :]
-    l_cls = l_h[:, 0, :]
-    p_pad = prot_pad_mask[:, 1:]
-    l_pad = lig_pad_mask[:, 1:]
+        p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
+        p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
+        p_pad = prot_pad_mask[:, 1:]
+        l_pad = lig_pad_mask[:, 1:]
 
-    z_base = self.base_head(p_cls).squeeze(-1)
+        z_base = self.base_head(p_cls).squeeze(-1)
 
-    if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-        z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
+        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
+            z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
+            z_delta = self.delta_head(z_delta_in).squeeze(-1)
+            logit = z_base.detach() + z_delta
+            aux["z_base"] = z_base
+            aux["z_delta"] = z_delta
+            aux["logit"] = logit
+            return logit, aux
+
+        # Q = ligand, K = protein, V = ligand
+        q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)   # (B, Ll, D)
+        k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)   # (B, Lp, D)
+        v = self.v_proj(l_tok)                                          # (B, Ll, D)
+
+        S = torch.matmul(q, k.transpose(1, 2))                          # (B, Ll, Lp)
+
+        S = S.masked_fill(p_pad.unsqueeze(1), -1e9)
+        S = S.masked_fill(l_pad.unsqueeze(-1), 0.0)
+
+        bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
+        S = torch.where(bad, torch.zeros_like(S), S)
+
+        A = torch.softmax(S, dim=-1)                                    # softmax over protein
+        A = A.masked_fill(l_pad.unsqueeze(-1), 0.0)
+        A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
+
+        # proteinを見て重みづけした ligand self-value
+        # まず各 ligand token ごとに、proteinとの整合度を1スカラーに落とす
+        l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)                  # (B, Ll)
+        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+
+        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)             # (B, D)
+
+        z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         z_delta = self.delta_head(z_delta_in).squeeze(-1)
+
         logit = z_base.detach() + z_delta
         aux["z_base"] = z_base
         aux["z_delta"] = z_delta
         aux["logit"] = logit
         return logit, aux
 
-    # Q = ligand, K = protein, V = ligand
-    q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)   # (B, Ll, D)
-    k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)   # (B, Lp, D)
-    v = self.v_proj(l_tok)                                          # (B, Ll, D)
-
-    S = torch.matmul(q, k.transpose(1, 2))                          # (B, Ll, Lp)
-
-    S = S.masked_fill(p_pad.unsqueeze(1), -1e9)
-    S = S.masked_fill(l_pad.unsqueeze(-1), 0.0)
-
-    bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
-    S = torch.where(bad, torch.zeros_like(S), S)
-
-    A = torch.softmax(S, dim=-1)                                    # softmax over protein
-    A = A.masked_fill(l_pad.unsqueeze(-1), 0.0)
-    A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
-
-    # proteinを見て重みづけした ligand self-value
-    # まず各 ligand token ごとに、proteinとの整合度を1スカラーに落とす
-    l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)                  # (B, Ll)
-    l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
-
-    l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)             # (B, D)
-
-    z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
-    z_delta = self.delta_head(z_delta_in).squeeze(-1)
-
-    logit = z_base.detach() + z_delta
-    aux["z_base"] = z_base
-    aux["z_delta"] = z_delta
-    aux["logit"] = logit
-    return logit, aux
 # =========================================================
 # Metrics / predict
 # =========================================================
