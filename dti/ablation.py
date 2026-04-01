@@ -2,19 +2,16 @@
 # -*- coding: utf-8 -*-
 
 """
-DTI binary classification with explicit protein baseline + ligand residual.
-
 Model:
-    z_base  = f(protein)
     z_delta = g(protein, ligand)
-    logit   = z_base + z_delta
+    logit   = z_delta
     prob    = sigmoid(logit)
 
 Labels:
     y_bin = 1 if y >= y_thr else 0
 
 Training objective:
-    loss = BCEWithLogits(logit, y_bin) + base_lambda * BCEWithLogits(z_base, y_bin)
+    loss = BCEWithLogits(logit, y_bin) + BCEWithLogits(y_bin)
 
 Notes:
 - This is a cleaned classification rewrite of the previous regression-style script.
@@ -398,13 +395,6 @@ class QKOnlyDTIClassifier(nn.Module):
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
 
-        self.base_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
-        )
         self.delta_head = nn.Sequential(
             nn.LayerNorm(2 * d_model),
             nn.Linear(2 * d_model, d_model),
@@ -434,13 +424,11 @@ class QKOnlyDTIClassifier(nn.Module):
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
-        z_base = self.base_head(p_cls).squeeze(-1)
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
             z_delta = self.delta_head(z_delta_in).squeeze(-1)
-            logit = z_base.detach() + z_delta
-            aux["z_base"] = z_base
+            logit = z_delta
             aux["z_delta"] = z_delta
             aux["logit"] = logit
             return logit, aux
@@ -464,7 +452,7 @@ class QKOnlyDTIClassifier(nn.Module):
 
         # proteinを見て重みづけした ligand self-value
         # まず各 ligand token ごとに、proteinとの整合度を1スカラーに落とす
-        l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)                  # (B, Ll)
+        l_imp = A.max(dim=-1).masked_fill(l_pad, 0.0)                  # (B, Ll)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
         l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)             # (B, D)
@@ -472,8 +460,7 @@ class QKOnlyDTIClassifier(nn.Module):
         z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         z_delta = self.delta_head(z_delta_in).squeeze(-1)
 
-        logit = z_base.detach() + z_delta
-        aux["z_base"] = z_base
+        logit = z_delta
         aux["z_delta"] = z_delta
         aux["logit"] = logit
         return logit, aux
@@ -537,8 +524,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         top_idx = order[:k]
         hits_topk = int(y01[top_idx].sum())
         hit_rate_topk = hits_topk / float(k)
-        base_rate = n_pos / float(n)
-        return float(hit_rate_topk / base_rate) if base_rate > 0 else 0.0
+        return float(hit_rate_topk)
 
     if y_pred.size == 0:
         return {
@@ -608,10 +594,9 @@ def train_one_epoch(
     device: torch.device,
     pos_weight: float,
     grad_clip: float = 1.0,
-    base_lambda: float = 0.1,
 ) -> Dict[str, float]:
     model.train()
-    losses, losses_main, losses_base = [], [], []
+    losses, losses_main = [], [], []
     use_amp = (device.type == "cuda")
     bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32))
 
@@ -627,16 +612,12 @@ def train_one_epoch(
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logit, aux = model(p_ids, p_msk, l_ids)
-                z_base = aux["z_base"]
                 loss_main = bce(logit, y_bin)
-                loss_base = bce(z_base, y_bin)
-                loss = loss_main + float(base_lambda) * loss_base
+                loss = loss_main
         else:
             logit, aux = model(p_ids, p_msk, l_ids)
-            z_base = aux["z_base"]
             loss_main = bce(logit, y_bin)
-            loss_base = bce(z_base, y_bin)
-            loss = loss_main + float(base_lambda) * loss_base
+            loss = loss_main
 
         loss.backward()
         if grad_clip > 0.0:
@@ -645,7 +626,6 @@ def train_one_epoch(
 
         losses.append(float(loss.detach().cpu().item()))
         losses_main.append(float(loss_main.detach().cpu().item()))
-        losses_base.append(float(loss_base.detach().cpu().item()))
         pbar.update(1)
         pbar.set_postfix(loss=f"{losses[-1]:.4f}")
 
@@ -653,7 +633,6 @@ def train_one_epoch(
     return {
         "loss": float(np.mean(losses)),
         "loss_main": float(np.mean(losses_main)),
-        "loss_base": float(np.mean(losses_base)),
     }
 
 
@@ -816,7 +795,6 @@ def main():
 
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--grad_clip", type=float, default=1.0)
-    ap.add_argument("--base_lambda", type=float, default=0.1)
 
     ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
@@ -961,7 +939,6 @@ def main():
             device=device,
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
-            base_lambda=float(args.base_lambda),
         )
 
         yhat_tr, yb_tr = predict(model, train_loader, device)
