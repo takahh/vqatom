@@ -445,10 +445,10 @@ class QKOnlyDTIClassifier(nn.Module):
             aux["logit"] = logit
             return logit, aux
 
-        q = self.q_proj(p_tok)
-        k = self.k_proj(l_tok)
+        q = torch.nn.functional.normalize(self.q_proj(p_tok), dim=-1)
+        k = torch.nn.functional.normalize(self.k_proj(l_tok), dim=-1)
+        S = torch.matmul(q, k.transpose(1, 2))
 
-        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
         S = S.masked_fill(l_pad.unsqueeze(1), -1e9)
         S = S.masked_fill(p_pad.unsqueeze(-1), 0.0)
 
