@@ -903,18 +903,24 @@ def main():
     fixed_train_ds = None
     train_shard_paths = None
 
-    if args.use_train_valid_csv and args.train_size is None:
-        fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
-        fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
-    elif not args.use_train_valid_csv:
+    if args.use_train_valid_csv:
+        if args.train_size is None:
+            # use full train.csv
+            fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+            fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
+        else:
+            # use first N rows
+            all_rows = read_csv_rows(args.train_csv)
+            train_rows = all_rows[: int(args.train_size)]
+            fixed_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True)
+            fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
+    else:
         train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
 
     for ep in range(1, args.epochs + 1):
         if args.use_train_valid_csv and args.train_size is not None:
-            epoch_seed = int(args.split_seed) + int(ep)
-            train_rows = read_csv_random_rows(args.train_csv, int(args.train_size), seed=epoch_seed)
-            epoch_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True)
-            train_loader = make_loader(epoch_train_ds, shuffle=True)
+            epoch_train_ds = fixed_train_ds
+            train_loader = fixed_train_loader
         elif args.use_train_valid_csv:
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
