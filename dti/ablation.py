@@ -357,6 +357,117 @@ class PretrainedLigandEncoder(nn.Module):
         pad_mask = (l_ids == self.pad_id)
         return self.enc(x, src_key_padding_mask=pad_mask)
 
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+
+
+def visualize_one_qk_map(
+    model,
+    loader,
+    device,
+    esm_tokenizer,
+    sample_idx_in_batch: int = 0,
+    show_token_labels: bool = False,
+    save_dir: str | None = None,
+    prefix: str = "sample",
+):
+    model.eval()
+    batch = next(iter(loader))
+
+    p_ids = batch.p_input_ids.to(device, non_blocking=True)
+    p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+    l_ids = batch.l_ids.to(device, non_blocking=True)
+
+    with torch.inference_mode():
+        logit, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+
+    S = aux["qk_scores"][sample_idx_in_batch].float().cpu().numpy()      # (Ll, Lp)
+    A = aux["attn_map"][sample_idx_in_batch].float().cpu().numpy()       # (Ll, Lp)
+    l_imp = aux["lig_importance"][sample_idx_in_batch].float().cpu().numpy()
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+
+    # pad removal
+    S_vis = S[~l_pad][:, ~p_pad]
+    A_vis = A[~l_pad][:, ~p_pad]
+    l_imp_vis = l_imp[~l_pad]
+
+    # token labels
+    p_tok_labels = None
+    l_tok_labels = None
+    if show_token_labels:
+        p_ids_1 = batch.p_input_ids[sample_idx_in_batch].cpu().tolist()
+        l_ids_1 = batch.l_ids[sample_idx_in_batch].cpu().tolist()
+
+        p_tok_labels = esm_tokenizer.convert_ids_to_tokens(p_ids_1)
+        p_tok_labels = p_tok_labels[1:]  # drop CLS
+        p_tok_labels = [t for t, is_pad in zip(p_tok_labels, p_pad) if not is_pad]
+
+        l_tok_labels = [str(x) for x in l_ids_1[1:]]  # drop ligand CLS
+        l_tok_labels = [t for t, is_pad in zip(l_tok_labels, l_pad) if not is_pad]
+
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch])
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+
+    # 1) QK score map
+    plt.figure(figsize=(10, 6))
+    plt.imshow(S_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"QK score map | prob={prob:.4f} y={y_bin:.0f}")
+    plt.xlabel("Protein tokens")
+    plt.ylabel("Ligand tokens")
+    if show_token_labels and p_tok_labels is not None and l_tok_labels is not None:
+        if len(p_tok_labels) <= 80:
+            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+        if len(l_tok_labels) <= 80:
+            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    # 2) Attention map
+    plt.figure(figsize=(10, 6))
+    plt.imshow(A_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"Attention map | prob={prob:.4f} y={y_bin:.0f}")
+    plt.xlabel("Protein tokens")
+    plt.ylabel("Ligand tokens")
+    if show_token_labels and p_tok_labels is not None and l_tok_labels is not None:
+        if len(p_tok_labels) <= 80:
+            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+        if len(l_tok_labels) <= 80:
+            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    # 3) Ligand importance
+    plt.figure(figsize=(10, 3))
+    plt.plot(np.arange(len(l_imp_vis)), l_imp_vis)
+    plt.title(f"Ligand importance | prob={prob:.4f} y={y_bin:.0f}")
+    plt.xlabel("Ligand token index")
+    plt.ylabel("importance")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_lig_importance.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    return {
+        "qk_scores": S_vis,
+        "attn_map": A_vis,
+        "lig_importance": l_imp_vis,
+        "prob": prob,
+        "y_bin": y_bin,
+        "protein_tokens": p_tok_labels,
+        "ligand_tokens": l_tok_labels,
+    }
 
 class ESMProteinEncoder(nn.Module):
     def __init__(self, model_name: str, device: torch.device, finetune: bool = False):
@@ -407,7 +518,13 @@ class QKOnlyDTIClassifier(nn.Module):
 
         self.v_proj = nn.Linear(d_model, d_model)
 
-    def forward(self, p_input_ids: torch.Tensor, p_attn_mask: torch.Tensor, l_ids: torch.Tensor):
+    def forward(
+            self,
+            p_input_ids: torch.Tensor,
+            p_attn_mask: torch.Tensor,
+            l_ids: torch.Tensor,
+            return_maps: bool = False,
+    ):
         aux = {}
         p_h = self.prot(p_input_ids, p_attn_mask)
         if self.p_proj is not None:
@@ -419,11 +536,9 @@ class QKOnlyDTIClassifier(nn.Module):
 
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
-        p_cls = p_h[:, 0, :]
         l_cls = l_h[:, 0, :]
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
-
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
@@ -434,11 +549,11 @@ class QKOnlyDTIClassifier(nn.Module):
             return logit, aux
 
         # Q = ligand, K = protein, V = ligand
-        q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)   # (B, Ll, D)
-        k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)   # (B, Lp, D)
-        v = self.v_proj(l_tok)                                          # (B, Ll, D)
+        q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)  # (B, Ll, D)
+        k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)  # (B, Lp, D)
+        v = l_tok  # (B, Ll, D)
 
-        S = torch.matmul(q, k.transpose(1, 2))                          # (B, Ll, Lp)
+        S = torch.matmul(q, k.transpose(1, 2))  # (B, Ll, Lp)
 
         S = S.masked_fill(p_pad.unsqueeze(1), -1e9)
         S = S.masked_fill(l_pad.unsqueeze(-1), 0.0)
@@ -446,16 +561,15 @@ class QKOnlyDTIClassifier(nn.Module):
         bad = (p_pad.all(dim=1) | l_pad.all(dim=1)).view(-1, 1, 1)
         S = torch.where(bad, torch.zeros_like(S), S)
 
-        A = torch.softmax(S, dim=-1)                                    # softmax over protein
+        A = torch.softmax(S, dim=-1)  # softmax over protein
         A = A.masked_fill(l_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
 
-        # proteinを見て重みづけした ligand self-value
-        # まず各 ligand token ごとに、proteinとの整合度を1スカラーに落とす
-        l_imp = A.max(dim=-1).values.masked_fill(l_pad, 0.0)
+        # ligand token importance
+        l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)  # (B, Ll)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)             # (B, D)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)  # (B, D)
 
         z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         z_delta = self.delta_head(z_delta_in).squeeze(-1)
@@ -463,6 +577,14 @@ class QKOnlyDTIClassifier(nn.Module):
         logit = z_delta
         aux["z_delta"] = z_delta
         aux["logit"] = logit
+
+        if return_maps:
+            aux["qk_scores"] = S.detach()  # before softmax
+            aux["attn_map"] = A.detach()  # after softmax
+            aux["lig_importance"] = l_imp.detach()
+            aux["p_pad"] = p_pad.detach()
+            aux["l_pad"] = l_pad.detach()
+
         return logit, aux
 
 # =========================================================
@@ -918,6 +1040,7 @@ def main():
         train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
 
     for ep in range(1, args.epochs + 1):
+        qk_save_dir = os.path.join(args.out_dir, "qk_maps")
         if args.use_train_valid_csv and args.train_size is not None:
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
@@ -997,7 +1120,17 @@ def main():
         print("[valid]", f"AUC={v_m['auroc']:.4f}", f"AP={v_m['ap']:.4f}", f"F1={v_m['f1']:.4f}", f"EF1={v_m['ef1']:.3f}", f"EF5={v_m['ef5']:.3f}", f"EF10={v_m['ef10']:.3f}")
         if final_m is not None:
             print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
-
+        if ep in [1, 2]:
+            visualize_one_qk_map(
+                model=model,
+                loader=valid_loader,
+                device=device,
+                esm_tokenizer=esm_tokenizer,
+                sample_idx_in_batch=0,
+                show_token_labels=False,
+                save_dir=qk_save_dir,
+                prefix=f"epoch{ep:03d}_valid_sample0",
+            )
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
 
