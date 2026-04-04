@@ -493,7 +493,8 @@ class ESMProteinEncoder(nn.Module):
 # Main model
 # =========================================================
 class QKOnlyDTIClassifier(nn.Module):
-    def __init__(self, protein_encoder: ESMProteinEncoder, ligand_encoder: PretrainedLigandEncoder, dropout: float):
+    def __init__(self, protein_encoder: ESMProteinEncoder, ligand_encoder: PretrainedLigandEncoder, dropout: float,
+        attn_temp: float = 2.0,):
         super().__init__()
         self.prot = protein_encoder
         self.lig = ligand_encoder
@@ -513,6 +514,7 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
+        self.attn_temp = float(attn_temp)
 
         self.lig_pad_id = int(self.lig.pad_id)
 
@@ -548,10 +550,10 @@ class QKOnlyDTIClassifier(nn.Module):
             aux["logit"] = logit
             return logit, aux
 
-        # Q = ligand, K = protein, V = ligand
         q = self.q_proj(l_tok)
         k = self.k_proj(p_tok)
         S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
+        S = S / self.attn_temp
 
         S = S.masked_fill(p_pad.unsqueeze(1), -1e9)
         S = S.masked_fill(l_pad.unsqueeze(-1), 0.0)
@@ -562,6 +564,15 @@ class QKOnlyDTIClassifier(nn.Module):
         A = torch.softmax(S, dim=-1)  # softmax over protein
         A = A.masked_fill(l_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
+        eps = 1e-8
+        A_safe = A.clamp_min(eps)
+        attn_entropy_tok = -(A_safe * torch.log(A_safe)).sum(dim=-1)  # (B, Ll)
+        attn_entropy_tok = attn_entropy_tok.masked_fill(l_pad, 0.0)
+
+        den = (~l_pad).sum(dim=1).clamp(min=1)
+        attn_entropy = (attn_entropy_tok.sum(dim=1) / den).mean()
+
+        aux["attn_entropy"] = attn_entropy
         context = torch.bmm(A, p_tok)  # (B, Ll, D)
         # ligand token importance
         l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)
@@ -708,15 +719,16 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 # Train
 # =========================================================
 def train_one_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-    pos_weight: float,
-    grad_clip: float = 1.0,
+        model: nn.Module,
+        loader: DataLoader,
+        optimizer: torch.optim.Optimizer,
+        device: torch.device,
+        pos_weight: float,
+        grad_clip: float = 1.0,
+        attn_entropy_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
-    losses, losses_main = [], []
+    losses, losses_main, losses_entropy = [], [], []
     use_amp = (device.type == "cuda")
     bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32))
 
@@ -733,11 +745,15 @@ def train_one_epoch(
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logit, aux = model(p_ids, p_msk, l_ids)
                 loss_main = bce(logit, y_bin)
-                loss = loss_main
+
+                loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
+                loss = loss_main + loss_entropy
         else:
             logit, aux = model(p_ids, p_msk, l_ids)
             loss_main = bce(logit, y_bin)
-            loss = loss_main
+
+            loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
+            loss = loss_main + loss_entropy
 
         loss.backward()
         if grad_clip > 0.0:
@@ -746,6 +762,7 @@ def train_one_epoch(
 
         losses.append(float(loss.detach().cpu().item()))
         losses_main.append(float(loss_main.detach().cpu().item()))
+        losses_entropy.append(float(loss_entropy.detach().cpu().item()))
         pbar.update(1)
         pbar.set_postfix(loss=f"{losses[-1]:.4f}")
 
@@ -753,6 +770,7 @@ def train_one_epoch(
     return {
         "loss": float(np.mean(losses)),
         "loss_main": float(np.mean(losses_main)),
+        "loss_entropy": float(np.mean(losses_entropy)),
     }
 
 
@@ -928,7 +946,8 @@ def main():
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
     ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-
+    ap.add_argument("--attn_temp", type=float, default=2.0)
+    ap.add_argument("--attn_entropy_lambda", type=float, default=1e-3)
     ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     args = ap.parse_args()
@@ -953,7 +972,12 @@ def main():
         debug_index_check=bool(args.lig_debug_index),
     )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
-    model = QKOnlyDTIClassifier(protein_encoder=prot_enc, ligand_encoder=lig_enc, dropout=args.dropout).to(device)
+    model = QKOnlyDTIClassifier(
+        protein_encoder=prot_enc,
+        ligand_encoder=lig_enc,
+        dropout=args.dropout,
+        attn_temp=args.attn_temp,
+    ).to(device)
 
     if args.dti_ckpt is not None:
         _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
@@ -1068,6 +1092,7 @@ def main():
             device=device,
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
+            attn_entropy_lambda=float(args.attn_entropy_lambda),
         )
 
         yhat_tr, yb_tr = predict(model, train_loader, device)
