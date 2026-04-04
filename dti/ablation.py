@@ -507,8 +507,8 @@ class QKOnlyDTIClassifier(nn.Module):
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
 
         self.delta_head = nn.Sequential(
-            nn.LayerNorm(2 * d_model),
-            nn.Linear(2 * d_model, d_model),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
@@ -535,14 +535,15 @@ class QKOnlyDTIClassifier(nn.Module):
         lig_pad_mask = (l_ids == self.lig_pad_id)
 
         p_tok = p_h[:, 1:, :]
+        p_tok = torch.nn.functional.dropout(p_tok, p=0.3, training=self.training)
         l_tok = l_h[:, 1:, :]
         l_cls = l_h[:, 0, :]
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z_delta_in = torch.cat([l_cls, l_cls], dim=-1)
-            z_delta = self.delta_head(z_delta_in).squeeze(-1)
+            l_sum = torch.zeros(l_h.size(0), l_h.size(-1), device=l_h.device, dtype=l_h.dtype)
+            z_delta = self.delta_head(l_sum).squeeze(-1)
             logit = z_delta
             aux["z_delta"] = z_delta
             aux["logit"] = logit
@@ -551,7 +552,6 @@ class QKOnlyDTIClassifier(nn.Module):
         # Q = ligand, K = protein, V = ligand
         q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)  # (B, Ll, D)
         k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)  # (B, Lp, D)
-        v = l_tok  # (B, Ll, D)
 
         S = torch.matmul(q, k.transpose(1, 2))  # (B, Ll, Lp)
 
@@ -564,15 +564,15 @@ class QKOnlyDTIClassifier(nn.Module):
         A = torch.softmax(S, dim=-1)  # softmax over protein
         A = A.masked_fill(l_pad.unsqueeze(-1), 0.0)
         A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
-
+        context = torch.bmm(A, p_tok)  # (B, Ll, D)
         # ligand token importance
-        l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)  # (B, Ll)
+        l_imp = A.max(dim=-1).values.masked_fill(l_pad, 0.0)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)  # (B, D)
-
-        z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
-        z_delta = self.delta_head(z_delta_in).squeeze(-1)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), context).squeeze(1)  # (B, D)
+        
+        # z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
+        z_delta = self.delta_head(l_sum).squeeze(-1)
 
         logit = z_delta
         aux["z_delta"] = z_delta
