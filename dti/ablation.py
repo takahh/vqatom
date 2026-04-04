@@ -535,7 +535,6 @@ class QKOnlyDTIClassifier(nn.Module):
         lig_pad_mask = (l_ids == self.lig_pad_id)
 
         p_tok = p_h[:, 1:, :]
-        p_tok = torch.nn.functional.dropout(p_tok, p=0.3, training=self.training)
         l_tok = l_h[:, 1:, :]
         l_cls = l_h[:, 0, :]
         p_pad = prot_pad_mask[:, 1:]
@@ -550,10 +549,9 @@ class QKOnlyDTIClassifier(nn.Module):
             return logit, aux
 
         # Q = ligand, K = protein, V = ligand
-        q = torch.nn.functional.normalize(self.q_proj(l_tok), dim=-1)  # (B, Ll, D)
-        k = torch.nn.functional.normalize(self.k_proj(p_tok), dim=-1)  # (B, Lp, D)
-
-        S = torch.matmul(q, k.transpose(1, 2))  # (B, Ll, Lp)
+        q = self.q_proj(l_tok)
+        k = self.k_proj(p_tok)
+        S = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(q.size(-1))
 
         S = S.masked_fill(p_pad.unsqueeze(1), -1e9)
         S = S.masked_fill(l_pad.unsqueeze(-1), 0.0)
@@ -566,11 +564,11 @@ class QKOnlyDTIClassifier(nn.Module):
         A = A.masked_fill(p_pad.unsqueeze(1), 0.0)
         context = torch.bmm(A, p_tok)  # (B, Ll, D)
         # ligand token importance
-        l_imp = A.max(dim=-1).values.masked_fill(l_pad, 0.0)
+        l_imp = A.mean(dim=-1).masked_fill(l_pad, 0.0)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
         l_sum = torch.bmm(l_imp.unsqueeze(1), context).squeeze(1)  # (B, D)
-        
+
         # z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         z_delta = self.delta_head(l_sum).squeeze(-1)
 
