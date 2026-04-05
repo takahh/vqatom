@@ -566,61 +566,61 @@ class QKOnlyDTIClassifier(nn.Module):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x.view(B, L, H * Dh)
 
-def forward(
-    self,
-    p_input_ids: torch.Tensor,
-    p_attn_mask: torch.Tensor,
-    l_ids: torch.Tensor,
-    return_maps: bool = False,
-):
-    aux = {}
+    def forward(
+        self,
+        p_input_ids: torch.Tensor,
+        p_attn_mask: torch.Tensor,
+        l_ids: torch.Tensor,
+        return_maps: bool = False,
+    ):
+        aux = {}
 
-    p_h = self.prot(p_input_ids, p_attn_mask)
-    if self.p_proj is not None:
-        p_h = self.p_proj(p_h)
+        p_h = self.prot(p_input_ids, p_attn_mask)
+        if self.p_proj is not None:
+            p_h = self.p_proj(p_h)
 
-    l_h = self.lig(l_ids)
+        l_h = self.lig(l_ids)
 
-    prot_pad_mask = (p_attn_mask == 0)       # (B, Lp_all)
-    lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
+        prot_pad_mask = (p_attn_mask == 0)       # (B, Lp_all)
+        lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
 
-    # CLS を除いた token 部分
-    p_tok = p_h[:, 1:, :]
-    l_tok = l_h[:, 1:, :]
-    p_cls = p_h[:, 0, :]
-    l_cls = l_h[:, 0, :]
+        # CLS を除いた token 部分
+        p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
+        p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
 
-    p_pad = prot_pad_mask[:, 1:]   # (B, Lp)
-    l_pad = lig_pad_mask[:, 1:]    # (B, Ll)
+        p_pad = prot_pad_mask[:, 1:]   # (B, Lp)
+        l_pad = lig_pad_mask[:, 1:]    # (B, Ll)
 
-    # 例: cross attention / qk
-    q = self.q_proj(l_tok)   # or p_tok depending on your design
-    k = self.k_proj(p_tok)
-    v = self.v_proj(p_tok)
+        # 例: cross attention / qk
+        q = self.q_proj(l_tok)   # or p_tok depending on your design
+        k = self.k_proj(p_tok)
+        v = self.v_proj(p_tok)
 
-    # raw QK
-    qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))  # (B, Ll, Lp)
+        # raw QK
+        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))  # (B, Ll, Lp)
 
-    # protein key padding mask
-    qk_scores = qk_scores.masked_fill(p_pad.unsqueeze(1), float("-inf"))
+        # protein key padding mask
+        qk_scores = qk_scores.masked_fill(p_pad.unsqueeze(1), float("-inf"))
 
-    attn_map = torch.softmax(qk_scores, dim=-1)  # (B, Ll, Lp)
+        attn_map = torch.softmax(qk_scores, dim=-1)  # (B, Ll, Lp)
 
-    # 以降 pooling / head ...
-    l_imp = attn_map.max(dim=-1).values.masked_fill(l_pad, 0.0)
-    l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        # 以降 pooling / head ...
+        l_imp = attn_map.max(dim=-1).values.masked_fill(l_pad, 0.0)
+        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-    l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)
-    z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
-    logit = self.delta_head(z_delta_in).squeeze(-1)
+        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)
+        z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
+        logit = self.delta_head(z_delta_in).squeeze(-1)
 
-    if return_maps:
-        aux["qk_scores"] = qk_scores
-        aux["attn_map"] = attn_map
-        aux["p_pad"] = p_pad
-        aux["l_pad"] = l_pad
+        if return_maps:
+            aux["qk_scores"] = qk_scores
+            aux["attn_map"] = attn_map
+            aux["p_pad"] = p_pad
+            aux["l_pad"] = l_pad
 
-    return logit, aux
+        return logit, aux
 
 # =========================================================
 # Metrics / predict
