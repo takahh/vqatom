@@ -566,114 +566,61 @@ class QKOnlyDTIClassifier(nn.Module):
         x = x.permute(0, 2, 1, 3).contiguous()
         return x.view(B, L, H * Dh)
 
-    def forward(
-        self,
-        p_input_ids: torch.Tensor,
-        p_attn_mask: torch.Tensor,
-        l_ids: torch.Tensor,
-        return_maps: bool = False,
-    ):
-        aux = {}
+def forward(
+    self,
+    p_input_ids: torch.Tensor,
+    p_attn_mask: torch.Tensor,
+    l_ids: torch.Tensor,
+    return_maps: bool = False,
+):
+    aux = {}
 
-        p_h = self.prot(p_input_ids, p_attn_mask)
-        if self.p_proj is not None:
-            p_h = self.p_proj(p_h)
+    p_h = self.prot(p_input_ids, p_attn_mask)
+    if self.p_proj is not None:
+        p_h = self.p_proj(p_h)
 
-        l_h = self.lig(l_ids)
+    l_h = self.lig(l_ids)
 
-        prot_pad_mask = (p_attn_mask == 0)
-        lig_pad_mask = (l_ids == self.lig_pad_id)
+    prot_pad_mask = (p_attn_mask == 0)       # (B, Lp_all)
+    lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
 
-        # protein tokens only
-        p_tok = p_h[:, 1:, :]  # (B, Lp, D)
-        p_pad = prot_pad_mask[:, 1:]  # (B, Lp)
+    # CLS を除いた token 部分
+    p_tok = p_h[:, 1:, :]
+    l_tok = l_h[:, 1:, :]
+    p_cls = p_h[:, 0, :]
+    l_cls = l_h[:, 0, :]
 
-        # ligand tokens only (CLSを除く)
-        l_tok = l_h[:, 1:, :]  # (B, Ll, D)
-        l_pad = lig_pad_mask[:, 1:]  # (B, Ll)
+    p_pad = prot_pad_mask[:, 1:]   # (B, Lp)
+    l_pad = lig_pad_mask[:, 1:]    # (B, Ll)
 
-        B = l_h.size(0)
-        D = l_h.size(-1)
+    # 例: cross attention / qk
+    q = self.q_proj(l_tok)   # or p_tok depending on your design
+    k = self.k_proj(p_tok)
+    v = self.v_proj(p_tok)
 
-        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z = torch.zeros(B, D, device=l_h.device, dtype=l_h.dtype)
-            z_delta = self.delta_head(z).squeeze(-1)
-            logit = z_delta
-            aux["z_delta"] = z_delta
-            aux["logit"] = logit
-            aux["attn_entropy"] = torch.zeros((), device=l_h.device, dtype=l_h.dtype)
-            if return_maps:
-                aux["qk_scores"] = torch.zeros(B, self.n_heads, 0, 0, device=l_h.device, dtype=l_h.dtype)
-                aux["attn_map"] = torch.zeros(B, self.n_heads, 0, 0, device=l_h.device, dtype=l_h.dtype)
-                aux["p_pad"] = p_pad.detach()
-                aux["l_pad"] = l_pad.detach()
-            return logit, aux
+    # raw QK
+    qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))  # (B, Ll, Lp)
 
-        # projections
-        q = self.q_proj(l_tok)  # (B, Ll, D)
-        k = self.k_proj(p_tok)  # (B, Lp, D)
-        v = self.v_proj(p_tok)  # (B, Lp, D)
+    # protein key padding mask
+    qk_scores = qk_scores.masked_fill(p_pad.unsqueeze(1), float("-inf"))
 
-        # split heads
-        q = self._split_heads(q)  # (B, H, Ll, Dh)
-        k = self._split_heads(k)  # (B, H, Lp, Dh)
-        v = self._split_heads(v)  # (B, H, Lp, Dh)
+    attn_map = torch.softmax(qk_scores, dim=-1)  # (B, Ll, Lp)
 
-        # attention scores
-        S = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.head_dim)  # (B, H, Ll, Lp)
-        S = S / self.attn_temp
+    # 以降 pooling / head ...
+    l_imp = attn_map.max(dim=-1).values.masked_fill(l_pad, 0.0)
+    l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        # protein pad を mask
-        S = S.masked_fill(p_pad.unsqueeze(1).unsqueeze(2), -1e9)
+    l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)
+    z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
+    logit = self.delta_head(z_delta_in).squeeze(-1)
 
-        # 全proteinがpadなら壊れないように
-        bad_p = p_pad.all(dim=1).view(B, 1, 1, 1)
-        S = torch.where(bad_p, torch.zeros_like(S), S)
+    if return_maps:
+        aux["qk_scores"] = qk_scores
+        aux["attn_map"] = attn_map
+        aux["p_pad"] = p_pad
+        aux["l_pad"] = l_pad
 
-        A = torch.softmax(S, dim=-1)  # (B, H, Ll, Lp)
-        A = A.masked_fill(p_pad.unsqueeze(1).unsqueeze(2), 0.0)
-
-        # ligand pad query も 0 にする
-        A = A.masked_fill(l_pad.unsqueeze(1).unsqueeze(-1), 0.0)
-
-        # entropy regularization
-        eps = 1e-8
-        A_safe = A.clamp_min(eps)
-        attn_entropy = -(A_safe * torch.log(A_safe)).sum(dim=-1)  # (B, H, Ll)
-        attn_entropy = attn_entropy.masked_fill(l_pad.unsqueeze(1), 0.0)
-
-        den = (~l_pad).sum(dim=1).clamp(min=1).float()  # (B,)
-        attn_entropy = attn_entropy.sum(dim=-1) / den.unsqueeze(1)  # (B,H)
-        attn_entropy = attn_entropy.mean()
-        aux["attn_entropy"] = attn_entropy
-
-        # 各ligand tokenごとに protein から情報回収
-        z_tok = torch.matmul(A, v)  # (B, H, Ll, Dh)
-        z_tok = self._merge_heads(z_tok)  # (B, Ll, D)
-        z_tok = self.out_proj(z_tok)  # (B, Ll, D)
-
-        # ligand側 pooling
-        l_mask = (~l_pad).unsqueeze(-1).float()  # (B, Ll, 1)
-        z = (z_tok * l_mask).sum(dim=1) / l_mask.sum(dim=1).clamp(min=1.0)  # (B, D)
-
-        z_delta = self.delta_head(z).squeeze(-1)
-        logit = z_delta
-
-        aux["z_delta"] = z_delta
-        aux["logit"] = logit
-
-        z_delta = self.delta_head(z).squeeze(-1)
-        logit = z_delta
-
-        aux["z_delta"] = z_delta
-        aux["logit"] = logit
-
-        if return_maps:
-            aux["qk_scores"] = S.detach()                    # (B, H, 1, Lp)
-            aux["attn_map"] = A.detach()                     # (B, H, 1, Lp)
-            aux["p_pad"] = p_pad.detach()
-
-        return logit, aux
+    return logit, aux
 
 # =========================================================
 # Metrics / predict
