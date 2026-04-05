@@ -529,6 +529,7 @@ class QKOnlyDTIClassifier(nn.Module):
         dropout: float,
         attn_temp: float = 2.0,
         n_heads: int = 4,
+        protein_token_dropout: float = 0.0,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -546,12 +547,18 @@ class QKOnlyDTIClassifier(nn.Module):
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        # multi-head projections
+        # projections
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
         self.v_proj = nn.Linear(d_model, d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
-        self.dropout = dropout
+
+        self.dropout = float(dropout)
+        self.attn_temp = float(attn_temp)
+        self.protein_token_dropout = float(protein_token_dropout)
+        self.lig_pad_id = int(self.lig.pad_id)
+
+        # input = [lig_cls, interaction_summary]
         self.delta_head = nn.Sequential(
             nn.LayerNorm(self.d_model * 2),
             nn.Linear(self.d_model * 2, self.d_model),
@@ -560,20 +567,28 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Linear(self.d_model, 1),
         )
 
-        self.attn_temp = float(attn_temp)
-        self.lig_pad_id = int(self.lig.pad_id)
+    def _safe_masked_softmax(self, scores: torch.Tensor, key_pad_mask: torch.Tensor) -> torch.Tensor:
+        """
+        scores:       (B, Ll, Lp)
+        key_pad_mask: (B, Lp)  True=PAD
+        """
+        scores = scores.masked_fill(key_pad_mask.unsqueeze(1), float("-inf"))
 
-    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, L, D) -> (B, H, L, Dh)
-        B, L, D = x.shape
-        x = x.view(B, L, self.n_heads, self.head_dim)
-        return x.permute(0, 2, 1, 3).contiguous()
+        # 全部 mask の行があると NaN になるので救済
+        all_masked = key_pad_mask.all(dim=1)  # (B,)
+        if all_masked.any():
+            scores = scores.clone()
+            scores[all_masked] = 0.0
 
-    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, H, L, Dh) -> (B, L, D)
-        B, H, L, Dh = x.shape
-        x = x.permute(0, 2, 1, 3).contiguous()
-        return x.view(B, L, H * Dh)
+        attn = torch.softmax(scores, dim=-1)
+
+        # 念のため PAD key をゼロ化
+        attn = attn.masked_fill(key_pad_mask.unsqueeze(1), 0.0)
+
+        # 再正規化
+        denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        attn = attn / denom
+        return attn
 
     def forward(
         self,
@@ -584,43 +599,79 @@ class QKOnlyDTIClassifier(nn.Module):
     ):
         aux = {}
 
-        p_h = self.prot(p_input_ids, p_attn_mask)
+        p_h = self.prot(p_input_ids, p_attn_mask)   # (B, Lp_all, Dp)
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)
+            p_h = self.p_proj(p_h)                  # (B, Lp_all, D)
 
-        l_h = self.lig(l_ids)
+        l_h = self.lig(l_ids)                       # (B, Ll_all, D)
 
         prot_pad_mask = (p_attn_mask == 0)          # (B, Lp_all)
         lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
 
-        # CLS を除いた token 部分
-        p_tok = p_h[:, 1:, :]
-        l_tok = l_h[:, 1:, :]
-        p_cls = p_h[:, 0, :]
-        l_cls = l_h[:, 0, :]
+        # CLS を除く
+        p_tok = p_h[:, 1:, :]                       # (B, Lp, D)
+        l_tok = l_h[:, 1:, :]                       # (B, Ll, D)
+        p_cls = p_h[:, 0, :]                        # (B, D)
+        l_cls = l_h[:, 0, :]                        # (B, D)
 
-        p_pad = prot_pad_mask[:, 1:]   # (B, Lp)
-        l_pad = lig_pad_mask[:, 1:]    # (B, Ll)
+        p_pad = prot_pad_mask[:, 1:]                # (B, Lp)
+        l_pad = lig_pad_mask[:, 1:]                 # (B, Ll)
 
-        # ligand -> protein の QK
-        q = self.q_proj(l_tok)
-        k = self.k_proj(p_tok)
+        # token が空の異常ケースを救済
+        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
+            z_delta_in = torch.cat([l_cls, p_cls], dim=-1)
+            logit = self.delta_head(z_delta_in).squeeze(-1)
 
-        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))  # (B, Ll, Lp)
-        qk_scores = qk_scores.masked_fill(p_pad.unsqueeze(1), float("-inf"))
+            if return_maps:
+                B = p_input_ids.size(0)
+                aux["qk_scores"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
+                aux["attn_map"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
+                aux["p_pad"] = p_pad
+                aux["l_pad"] = l_pad
+                aux["l_imp"] = torch.zeros(B, 0, device=p_input_ids.device)
+                aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
+            return logit, aux
 
-        attn_map = torch.softmax(qk_scores, dim=-1)  # (B, Ll, Lp)
+        # training 時に protein token を少し落とす
+        if self.training and self.protein_token_dropout > 0.0:
+            drop_mask = (torch.rand_like(p_pad.float()) < self.protein_token_dropout) & (~p_pad)
+            p_pad = p_pad | drop_mask
+
+            # すべて drop されると困るので、各サンプルで最低1 tokenは残す
+            all_dropped = p_pad.all(dim=1)  # (B,)
+            if all_dropped.any():
+                p_pad = p_pad.clone()
+                keep_idx = (~prot_pad_mask[:, 1:]).float().argmax(dim=1)
+                for b in torch.where(all_dropped)[0]:
+                    p_pad[b, keep_idx[b]] = False
+
+        # ligand(query) -> protein(key,value)
+        q = self.q_proj(l_tok)   # (B, Ll, D)
+        k = self.k_proj(p_tok)   # (B, Lp, D)
+        v = self.v_proj(p_tok)   # (B, Lp, D)
+
+        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))   # (B, Ll, Lp)
+        qk_scores = qk_scores / self.attn_temp
+
+        attn_map = self._safe_masked_softmax(qk_scores, p_pad)                      # (B, Ll, Lp)
+
+        # protein values を読む
+        ctx = torch.matmul(attn_map, v)                                             # (B, Ll, D)
+
+        # ligand token と protein-context を融合
+        joint = l_tok + self.out_proj(ctx)                                          # (B, Ll, D)
 
         # ligand token importance
-        l_imp = attn_map.max(dim=-1).values          # (B, Ll)
+        # max ではなく mean にすることで 1点集中 shortcut を少し弱める
+        l_imp = attn_map.mean(dim=-1)                                               # (B, Ll)
         l_imp = l_imp.masked_fill(l_pad, 0.0)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        # ligand 側を集約する
-        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B, D)
+        # interaction-aware pooling
+        joint_sum = torch.bmm(l_imp.unsqueeze(1), joint).squeeze(1)                 # (B, D)
 
-        z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
-        logit = self.delta_head(z_delta_in).squeeze(-1)
+        z_delta_in = torch.cat([l_cls, joint_sum], dim=-1)                          # (B, 2D)
+        logit = self.delta_head(z_delta_in).squeeze(-1)                             # (B,)
 
         if return_maps:
             aux["qk_scores"] = qk_scores
@@ -628,6 +679,13 @@ class QKOnlyDTIClassifier(nn.Module):
             aux["p_pad"] = p_pad
             aux["l_pad"] = l_pad
             aux["l_imp"] = l_imp
+
+            # entropy regularization 用
+            attn_safe = attn_map.clamp(min=1e-8)
+            ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)                   # (B, Ll)
+            ent = ent.masked_fill(l_pad, 0.0)
+            denom = (~l_pad).sum(dim=1).clamp(min=1)
+            aux["attn_entropy"] = (ent.sum(dim=1) / denom).mean()
 
         return logit, aux
 
@@ -1018,12 +1076,14 @@ def main():
         debug_index_check=bool(args.lig_debug_index),
     )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+
     model = QKOnlyDTIClassifier(
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
         dropout=args.dropout,
         attn_temp=args.attn_temp,
         n_heads=args.n_heads,
+        protein_token_dropout=0.10,
     ).to(device)
 
     if args.dti_ckpt is not None:
