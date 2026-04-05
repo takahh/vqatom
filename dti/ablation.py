@@ -754,18 +754,20 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 # Train
 # =========================================================
 def train_one_epoch(
-        model: nn.Module,
-        loader: DataLoader,
-        optimizer: torch.optim.Optimizer,
-        device: torch.device,
-        pos_weight: float,
-        grad_clip: float = 1.0,
-        attn_entropy_lambda: float = 0.0,
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    device: torch.device,
+    pos_weight: float,
+    grad_clip: float = 1.0,
+    attn_entropy_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
     losses, losses_main, losses_entropy = [], [], []
     use_amp = (device.type == "cuda")
-    bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32))
+    bce = nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
+    )
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
     for batch in loader:
@@ -780,23 +782,33 @@ def train_one_epoch(
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logit, aux = model(p_ids, p_msk, l_ids)
                 loss_main = bce(logit, y_bin)
+
                 loss_entropy = torch.tensor(0.0, device=logit.device)
                 if attn_entropy_lambda != 0 and "attn_entropy" in aux:
                     loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
+
+                loss = loss_main + loss_entropy
         else:
             logit, aux = model(p_ids, p_msk, l_ids)
             loss_main = bce(logit, y_bin)
 
-            loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
-        loss = loss_main + loss_entropy
+            loss_entropy = torch.tensor(0.0, device=logit.device)
+            if attn_entropy_lambda != 0 and "attn_entropy" in aux:
+                loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
+
+            loss = loss_main + loss_entropy
+
         loss.backward()
+
         if grad_clip > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+
         optimizer.step()
 
         losses.append(float(loss.detach().cpu().item()))
         losses_main.append(float(loss_main.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
+
         pbar.update(1)
         pbar.set_postfix(loss=f"{losses[-1]:.4f}")
 
@@ -806,7 +818,6 @@ def train_one_epoch(
         "loss_main": float(np.mean(losses_main)),
         "loss_entropy": float(np.mean(losses_entropy)),
     }
-
 
 # =========================================================
 # Save/load
