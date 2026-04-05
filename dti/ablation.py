@@ -141,6 +141,7 @@ class Batch:
     p_attn_mask: torch.Tensor
     l_ids: torch.Tensor
     y_bin: torch.Tensor
+    y_reg: torch.Tensor
 
 
 class DTIDataset(Dataset):
@@ -178,6 +179,13 @@ class DTIDataset(Dataset):
             rr["lig_tok"] = lig_tok
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
+            # dataset作成後に
+            ys = [r["y"] for r in self.rows]
+            mean = np.mean(ys)
+            std = np.std(ys) + 1e-6
+
+            for r in self.rows:
+                r["y_reg"] = (r["y"] - mean) / std
             self.rows.append(rr)
 
         if not self.rows:
@@ -214,8 +222,14 @@ def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
 
     l_ids = pad_1d(l_ids_list, lig_pad)
     y_bin = torch.tensor([float(s["y_bin"]) for s in samples], dtype=torch.float32)
-    return Batch(p_input_ids=p_input_ids, p_attn_mask=p_attn_mask, l_ids=l_ids, y_bin=y_bin)
-
+    y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
+    return Batch(
+        p_input_ids=p_input_ids,
+        p_attn_mask=p_attn_mask,
+        l_ids=l_ids,
+        y_bin=y_bin,
+        y_reg=y_reg,
+    )
 
 # =========================================================
 # Checkpoint / vocab utils
@@ -385,12 +399,12 @@ def visualize_one_qk_map(
     l_ids = batch.l_ids.to(device, non_blocking=True)
 
     with torch.inference_mode():
-        logit, aux = model(p_ids, p_msk, l_ids, return_maps=True)
-
+        logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
     # qk_scores, attn_map:
     #   old: (B, H, 1, Lp)
     #   new: (B, H, Ll, Lp)
-    S = aux["qk_scores"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
+    S = aux["qk_scores_heads"][sample_idx_in_batch]  # (H, Ll, Lp)
+
     A = aux["attn_map"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
 
     p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)  # (Lp,)
@@ -428,6 +442,8 @@ def visualize_one_qk_map(
 
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch])
+    y_reg_pred = float(yhat_reg[sample_idx_in_batch].detach().cpu())
+    y_reg_true = float(batch.y_reg[sample_idx_in_batch])
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
@@ -436,7 +452,7 @@ def visualize_one_qk_map(
     plt.figure(figsize=(10, 6))
     plt.imshow(S_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Head-mean Ligand->Protein QK | prob={prob:.4f} y={y_bin:.0f}")
+    plt.title(f"Head-mean Ligand->Protein QK | prob={prob:.4f} y_bin={y_bin:.0f} y_reg={y_reg_true:.3f} pred={y_reg_pred:.3f}")
     plt.xlabel("Protein tokens")
     plt.ylabel("Ligand tokens")
     if show_token_labels:
@@ -488,6 +504,32 @@ def visualize_one_qk_map(
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
+
+    if "qk_scores_heads" in aux:
+        for h in range(aux["qk_scores_heads"].shape[1]):
+            S_h = aux["qk_scores_heads"][sample_idx_in_batch, h].float().cpu().numpy()
+            A_h = aux["attn_map_heads"][sample_idx_in_batch, h].float().cpu().numpy()
+
+            S_h = S_h[~l_pad][:, ~p_pad]
+            A_h = A_h[~l_pad][:, ~p_pad]
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(S_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Head{h} QK")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_head{h}.png"), dpi=200, bbox_inches="tight")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(A_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Head{h} attention")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_head{h}.png"), dpi=200, bbox_inches="tight")
+            plt.close()
 
     return {
         "qk_scores": S_vis,
@@ -547,19 +589,38 @@ class QKOnlyDTIClassifier(nn.Module):
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        # projections
+        # true multi-head projections
         self.q_proj = nn.Linear(d_model, d_model, bias=False)
         self.k_proj = nn.Linear(d_model, d_model, bias=False)
-        self.v_proj = nn.Linear(d_model, d_model, bias=False)
-        self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
+        # dual V
+        self.v_prot_proj = nn.Linear(d_model, d_model, bias=False)  # protein flow
+        self.v_lig_proj = nn.Linear(d_model, d_model, bias=False)   # ligand self flow
+
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.dropout = float(dropout)
         self.attn_temp = float(attn_temp)
         self.protein_token_dropout = float(protein_token_dropout)
         self.lig_pad_id = int(self.lig.pad_id)
 
-        # input = [lig_cls, interaction_summary]
-        self.delta_head = nn.Sequential(
+        # fuse [ctx_from_prot, lig_self]
+        self.fuse = nn.Sequential(
+            nn.LayerNorm(self.d_model * 2),
+            nn.Linear(self.d_model * 2, self.d_model),
+            nn.GELU(),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.d_model, self.d_model),
+        )
+
+        # pooled token summary + ligand CLS
+        self.cls_head = nn.Sequential(
+            nn.LayerNorm(self.d_model * 2),
+            nn.Linear(self.d_model * 2, self.d_model),
+            nn.GELU(),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.d_model, 1),
+        )
+        self.reg_head = nn.Sequential(
             nn.LayerNorm(self.d_model * 2),
             nn.Linear(self.d_model * 2, self.d_model),
             nn.GELU(),
@@ -567,25 +628,32 @@ class QKOnlyDTIClassifier(nn.Module):
             nn.Linear(self.d_model, 1),
         )
 
-    def _safe_masked_softmax(self, scores: torch.Tensor, key_pad_mask: torch.Tensor) -> torch.Tensor:
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, L, D) -> (B, H, L, Dh)
+        B, L, D = x.shape
+        x = x.view(B, L, self.n_heads, self.head_dim).transpose(1, 2).contiguous()
+        return x
+
+    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, H, L, Dh) -> (B, L, D)
+        B, H, L, Dh = x.shape
+        x = x.transpose(1, 2).contiguous().view(B, L, H * Dh)
+        return x
+
+    def _safe_masked_softmax_4d(self, scores: torch.Tensor, key_pad_mask: torch.Tensor) -> torch.Tensor:
         """
-        scores:       (B, Ll, Lp)
+        scores:       (B, H, Ll, Lp)
         key_pad_mask: (B, Lp)  True=PAD
         """
-        scores = scores.masked_fill(key_pad_mask.unsqueeze(1), float("-inf"))
+        scores = scores.masked_fill(key_pad_mask[:, None, None, :], float("-inf"))
 
-        # 全部 mask の行があると NaN になるので救済
         all_masked = key_pad_mask.all(dim=1)  # (B,)
         if all_masked.any():
             scores = scores.clone()
             scores[all_masked] = 0.0
 
         attn = torch.softmax(scores, dim=-1)
-
-        # 念のため PAD key をゼロ化
-        attn = attn.masked_fill(key_pad_mask.unsqueeze(1), 0.0)
-
-        # 再正規化
+        attn = attn.masked_fill(key_pad_mask[:, None, None, :], 0.0)
         denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
         attn = attn / denom
         return attn
@@ -605,89 +673,109 @@ class QKOnlyDTIClassifier(nn.Module):
 
         l_h = self.lig(l_ids)                       # (B, Ll_all, D)
 
-        prot_pad_mask = (p_attn_mask == 0)          # (B, Lp_all)
-        lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
+        prot_pad_mask = (p_attn_mask == 0)
+        lig_pad_mask  = (l_ids == self.lig_pad_id)
 
-        # CLS を除く
+        # drop CLS
         p_tok = p_h[:, 1:, :]                       # (B, Lp, D)
         l_tok = l_h[:, 1:, :]                       # (B, Ll, D)
-        p_cls = p_h[:, 0, :]                        # (B, D)
-        l_cls = l_h[:, 0, :]                        # (B, D)
+        p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
 
-        p_pad = prot_pad_mask[:, 1:]                # (B, Lp)
-        l_pad = lig_pad_mask[:, 1:]                 # (B, Ll)
+        p_pad = prot_pad_mask[:, 1:]
+        l_pad = lig_pad_mask[:, 1:]
 
-        # token が空の異常ケースを救済
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z_delta_in = torch.cat([l_cls, p_cls], dim=-1)
-            logit = self.delta_head(z_delta_in).squeeze(-1)
-
+            z = torch.cat([l_cls, p_cls], dim=-1)
+            logit = self.cls_head(z).squeeze(-1)
+            yhat_reg = self.reg_head(z).squeeze(-1)
             if return_maps:
                 B = p_input_ids.size(0)
-                aux["qk_scores"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["attn_map"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
+                aux["qk_scores"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
+                aux["attn_map"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
                 aux["l_imp"] = torch.zeros(B, 0, device=p_input_ids.device)
                 aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
-            return logit, aux
+            return logit, yhat_reg, aux
 
-        # training 時に protein token を少し落とす
         if self.training and self.protein_token_dropout > 0.0:
             drop_mask = (torch.rand_like(p_pad.float()) < self.protein_token_dropout) & (~p_pad)
             p_pad = p_pad | drop_mask
 
-            # すべて drop されると困るので、各サンプルで最低1 tokenは残す
-            all_dropped = p_pad.all(dim=1)  # (B,)
+            all_dropped = p_pad.all(dim=1)
             if all_dropped.any():
                 p_pad = p_pad.clone()
                 keep_idx = (~prot_pad_mask[:, 1:]).float().argmax(dim=1)
                 for b in torch.where(all_dropped)[0]:
                     p_pad[b, keep_idx[b]] = False
 
-        # ligand(query) -> protein(key,value)
-        q = self.q_proj(l_tok)   # (B, Ll, D)
-        k = self.k_proj(p_tok)   # (B, Lp, D)
-        v = self.v_proj(p_tok)   # (B, Lp, D)
+        # projections
+        q = self._split_heads(self.q_proj(l_tok))             # (B,H,Ll,Dh)
+        k = self._split_heads(self.k_proj(p_tok))             # (B,H,Lp,Dh)
+        v_prot = self._split_heads(self.v_prot_proj(p_tok))   # (B,H,Lp,Dh)
+        v_lig  = self._split_heads(self.v_lig_proj(l_tok))    # (B,H,Ll,Dh)
 
-        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))   # (B, Ll, Lp)
-        qk_scores = qk_scores / self.attn_temp
+        # multi-head QK
+        temp = self.attn_temp + torch.arange(self.n_heads, device=q.device).view(1, -1, 1, 1) * 0.2
+        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / (math.sqrt(self.head_dim) * temp)
 
-        attn_map = self._safe_masked_softmax(qk_scores, p_pad)                      # (B, Ll, Lp)
 
-        # protein values を読む
-        ctx = torch.matmul(attn_map, v)                                             # (B, Ll, D)
+        attn_map = self._safe_masked_softmax_4d(qk_scores, p_pad)                      # (B,H,Ll,Lp)
 
-        # ligand token と protein-context を融合
-        joint = l_tok + self.out_proj(ctx)                                          # (B, Ll, D)
+        # protein flow
+        ctx_prot = torch.matmul(attn_map, v_prot)                                       # (B,H,Ll,Dh)
 
-        # ligand token importance
-        # max ではなく mean にすることで 1点集中 shortcut を少し弱める
-        l_imp = attn_map.mean(dim=-1)                                               # (B, Ll)
-        l_imp = l_imp.masked_fill(l_pad, 0.0)
-        l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        # ligand self flow (broadcast as another stream)
+        lig_self = v_lig                                                                # (B,H,Ll,Dh)
 
-        # interaction-aware pooling
-        joint_sum = torch.bmm(l_imp.unsqueeze(1), joint).squeeze(1)                 # (B, D)
+        ctx_prot = self._merge_heads(ctx_prot)                                          # (B,Ll,D)
+        lig_self = self._merge_heads(lig_self)                                          # (B,Ll,D)
 
-        z_delta_in = torch.cat([l_cls, joint_sum], dim=-1)                          # (B, 2D)
-        logit = self.delta_head(z_delta_in).squeeze(-1)                             # (B,)
+        joint_in = torch.cat([ctx_prot, lig_self], dim=-1)                             # (B,Ll,2D)
+        joint = self.fuse(joint_in)                                                     # (B,Ll,D)
+        gate = torch.sigmoid(self.out_proj(joint))
+        joint = l_tok + gate * joint
+
+        # MAX pool over ligand tokens
+        joint_masked = joint.masked_fill(l_pad.unsqueeze(-1), float("-inf"))            # (B,Ll,D)
+        joint_max = joint_masked.max(dim=1).values                                      # (B,D)
+
+        # if all ligand tokens were masked for some weird case
+        bad = torch.isinf(joint_max).any(dim=1)
+        if bad.any():
+            joint_max = joint_max.clone()
+            joint_max[bad] = 0.0
+
+        z = torch.cat([l_cls, joint_max], dim=-1)                                       # (B,2D)
+
+        logit = self.cls_head(z).squeeze(-1)
+        yhat_reg = self.reg_head(z).squeeze(-1)
 
         if return_maps:
-            aux["qk_scores"] = qk_scores
-            aux["attn_map"] = attn_map
+            # head mean only for the old visualizer
+            aux["qk_scores"] = qk_scores.mean(dim=1)   # (B,Ll,Lp)
+            aux["attn_map"] = attn_map.mean(dim=1)     # (B,Ll,Lp)
+
+            # also keep full heads for debugging
+            aux["qk_scores_heads"] = qk_scores         # (B,H,Ll,Lp)
+            aux["attn_map_heads"] = attn_map           # (B,H,Ll,Lp)
+
             aux["p_pad"] = p_pad
             aux["l_pad"] = l_pad
+
+            # token importance from max-over-protein then mean-over-head
+            l_imp = attn_map.max(dim=-1).values.mean(dim=1)                              # (B,Ll)
+            l_imp = l_imp.masked_fill(l_pad, 0.0)
             aux["l_imp"] = l_imp
 
-            # entropy regularization 用
             attn_safe = attn_map.clamp(min=1e-8)
-            ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)                   # (B, Ll)
-            ent = ent.masked_fill(l_pad, 0.0)
+            ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)                        # (B,H,Ll)
+            ent = ent.masked_fill(l_pad[:, None, :], 0.0)
             denom = (~l_pad).sum(dim=1).clamp(min=1)
-            aux["attn_entropy"] = (ent.sum(dim=1) / denom).mean()
+            aux["attn_entropy"] = (ent.sum(dim=(1, 2)) / (denom * self.n_heads)).mean()
 
-        return logit, aux
+        return logit, yhat_reg, aux
 
 
 # =========================================================
@@ -711,6 +799,7 @@ def compute_pos_weight_from_dataset(ds: Dataset) -> float:
 def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     model.eval()
     prob_list, ybin_list = [], []
+    yreg_pred_list, yreg_true_list = [], []
     use_amp = (device.type == "cuda")
 
     with torch.inference_mode():
@@ -721,17 +810,48 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
 
             if use_amp:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logit, _ = model(p_ids, p_msk, l_ids)
+                    logit, yhat_reg, _ = model(p_ids, p_msk, l_ids)
             else:
-                logit, _ = model(p_ids, p_msk, l_ids)
+                logit, yhat_reg, _ = model(p_ids, p_msk, l_ids)
 
             prob = torch.sigmoid(logit)
+
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
+            yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
+            yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
 
     y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
     y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
-    return y_prob, y_bin
+    y_reg_pred = np.concatenate(yreg_pred_list, axis=0) if yreg_pred_list else np.array([], dtype=np.float64)
+    y_reg_true = np.concatenate(yreg_true_list, axis=0) if yreg_true_list else np.array([], dtype=np.float64)
+    return y_prob, y_bin, y_reg_pred, y_reg_true
+
+
+def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
+    if y_pred.size == 0:
+        return {"mae": 0.0, "rmse": 0.0, "pearson": 0.0, "spearman": 0.0}
+
+    mae = float(np.mean(np.abs(y_pred - y_true)))
+    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
+
+    if len(y_pred) < 2:
+        return {"mae": mae, "rmse": rmse, "pearson": 0.0, "spearman": 0.0}
+
+    pearson = float(np.corrcoef(y_pred, y_true)[0, 1]) if np.std(y_pred) > 0 and np.std(y_true) > 0 else 0.0
+
+    # simple spearman via rank
+    yp_rank = np.argsort(np.argsort(y_pred))
+    yt_rank = np.argsort(np.argsort(y_true))
+    spearman = float(np.corrcoef(yp_rank, yt_rank)[0, 1]) if np.std(yp_rank) > 0 and np.std(yt_rank) > 0 else 0.0
+
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "pearson": pearson,
+        "spearman": spearman,
+    }
+
 
 
 def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
@@ -820,13 +940,16 @@ def train_one_epoch(
     pos_weight: float,
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
+    reg_lambda: float = 0.1,
 ) -> Dict[str, float]:
     model.train()
-    losses, losses_main, losses_entropy = [], [], []
+    losses, losses_cls, losses_reg, losses_entropy = [], [], [], []
     use_amp = (device.type == "cuda")
+
     bce = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
     )
+    reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
     for batch in loader:
@@ -834,28 +957,31 @@ def train_one_epoch(
         p_msk = batch.p_attn_mask.to(device, non_blocking=True)
         l_ids = batch.l_ids.to(device, non_blocking=True)
         y_bin = batch.y_bin.to(device, non_blocking=True).float()
+        y_reg = batch.y_reg.to(device, non_blocking=True).float()
 
         optimizer.zero_grad(set_to_none=True)
 
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logit, aux = model(p_ids, p_msk, l_ids)
-                loss_main = bce(logit, y_bin)
+                logit, yhat_reg, aux = model(p_ids, p_msk, l_ids)
+                loss_cls = bce(logit, y_bin)
+                loss_reg = reg_loss_fn(yhat_reg, y_reg)
 
                 loss_entropy = torch.tensor(0.0, device=logit.device)
                 if attn_entropy_lambda != 0 and "attn_entropy" in aux:
                     loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
 
-                loss = loss_main + loss_entropy
+                loss = 0.5 * loss_cls + reg_lambda * loss_reg
         else:
-            logit, aux = model(p_ids, p_msk, l_ids)
-            loss_main = bce(logit, y_bin)
+            logit, yhat_reg, aux = model(p_ids, p_msk, l_ids)
+            loss_cls = bce(logit, y_bin)
+            loss_reg = reg_loss_fn(yhat_reg, y_reg)
 
             loss_entropy = torch.tensor(0.0, device=logit.device)
             if attn_entropy_lambda != 0 and "attn_entropy" in aux:
                 loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
 
-            loss = loss_main + loss_entropy
+            loss = 0.5 * loss_cls + reg_lambda * loss_reg
 
         loss.backward()
 
@@ -865,7 +991,8 @@ def train_one_epoch(
         optimizer.step()
 
         losses.append(float(loss.detach().cpu().item()))
-        losses_main.append(float(loss_main.detach().cpu().item()))
+        losses_cls.append(float(loss_cls.detach().cpu().item()))
+        losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
 
         pbar.update(1)
@@ -874,7 +1001,8 @@ def train_one_epoch(
     pbar.close()
     return {
         "loss": float(np.mean(losses)),
-        "loss_main": float(np.mean(losses_main)),
+        "loss_cls": float(np.mean(losses_cls)),
+        "loss_reg": float(np.mean(losses_reg)),
         "loss_entropy": float(np.mean(losses_entropy)),
     }
 
@@ -1055,6 +1183,7 @@ def main():
     ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--n_heads", type=int, default=4)
+    ap.add_argument("--reg_lambda", type=float, default=0.1)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -1130,20 +1259,24 @@ def main():
         )
 
     if args.eval_only:
-        yhat_v, yb_v = predict(model, valid_loader, device)
+        yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
+        v_r = eval_reg_metrics(yhatr_v, yr_v)
         print("[VALID]", v_m)
 
-        test_m = None
+        test_m, test_r = None, None
         if test_loader is not None:
-            yhat_t, yb_t = predict(model, test_loader, device)
+            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
             test_m = eval_metrics(yhat_t, yb_t)
+            test_r = eval_reg_metrics(yhatr_t, yr_t)
             print("[TEST ]", test_m)
 
         save_json(os.path.join(args.out_dir, "eval_only.json"), {
             "mode": "eval_only",
             "valid": v_m,
+            "valid_reg": v_r,
             "test": test_m,
+            "test_reg": test_r,
             "valid_csv": args.valid_csv,
             "test_csv": args.test_csv,
             "dti_ckpt": args.dti_ckpt,
@@ -1201,13 +1334,16 @@ def main():
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
             attn_entropy_lambda=float(args.attn_entropy_lambda),
+            reg_lambda=float(args.reg_lambda),
         )
 
-        yhat_tr, yb_tr = predict(model, train_loader, device)
+        yhat_tr, yb_tr, yhatr_tr, yr_tr = predict(model, train_loader, device)
         tr_m = eval_metrics(yhat_tr, yb_tr)
+        tr_r = eval_reg_metrics(yhatr_tr, yr_tr)
 
-        yhat_v, yb_v = predict(model, valid_loader, device)
+        yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
+        v_r = eval_reg_metrics(yhatr_v, yr_v)
 
         if scheduler is not None:
             scheduler.step(float(v_m[args.select_on]))
@@ -1225,30 +1361,39 @@ def main():
 
         save_dti_checkpoint(os.path.join(args.out_dir, "last.pt"), model, args, lig_enc, epoch=ep, best=best)
 
-        test_m = None
+        test_m, test_r = None, None
         if test_loader is not None:
-            yhat_t, yb_t = predict(model, test_loader, device)
+            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
             test_m = eval_metrics(yhat_t, yb_t)
-            print("[TEST ]", test_m)
+            test_r = eval_reg_metrics(yhatr_t, yr_t)
 
-        final_m = None
+        final_m, final_r = None, None
         if final_eval_loader is not None:
-            yhat_f, yb_f = predict(model, final_eval_loader, device)
+            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
             final_m = eval_metrics(yhat_f, yb_f)
+            final_r = eval_reg_metrics(yhatr_f, yr_f)
 
         save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), {
             "epoch": ep,
             "train_stat": tr_stat,
             "train_metrics": tr_m,
+            "train_reg_metrics": tr_r,
             "valid_metrics": v_m,
+            "valid_reg_metrics": v_r,
             "final_eval_metrics": final_m,
+            "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
             "test_metrics": test_m,
+            "test_reg_metrics": test_r if test_loader is not None else None,
             "pos_weight": pos_weight,
         })
 
         print(f"\n===== Epoch {ep} =====")
-        print("[train]", f"AUC={tr_m['auroc']:.4f}", f"AP={tr_m['ap']:.4f}", f"F1={tr_m['f1']:.4f}", f"EF1={tr_m['ef1']:.3f}", f"EF5={tr_m['ef5']:.3f}", f"EF10={tr_m['ef10']:.3f}")
-        print("[valid]", f"AUC={v_m['auroc']:.4f}", f"AP={v_m['ap']:.4f}", f"F1={v_m['f1']:.4f}", f"EF1={v_m['ef1']:.3f}", f"EF5={v_m['ef5']:.3f}", f"EF10={v_m['ef10']:.3f}")
+        print("[train]",
+              f"AUC={tr_m['auroc']:.4f}", f"AP={tr_m['ap']:.4f}", f"F1={tr_m['f1']:.4f}",
+              f"RMSE={tr_r['rmse']:.4f}", f"SP={tr_r['spearman']:.4f}")
+        print("[valid]",
+              f"AUC={v_m['auroc']:.4f}", f"AP={v_m['ap']:.4f}", f"F1={v_m['f1']:.4f}",
+              f"RMSE={v_r['rmse']:.4f}", f"SP={v_r['spearman']:.4f}")
         if final_m is not None:
             print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
         if ep in [1, 2]:
