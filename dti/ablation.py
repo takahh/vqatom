@@ -771,9 +771,9 @@ def train_one_epoch(
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logit, aux = model(p_ids, p_msk, l_ids)
                 loss_main = bce(logit, y_bin)
-
-                loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
-                loss = loss_main + loss_entropy
+                loss_entropy = torch.tensor(0.0, device=logit.device)
+                if attn_entropy_lambda != 0 and "attn_entropy" in aux:
+                    loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
         else:
             logit, aux = model(p_ids, p_msk, l_ids)
             loss_main = bce(logit, y_bin)
