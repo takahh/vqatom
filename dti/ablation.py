@@ -779,8 +779,7 @@ def train_one_epoch(
             loss_main = bce(logit, y_bin)
 
             loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
-            loss = loss_main + loss_entropy
-
+        loss = loss_main + loss_entropy
         loss.backward()
         if grad_clip > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
