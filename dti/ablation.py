@@ -390,25 +390,20 @@ def visualize_one_qk_map(
     # qk_scores, attn_map:
     #   old: (B, H, 1, Lp)
     #   new: (B, H, Ll, Lp)
-    S = aux["qk_scores"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()
-    A = aux["attn_map"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()
+    S = aux["qk_scores"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
+    A = aux["attn_map"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
 
-    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)  # (Lp,)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)  # (Ll,)
 
     print("DEBUG S:", S.shape)
+    print("DEBUG A:", A.shape)
     print("DEBUG p_pad:", p_pad.shape)
     print("DEBUG l_pad:", l_pad.shape)
 
-    # 🔥 auto-detect axis (fixes your crash permanently)
     if S.shape == (len(l_pad), len(p_pad)):
-        # (Ll, Lp)
         S_vis = S[~l_pad][:, ~p_pad]
         A_vis = A[~l_pad][:, ~p_pad]
-    elif S.shape == (len(p_pad), len(l_pad)):
-        # (Lp, Ll)
-        S_vis = S[~p_pad][:, ~l_pad]
-        A_vis = A[~p_pad][:, ~l_pad]
     else:
         raise ValueError(
             f"Unexpected shape: S={S.shape}, p_pad={len(p_pad)}, l_pad={len(l_pad)}"
