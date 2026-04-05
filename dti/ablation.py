@@ -544,7 +544,7 @@ class QKOnlyDTIClassifier(nn.Module):
 
         # protein tokens only
         p_tok = p_h[:, 1:, :]                               # (B, Lp, D)
-        p_tok = torch.nn.functional.dropout(p_tok, p=0.2, training=self.training)
+        # p_tok = torch.nn.functional.dropout(p_tok, p=0.2, training=self.training)
         p_pad = prot_pad_mask[:, 1:]                        # (B, Lp)
 
         # ligand CLS only
