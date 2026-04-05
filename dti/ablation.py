@@ -544,11 +544,11 @@ class QKOnlyDTIClassifier(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
         self.delta_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
+            nn.LayerNorm(self.d_model * 2),
+            nn.Linear(self.d_model * 2, self.d_model),
             nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.d_model, 1),
         )
 
         self.attn_temp = float(attn_temp)
