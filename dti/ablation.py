@@ -372,6 +372,11 @@ def visualize_one_qk_map(
     save_dir: str | None = None,
     prefix: str = "sample",
 ):
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import torch
+
     model.eval()
     batch = next(iter(loader))
 
@@ -382,20 +387,35 @@ def visualize_one_qk_map(
     with torch.inference_mode():
         logit, aux = model(p_ids, p_msk, l_ids, return_maps=True)
 
-    # (H,1,Lp) -> head mean -> (1,Lp)
-    S = aux["qk_scores"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()
-    A = aux["attn_map"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()
-    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    # qk_scores, attn_map:
+    #   old: (B, H, 1, Lp)
+    #   new: (B, H, Ll, Lp)
+    S = aux["qk_scores"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()   # (Ll, Lp)
+    A = aux["attn_map"][sample_idx_in_batch].float().mean(dim=0).cpu().numpy()     # (Ll, Lp)
 
-    S_vis = S[:, ~p_pad]
-    A_vis = A[:, ~p_pad]
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)           # (Lp,)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)           # (Ll,)
 
+    # pad除去
+    S_vis = S[~l_pad][:, ~p_pad]   # (Ll_valid, Lp_valid)
+    A_vis = A[~l_pad][:, ~p_pad]   # (Ll_valid, Lp_valid)
+
+    # protein token labels
     p_tok_labels = None
     if show_token_labels:
         p_ids_1 = batch.p_input_ids[sample_idx_in_batch].cpu().tolist()
         p_tok_labels = esm_tokenizer.convert_ids_to_tokens(p_ids_1)
+        # protein側は CLS を落とす
         p_tok_labels = p_tok_labels[1:]
         p_tok_labels = [t for t, is_pad in zip(p_tok_labels, p_pad) if not is_pad]
+
+    # ligand token labels
+    l_tok_labels = None
+    if show_token_labels:
+        l_ids_1 = batch.l_ids[sample_idx_in_batch].cpu().tolist()
+        # ligand側も CLS を落とす
+        l_tok_labels = l_ids_1[1:]
+        l_tok_labels = [str(t) for t, is_pad in zip(l_tok_labels, l_pad) if not is_pad]
 
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch])
@@ -403,40 +423,61 @@ def visualize_one_qk_map(
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
-    plt.figure(figsize=(10, 3))
+    # 1) QK heatmap
+    plt.figure(figsize=(10, 6))
     plt.imshow(S_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Head-mean CLS->Protein QK | prob={prob:.4f} y={y_bin:.0f}")
+    plt.title(f"Head-mean Ligand->Protein QK | prob={prob:.4f} y={y_bin:.0f}")
     plt.xlabel("Protein tokens")
-    plt.ylabel("CLS")
-    if show_token_labels and p_tok_labels is not None and len(p_tok_labels) <= 80:
-        plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+    plt.ylabel("Ligand tokens")
+    if show_token_labels:
+        if p_tok_labels is not None and len(p_tok_labels) <= 80:
+            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+        if l_tok_labels is not None and len(l_tok_labels) <= 80:
+            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    plt.figure(figsize=(10, 3))
+    # 2) attention heatmap
+    plt.figure(figsize=(10, 6))
     plt.imshow(A_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Head-mean CLS->Protein attention | prob={prob:.4f} y={y_bin:.0f}")
+    plt.title(f"Head-mean Ligand->Protein attention | prob={prob:.4f} y={y_bin:.0f}")
     plt.xlabel("Protein tokens")
-    plt.ylabel("CLS")
-    if show_token_labels and p_tok_labels is not None and len(p_tok_labels) <= 80:
-        plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+    plt.ylabel("Ligand tokens")
+    if show_token_labels:
+        if p_tok_labels is not None and len(p_tok_labels) <= 80:
+            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
+        if l_tok_labels is not None and len(l_tok_labels) <= 80:
+            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    plt.figure(figsize=(10, 3))
-    plt.plot(np.arange(A_vis.shape[1]), A_vis[0])
-    plt.title(f"Head-mean CLS attention | prob={prob:.4f} y={y_bin:.0f}")
-    plt.xlabel("Protein token index")
-    plt.ylabel("attention")
+    # 3) ligandごとのprotein attention要約
+    # 各 ligand token について protein方向に平均 attention を見る
+    plt.figure(figsize=(10, 4))
+    plt.plot(np.arange(A_vis.shape[0]), A_vis.mean(axis=1))
+    plt.title(f"Ligand-token mean attention to protein | prob={prob:.4f} y={y_bin:.0f}")
+    plt.xlabel("Ligand token index")
+    plt.ylabel("mean attention")
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_cls_attention.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    # 4) proteinごとのligand平均attention
+    plt.figure(figsize=(10, 4))
+    plt.plot(np.arange(A_vis.shape[1]), A_vis.mean(axis=0))
+    plt.title(f"Protein-token mean attention from ligand | prob={prob:.4f} y={y_bin:.0f}")
+    plt.xlabel("Protein token index")
+    plt.ylabel("mean attention")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
     return {
@@ -445,8 +486,8 @@ def visualize_one_qk_map(
         "prob": prob,
         "y_bin": y_bin,
         "protein_tokens": p_tok_labels,
+        "ligand_tokens": l_tok_labels,
     }
-
 
 class ESMProteinEncoder(nn.Module):
     def __init__(self, model_name: str, device: torch.device, finetune: bool = False):
@@ -541,19 +582,20 @@ class QKOnlyDTIClassifier(nn.Module):
         l_h = self.lig(l_ids)
 
         prot_pad_mask = (p_attn_mask == 0)
+        lig_pad_mask = (l_ids == self.lig_pad_id)
 
         # protein tokens only
-        p_tok = p_h[:, 1:, :]                               # (B, Lp, D)
-        # p_tok = torch.nn.functional.dropout(p_tok, p=0.2, training=self.training)
-        p_pad = prot_pad_mask[:, 1:]                        # (B, Lp)
+        p_tok = p_h[:, 1:, :]  # (B, Lp, D)
+        p_pad = prot_pad_mask[:, 1:]  # (B, Lp)
 
-        # ligand CLS only
-        l_cls = l_h[:, 0:1, :]                              # (B, 1, D)
+        # ligand tokens only (CLSを除く)
+        l_tok = l_h[:, 1:, :]  # (B, Ll, D)
+        l_pad = lig_pad_mask[:, 1:]  # (B, Ll)
 
         B = l_h.size(0)
         D = l_h.size(-1)
 
-        if p_tok.size(1) == 0:
+        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
             z = torch.zeros(B, D, device=l_h.device, dtype=l_h.dtype)
             z_delta = self.delta_head(z).squeeze(-1)
             logit = z_delta
@@ -561,45 +603,64 @@ class QKOnlyDTIClassifier(nn.Module):
             aux["logit"] = logit
             aux["attn_entropy"] = torch.zeros((), device=l_h.device, dtype=l_h.dtype)
             if return_maps:
-                aux["qk_scores"] = torch.zeros(B, self.n_heads, 1, 0, device=l_h.device, dtype=l_h.dtype)
-                aux["attn_map"] = torch.zeros(B, self.n_heads, 1, 0, device=l_h.device, dtype=l_h.dtype)
+                aux["qk_scores"] = torch.zeros(B, self.n_heads, 0, 0, device=l_h.device, dtype=l_h.dtype)
+                aux["attn_map"] = torch.zeros(B, self.n_heads, 0, 0, device=l_h.device, dtype=l_h.dtype)
                 aux["p_pad"] = p_pad.detach()
+                aux["l_pad"] = l_pad.detach()
             return logit, aux
 
         # projections
-        q = self.q_proj(l_cls)                               # (B, 1, D)
-        k = self.k_proj(p_tok)                               # (B, Lp, D)
-        v = self.v_proj(p_tok)                               # (B, Lp, D)
+        q = self.q_proj(l_tok)  # (B, Ll, D)
+        k = self.k_proj(p_tok)  # (B, Lp, D)
+        v = self.v_proj(p_tok)  # (B, Lp, D)
 
         # split heads
-        q = self._split_heads(q)                             # (B, H, 1, Dh)
-        k = self._split_heads(k)                             # (B, H, Lp, Dh)
-        v = self._split_heads(v)                             # (B, H, Lp, Dh)
+        q = self._split_heads(q)  # (B, H, Ll, Dh)
+        k = self._split_heads(k)  # (B, H, Lp, Dh)
+        v = self._split_heads(v)  # (B, H, Lp, Dh)
 
         # attention scores
-        S = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.head_dim)   # (B, H, 1, Lp)
+        S = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.head_dim)  # (B, H, Ll, Lp)
         S = S / self.attn_temp
 
+        # protein pad を mask
         S = S.masked_fill(p_pad.unsqueeze(1).unsqueeze(2), -1e9)
 
-        bad = p_pad.all(dim=1).view(B, 1, 1, 1)
-        S = torch.where(bad, torch.zeros_like(S), S)
+        # 全proteinがpadなら壊れないように
+        bad_p = p_pad.all(dim=1).view(B, 1, 1, 1)
+        S = torch.where(bad_p, torch.zeros_like(S), S)
 
-        A = torch.softmax(S, dim=-1)                         # (B, H, 1, Lp)
+        A = torch.softmax(S, dim=-1)  # (B, H, Ll, Lp)
         A = A.masked_fill(p_pad.unsqueeze(1).unsqueeze(2), 0.0)
 
-        # entropy regularization: average over heads
+        # ligand pad query も 0 にする
+        A = A.masked_fill(l_pad.unsqueeze(1).unsqueeze(-1), 0.0)
+
+        # entropy regularization
         eps = 1e-8
         A_safe = A.clamp_min(eps)
-        attn_entropy = -(A_safe * torch.log(A_safe)).sum(dim=-1)   # (B, H, 1)
+        attn_entropy = -(A_safe * torch.log(A_safe)).sum(dim=-1)  # (B, H, Ll)
+        attn_entropy = attn_entropy.masked_fill(l_pad.unsqueeze(1), 0.0)
+
+        den = (~l_pad).sum(dim=1).clamp(min=1).float()  # (B,)
+        attn_entropy = attn_entropy.sum(dim=-1) / den.unsqueeze(1)  # (B,H)
         attn_entropy = attn_entropy.mean()
         aux["attn_entropy"] = attn_entropy
 
-        # head outputs
-        z = torch.matmul(A, v)                               # (B, H, 1, Dh)
-        z = self._merge_heads(z)                             # (B, 1, D)
-        z = z.squeeze(1)                                     # (B, D)
-        z = self.out_proj(z)
+        # 各ligand tokenごとに protein から情報回収
+        z_tok = torch.matmul(A, v)  # (B, H, Ll, Dh)
+        z_tok = self._merge_heads(z_tok)  # (B, Ll, D)
+        z_tok = self.out_proj(z_tok)  # (B, Ll, D)
+
+        # ligand側 pooling
+        l_mask = (~l_pad).unsqueeze(-1).float()  # (B, Ll, 1)
+        z = (z_tok * l_mask).sum(dim=1) / l_mask.sum(dim=1).clamp(min=1.0)  # (B, D)
+
+        z_delta = self.delta_head(z).squeeze(-1)
+        logit = z_delta
+
+        aux["z_delta"] = z_delta
+        aux["logit"] = logit
 
         z_delta = self.delta_head(z).squeeze(-1)
         logit = z_delta
