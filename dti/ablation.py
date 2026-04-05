@@ -581,7 +581,7 @@ class QKOnlyDTIClassifier(nn.Module):
 
         l_h = self.lig(l_ids)
 
-        prot_pad_mask = (p_attn_mask == 0)       # (B, Lp_all)
+        prot_pad_mask = (p_attn_mask == 0)          # (B, Lp_all)
         lig_pad_mask  = (l_ids == self.lig_pad_id)  # (B, Ll_all)
 
         # CLS を除いた token 部分
@@ -593,24 +593,23 @@ class QKOnlyDTIClassifier(nn.Module):
         p_pad = prot_pad_mask[:, 1:]   # (B, Lp)
         l_pad = lig_pad_mask[:, 1:]    # (B, Ll)
 
-        # 例: cross attention / qk
-        q = self.q_proj(l_tok)   # or p_tok depending on your design
+        # ligand -> protein の QK
+        q = self.q_proj(l_tok)
         k = self.k_proj(p_tok)
-        v = self.v_proj(p_tok)
 
-        # raw QK
         qk_scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(q.size(-1))  # (B, Ll, Lp)
-
-        # protein key padding mask
         qk_scores = qk_scores.masked_fill(p_pad.unsqueeze(1), float("-inf"))
 
         attn_map = torch.softmax(qk_scores, dim=-1)  # (B, Ll, Lp)
 
-        # 以降 pooling / head ...
-        l_imp = attn_map.max(dim=-1).values.masked_fill(l_pad, 0.0)
+        # ligand token importance
+        l_imp = attn_map.max(dim=-1).values          # (B, Ll)
+        l_imp = l_imp.masked_fill(l_pad, 0.0)
         l_imp = l_imp / l_imp.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
-        l_sum = torch.bmm(l_imp.unsqueeze(1), v).squeeze(1)
+        # ligand 側を集約する
+        l_sum = torch.bmm(l_imp.unsqueeze(1), l_tok).squeeze(1)   # (B, D)
+
         z_delta_in = torch.cat([l_cls, l_sum], dim=-1)
         logit = self.delta_head(z_delta_in).squeeze(-1)
 
@@ -619,6 +618,7 @@ class QKOnlyDTIClassifier(nn.Module):
             aux["attn_map"] = attn_map
             aux["p_pad"] = p_pad
             aux["l_pad"] = l_pad
+            aux["l_imp"] = l_imp
 
         return logit, aux
 
