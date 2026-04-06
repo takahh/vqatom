@@ -1265,12 +1265,14 @@ class CrossAttention(nn.Module):
 
     def forward(self, q_in, kv_in, kv_pad_mask=None):
         # 軽く正規化して sharp な collapse を抑える
-        q_in = torch.nn.functional.normalize(q_in, dim=-1)
-        kv_in = torch.nn.functional.normalize(kv_in, dim=-1)
 
         q = self._split(self.q_proj(q_in))
         k = self._split(self.k_proj(kv_in))
         v = self._split(self.v_proj(kv_in))
+
+        # より本命
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
 
         scores = torch.matmul(q, k.transpose(-1, -2))
         scores = scores / (math.sqrt(self.head_dim) * self.attn_temp)
