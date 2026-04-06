@@ -1503,13 +1503,12 @@ class DualStreamDTIClassifier(nn.Module):
 
         # --- baseline ---
         logit_base = self.base_head(prot_vec_base).squeeze(-1)
-
         # --- epoch制御 ---
         base_for_main = logit_base.detach() if self.detach_base_for_main else logit_base
 
         # --- final ---
         logit = base_for_main + 1.5 * logit_delta
-        
+
         # regression はそのまま
         yhat_reg = self.reg_head(z_delta).squeeze(-1)
 
