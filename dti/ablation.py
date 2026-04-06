@@ -1063,8 +1063,13 @@ def train_one_epoch(
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
+    base_loss_alpha=0.3,
+    epoch=1
 ) -> Dict[str, float]:
     model.train()
+
+    if hasattr(model, "detach_base_for_main"):
+        model.detach_base_for_main = (epoch >= 2)
     losses, losses_cls, losses_reg, losses_entropy = [], [], [], []
     use_amp = (device.type == "cuda")
 
@@ -1109,7 +1114,11 @@ def train_one_epoch(
                 if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                     loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
 
-                loss = 0.5 * loss_cls + loss_entropy
+                loss_base = torch.tensor(0.0, device=device)
+                if "logit_base" in aux:
+                    loss_base = bce(aux["logit_base"], y_bin)
+
+                loss = 0.5 * loss_cls + base_loss_alpha * loss_base + loss_entropy
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
         else:
@@ -1132,7 +1141,11 @@ def train_one_epoch(
             loss_entropy = torch.tensor(0.0, device=device)
             if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                 loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
-            loss = 0.5 * loss_cls + loss_entropy
+            loss_base = torch.tensor(0.0, device=device)
+            if "logit_base" in aux:
+                loss_base = bce(aux["logit_base"], y_bin)
+
+            loss = 0.5 * loss_cls + base_loss_alpha * loss_base + loss_entropy
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
 
@@ -1411,6 +1424,17 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
+        # ★ 追加
+        self.base_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 1),
+        )
+
+        self.delta_scale = 1.0
+        self.detach_base_for_main = False
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1450,6 +1474,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
+        prot_vec_base = self._masked_mean(p_tok, p_pad)
 
         eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
         if eos_id is None:
@@ -1472,9 +1497,26 @@ class DualStreamDTIClassifier(nn.Module):
         prot_vec = self._masked_mean(p_tok, p_pad)
         inter_vec = lig_vec * prot_vec
 
-        z = torch.cat([lig_vec, prot_vec, inter_vec], dim=-1)
-        logit = self.cls_head(z).squeeze(-1)
-        yhat_reg = self.reg_head(z).squeeze(-1)
+        # --- delta ---
+        z_delta = torch.cat([lig_vec, prot_vec, inter_vec], dim=-1)
+        logit_delta = self.cls_head(z_delta).squeeze(-1)
+
+        # --- baseline ---
+        logit_base = self.base_head(prot_vec_base).squeeze(-1)
+
+        # --- epoch制御 ---
+        base_for_main = logit_base.detach() if self.detach_base_for_main else logit_base
+
+        # --- final ---
+        logit = base_for_main + 1.5 * logit_delta
+        
+        # regression はそのまま
+        yhat_reg = self.reg_head(z_delta).squeeze(-1)
+
+        # --- logging ---
+        aux["logit_base"] = logit_base
+        aux["logit_delta"] = logit_delta
+        aux["logit_full"] = logit
 
         if last_aux is not None:
             attn_lp = last_aux["attn_lp"]
@@ -1838,6 +1880,8 @@ def main():
             grad_clip=float(args.grad_clip),
             attn_entropy_lambda=float(args.attn_entropy_lambda),
             reg_lambda=float(args.reg_lambda),
+            base_loss_alpha=0.3,
+            epoch=ep,
         )
 
         yhat_tr, yb_tr, yhatr_tr, yr_tr = predict(model, train_loader, device)
