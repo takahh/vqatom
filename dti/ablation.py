@@ -194,8 +194,27 @@ class DTIDataset(Dataset):
     def __len__(self) -> int:
         return len(self.rows)
 
-    def __getitem__(self, idx: int) -> Dict[str, object]:
-        return self.rows[idx]
+    def __getitem__(self, idx):
+        row = self.rows[idx]
+
+        lig_ids = [self.lig_cls_id] + self.encode_ligand(row["smiles"])
+
+        item = {
+            "protein_seq": row["seq"],
+            "lig_ids": lig_ids,
+            "y": float(row["label"]),  # 分類用
+        }
+
+        if "y_reg" in row and row["y_reg"] not in ("", None):
+            item["y_reg"] = float(row["y_reg"])
+        elif "Y" in row and row["Y"] not in ("", None):
+            item["y_reg"] = float(row["Y"])
+        elif "affinity" in row and row["affinity"] not in ("", None):
+            item["y_reg"] = float(row["affinity"])
+        else:
+            item["y_reg"] = None
+
+        return item
 
 
 def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
@@ -205,29 +224,38 @@ def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> Con
     return ConcatDataset(ds_list)
 
 
-def collate_fn(samples, esm_tokenizer, lig_pad: int, lig_cls: int) -> Batch:
-    seqs = [s["seq"] for s in samples]
-    enc = esm_tokenizer(seqs, return_tensors="pt", padding=True, truncation=True)
-    p_input_ids = enc["input_ids"].long()
-    p_attn_mask = enc["attention_mask"].long()
+def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
+    p_seqs = [s["protein_seq"] for s in samples]
+    l_ids_list = [s["lig_ids"] for s in samples]
 
-    l_ids_list = []
-    for s in samples:
-        x = torch.tensor(parse_lig_tokens(s["lig_tok"]), dtype=torch.long)
-        if x.numel() == 0:
-            x = torch.tensor([lig_cls], dtype=torch.long)
-        else:
-            x = torch.cat([torch.tensor([lig_cls], dtype=torch.long), x], dim=0)
-        l_ids_list.append(x)
+    tok = esm_tokenizer(
+        p_seqs,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=1024,
+    )
+    p_input_ids = tok["input_ids"]
+    p_attn_mask = tok["attention_mask"]
 
-    l_ids = pad_1d(l_ids_list, lig_pad)
-    y_bin = torch.tensor([float(s["y_bin"]) for s in samples], dtype=torch.float32)
-    y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
+    max_l = max(len(x) for x in l_ids_list)
+    l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
+    for i, ids in enumerate(l_ids_list):
+        l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
+
+    y_cls = torch.tensor([float(s["y"]) for s in samples], dtype=torch.float32)
+
+    has_y_reg = all(("y_reg" in s) and (s["y_reg"] is not None) for s in samples)
+    if has_y_reg:
+        y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
+    else:
+        y_reg = None
+
     return Batch(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
-        y_bin=y_bin,
+        y=y_cls,
         y_reg=y_reg,
     )
 
@@ -952,36 +980,68 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
+
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
         p_msk = batch.p_attn_mask.to(device, non_blocking=True)
         l_ids = batch.l_ids.to(device, non_blocking=True)
         y_bin = batch.y_bin.to(device, non_blocking=True).float()
-        y_reg = batch.y_reg.to(device, non_blocking=True).float()
+
+        y_reg = None
+        if getattr(batch, "y_reg", None) is not None:
+            y_reg = batch.y_reg.to(device, non_blocking=True).float()
 
         optimizer.zero_grad(set_to_none=True)
 
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logit, yhat_reg, aux = model(p_ids, p_msk, l_ids)
-                loss_cls = bce(logit, y_bin)
-                loss_reg = reg_loss_fn(yhat_reg, y_reg)
+                out = model(p_ids, p_msk, l_ids)
 
-                loss_entropy = torch.tensor(0.0, device=logit.device)
-                if attn_entropy_lambda != 0 and "attn_entropy" in aux:
+                if isinstance(out, tuple) and len(out) == 3:
+                    logit, yhat_reg, aux = out
+                elif isinstance(out, tuple) and len(out) == 2:
+                    logit, aux = out
+                    yhat_reg = None
+                else:
+                    raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+
+                loss_cls = bce(logit, y_bin)
+
+                loss_reg = torch.tensor(0.0, device=device)
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg)
+
+                loss_entropy = torch.tensor(0.0, device=device)
+                if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                     loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
 
-                loss = 0.5 * loss_cls + reg_lambda * loss_reg
+                loss = 0.5 * loss_cls + loss_entropy
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss = loss + reg_lambda * loss_reg
         else:
-            logit, yhat_reg, aux = model(p_ids, p_msk, l_ids)
-            loss_cls = bce(logit, y_bin)
-            loss_reg = reg_loss_fn(yhat_reg, y_reg)
+            out = model(p_ids, p_msk, l_ids)
 
-            loss_entropy = torch.tensor(0.0, device=logit.device)
-            if attn_entropy_lambda != 0 and "attn_entropy" in aux:
+            if isinstance(out, tuple) and len(out) == 3:
+                logit, yhat_reg, aux = out
+            elif isinstance(out, tuple) and len(out) == 2:
+                logit, aux = out
+                yhat_reg = None
+            else:
+                raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+
+            loss_cls = bce(logit, y_bin)
+
+            loss_reg = torch.tensor(0.0, device=device)
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg)
+
+            loss_entropy = torch.tensor(0.0, device=device)
+            if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                 loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
 
-            loss = 0.5 * loss_cls + reg_lambda * loss_reg
+            loss = 0.5 * loss_cls + loss_entropy
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss = loss + reg_lambda * loss_reg
 
         loss.backward()
 
@@ -996,14 +1056,19 @@ def train_one_epoch(
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
 
         pbar.update(1)
-        pbar.set_postfix(loss=f"{losses[-1]:.4f}")
+        pbar.set_postfix(
+            loss=f"{losses[-1]:.4f}",
+            cls=f"{losses_cls[-1]:.4f}",
+            reg=f"{losses_reg[-1]:.4f}",
+        )
 
     pbar.close()
+
     return {
-        "loss": float(np.mean(losses)),
-        "loss_cls": float(np.mean(losses_cls)),
-        "loss_reg": float(np.mean(losses_reg)),
-        "loss_entropy": float(np.mean(losses_entropy)),
+        "loss": float(np.mean(losses)) if losses else 0.0,
+        "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
+        "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
+        "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
     }
 
 # =========================================================
