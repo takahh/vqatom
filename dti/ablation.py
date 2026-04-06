@@ -463,7 +463,16 @@ def visualize_one_qk_map(
         p_ids_1 = batch.p_input_ids[sample_idx_in_batch].detach().cpu().tolist()
         p_tok_labels = esm_tokenizer.convert_ids_to_tokens(p_ids_1)
         p_tok_labels = p_tok_labels[1:]  # drop CLS
-        p_tok_labels = [t for t, is_pad in zip(p_tok_labels, p_pad) if not is_pad]
+
+        eos_tok = getattr(esm_tokenizer, "eos_token", None)
+        filtered = []
+        for t, is_pad in zip(p_tok_labels, p_pad):
+            if is_pad:
+                continue
+            if eos_tok is not None and t == eos_tok:
+                continue
+            filtered.append(t)
+        p_tok_labels = filtered
 
     # ligand token labels
     l_tok_labels = None
@@ -715,30 +724,45 @@ class QKOnlyDTIClassifier(nn.Module):
         return attn
 
     def forward(
-        self,
-        p_input_ids: torch.Tensor,
-        p_attn_mask: torch.Tensor,
-        l_ids: torch.Tensor,
-        return_maps: bool = False,
+            self,
+            p_input_ids: torch.Tensor,
+            p_attn_mask: torch.Tensor,
+            l_ids: torch.Tensor,
+            return_maps: bool = False,
     ):
         aux = {}
 
-        p_h = self.prot(p_input_ids, p_attn_mask)   # (B, Lp_all, Dp)
+        p_h = self.prot(p_input_ids, p_attn_mask)  # (B, Lp_all, Dp)
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)                  # (B, Lp_all, D)
+            p_h = self.p_proj(p_h)  # (B, Lp_all, D)
 
-        l_h = self.lig(l_ids)                       # (B, Ll_all, D)
+        l_h = self.lig(l_ids)  # (B, Ll_all, D)
 
         prot_pad_mask = (p_attn_mask == 0)
-        lig_pad_mask  = (l_ids == self.lig_pad_id)
+        lig_pad_mask = (l_ids == self.lig_pad_id)
 
-        # drop CLS
-        p_tok = p_h[:, 1:, :]                       # (B, Lp, D)
-        l_tok = l_h[:, 1:, :]                       # (B, Ll, D)
-        p_cls = p_h[:, 0, :]
+        # ---- protein special token handling ----
+        # ESM: keep CLS separately, remove CLS/EOS from token interaction branch
+        p_cls = p_h[:, 0, :]  # (B, D)
+
+        # token ids
+        p_tok_ids_all = p_input_ids[:, 1:]  # after CLS
+        p_tok_all = p_h[:, 1:, :]
+        p_pad_all = prot_pad_mask[:, 1:]
+
+        eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
+        if eos_id is None:
+            eos_id = 2  # ESM2 usually uses 2 for eos
+
+        p_special = p_pad_all | (p_tok_ids_all == eos_id)
+
+        # keep tensors same length; special positions are just masked out
+        p_tok = p_tok_all  # (B, Lp, D)
+        p_pad = p_special  # (B, Lp)
+
+        # ligand side: drop CLS only
+        l_tok = l_h[:, 1:, :]  # (B, Ll, D)
         l_cls = l_h[:, 0, :]
-
-        p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
         if p_tok.size(1) == 0 or l_tok.size(1) == 0:
@@ -747,8 +771,8 @@ class QKOnlyDTIClassifier(nn.Module):
             yhat_reg = self.reg_head(z).squeeze(-1)
             if return_maps:
                 B = p_input_ids.size(0)
-                aux["qk_scores"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["attn_map"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
+                aux["qk_scores"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
+                aux["attn_map"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
                 aux["l_imp"] = torch.zeros(B, 0, device=p_input_ids.device)
@@ -762,61 +786,45 @@ class QKOnlyDTIClassifier(nn.Module):
             all_dropped = p_pad.all(dim=1)
             if all_dropped.any():
                 p_pad = p_pad.clone()
-                keep_idx = (~prot_pad_mask[:, 1:]).float().argmax(dim=1)
+                keep_idx = (~p_special).float().argmax(dim=1)
                 for b in torch.where(all_dropped)[0]:
                     p_pad[b, keep_idx[b]] = False
 
-        # projections
-        q = self._split_heads(self.q_proj(l_tok))             # (B,H,Ll,Dh)
-        k = self._split_heads(self.k_proj(p_tok))             # (B,H,Lp,Dh)
-        v_prot = self._split_heads(self.v_prot_proj(p_tok))   # (B,H,Lp,Dh)
-        v_lig  = self._split_heads(self.v_lig_proj(l_tok))    # (B,H,Ll,Dh)
+        # ---- projections ----
+        # normalize before Q/K so protein-direction contrast becomes stronger
+        q_in = torch.nn.functional.normalize(l_tok, dim=-1)
+        k_in = torch.nn.functional.normalize(p_tok, dim=-1)
 
-        # multi-head QK
+        q = self._split_heads(self.q_proj(q_in))  # (B,H,Ll,Dh)
+        k = self._split_heads(self.k_proj(k_in))  # (B,H,Lp,Dh)
+        v_prot = self._split_heads(self.v_prot_proj(p_tok))  # (B,H,Lp,Dh)
+        v_lig = self._split_heads(self.v_lig_proj(l_tok))  # (B,H,Ll,Dh)
+
         temp = self.attn_temp + torch.arange(self.n_heads, device=q.device).view(1, -1, 1, 1) * 0.2
         qk_scores = torch.matmul(q, k.transpose(-1, -2)) / (math.sqrt(self.head_dim) * temp)
 
+        attn_map = self._safe_masked_softmax_4d(qk_scores, p_pad)  # (B,H,Ll,Lp)
 
-        attn_map = self._safe_masked_softmax_4d(qk_scores, p_pad)                      # (B,H,Ll,Lp)
+        ctx_prot = torch.matmul(attn_map, v_prot)  # (B,H,Ll,Dh)
+        lig_self = v_lig  # (B,H,Ll,Dh)
 
-        # protein flow
-        ctx_prot = torch.matmul(attn_map, v_prot)                                       # (B,H,Ll,Dh)
-
-        # ligand self flow (broadcast as another stream)
-        lig_self = v_lig                                                                # (B,H,Ll,Dh)
-
-        ctx_prot = self._merge_heads(ctx_prot)                                          # (B,Ll,D)
-        lig_self = self._merge_heads(lig_self)                                          # (B,Ll,D)
+        ctx_prot = self._merge_heads(ctx_prot)  # (B,Ll,D)
+        lig_self = self._merge_heads(lig_self)  # (B,Ll,D)
 
         joint_in = torch.cat([ctx_prot, lig_self], dim=-1)  # (B,Ll,2D)
         joint = self.fuse(joint_in)  # (B,Ll,D)
         gate = torch.sigmoid(self.out_proj(joint))
         joint = l_tok + gate * joint  # (B,Ll,D)
 
-        # -------------------------------
-        # ligand token competition
-        # -------------------------------
-        # attn_map: (B,H,Ll,Lp)
-        # まず各 ligand token が protein のどこかにどれだけ強く反応したかを見る
-        l_importance = attn_map.max(dim=-1).values  # (B,H,Ll)
-
-        # PAD ligand token を無効化
+        # ---- ligand token competition: use raw QK, not attn_map ----
+        l_importance = qk_scores.max(dim=-1).values  # (B,H,Ll)
         l_importance = l_importance.masked_fill(l_pad.unsqueeze(1), float("-inf"))
-
-        # ligand token 間で softmax
         l_weights = torch.softmax(l_importance, dim=-1)  # (B,H,Ll)
 
-        # head ごとに joint を持たせたいので、joint を head に複製
-        # joint: (B,Ll,D) -> (B,H,Ll,D)
-        joint_h = joint.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
-
-        # ligand token の重み付き和
+        joint_h = joint.unsqueeze(1).expand(-1, self.n_heads, -1, -1)  # (B,H,Ll,D)
         joint_vec_h = (joint_h * l_weights.unsqueeze(-1)).sum(dim=2)  # (B,H,D)
-
-        # head 平均
         joint_vec = joint_vec_h.mean(dim=1)  # (B,D)
 
-        # 念のための保護
         bad = ~torch.isfinite(joint_vec).all(dim=1)
         if bad.any():
             joint_vec = joint_vec.clone()
@@ -832,26 +840,20 @@ class QKOnlyDTIClassifier(nn.Module):
         ent = ent.masked_fill(l_pad[:, None, :], 0.0)
         denom = (~l_pad).sum(dim=1).clamp(min=1)
         aux["attn_entropy"] = (ent.sum(dim=(1, 2)) / (denom * self.n_heads)).mean()
-        
+
         if return_maps:
-            # head mean only for the old visualizer
-            aux["qk_scores"] = qk_scores.mean(dim=1)   # (B,Ll,Lp)
-            aux["attn_map"] = attn_map.mean(dim=1)     # (B,Ll,Lp)
-
-            # also keep full heads for debugging
-            aux["qk_scores_heads"] = qk_scores         # (B,H,Ll,Lp)
-            aux["attn_map_heads"] = attn_map           # (B,H,Ll,Lp)
-
+            aux["qk_scores"] = qk_scores.mean(dim=1)  # (B,Ll,Lp)
+            aux["attn_map"] = attn_map.mean(dim=1)  # (B,Ll,Lp)
+            aux["qk_scores_heads"] = qk_scores  # (B,H,Ll,Lp)
+            aux["attn_map_heads"] = attn_map  # (B,H,Ll,Lp)
             aux["p_pad"] = p_pad
             aux["l_pad"] = l_pad
 
-            # token importance from max-over-protein then mean-over-head
-            l_imp = attn_map.max(dim=-1).values.mean(dim=1)                              # (B,Ll)
+            l_imp = qk_scores.max(dim=-1).values.mean(dim=1)  # (B,Ll)
             l_imp = l_imp.masked_fill(l_pad, 0.0)
             aux["l_imp"] = l_imp
 
         return logit, yhat_reg, aux
-
 
 # =========================================================
 # Metrics / predict
@@ -1061,7 +1063,7 @@ def train_one_epoch(
 
                 loss_entropy = torch.tensor(0.0, device=device)
                 if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                    loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
+                    loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
 
                 loss = 0.5 * loss_cls + loss_entropy
                 if (y_reg is not None) and (yhat_reg is not None):
@@ -1085,8 +1087,7 @@ def train_one_epoch(
 
             loss_entropy = torch.tensor(0.0, device=device)
             if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                loss_entropy = -attn_entropy_lambda * aux["attn_entropy"]
-
+                loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
             loss = 0.5 * loss_cls + loss_entropy
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
@@ -1285,7 +1286,7 @@ def main():
     ap.add_argument("--min_lr", type=float, default=1e-6)
 
     ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
-
+    ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
@@ -1326,7 +1327,7 @@ def main():
         dropout=args.dropout,
         attn_temp=args.attn_temp,
         n_heads=args.n_heads,
-        protein_token_dropout=0.10,
+        protein_token_dropout=args.protein_token_dropout,
     ).to(device)
 
     if args.dti_ckpt is not None:
