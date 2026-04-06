@@ -135,14 +135,15 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
 # =========================================================
 # Batch / dataset
 # =========================================================
+from typing import Optional
+
 @dataclass
 class Batch:
     p_input_ids: torch.Tensor
     p_attn_mask: torch.Tensor
     l_ids: torch.Tensor
     y_bin: torch.Tensor
-    y_reg: torch.Tensor
-
+    y_reg: Optional[torch.Tensor]
 
 class DTIDataset(Dataset):
     def __init__(
@@ -151,6 +152,7 @@ class DTIDataset(Dataset):
         rows: Optional[List[Dict[str, str]]] = None,
         y_thr: float = Y_THR,
         drop_missing_y: bool = True,
+        lig_cls_id: int = 0,   # 必要なら外から渡す
     ):
         if rows is not None:
             raw_rows = rows
@@ -159,7 +161,9 @@ class DTIDataset(Dataset):
         else:
             raise ValueError("Either csv_path or rows must be provided")
 
+        self.lig_cls_id = lig_cls_id
         self.rows: List[Dict[str, object]] = []
+
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
             lig_tok = (r.get("lig_tok") or "").strip()
@@ -167,6 +171,7 @@ class DTIDataset(Dataset):
 
             if not seq or not lig_tok:
                 continue
+
             if y_raw in ("", None):
                 if drop_missing_y:
                     continue
@@ -179,46 +184,48 @@ class DTIDataset(Dataset):
             rr["lig_tok"] = lig_tok
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
-            # dataset作成後に
-            ys = [r["y"] for r in self.rows]
-            mean = np.mean(ys)
-            std = np.std(ys) + 1e-6
-
-            for r in self.rows:
-                r["y_reg"] = (r["y"] - mean) / std
             self.rows.append(rr)
 
         if not self.rows:
             raise ValueError("No usable rows in dataset")
 
+        ys = [float(r["y"]) for r in self.rows if not np.isnan(float(r["y"]))]
+        if len(ys) == 0:
+            mean = 0.0
+            std = 1.0
+        else:
+            mean = float(np.mean(ys))
+            std = float(np.std(ys)) + 1e-6
+
+        for r in self.rows:
+            y = float(r["y"])
+            if np.isnan(y):
+                r["y_reg"] = None
+            else:
+                r["y_reg"] = (y - mean) / std
+
     def __len__(self) -> int:
         return len(self.rows)
+
+    def _parse_lig_tok(self, lig_tok: str) -> List[int]:
+        return [int(x) for x in lig_tok.split() if x.strip()]
 
     def __getitem__(self, idx):
         row = self.rows[idx]
 
-        lig_ids = [self.lig_cls_id] + self.encode_ligand(row["smiles"])
+        lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
 
         item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
-            "y": float(row["label"]),  # 分類用
+            "y_bin": float(row["y_bin"]),
+            "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
         }
-
-        if "y_reg" in row and row["y_reg"] not in ("", None):
-            item["y_reg"] = float(row["y_reg"])
-        elif "Y" in row and row["Y"] not in ("", None):
-            item["y_reg"] = float(row["Y"])
-        elif "affinity" in row and row["affinity"] not in ("", None):
-            item["y_reg"] = float(row["affinity"])
-        else:
-            item["y_reg"] = None
-
         return item
 
 
 def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
-    ds_list = [DTIDataset(csv_path=p, y_thr=float(y_thr), drop_missing_y=True) for p in shard_paths]
+    ds_list = [DTIDataset(csv_path=p, y_thr=float(y_thr), drop_missing_y=True, lig_cls_id=lig_enc.cls_id ) for p in shard_paths]
     if not ds_list:
         raise ValueError("No train shards were loaded")
     return ConcatDataset(ds_list)
@@ -243,7 +250,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
     for i, ids in enumerate(l_ids_list):
         l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
-    y_cls = torch.tensor([float(s["y"]) for s in samples], dtype=torch.float32)
+    y_bin = torch.tensor([float(s["y_bin"]) for s in samples], dtype=torch.float32)
 
     has_y_reg = all(("y_reg" in s) and (s["y_reg"] is not None) for s in samples)
     if has_y_reg:
@@ -255,7 +262,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
         l_ids=l_ids,
-        y=y_cls,
+        y_bin=y_bin,
         y_reg=y_reg,
     )
 
@@ -443,13 +450,14 @@ def visualize_one_qk_map(
     print("DEBUG p_pad:", p_pad.shape)
     print("DEBUG l_pad:", l_pad.shape)
 
+    S = aux["qk_scores"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
+    A = aux["attn_map"][sample_idx_in_batch].float().cpu().numpy()  # (Ll, Lp)
+
     if S.shape == (len(l_pad), len(p_pad)):
         S_vis = S[~l_pad][:, ~p_pad]
         A_vis = A[~l_pad][:, ~p_pad]
     else:
-        raise ValueError(
-            f"Unexpected shape: S={S.shape}, p_pad={len(p_pad)}, l_pad={len(l_pad)}"
-        )
+        raise ValueError(...)
 
     # protein token labels
     p_tok_labels = None
@@ -846,8 +854,9 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
 
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
-            yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
-            yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
+            if batch.y_reg is not None:
+                yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
+                yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
 
     y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
     y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
@@ -1299,17 +1308,20 @@ def main():
             collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_enc.pad_id, lig_cls=lig_enc.cls_id),
         )
 
-    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True,
+    lig_cls_id=lig_enc.cls_id,)
     valid_loader = make_loader(valid_ds, shuffle=False)
 
     final_eval_loader = None
     if args.final_eval_csv:
-        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True,
+    lig_cls_id=lig_enc.cls_id,)
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
     test_loader = None
     if args.test_csv:
-        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True,
+    lig_cls_id=lig_enc.cls_id)
         test_loader = make_loader(test_ds, shuffle=False)
 
     optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
@@ -1356,13 +1368,15 @@ def main():
     if args.use_train_valid_csv:
         if args.train_size is None:
             # use full train.csv
-            fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True)
+            fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True,
+    lig_cls_id=lig_enc.cls_id,)
             fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
         else:
             # use first N rows
             all_rows = read_csv_rows(args.train_csv)
             train_rows = all_rows[: int(args.train_size)]
-            fixed_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True)
+            fixed_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True,
+    lig_cls_id=lig_enc.cls_id,)
             fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
     else:
         train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
@@ -1372,20 +1386,9 @@ def main():
         if args.use_train_valid_csv and args.train_size is not None:
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
-        elif args.use_train_valid_csv:
+        else:
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
-        else:
-            chosen_shards = pick_epoch_shards_random(
-                train_shard_paths,
-                train_size=int(args.train_size) if args.train_size is not None else len(train_shard_paths) * args.train_shard_size,
-                shard_size=int(args.train_shard_size),
-                epoch=ep,
-                seed=int(args.seed),
-                num_shards_per_epoch=args.train_num_shards_per_epoch,
-            )
-            epoch_train_ds = build_train_dataset_from_shards(chosen_shards, y_thr=float(args.y_thr))
-            train_loader = make_loader(epoch_train_ds, shuffle=True)
 
         print("epoch train n:", len(epoch_train_ds))
         pos_weight = compute_pos_weight_from_dataset(epoch_train_ds)
