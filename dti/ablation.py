@@ -788,26 +788,51 @@ class QKOnlyDTIClassifier(nn.Module):
         ctx_prot = self._merge_heads(ctx_prot)                                          # (B,Ll,D)
         lig_self = self._merge_heads(lig_self)                                          # (B,Ll,D)
 
-        joint_in = torch.cat([ctx_prot, lig_self], dim=-1)                             # (B,Ll,2D)
-        joint = self.fuse(joint_in)                                                     # (B,Ll,D)
+        joint_in = torch.cat([ctx_prot, lig_self], dim=-1)  # (B,Ll,2D)
+        joint = self.fuse(joint_in)  # (B,Ll,D)
         gate = torch.sigmoid(self.out_proj(joint))
-        joint = l_tok + gate * joint
+        joint = l_tok + gate * joint  # (B,Ll,D)
 
-        # MAX pool over ligand tokens
-        joint_masked = joint.masked_fill(l_pad.unsqueeze(-1), float("-inf"))            # (B,Ll,D)
-        joint_max = joint_masked.max(dim=1).values                                      # (B,D)
+        # -------------------------------
+        # ligand token competition
+        # -------------------------------
+        # attn_map: (B,H,Ll,Lp)
+        # まず各 ligand token が protein のどこかにどれだけ強く反応したかを見る
+        l_importance = attn_map.max(dim=-1).values  # (B,H,Ll)
 
-        # if all ligand tokens were masked for some weird case
-        bad = torch.isinf(joint_max).any(dim=1)
+        # PAD ligand token を無効化
+        l_importance = l_importance.masked_fill(l_pad.unsqueeze(1), float("-inf"))
+
+        # ligand token 間で softmax
+        l_weights = torch.softmax(l_importance, dim=-1)  # (B,H,Ll)
+
+        # head ごとに joint を持たせたいので、joint を head に複製
+        # joint: (B,Ll,D) -> (B,H,Ll,D)
+        joint_h = joint.unsqueeze(1).expand(-1, self.n_heads, -1, -1)
+
+        # ligand token の重み付き和
+        joint_vec_h = (joint_h * l_weights.unsqueeze(-1)).sum(dim=2)  # (B,H,D)
+
+        # head 平均
+        joint_vec = joint_vec_h.mean(dim=1)  # (B,D)
+
+        # 念のための保護
+        bad = ~torch.isfinite(joint_vec).all(dim=1)
         if bad.any():
-            joint_max = joint_max.clone()
-            joint_max[bad] = 0.0
+            joint_vec = joint_vec.clone()
+            joint_vec[bad] = 0.0
 
-        z = torch.cat([l_cls, joint_max], dim=-1)                                       # (B,2D)
+        z = torch.cat([l_cls, joint_vec], dim=-1)  # (B,2D)
 
         logit = self.cls_head(z).squeeze(-1)
         yhat_reg = self.reg_head(z).squeeze(-1)
 
+        attn_safe = attn_map.clamp(min=1e-8)
+        ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)  # (B,H,Ll)
+        ent = ent.masked_fill(l_pad[:, None, :], 0.0)
+        denom = (~l_pad).sum(dim=1).clamp(min=1)
+        aux["attn_entropy"] = (ent.sum(dim=(1, 2)) / (denom * self.n_heads)).mean()
+        
         if return_maps:
             # head mean only for the old visualizer
             aux["qk_scores"] = qk_scores.mean(dim=1)   # (B,Ll,Lp)
@@ -824,12 +849,6 @@ class QKOnlyDTIClassifier(nn.Module):
             l_imp = attn_map.max(dim=-1).values.mean(dim=1)                              # (B,Ll)
             l_imp = l_imp.masked_fill(l_pad, 0.0)
             aux["l_imp"] = l_imp
-
-            attn_safe = attn_map.clamp(min=1e-8)
-            ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)                        # (B,H,Ll)
-            ent = ent.masked_fill(l_pad[:, None, :], 0.0)
-            denom = (~l_pad).sum(dim=1).clamp(min=1)
-            aux["attn_entropy"] = (ent.sum(dim=(1, 2)) / (denom * self.n_heads)).mean()
 
         return logit, yhat_reg, aux
 
