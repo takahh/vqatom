@@ -483,6 +483,11 @@ def visualize_one_qk_map(
 
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
+    S_lp = aux["qk_scores_lp"][sample_idx_in_batch].cpu().numpy()
+    A_lp = aux["attn_map_lp"][sample_idx_in_batch].cpu().numpy()
+
+    S_pl = aux["qk_scores_pl"][sample_idx_in_batch].cpu().numpy()
+    A_pl = aux["attn_map_pl"][sample_idx_in_batch].cpu().numpy()
 
     y_reg_pred = None
     if yhat_reg is not None:
@@ -555,6 +560,14 @@ def visualize_one_qk_map(
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
+
+    # LP
+    plt.imshow(A_lp)
+    plt.title("Ligand <- Protein")
+
+    # PL
+    plt.imshow(A_pl)
+    plt.title("Protein <- Ligand")
 
     # 5) per-head maps
     if "qk_scores_heads" in aux and "attn_map_heads" in aux:
@@ -1382,6 +1395,17 @@ class DualStreamDTIClassifier(nn.Module):
                 aux["l_pad"] = l_pad
                 aux["l_imp"] = torch.zeros(B, 0, device=p_input_ids.device)
 
+        if return_maps:
+            aux["qk_scores_lp"] = qk_lp.mean(dim=1)
+            aux["attn_map_lp"] = attn_lp.mean(dim=1)
+            aux["qk_scores_lp_heads"] = qk_lp
+            aux["attn_map_lp_heads"] = attn_lp
+
+            aux["qk_scores_pl"] = last_aux["qk_pl"].mean(dim=1)
+            aux["attn_map_pl"] = last_aux["attn_pl"].mean(dim=1)
+            aux["qk_scores_pl_heads"] = last_aux["qk_pl"]
+            aux["attn_map_pl_heads"] = last_aux["attn_pl"]
+
         return logit, yhat_reg, aux
 
 # =========================================================
@@ -1507,7 +1531,6 @@ def main():
 
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--grad_clip", type=float, default=1.0)
-
     ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
