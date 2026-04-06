@@ -439,55 +439,8 @@ def visualize_one_qk_map(
     p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)  # (Lp,)
     l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)  # (Ll,)
 
-    # head-mean maps
-    S = aux["qk_scores"][sample_idx_in_batch].detach().float().cpu().numpy()   # (Ll, Lp)
-    A = aux["attn_map"][sample_idx_in_batch].detach().float().cpu().numpy()    # (Ll, Lp)
-
-    print("DEBUG S:", S.shape)
-    print("DEBUG A:", A.shape)
-    print("DEBUG p_pad:", p_pad.shape)
-    print("DEBUG l_pad:", l_pad.shape)
-
-    expected_shape = (len(l_pad), len(p_pad))
-    if S.shape != expected_shape or A.shape != expected_shape:
-        raise ValueError(
-            f"Unexpected shape: S={S.shape}, A={A.shape}, expected={expected_shape}"
-        )
-
-    S_vis = S[~l_pad][:, ~p_pad]
-    A_vis = A[~l_pad][:, ~p_pad]
-
-    # protein token labels
-    p_tok_labels = None
-    if show_token_labels:
-        p_ids_1 = batch.p_input_ids[sample_idx_in_batch].detach().cpu().tolist()
-        p_tok_labels = esm_tokenizer.convert_ids_to_tokens(p_ids_1)
-        p_tok_labels = p_tok_labels[1:]  # drop CLS
-
-        eos_tok = getattr(esm_tokenizer, "eos_token", None)
-        filtered = []
-        for t, is_pad in zip(p_tok_labels, p_pad):
-            if is_pad:
-                continue
-            if eos_tok is not None and t == eos_tok:
-                continue
-            filtered.append(t)
-        p_tok_labels = filtered
-
-    # ligand token labels
-    l_tok_labels = None
-    if show_token_labels:
-        l_ids_1 = batch.l_ids[sample_idx_in_batch].detach().cpu().tolist()
-        l_tok_labels = l_ids_1[1:]  # drop CLS
-        l_tok_labels = [str(t) for t, is_pad in zip(l_tok_labels, l_pad) if not is_pad]
-
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
-    S_lp = aux["qk_scores_lp"][sample_idx_in_batch].cpu().numpy()
-    A_lp = aux["attn_map_lp"][sample_idx_in_batch].cpu().numpy()
-
-    S_pl = aux["qk_scores_pl"][sample_idx_in_batch].cpu().numpy()
-    A_pl = aux["attn_map_pl"][sample_idx_in_batch].cpu().numpy()
 
     y_reg_pred = None
     if yhat_reg is not None:
@@ -500,16 +453,73 @@ def visualize_one_qk_map(
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
-    # title helpers
     reg_txt = ""
     if (y_reg_true is not None) and (y_reg_pred is not None):
         reg_txt = f" y_reg={y_reg_true:.3f} pred={y_reg_pred:.3f}"
 
-    # 1) QK heatmap
+    # ---------------------------
+    # token labels
+    # ---------------------------
+    p_tok_labels = None
+    l_tok_labels = None
+    if show_token_labels:
+        p_ids_1 = batch.p_input_ids[sample_idx_in_batch].detach().cpu().tolist()
+        p_tok_labels_all = esm_tokenizer.convert_ids_to_tokens(p_ids_1)[1:]  # drop CLS
+
+        eos_tok = getattr(esm_tokenizer, "eos_token", None)
+        p_tok_labels = []
+        for t, is_pad in zip(p_tok_labels_all, p_pad):
+            if is_pad:
+                continue
+            if eos_tok is not None and t == eos_tok:
+                continue
+            p_tok_labels.append(t)
+
+        l_ids_1 = batch.l_ids[sample_idx_in_batch].detach().cpu().tolist()
+        l_tok_labels_all = l_ids_1[1:]  # drop CLS
+        l_tok_labels = [str(t) for t, is_pad in zip(l_tok_labels_all, l_pad) if not is_pad]
+
+    # ---------------------------
+    # LP: ligand <- protein
+    # shape: (Ll, Lp)
+    # rows = ligand, cols = protein
+    # ---------------------------
+    S_lp = aux["qk_scores_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
+    A_lp = aux["attn_map_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
+
+    expected_lp = (len(l_pad), len(p_pad))
+    if S_lp.shape != expected_lp or A_lp.shape != expected_lp:
+        raise ValueError(
+            f"Unexpected LP shape: S_lp={S_lp.shape}, A_lp={A_lp.shape}, expected={expected_lp}"
+        )
+
+    S_lp_vis = S_lp[~l_pad][:, ~p_pad]
+    A_lp_vis = A_lp[~l_pad][:, ~p_pad]
+
+    # ---------------------------
+    # PL: protein <- ligand
+    # shape: (Lp, Ll)
+    # rows = protein, cols = ligand
+    # ---------------------------
+    S_pl = aux["qk_scores_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
+    A_pl = aux["attn_map_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
+
+    expected_pl = (len(p_pad), len(l_pad))
+    if S_pl.shape != expected_pl or A_pl.shape != expected_pl:
+        raise ValueError(
+            f"Unexpected PL shape: S_pl={S_pl.shape}, A_pl={A_pl.shape}, expected={expected_pl}"
+        )
+
+    S_pl_vis = S_pl[~p_pad][:, ~l_pad]
+    A_pl_vis = A_pl[~p_pad][:, ~l_pad]
+
+    # =========================================================
+    # 1) LP QK
+    # =========================================================
     plt.figure(figsize=(10, 6))
-    plt.imshow(S_vis, aspect="auto")
+    plt.imshow(S_lp_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Head-mean Ligand->Protein QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+    plt.title(f"Ligand <- Protein QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
     plt.xlabel("Protein tokens")
     plt.ylabel("Ligand tokens")
     if show_token_labels:
@@ -519,14 +529,16 @@ def visualize_one_qk_map(
             plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_lp.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # 2) attention heatmap
+    # =========================================================
+    # 2) LP attention
+    # =========================================================
     plt.figure(figsize=(10, 6))
-    plt.imshow(A_vis, aspect="auto")
+    plt.imshow(A_lp_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Head-mean Ligand->Protein attention | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.title(f"Ligand <- Protein attention | prob={prob:.4f} y_bin={y_bin:.0f}")
     plt.xlabel("Protein tokens")
     plt.ylabel("Ligand tokens")
     if show_token_labels:
@@ -536,80 +548,99 @@ def visualize_one_qk_map(
             plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_lp.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # 3) ligandごとのprotein attention要約
+    # =========================================================
+    # 3) PL QK
+    # =========================================================
+    plt.figure(figsize=(10, 6))
+    plt.imshow(S_pl_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"Protein <- Ligand QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+    plt.xlabel("Ligand tokens")
+    plt.ylabel("Protein tokens")
+    if show_token_labels:
+        if l_tok_labels is not None and len(l_tok_labels) <= 80:
+            plt.xticks(range(len(l_tok_labels)), l_tok_labels, rotation=90, fontsize=6)
+        if p_tok_labels is not None and len(p_tok_labels) <= 80:
+            plt.yticks(range(len(p_tok_labels)), p_tok_labels, fontsize=6)
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_pl.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    # =========================================================
+    # 4) PL attention
+    # =========================================================
+    plt.figure(figsize=(10, 6))
+    plt.imshow(A_pl_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"Protein <- Ligand attention | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.xlabel("Ligand tokens")
+    plt.ylabel("Protein tokens")
+    if show_token_labels:
+        if l_tok_labels is not None and len(l_tok_labels) <= 80:
+            plt.xticks(range(len(l_tok_labels)), l_tok_labels, rotation=90, fontsize=6)
+        if p_tok_labels is not None and len(p_tok_labels) <= 80:
+            plt.yticks(range(len(p_tok_labels)), p_tok_labels, fontsize=6)
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_pl.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+
+    # =========================================================
+    # 5) summary lines
+    # =========================================================
+    # LP: ligandごとの protein attention 平均
     plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_vis.shape[0]), A_vis.mean(axis=1))
-    plt.title(f"Ligand-token mean attention to protein | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.plot(np.arange(A_lp_vis.shape[0]), A_lp_vis.mean(axis=1))
+    plt.title(f"LP: ligand-token mean attention to protein | prob={prob:.4f}")
     plt.xlabel("Ligand token index")
     plt.ylabel("mean attention")
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_lp_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # 4) proteinごとのligand平均attention
+    # LP: proteinごとの ligand からの平均 attention
     plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_vis.shape[1]), A_vis.mean(axis=0))
-    plt.title(f"Protein-token mean attention from ligand | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.plot(np.arange(A_lp_vis.shape[1]), A_lp_vis.mean(axis=0))
+    plt.title(f"LP: protein-token mean attention from ligand | prob={prob:.4f}")
     plt.xlabel("Protein token index")
     plt.ylabel("mean attention")
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_lp_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # LP
-    plt.imshow(A_lp)
-    plt.title("Ligand <- Protein")
+    # PL: proteinごとの ligand attention 平均
+    plt.figure(figsize=(10, 4))
+    plt.plot(np.arange(A_pl_vis.shape[0]), A_pl_vis.mean(axis=1))
+    plt.title(f"PL: protein-token mean attention to ligand | prob={prob:.4f}")
+    plt.xlabel("Protein token index")
+    plt.ylabel("mean attention")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_pl_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
+    plt.close()
 
-    # PL
-    plt.imshow(A_pl)
-    plt.title("Protein <- Ligand")
-
-    # 5) per-head maps
-    if "qk_scores_heads" in aux and "attn_map_heads" in aux:
-        n_heads = aux["qk_scores_heads"].shape[1]
-        for h in range(n_heads):
-            S_h = aux["qk_scores_heads"][sample_idx_in_batch, h].detach().float().cpu().numpy()  # (Ll, Lp)
-            A_h = aux["attn_map_heads"][sample_idx_in_batch, h].detach().float().cpu().numpy()   # (Ll, Lp)
-
-            if S_h.shape != expected_shape or A_h.shape != expected_shape:
-                raise ValueError(
-                    f"Unexpected per-head shape at head {h}: "
-                    f"S_h={S_h.shape}, A_h={A_h.shape}, expected={expected_shape}"
-                )
-
-            S_h = S_h[~l_pad][:, ~p_pad]
-            A_h = A_h[~l_pad][:, ~p_pad]
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(S_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Head {h} QK")
-            plt.xlabel("Protein tokens")
-            plt.ylabel("Ligand tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_head{h}.png"), dpi=200, bbox_inches="tight")
-            plt.close()
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(A_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Head {h} attention")
-            plt.xlabel("Protein tokens")
-            plt.ylabel("Ligand tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_head{h}.png"), dpi=200, bbox_inches="tight")
-            plt.close()
+    # PL: ligandごとの protein からの平均 attention
+    plt.figure(figsize=(10, 4))
+    plt.plot(np.arange(A_pl_vis.shape[1]), A_pl_vis.mean(axis=0))
+    plt.title(f"PL: ligand-token mean attention from protein | prob={prob:.4f}")
+    plt.xlabel("Ligand token index")
+    plt.ylabel("mean attention")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_pl_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
+    plt.close()
 
     return {
-        "qk_scores": S_vis,
-        "attn_map": A_vis,
+        "qk_scores_lp": S_lp_vis,
+        "attn_map_lp": A_lp_vis,
+        "qk_scores_pl": S_pl_vis,
+        "attn_map_pl": A_pl_vis,
         "prob": prob,
         "y_bin": y_bin,
         "y_reg_pred": y_reg_pred,
