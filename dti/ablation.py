@@ -904,11 +904,7 @@ def train_one_epoch(
             loss_entropy = torch.tensor(0.0, device=device)
             if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                 loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
-            loss_base = torch.tensor(0.0, device=device)
-            if "logit_base" in aux:
-                loss_base = bce(aux["logit_base"], y_bin)
-
-            loss = 0.5 * loss_cls + base_loss_alpha * loss_base + loss_entropy
+            loss = loss_cls + loss_entropy
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
 
@@ -1242,12 +1238,6 @@ class DualStreamDTIClassifier(nn.Module):
 
         # --- delta ---
         z_delta = torch.cat([lig_vec, prot_vec, inter_vec], dim=-1)
-        logit_delta = self.cls_head(z_delta).squeeze(-1)
-
-        # regression はそのまま
-        yhat_reg = self.reg_head(z_delta).squeeze(-1)
-
-        # --- logging ---
         logit = self.cls_head(z_delta).squeeze(-1)
         yhat_reg = self.reg_head(z_delta).squeeze(-1)
 
@@ -1285,20 +1275,24 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
             if return_maps:
-                aux["qk_scores_lp"] = qk_lp.mean(dim=1)  # (B, Ll, Lp)
-                aux["attn_map_lp"] = attn_lp.mean(dim=1)  # (B, Ll, Lp)
-                aux["qk_scores_lp_heads"] = qk_lp
-                aux["attn_map_lp_heads"] = attn_lp
+                B = p_input_ids.size(0)
+                Ll = l_tok.size(1)
+                Lp = p_tok.size(1)
 
-                aux["qk_scores_pl"] = qk_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
-                aux["attn_map_pl"] = attn_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
-                aux["qk_scores_pl_heads"] = qk_lp.transpose(2, 3)  # (B, H, Lp, Ll)
-                aux["attn_map_pl_heads"] = attn_lp.transpose(2, 3)  # (B, H, Lp, Ll)
+                aux["qk_scores_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
-                aux["qk_scores"] = qk_lp.mean(dim=1)
-                aux["attn_map"] = attn_lp.mean(dim=1)
-                aux["qk_scores_heads"] = qk_lp
-                aux["attn_map_heads"] = attn_lp
+                aux["qk_scores_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
+                aux["attn_map_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
+                aux["qk_scores_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
+                aux["attn_map_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
+
+                aux["qk_scores"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
@@ -1480,6 +1474,7 @@ def main():
         protein_token_dropout=args.protein_token_dropout,
         ligand_token_dropout=args.ligand_token_dropout,
         attn_temp=args.attn_temp,
+        qk_norm=args.qk_norm,
         attn_smooth_eps=args.attn_smooth_eps,
     ).to(device)
 
