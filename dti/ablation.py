@@ -670,237 +670,6 @@ class ESMProteinEncoder(nn.Module):
 
 
 # =========================================================
-# Main model
-# =========================================================
-class QKOnlyDTIClassifier(nn.Module):
-    def __init__(
-        self,
-        protein_encoder: ESMProteinEncoder,
-        ligand_encoder: PretrainedLigandEncoder,
-        dropout: float,
-        attn_temp: float = 2.0,
-        n_heads: int = 4,
-        protein_token_dropout: float = 0.0,
-    ):
-        super().__init__()
-        self.prot = protein_encoder
-        self.lig = ligand_encoder
-
-        d_model = self.lig.d_model
-        if d_model % n_heads != 0:
-            raise ValueError(f"d_model ({d_model}) must be divisible by n_heads ({n_heads})")
-
-        self.d_model = d_model
-        self.n_heads = int(n_heads)
-        self.head_dim = d_model // n_heads
-
-        self.p_proj = None
-        if self.prot.hidden_size != d_model:
-            self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-
-        # true multi-head projections
-        self.q_proj = nn.Linear(d_model, d_model, bias=False)
-        self.k_proj = nn.Linear(d_model, d_model, bias=False)
-
-        # dual V
-        self.v_prot_proj = nn.Linear(d_model, d_model, bias=False)  # protein flow
-        self.v_lig_proj = nn.Linear(d_model, d_model, bias=False)   # ligand self flow
-
-        self.out_proj = nn.Linear(d_model, d_model, bias=False)
-        self.dropout = float(dropout)
-        self.attn_temp = float(attn_temp)
-        self.protein_token_dropout = float(protein_token_dropout)
-        self.lig_pad_id = int(self.lig.pad_id)
-
-        # fuse [ctx_from_prot, lig_self]
-        self.fuse = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),
-            nn.Linear(self.d_model * 2, self.d_model),
-            nn.GELU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.d_model, self.d_model),
-        )
-
-        # pooled token summary + ligand CLS
-        self.cls_head = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),
-            nn.Linear(self.d_model * 2, self.d_model),
-            nn.GELU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.d_model, 1),
-        )
-        self.reg_head = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),
-            nn.Linear(self.d_model * 2, self.d_model),
-            nn.GELU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.d_model, 1),
-        )
-
-    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
-        # (B, L, D) -> (B, H, L, Dh)
-        B, L, D = x.shape
-        x = x.view(B, L, self.n_heads, self.head_dim).transpose(1, 2).contiguous()
-        return x
-
-    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
-        # (B, H, L, Dh) -> (B, L, D)
-        B, H, L, Dh = x.shape
-        x = x.transpose(1, 2).contiguous().view(B, L, H * Dh)
-        return x
-
-    def _safe_masked_softmax_4d(self, scores: torch.Tensor, key_pad_mask: torch.Tensor) -> torch.Tensor:
-        """
-        scores:       (B, H, Ll, Lp)
-        key_pad_mask: (B, Lp)  True=PAD
-        """
-        scores = scores.masked_fill(key_pad_mask[:, None, None, :], float("-inf"))
-
-        all_masked = key_pad_mask.all(dim=1)  # (B,)
-        if all_masked.any():
-            scores = scores.clone()
-            scores[all_masked] = 0.0
-
-        attn = torch.softmax(scores, dim=-1)
-        attn = attn.masked_fill(key_pad_mask[:, None, None, :], 0.0)
-        denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-        attn = attn / denom
-
-        return attn
-
-    def forward(
-            self,
-            p_input_ids: torch.Tensor,
-            p_attn_mask: torch.Tensor,
-            l_ids: torch.Tensor,
-            return_maps: bool = False,
-    ):
-        aux = {}
-
-        p_h = self.prot(p_input_ids, p_attn_mask)  # (B, Lp_all, Dp)
-        if self.p_proj is not None:
-            p_h = self.p_proj(p_h)  # (B, Lp_all, D)
-
-        l_h = self.lig(l_ids)  # (B, Ll_all, D)
-
-        prot_pad_mask = (p_attn_mask == 0)
-        lig_pad_mask = (l_ids == self.lig_pad_id)
-
-        # ---- protein special token handling ----
-        # ESM: keep CLS separately, remove CLS/EOS from token interaction branch
-        p_cls = p_h[:, 0, :]  # (B, D)
-
-        # token ids
-        p_tok_ids_all = p_input_ids[:, 1:]  # after CLS
-        p_tok_all = p_h[:, 1:, :]
-        p_pad_all = prot_pad_mask[:, 1:]
-
-        eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
-        if eos_id is None:
-            eos_id = 2  # ESM2 usually uses 2 for eos
-
-        p_special = p_pad_all | (p_tok_ids_all == eos_id)
-
-        # keep tensors same length; special positions are just masked out
-        p_tok = p_tok_all  # (B, Lp, D)
-        p_pad = p_special  # (B, Lp)
-
-        # ligand side: drop CLS only
-        l_tok = l_h[:, 1:, :]  # (B, Ll, D)
-        l_cls = l_h[:, 0, :]
-        l_pad = lig_pad_mask[:, 1:]
-
-        if p_tok.size(1) == 0 or l_tok.size(1) == 0:
-            z = torch.cat([l_cls, p_cls], dim=-1)
-            logit = self.cls_head(z).squeeze(-1)
-            yhat_reg = self.reg_head(z).squeeze(-1)
-            if return_maps:
-                B = p_input_ids.size(0)
-                aux["qk_scores"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["attn_map"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["p_pad"] = p_pad
-                aux["l_pad"] = l_pad
-                aux["l_imp"] = torch.zeros(B, 0, device=p_input_ids.device)
-                aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
-            return logit, yhat_reg, aux
-
-        if self.training and self.protein_token_dropout > 0.0:
-            drop_mask = (torch.rand_like(p_pad.float()) < self.protein_token_dropout) & (~p_pad)
-            p_pad = p_pad | drop_mask
-
-            all_dropped = p_pad.all(dim=1)
-            if all_dropped.any():
-                p_pad = p_pad.clone()
-                keep_idx = (~p_special).float().argmax(dim=1)
-                for b in torch.where(all_dropped)[0]:
-                    p_pad[b, keep_idx[b]] = False
-
-        # ---- projections ----
-        # normalize before Q/K so protein-direction contrast becomes stronger
-        q_in = torch.nn.functional.normalize(l_tok, dim=-1)
-        k_in = torch.nn.functional.normalize(p_tok, dim=-1)
-
-        q = self._split_heads(self.q_proj(q_in))  # (B,H,Ll,Dh)
-        k = self._split_heads(self.k_proj(k_in))  # (B,H,Lp,Dh)
-        v_prot = self._split_heads(self.v_prot_proj(p_tok))  # (B,H,Lp,Dh)
-        v_lig = self._split_heads(self.v_lig_proj(l_tok))  # (B,H,Ll,Dh)
-
-        temp = self.attn_temp + torch.arange(self.n_heads, device=q.device).view(1, -1, 1, 1) * 0.2
-        qk_scores = torch.matmul(q, k.transpose(-1, -2)) / (math.sqrt(self.head_dim) * temp)
-
-        attn_map = self._safe_masked_softmax_4d(qk_scores, p_pad)  # (B,H,Ll,Lp)
-
-        ctx_prot = torch.matmul(attn_map, v_prot)  # (B,H,Ll,Dh)
-        lig_self = v_lig  # (B,H,Ll,Dh)
-
-        ctx_prot = self._merge_heads(ctx_prot)  # (B,Ll,D)
-        lig_self = self._merge_heads(lig_self)  # (B,Ll,D)
-
-        joint_in = torch.cat([ctx_prot, lig_self], dim=-1)  # (B,Ll,2D)
-        joint = self.fuse(joint_in)  # (B,Ll,D)
-        gate = torch.sigmoid(self.out_proj(joint))
-        joint = l_tok + gate * joint  # (B,Ll,D)
-
-        # ---- ligand token competition: use raw QK, not attn_map ----
-        l_importance = qk_scores.max(dim=-1).values  # (B,H,Ll)
-        l_importance = l_importance.masked_fill(l_pad.unsqueeze(1), float("-inf"))
-        l_weights = torch.softmax(l_importance, dim=-1)  # (B,H,Ll)
-
-        joint_h = joint.unsqueeze(1).expand(-1, self.n_heads, -1, -1)  # (B,H,Ll,D)
-        joint_vec_h = (joint_h * l_weights.unsqueeze(-1)).sum(dim=2)  # (B,H,D)
-        joint_vec = joint_vec_h.mean(dim=1)  # (B,D)
-
-        bad = ~torch.isfinite(joint_vec).all(dim=1)
-        if bad.any():
-            joint_vec = joint_vec.clone()
-            joint_vec[bad] = 0.0
-
-        z = torch.cat([l_cls, joint_vec], dim=-1)  # (B,2D)
-
-        logit = self.cls_head(z).squeeze(-1)
-        yhat_reg = self.reg_head(z).squeeze(-1)
-
-        attn_safe = attn_map.clamp(min=1e-8)
-        ent = -(attn_safe * torch.log(attn_safe)).sum(dim=-1)  # (B,H,Ll)
-        ent = ent.masked_fill(l_pad[:, None, :], 0.0)
-        denom = (~l_pad).sum(dim=1).clamp(min=1)
-        aux["attn_entropy"] = (ent.sum(dim=(1, 2)) / (denom * self.n_heads)).mean()
-
-        if return_maps:
-            aux["qk_scores"] = qk_scores.mean(dim=1)  # (B,Ll,Lp)
-            aux["attn_map"] = attn_map.mean(dim=1)  # (B,Ll,Lp)
-            aux["qk_scores_heads"] = qk_scores  # (B,H,Ll,Lp)
-            aux["attn_map_heads"] = attn_map  # (B,H,Ll,Lp)
-            aux["p_pad"] = p_pad
-            aux["l_pad"] = l_pad
-
-            l_imp = qk_scores.max(dim=-1).values.mean(dim=1)  # (B,Ll)
-            l_imp = l_imp.masked_fill(l_pad, 0.0)
-            aux["l_imp"] = l_imp
-
-        return logit, yhat_reg, aux
-
-# =========================================================
 # Metrics / predict
 # =========================================================
 def compute_pos_weight_from_dataset(ds: Dataset) -> float:
@@ -1069,8 +838,6 @@ def train_one_epoch(
 ) -> Dict[str, float]:
     model.train()
 
-    if hasattr(model, "detach_base_for_main"):
-        model.detach_base_for_main = (epoch >= 2)
     losses, losses_cls, losses_reg, losses_entropy = [], [], [], []
     use_amp = (device.type == "cuda")
 
@@ -1114,12 +881,7 @@ def train_one_epoch(
                 loss_entropy = torch.tensor(0.0, device=device)
                 if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
                     loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
-
-                loss_base = torch.tensor(0.0, device=device)
-                if "logit_base" in aux:
-                    loss_base = bce(aux["logit_base"], y_bin)
-
-                loss = 0.5 * loss_cls + base_loss_alpha * loss_base + loss_entropy
+                loss = loss_cls + loss_entropy
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
         else:
@@ -1193,7 +955,6 @@ def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, l
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
-            "model_type": getattr(args, "model_type", "qkonly_cls"),
             "lig_config": lig_enc.conf,
             "lig_vocab_source": lig_enc.vocab_source,
             "lig_base_vocab": lig_enc.base_vocab,
@@ -1429,17 +1190,6 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
-        # ★ 追加
-        self.base_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
-        )
-
-        self.delta_scale = 1.0
-        self.detach_base_for_main = False
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1479,7 +1229,6 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
-        prot_vec_base = self._masked_mean(p_tok, p_pad)
 
         eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
         if eos_id is None:
@@ -1519,23 +1268,14 @@ class DualStreamDTIClassifier(nn.Module):
         z_delta = torch.cat([lig_vec, prot_vec, inter_vec], dim=-1)
         logit_delta = self.cls_head(z_delta).squeeze(-1)
 
-        # --- baseline ---
-        logit_base = self.base_head(prot_vec_base).squeeze(-1)
-
-        # --- final ---
-        # epoch 1: baseline + delta
-        # epoch 2+: delta only
-        if self.detach_base_for_main:
-            logit = logit_base.detach() + 1.0 * logit_delta
-        else:
-            logit = logit_base + 1.0 * logit_delta
-
         # regression はそのまま
         yhat_reg = self.reg_head(z_delta).squeeze(-1)
 
         # --- logging ---
-        aux["logit_base"] = logit_base
-        aux["logit_delta"] = logit_delta
+        logit = self.cls_head(z_delta).squeeze(-1)
+        yhat_reg = self.reg_head(z_delta).squeeze(-1)
+
+        aux["logit_delta"] = logit
         aux["logit_full"] = logit
 
         if last_aux is not None:
@@ -1727,7 +1467,6 @@ def main():
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
     ap.add_argument("--min_lr", type=float, default=1e-6)
-    ap.add_argument("--model_type", type=str, default="dual_stream", choices=["qkonly", "dual_stream"])
     ap.add_argument("--dual_stream_layers", type=int, default=2)
     ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
@@ -1766,27 +1505,17 @@ def main():
     )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
-    if args.model_type == "dual_stream":
-        model = DualStreamDTIClassifier(
-            protein_encoder=prot_enc,
-            ligand_encoder=lig_enc,
-            dropout=args.dropout,
-            n_heads=args.n_heads,
-            n_layers=args.dual_stream_layers,
-            protein_token_dropout=args.protein_token_dropout,
-            ligand_token_dropout=args.ligand_token_dropout,
-            attn_temp=args.attn_temp,
-            attn_smooth_eps=args.attn_smooth_eps,
-        ).to(device)
-    else:
-        model = QKOnlyDTIClassifier(
-            protein_encoder=prot_enc,
-            ligand_encoder=lig_enc,
-            dropout=args.dropout,
-            attn_temp=args.attn_temp,
-            n_heads=args.n_heads,
-            protein_token_dropout=args.protein_token_dropout,
-        ).to(device)
+    model = DualStreamDTIClassifier(
+        protein_encoder=prot_enc,
+        ligand_encoder=lig_enc,
+        dropout=args.dropout,
+        n_heads=args.n_heads,
+        n_layers=args.dual_stream_layers,
+        protein_token_dropout=args.protein_token_dropout,
+        ligand_token_dropout=args.ligand_token_dropout,
+        attn_temp=args.attn_temp,
+        attn_smooth_eps=args.attn_smooth_eps,
+    ).to(device)
 
     if args.dti_ckpt is not None:
         _, missing, unexpected = load_dti_checkpoint(args.dti_ckpt, model, device)
