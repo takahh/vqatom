@@ -1155,10 +1155,16 @@ class FFN(nn.Module):
         return self.net(x)
 
 class DualStreamBlock(nn.Module):
-    def __init__(self, d_model, n_heads, dropout=0.1,
-                 attn_temp=1.0, qk_norm=True,
-                 attn_smooth_eps=0.0,
-                 attn_activation="softmax"):
+    def __init__(
+        self,
+        d_model,
+        n_heads,
+        dropout=0.1,
+        attn_temp=1.0,
+        qk_norm=True,
+        attn_smooth_eps=0.02,
+        attn_activation="softmax",
+    ):
         super().__init__()
 
         self.ln_l_q = nn.LayerNorm(d_model)
