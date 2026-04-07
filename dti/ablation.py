@@ -1113,7 +1113,7 @@ def train_one_epoch(
 
                 loss_entropy = torch.tensor(0.0, device=device)
                 if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                    loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
+                    loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
 
                 loss_base = torch.tensor(0.0, device=device)
                 if "logit_base" in aux:
@@ -1141,7 +1141,7 @@ def train_one_epoch(
 
             loss_entropy = torch.tensor(0.0, device=device)
             if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                loss_entropy = +attn_entropy_lambda * aux["attn_entropy"]
+                loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
             loss_base = torch.tensor(0.0, device=device)
             if "logit_base" in aux:
                 loss_base = bce(aux["logit_base"], y_bin)
@@ -1409,6 +1409,7 @@ class DualStreamDTIClassifier(nn.Module):
                 dropout=self.dropout,
                 attn_temp=attn_temp,
                 qk_norm=self.qk_norm,
+                attn_smooth_eps=attn_smooth_eps,
             )
             for _ in range(n_layers)
         ])
@@ -1515,9 +1516,9 @@ class DualStreamDTIClassifier(nn.Module):
         # epoch 1: baseline + delta
         # epoch 2+: delta only
         if self.detach_base_for_main:
-            logit = logit_base.detach() + 1.5 * logit_delta
+            logit = logit_base.detach() + 1.0 * logit_delta
         else:
-            logit = logit_base + 1.5 * logit_delta
+            logit = logit_base + 1.0 * logit_delta
 
         # regression はそのまま
         yhat_reg = self.reg_head(z_delta).squeeze(-1)
