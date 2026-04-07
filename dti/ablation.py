@@ -1212,6 +1212,7 @@ class DualStreamDTIClassifier(nn.Module):
         attn_temp: float = 2.0,
         qk_norm: bool = True,
         attn_smooth_eps: float = 0.02,
+        attn_activation: str = "softmax",
     ):
         super().__init__()
         self.prot = protein_encoder
