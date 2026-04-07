@@ -1731,7 +1731,6 @@ def main():
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
-    ap.add_argument("--attn_temp", type=float, default=1.0)
     ap.add_argument("--qk_norm", action="store_true")
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
