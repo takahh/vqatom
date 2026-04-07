@@ -635,7 +635,74 @@ def visualize_one_qk_map(
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_pl_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
     plt.close()
+    # =========================================================
+    # 6) per-head visualize
+    # =========================================================
+    if return_maps := (
+        "qk_scores_lp_heads" in aux and
+        "attn_map_lp_heads" in aux and
+        "qk_scores_pl_heads" in aux and
+        "attn_map_pl_heads" in aux
+    ):
+        qk_lp_heads = aux["qk_scores_lp_heads"][sample_idx_in_batch].detach().float().cpu().numpy()   # (H, Ll, Lp)
+        attn_lp_heads = aux["attn_map_lp_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H, Ll, Lp)
+        qk_pl_heads = aux["qk_scores_pl_heads"][sample_idx_in_batch].detach().float().cpu().numpy()   # (H, Lp, Ll)
+        attn_pl_heads = aux["attn_map_pl_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H, Lp, Ll)
 
+        H = qk_lp_heads.shape[0]
+
+        for h in range(H):
+            # LP head h
+            qk_lp_h = qk_lp_heads[h][~l_pad][:, ~p_pad]
+            attn_lp_h = attn_lp_heads[h][~l_pad][:, ~p_pad]
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(qk_lp_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Ligand <- Protein QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+            plt.xlabel("Protein tokens")
+            plt.ylabel("Ligand tokens")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_lp.png"), dpi=200, bbox_inches="tight")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(attn_lp_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Ligand <- Protein attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
+            plt.xlabel("Protein tokens")
+            plt.ylabel("Ligand tokens")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_lp.png"), dpi=200, bbox_inches="tight")
+            plt.close()
+
+            # PL head h
+            qk_pl_h = qk_pl_heads[h][~p_pad][:, ~l_pad]
+            attn_pl_h = attn_pl_heads[h][~p_pad][:, ~l_pad]
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(qk_pl_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Protein <- Ligand QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+            plt.xlabel("Ligand tokens")
+            plt.ylabel("Protein tokens")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_pl.png"), dpi=200, bbox_inches="tight")
+            plt.close()
+
+            plt.figure(figsize=(10, 6))
+            plt.imshow(attn_pl_h, aspect="auto")
+            plt.colorbar()
+            plt.title(f"Protein <- Ligand attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
+            plt.xlabel("Ligand tokens")
+            plt.ylabel("Protein tokens")
+            plt.tight_layout()
+            if save_dir is not None:
+                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_pl.png"), dpi=200, bbox_inches="tight")
+            plt.close()
     return {
         "qk_scores_lp": S_lp_vis,
         "attn_map_lp": A_lp_vis,
@@ -1148,15 +1215,15 @@ class DualStreamDTIClassifier(nn.Module):
 
         # CLSを使わないので 3D = [lig_vec, prot_vec, lig_vec*prot_vec]
         self.cls_head = nn.Sequential(
-            nn.LayerNorm(d_model * 3),
-            nn.Linear(d_model * 3, d_model),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
         )
         self.reg_head = nn.Sequential(
-            nn.LayerNorm(d_model * 3),
-            nn.Linear(d_model * 3, d_model),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, 1),
@@ -1221,24 +1288,11 @@ class DualStreamDTIClassifier(nn.Module):
             else:
                 l_tok, p_tok = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False)
         # まず protein は普通に集約
-        lig_seed = self._masked_mean(l_tok, l_pad)
+        # attention で更新された ligand token をそのまま集約
+        lig_vec = self._masked_mean(l_tok, l_pad)
 
-        prot_scores = (p_tok * lig_seed.unsqueeze(1)).sum(dim=-1) / math.sqrt(self.d_model)
-        prot_scores = prot_scores.masked_fill(p_pad, -1e9)
-        prot_weights = torch.softmax(prot_scores, dim=1)
-        prot_vec = (p_tok * prot_weights.unsqueeze(-1)).sum(dim=1)
-
-        lig_scores = (l_tok * prot_vec.unsqueeze(1)).sum(dim=-1) / math.sqrt(self.d_model)
-        lig_scores = lig_scores.masked_fill(l_pad, -1e9)
-        lig_weights = torch.softmax(lig_scores, dim=1)
-        lig_vec = (l_tok * lig_weights.unsqueeze(-1)).sum(dim=1)
-
-        inter_vec = lig_vec * prot_vec
-
-        # --- delta ---
-        z_delta = torch.cat([lig_vec, prot_vec, inter_vec], dim=-1)
-        logit = self.cls_head(z_delta).squeeze(-1)
-        yhat_reg = self.reg_head(z_delta).squeeze(-1)
+        logit = self.cls_head(lig_vec).squeeze(-1)
+        yhat_reg = self.reg_head(lig_vec).squeeze(-1)
 
         aux["logit_delta"] = logit
         aux["logit_full"] = logit
