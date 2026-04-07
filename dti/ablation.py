@@ -1501,13 +1501,17 @@ class DualStreamDTIClassifier(nn.Module):
             else:
                 l_tok, p_tok = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False)
         # まず protein は普通に集約
-        prot_vec = self._masked_mean(p_tok, p_pad)  # (B, D)
+        lig_seed = self._masked_mean(l_tok, l_pad)
 
-        lig_scores = (l_tok * prot_vec.unsqueeze(1)).sum(dim=-1) / math.sqrt(self.d_model)  # (B, Ll)
+        prot_scores = (p_tok * lig_seed.unsqueeze(1)).sum(dim=-1) / math.sqrt(self.d_model)
+        prot_scores = prot_scores.masked_fill(p_pad, -1e9)
+        prot_weights = torch.softmax(prot_scores, dim=1)
+        prot_vec = (p_tok * prot_weights.unsqueeze(-1)).sum(dim=1)
+
+        lig_scores = (l_tok * prot_vec.unsqueeze(1)).sum(dim=-1) / math.sqrt(self.d_model)
         lig_scores = lig_scores.masked_fill(l_pad, -1e9)
         lig_weights = torch.softmax(lig_scores, dim=1)
-
-        lig_vec = (l_tok * lig_weights.unsqueeze(-1)).sum(dim=1)  # (B, D)
+        lig_vec = (l_tok * lig_weights.unsqueeze(-1)).sum(dim=1)
 
         inter_vec = lig_vec * prot_vec
 
