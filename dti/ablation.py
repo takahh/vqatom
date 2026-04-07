@@ -1964,7 +1964,7 @@ def main():
               f"RMSE={v_r['rmse']:.4f}", f"SP={v_r['spearman']:.4f}")
         if final_m is not None:
             print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
-        if ep in [1, 2]:
+        if ep in [1, 2, 3, 4]:
             visualize_one_qk_map(
                 model=model,
                 loader=valid_loader,
