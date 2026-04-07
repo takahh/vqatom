@@ -998,21 +998,25 @@ class CrossAttention(nn.Module):
         self.attn_temp = attn_temp
         self.qk_norm = qk_norm
         self.attn_smooth_eps = attn_smooth_eps
-
         self.scale = 1.0 / math.sqrt(self.d_head)
 
-    def forward(self, q_in, kv_in, kv_pad_mask=None, return_maps=False):
+    def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
+        if v_in is None:
+            v_in = k_in
+
         B, Lq, _ = q_in.shape
-        _, Lk, _ = kv_in.shape
+        _, Lk, _ = k_in.shape
+        _, Lv, _ = v_in.shape
+        if Lk != Lv:
+            raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
         q = self.q_proj(q_in)
-        k = self.k_proj(kv_in)
-        v = self.v_proj(kv_in)   # ★ VはK側に統一（安全）
+        k = self.k_proj(k_in)
+        v = self.v_proj(v_in)
 
-        # multi-head
         q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)
         k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)
-        v = v.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)
+        v = v.view(B, Lv, self.n_heads, self.d_head).transpose(1, 2)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
@@ -1027,13 +1031,11 @@ class CrossAttention(nn.Module):
 
         attn = torch.softmax(attn_logits, dim=-1)
 
-        # ---- mask再適用 + normalize ----
         if kv_pad_mask is not None:
             attn = attn.masked_fill(mask, 0.0)
             denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
             attn = attn / denom
 
-        # ---- smoothing ----
         eps = self.attn_smooth_eps
         if eps > 0:
             if kv_pad_mask is None:
@@ -1050,11 +1052,9 @@ class CrossAttention(nn.Module):
         out = self.out_proj(out)
 
         if return_maps:
-            return out, {
-                "qk_scores": attn_logits.detach(),
-                "attn_map": attn.detach(),
-            }
+            return out, {"qk_scores": attn_logits.detach(), "attn_map": attn.detach()}
         return out
+
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1075,7 +1075,6 @@ class DualStreamBlock(nn.Module):
 
         self.ln_l_q = nn.LayerNorm(d_model)
         self.ln_l_kv = nn.LayerNorm(d_model)
-        self.ln_p_q = nn.LayerNorm(d_model)
         self.ln_p_kv = nn.LayerNorm(d_model)
 
         self.lig_from_prot = CrossAttention(
@@ -1084,54 +1083,31 @@ class DualStreamBlock(nn.Module):
             qk_norm=qk_norm,
             attn_smooth_eps=attn_smooth_eps,
         )
-        self.prot_from_lig = CrossAttention(
-            d_model, n_heads, dropout,
-            attn_temp=attn_temp,
-            qk_norm=qk_norm,
-            attn_smooth_eps=attn_smooth_eps,
-        )
 
         self.ln_l_ffn = nn.LayerNorm(d_model)
-        self.ln_p_ffn = nn.LayerNorm(d_model)
-
         self.ff_l = FFN(d_model, dropout)
-        self.ff_p = FFN(d_model, dropout)
 
     def forward(self, l_h, p_h, l_pad=None, p_pad=None, return_maps=False):
-
-        # ---- ligand update ----
-        l_q = self.ln_l_q(l_h)
-        p_k = self.ln_p_kv(p_h)
+        l_q = self.ln_l_q(l_h)     # Q = ligand
+        p_k = self.ln_p_kv(p_h)    # K = protein
+        l_v = self.ln_l_kv(l_h)    # V = ligand
 
         if return_maps:
-            l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, p_pad, True)
+            l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, l_v, p_pad, True)
         else:
-            l_ctx = self.lig_from_prot(l_q, p_k, p_pad, False)
+            l_ctx = self.lig_from_prot(l_q, p_k, l_v, p_pad, False)
 
         l_h = l_h + l_ctx
         l_h = l_h + self.ff_l(self.ln_l_ffn(l_h))
-
-        # ---- protein update ----
-        p_q = self.ln_p_q(p_h)
-        l_k = self.ln_l_kv(l_h)
-
-        if return_maps:
-            p_ctx, aux_pl = self.prot_from_lig(p_q, l_k, l_pad, True)
-        else:
-            p_ctx = self.prot_from_lig(p_q, l_k, l_pad, False)
-
-        p_h = p_h + p_ctx
-        p_h = p_h + self.ff_p(self.ln_p_ffn(p_h))
 
         if return_maps:
             return l_h, p_h, {
                 "attn_lp": aux_lp["attn_map"],
                 "qk_lp": aux_lp["qk_scores"],
-                "attn_pl": aux_pl["attn_map"],
-                "qk_pl": aux_pl["qk_scores"],
             }
 
         return l_h, p_h
+
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
@@ -1280,37 +1256,25 @@ class DualStreamDTIClassifier(nn.Module):
 
         if last_aux is not None:
             attn_lp = last_aux["attn_lp"]
-            qk_lp   = last_aux["qk_lp"]
-            attn_pl = last_aux["attn_pl"]
-            qk_pl   = last_aux["qk_pl"]
+            qk_lp = last_aux["qk_lp"]
 
-            # entropy は LP/PL 両方にかける
             attn_lp_safe = attn_lp.clamp(min=1e-8)
             ent_lp = -(attn_lp_safe * torch.log(attn_lp_safe)).sum(dim=-1)  # (B,H,Ll)
             ent_lp = ent_lp.masked_fill(l_pad[:, None, :], 0.0)
             denom_l = (~l_pad).sum(dim=1).clamp(min=1)
-            ent_lp_mean = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads))
-
-            attn_pl_safe = attn_pl.clamp(min=1e-8)
-            ent_pl = -(attn_pl_safe * torch.log(attn_pl_safe)).sum(dim=-1)  # (B,H,Lp)
-            ent_pl = ent_pl.masked_fill(p_pad[:, None, :], 0.0)
-            denom_p = (~p_pad).sum(dim=1).clamp(min=1)
-            ent_pl_mean = (ent_pl.sum(dim=(1, 2)) / (denom_p * self.n_heads))
-
-            aux["attn_entropy"] = 0.5 * (ent_lp_mean.mean() + ent_pl_mean.mean())
+            aux["attn_entropy"] = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads)).mean()
 
             if return_maps:
-                aux["qk_scores_lp"] = qk_lp.mean(dim=1)
-                aux["attn_map_lp"] = attn_lp.mean(dim=1)
+                aux["qk_scores_lp"] = qk_lp.mean(dim=1)  # (B, Ll, Lp)
+                aux["attn_map_lp"] = attn_lp.mean(dim=1)  # (B, Ll, Lp)
                 aux["qk_scores_lp_heads"] = qk_lp
                 aux["attn_map_lp_heads"] = attn_lp
 
-                aux["qk_scores_pl"] = qk_pl.mean(dim=1)
-                aux["attn_map_pl"] = attn_pl.mean(dim=1)
-                aux["qk_scores_pl_heads"] = qk_pl
-                aux["attn_map_pl_heads"] = attn_pl
+                aux["qk_scores_pl"] = qk_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
+                aux["attn_map_pl"] = attn_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
+                aux["qk_scores_pl_heads"] = qk_lp.transpose(2, 3)  # (B, H, Lp, Ll)
+                aux["attn_map_pl_heads"] = attn_lp.transpose(2, 3)  # (B, H, Lp, Ll)
 
-                # 互換用
                 aux["qk_scores"] = qk_lp.mean(dim=1)
                 aux["attn_map"] = attn_lp.mean(dim=1)
                 aux["qk_scores_heads"] = qk_lp
@@ -1321,19 +1285,21 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
             if return_maps:
-                B = p_input_ids.size(0)
-                aux["qk_scores_lp"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["attn_map_lp"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["qk_scores_pl"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["attn_map_pl"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["qk_scores_lp_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["attn_map_lp_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["qk_scores_pl_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["attn_map_pl_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["qk_scores"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["attn_map"] = torch.zeros(B, 0, 0, device=p_input_ids.device)
-                aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
-                aux["attn_map_heads"] = torch.zeros(B, self.n_heads, 0, 0, device=p_input_ids.device)
+                aux["qk_scores_lp"] = qk_lp.mean(dim=1)  # (B, Ll, Lp)
+                aux["attn_map_lp"] = attn_lp.mean(dim=1)  # (B, Ll, Lp)
+                aux["qk_scores_lp_heads"] = qk_lp
+                aux["attn_map_lp_heads"] = attn_lp
+
+                aux["qk_scores_pl"] = qk_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
+                aux["attn_map_pl"] = attn_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
+                aux["qk_scores_pl_heads"] = qk_lp.transpose(2, 3)  # (B, H, Lp, Ll)
+                aux["attn_map_pl_heads"] = attn_lp.transpose(2, 3)  # (B, H, Lp, Ll)
+
+                aux["qk_scores"] = qk_lp.mean(dim=1)
+                aux["attn_map"] = attn_lp.mean(dim=1)
+                aux["qk_scores_heads"] = qk_lp
+                aux["attn_map_heads"] = attn_lp
+
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
 
