@@ -765,6 +765,7 @@ class QKOnlyDTIClassifier(nn.Module):
         attn = attn.masked_fill(key_pad_mask[:, None, None, :], 0.0)
         denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
         attn = attn / denom
+
         return attn
 
     def forward(
@@ -1212,91 +1213,87 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
     model.to(device)
     return ckpt, missing, unexpected
 
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
 class CrossAttention(nn.Module):
-    def __init__(
-        self,
-        d_model,
-        n_heads,
-        dropout=0.1,
-        attn_temp: float = 2.0,
-        attn_smooth_eps: float = 0.02,
-    ):
+    def __init__(self, d_model, n_heads, dropout=0.1, attn_temp=1.0, qk_norm=True, attn_smooth_eps=0.02):
         super().__init__()
         assert d_model % n_heads == 0
+
         self.d_model = d_model
         self.n_heads = n_heads
-        self.head_dim = d_model // n_heads
-        self.attn_temp = float(attn_temp)
-        self.attn_smooth_eps = float(attn_smooth_eps)
+        self.d_head = d_model // n_heads
 
-        self.q_proj = nn.Linear(d_model, d_model, bias=False)
-        self.k_proj = nn.Linear(d_model, d_model, bias=False)
-        self.v_proj = nn.Linear(d_model, d_model, bias=False)
-        self.out_proj = nn.Linear(d_model, d_model, bias=False)
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
         self.dropout = nn.Dropout(dropout)
+        self.attn_temp = attn_temp
+        self.qk_norm = qk_norm
+        self.attn_smooth_eps = attn_smooth_eps
 
-    def _split(self, x):
-        B, L, D = x.shape
-        return x.view(B, L, self.n_heads, self.head_dim).transpose(1, 2)
+        self.scale = 1.0 / math.sqrt(self.d_head)
 
-    def _merge(self, x):
-        B, H, L, Dh = x.shape
-        return x.transpose(1, 2).contiguous().view(B, L, H * Dh)
+    def forward(self, q_in, kv_in, kv_pad_mask=None, return_maps=False):
+        B, Lq, _ = q_in.shape
+        _, Lk, _ = kv_in.shape
 
-    def _masked_softmax_with_smoothing(self, scores, kv_pad_mask=None):
-        """
-        scores: (B, H, Lq, Lk)
-        kv_pad_mask: (B, Lk), True=PAD
-        """
+        q = self.q_proj(q_in)
+        k = self.k_proj(kv_in)
+        v = self.v_proj(kv_in)   # ★ VはK側に統一（安全）
+
+        # multi-head
+        q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)
+        k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)
+        v = v.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)
+
+        if self.qk_norm:
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
+
+        attn_logits = torch.matmul(q, k.transpose(-2, -1))
+        attn_logits = attn_logits * self.scale / self.attn_temp
+
         if kv_pad_mask is not None:
-            scores = scores.masked_fill(kv_pad_mask[:, None, None, :], float("-inf"))
+            mask = kv_pad_mask[:, None, None, :]
+            attn_logits = attn_logits.masked_fill(mask, -1e9)
 
-        attn = torch.softmax(scores, dim=-1)
+        attn = torch.softmax(attn_logits, dim=-1)
 
+        # ---- mask再適用 + normalize ----
         if kv_pad_mask is not None:
-            valid = (~kv_pad_mask).float()[:, None, None, :]  # (B,1,1,Lk)
-            valid_count = valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
+            attn = attn.masked_fill(mask, 0.0)
+            denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            attn = attn / denom
 
-            # maskされた場所を0に
-            attn = attn.masked_fill(kv_pad_mask[:, None, None, :], 0.0)
+        # ---- smoothing ----
+        eps = self.attn_smooth_eps
+        if eps > 0:
+            if kv_pad_mask is None:
+                attn = (1 - eps) * attn + eps / attn.size(-1)
+            else:
+                valid = (~kv_pad_mask)[:, None, None, :].float()
+                valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
+                attn = (1 - eps) * attn + eps * valid
 
-            # smoothing: valid位置に一様分布を少し混ぜる
-            if self.attn_smooth_eps > 0.0:
-                uniform_valid = valid / valid_count
-                attn = (1.0 - self.attn_smooth_eps) * attn + self.attn_smooth_eps * uniform_valid
-
-            # 再正規化
-            attn = attn / attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-        else:
-            if self.attn_smooth_eps > 0.0:
-                Lk = attn.size(-1)
-                uniform = torch.full_like(attn, 1.0 / float(Lk))
-                attn = (1.0 - self.attn_smooth_eps) * attn + self.attn_smooth_eps * uniform
-                attn = attn / attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-
-        return attn
-
-    def forward(self, q_in, kv_in, kv_pad_mask=None):
-        # 軽く正規化して sharp な collapse を抑える
-
-        q = self._split(self.q_proj(q_in))
-        k = self._split(self.k_proj(kv_in))
-        v = self._split(self.v_proj(kv_in))
-
-        # より本命
-        q = torch.nn.functional.normalize(q, dim=-1)
-        k = torch.nn.functional.normalize(k, dim=-1)
-
-        scores = torch.matmul(q, k.transpose(-1, -2))
-        scores = scores / (math.sqrt(self.head_dim) * self.attn_temp)
-
-        attn = self._masked_softmax_with_smoothing(scores, kv_pad_mask=kv_pad_mask)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
-        out = self._merge(out)
+        out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
-        return out, attn, scores
+
+        if return_maps:
+            return out, {
+                "qk_scores": attn_logits.detach(),
+                "attn_map": attn.detach(),
+            }
+        return out
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1312,15 +1309,9 @@ class FFN(nn.Module):
         return self.net(x)
 
 class DualStreamBlock(nn.Module):
-    def __init__(
-        self,
-        d_model,
-        n_heads,
-        dropout=0.1,
-        attn_temp: float = 2.0,
-        attn_smooth_eps: float = 0.02,
-    ):
+    def __init__(self, d_model, n_heads, dropout=0.1, attn_temp=1.0, qk_norm=True, attn_smooth_eps=0.02):
         super().__init__()
+
         self.ln_l_q = nn.LayerNorm(d_model)
         self.ln_l_kv = nn.LayerNorm(d_model)
         self.ln_p_q = nn.LayerNorm(d_model)
@@ -1329,46 +1320,57 @@ class DualStreamBlock(nn.Module):
         self.lig_from_prot = CrossAttention(
             d_model, n_heads, dropout,
             attn_temp=attn_temp,
+            qk_norm=qk_norm,
             attn_smooth_eps=attn_smooth_eps,
         )
         self.prot_from_lig = CrossAttention(
             d_model, n_heads, dropout,
             attn_temp=attn_temp,
+            qk_norm=qk_norm,
             attn_smooth_eps=attn_smooth_eps,
         )
 
         self.ln_l_ffn = nn.LayerNorm(d_model)
         self.ln_p_ffn = nn.LayerNorm(d_model)
-        self.ffn_l = FFN(d_model, dropout)
-        self.ffn_p = FFN(d_model, dropout)
 
-        self.dropout = nn.Dropout(dropout)
+        self.ff_l = FFN(d_model, dropout)
+        self.ff_p = FFN(d_model, dropout)
 
-    def forward(self, l_tok, p_tok, l_pad=None, p_pad=None):
-        # ligand <- protein
-        l_upd, attn_lp, qk_lp = self.lig_from_prot(
-            self.ln_l_q(l_tok), self.ln_p_kv(p_tok), kv_pad_mask=p_pad
-        )
-        l_tok = l_tok + self.dropout(l_upd)
+    def forward(self, l_h, p_h, l_pad=None, p_pad=None, return_maps=False):
 
-        # protein <- ligand
-        p_upd, attn_pl, qk_pl = self.prot_from_lig(
-            self.ln_p_q(p_tok), self.ln_l_kv(l_tok), kv_pad_mask=l_pad
-        )
-        p_tok = p_tok + self.dropout(p_upd)
+        # ---- ligand update ----
+        l_q = self.ln_l_q(l_h)
+        p_k = self.ln_p_kv(p_h)
 
-        # FFN
-        l_tok = l_tok + self.dropout(self.ffn_l(self.ln_l_ffn(l_tok)))
-        p_tok = p_tok + self.dropout(self.ffn_p(self.ln_p_ffn(p_tok)))
+        if return_maps:
+            l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, p_pad, True)
+        else:
+            l_ctx = self.lig_from_prot(l_q, p_k, p_pad, False)
 
-        aux = {
-            "attn_lp": attn_lp,
-            "qk_lp": qk_lp,
-            "attn_pl": attn_pl,
-            "qk_pl": qk_pl,
-        }
-        return l_tok, p_tok, aux
+        l_h = l_h + l_ctx
+        l_h = l_h + self.ff_l(self.ln_l_ffn(l_h))
 
+        # ---- protein update ----
+        p_q = self.ln_p_q(p_h)
+        l_k = self.ln_l_kv(l_h)
+
+        if return_maps:
+            p_ctx, aux_pl = self.prot_from_lig(p_q, l_k, l_pad, True)
+        else:
+            p_ctx = self.prot_from_lig(p_q, l_k, l_pad, False)
+
+        p_h = p_h + p_ctx
+        p_h = p_h + self.ff_p(self.ln_p_ffn(p_h))
+
+        if return_maps:
+            return l_h, p_h, {
+                "attn_lp": aux_lp["attn_map"],
+                "qk_lp": aux_lp["qk_scores"],
+                "attn_pl": aux_pl["attn_map"],
+                "qk_pl": aux_pl["qk_scores"],
+            }
+
+        return l_h, p_h
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
@@ -1381,6 +1383,7 @@ class DualStreamDTIClassifier(nn.Module):
         protein_token_dropout: float = 0.0,
         ligand_token_dropout: float = 0.0,
         attn_temp: float = 2.0,
+        qk_norm: bool = True,
         attn_smooth_eps: float = 0.02,
     ):
         super().__init__()
@@ -1397,14 +1400,15 @@ class DualStreamDTIClassifier(nn.Module):
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-
+        self.qk_norm = qk_norm
+        self.dropout = dropout
         self.blocks = nn.ModuleList([
             DualStreamBlock(
-                d_model=d_model,
-                n_heads=n_heads,
-                dropout=dropout,
+                d_model=self.d_model,
+                n_heads=self.n_heads,
+                dropout=self.dropout,
                 attn_temp=attn_temp,
-                attn_smooth_eps=attn_smooth_eps,
+                qk_norm=self.qk_norm,
             )
             for _ in range(n_layers)
         ])
@@ -1490,8 +1494,11 @@ class DualStreamDTIClassifier(nn.Module):
 
         last_aux = None
         for blk in self.blocks:
-            l_tok, p_tok, blk_aux = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad)
-            last_aux = blk_aux
+            if return_maps:
+                l_tok, p_tok, blk_aux = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=True)
+                last_aux = blk_aux  # ★これ追加
+            else:
+                l_tok, p_tok = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False)
 
         lig_vec = self._masked_mean(l_tok, l_pad)
         prot_vec = self._masked_mean(p_tok, p_pad)
@@ -1508,7 +1515,7 @@ class DualStreamDTIClassifier(nn.Module):
         # epoch 1: baseline + delta
         # epoch 2+: delta only
         if self.detach_base_for_main:
-            logit = 1.5 * logit_delta
+            logit = logit_base.detach() + 1.5 * logit_delta
         else:
             logit = logit_base + 1.5 * logit_delta
 
@@ -1724,6 +1731,8 @@ def main():
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
+    ap.add_argument("--attn_temp", type=float, default=1.0)
+    ap.add_argument("--qk_norm", action="store_true")
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
