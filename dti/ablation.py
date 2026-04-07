@@ -1044,7 +1044,16 @@ import torch.nn.functional as F
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, d_model, n_heads, dropout=0.1, attn_temp=1.0, qk_norm=True, attn_smooth_eps=0.02):
+    def __init__(
+        self,
+        d_model,
+        n_heads,
+        dropout=0.1,
+        attn_temp=1.0,
+        qk_norm=True,
+        attn_smooth_eps=0.0,
+        attn_activation="softmax",   # "softmax" or "entmax15"
+    ):
         super().__init__()
         assert d_model % n_heads == 0
 
@@ -1061,6 +1070,7 @@ class CrossAttention(nn.Module):
         self.attn_temp = attn_temp
         self.qk_norm = qk_norm
         self.attn_smooth_eps = attn_smooth_eps
+        self.attn_activation = attn_activation
         self.scale = 1.0 / math.sqrt(self.d_head)
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
@@ -1077,31 +1087,40 @@ class CrossAttention(nn.Module):
         k = self.k_proj(k_in)
         v = self.v_proj(v_in)
 
-        q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)
-        k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)
-        v = v.view(B, Lv, self.n_heads, self.d_head).transpose(1, 2)
+        q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lq,D)
+        k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lk,D)
+        v = v.view(B, Lv, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lv,D)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
-        attn_logits = torch.matmul(q, k.transpose(-2, -1))
+        attn_logits = torch.matmul(q, k.transpose(-2, -1))   # (B,H,Lq,Lk)
         attn_logits = attn_logits * self.scale / self.attn_temp
 
+        mask = None
         if kv_pad_mask is not None:
-            mask = kv_pad_mask[:, None, None, :]
+            mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
             attn_logits = attn_logits.masked_fill(mask, -1e9)
 
-        attn = torch.softmax(attn_logits, dim=-1)
+        # ---- activation ----
+        if self.attn_activation == "softmax":
+            attn = torch.softmax(attn_logits, dim=-1)
+        elif self.attn_activation == "entmax15":
+            from entmax import entmax15
+            attn = entmax15(attn_logits, dim=-1)
+        else:
+            raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
-        if kv_pad_mask is not None:
+        if mask is not None:
             attn = attn.masked_fill(mask, 0.0)
             denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
             attn = attn / denom
 
+        # smoothing は基本オフ推奨
         eps = self.attn_smooth_eps
         if eps > 0:
-            if kv_pad_mask is None:
+            if mask is None:
                 attn = (1 - eps) * attn + eps / attn.size(-1)
             else:
                 valid = (~kv_pad_mask)[:, None, None, :].float()
@@ -1110,12 +1129,15 @@ class CrossAttention(nn.Module):
 
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
+        out = torch.matmul(attn, v)   # (B,H,Lq,D)
         out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
         if return_maps:
-            return out, {"qk_scores": attn_logits.detach(), "attn_map": attn.detach()}
+            return out, {
+                "qk_scores": attn_logits.detach(),
+                "attn_map": attn.detach(),
+            }
         return out
 
 
@@ -1133,7 +1155,10 @@ class FFN(nn.Module):
         return self.net(x)
 
 class DualStreamBlock(nn.Module):
-    def __init__(self, d_model, n_heads, dropout=0.1, attn_temp=1.0, qk_norm=True, attn_smooth_eps=0.02):
+    def __init__(self, d_model, n_heads, dropout=0.1,
+                 attn_temp=1.0, qk_norm=True,
+                 attn_smooth_eps=0.0,
+                 attn_activation="softmax"):
         super().__init__()
 
         self.ln_l_q = nn.LayerNorm(d_model)
@@ -1141,10 +1166,13 @@ class DualStreamBlock(nn.Module):
         self.ln_p_kv = nn.LayerNorm(d_model)
 
         self.lig_from_prot = CrossAttention(
-            d_model, n_heads, dropout,
+            d_model,
+            n_heads,
+            dropout,
             attn_temp=attn_temp,
             qk_norm=qk_norm,
             attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
         )
 
         self.ln_l_ffn = nn.LayerNorm(d_model)
@@ -1209,6 +1237,7 @@ class DualStreamDTIClassifier(nn.Module):
                 attn_temp=attn_temp,
                 qk_norm=self.qk_norm,
                 attn_smooth_eps=attn_smooth_eps,
+                attn_activation=attn_activation,
             )
             for _ in range(n_layers)
         ])
@@ -1449,7 +1478,7 @@ def main():
     ap.add_argument("--test_csv", type=str, default=None)
     ap.add_argument("--train_size", type=int, default=None)
     ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
-    ap.add_argument("--attn_smooth_eps", type=float, default=0.02)
+    ap.add_argument("--attn_smooth_eps", type=float, default=0.0)
     ap.add_argument("--train_shard_dir", type=str, default=None)
     ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
     ap.add_argument("--train_shard_size", type=int, default=1000)
@@ -1457,7 +1486,8 @@ def main():
 
     ap.add_argument("--lig_ckpt", type=str, required=True)
     ap.add_argument("--vq_ckpt", type=str, default=None)
-
+    ap.add_argument("--attn_activation", type=str, default="softmax",
+                    choices=["softmax", "entmax15"])
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
@@ -1529,6 +1559,7 @@ def main():
         attn_temp=args.attn_temp,
         qk_norm=args.qk_norm,
         attn_smooth_eps=args.attn_smooth_eps,
+        attn_activation=args.attn_activation,
     ).to(device)
 
     if args.dti_ckpt is not None:
