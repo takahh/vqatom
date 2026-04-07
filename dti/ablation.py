@@ -1242,7 +1242,6 @@ class DualStreamDTIClassifier(nn.Module):
             )
             for _ in range(n_layers)
         ])
-
         # CLSを使わないので 3D = [lig_vec, prot_vec, lig_vec*prot_vec]
         self.cls_head = nn.Sequential(
             nn.LayerNorm(d_model),
