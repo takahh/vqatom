@@ -1084,14 +1084,14 @@ class DualStreamBlock(nn.Module):
         self.ff_l = FFN(d_model, dropout)
 
     def forward(self, l_h, p_h, l_pad=None, p_pad=None, return_maps=False):
-        l_q = self.ln_l_q(l_h)     # Q = ligand
-        p_k = self.ln_p_kv(p_h)    # K = protein
-        l_v = self.ln_l_kv(l_h)    # V = ligand
+        l_q = self.ln_l_q(l_h)  # Q = ligand
+        p_k = self.ln_p_kv(p_h)  # K = protein
+        p_v = self.ln_p_kv(p_h)  # V = protein
 
         if return_maps:
-            l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, l_v, p_pad, True)
+            l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, p_v, p_pad, True)
         else:
-            l_ctx = self.lig_from_prot(l_q, p_k, l_v, p_pad, False)
+            l_ctx = self.lig_from_prot(l_q, p_k, p_v, p_pad, False)
 
         l_h = l_h + l_ctx
         l_h = l_h + self.ff_l(self.ln_l_ffn(l_h))
@@ -1103,7 +1103,6 @@ class DualStreamBlock(nn.Module):
             }
 
         return l_h, p_h
-
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
