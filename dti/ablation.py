@@ -1319,7 +1319,6 @@ class DualStreamDTIClassifier(nn.Module):
         prot_pad_mask = (p_attn_mask == 0)
         lig_pad_mask = (l_ids == self.lig_pad_id)
 
-        # CLSは切り離すが最終判定には使わない
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
 
