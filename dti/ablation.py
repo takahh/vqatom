@@ -1052,7 +1052,8 @@ class CrossAttention(nn.Module):
         attn_temp=1.0,
         qk_norm=True,
         attn_smooth_eps=0.0,
-        attn_activation="softmax",   # "softmax" or "entmax15"
+        attn_activation="softmax",   # "softmax", "entmax15", "sigmoid"
+        sigmoid_row_norm=False,      # sigmoid時だけ使う
     ):
         super().__init__()
         assert d_model % n_heads == 0
@@ -1071,6 +1072,7 @@ class CrossAttention(nn.Module):
         self.qk_norm = qk_norm
         self.attn_smooth_eps = attn_smooth_eps
         self.attn_activation = attn_activation
+        self.sigmoid_row_norm = sigmoid_row_norm
         self.scale = 1.0 / math.sqrt(self.d_head)
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
@@ -1101,31 +1103,53 @@ class CrossAttention(nn.Module):
         mask = None
         if kv_pad_mask is not None:
             mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
-            attn_logits = attn_logits.masked_fill(mask, -1e9)
 
         # ---- activation ----
         if self.attn_activation == "softmax":
-            attn = torch.softmax(attn_logits, dim=-1)
+            x = attn_logits
+            if mask is not None:
+                x = x.masked_fill(mask, -1e9)
+            attn = torch.softmax(x, dim=-1)
+
+            if mask is not None:
+                attn = attn.masked_fill(mask, 0.0)
+
         elif self.attn_activation == "entmax15":
             from entmax import entmax15
-            attn = entmax15(attn_logits, dim=-1)
+            x = attn_logits
+            if mask is not None:
+                x = x.masked_fill(mask, -1e9)
+            attn = entmax15(x, dim=-1)
+
+            if mask is not None:
+                attn = attn.masked_fill(mask, 0.0)
+
+        elif self.attn_activation == "sigmoid":
+            attn = torch.sigmoid(attn_logits)
+
+            if mask is not None:
+                attn = attn.masked_fill(mask, 0.0)
+
+            # optional: 行方向に軽く正規化したいときだけ使う
+            if self.sigmoid_row_norm:
+                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                attn = attn / denom
+
         else:
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
-        if mask is not None:
-            attn = attn.masked_fill(mask, 0.0)
-            denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            attn = attn / denom
-
-        # smoothing は基本オフ推奨
+        # smoothing は softmax / entmax のときだけ推奨
         eps = self.attn_smooth_eps
         if eps > 0:
-            if mask is None:
-                attn = (1 - eps) * attn + eps / attn.size(-1)
+            if self.attn_activation == "sigmoid":
+                pass
             else:
-                valid = (~kv_pad_mask)[:, None, None, :].float()
-                valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
-                attn = (1 - eps) * attn + eps * valid
+                if mask is None:
+                    attn = (1 - eps) * attn + eps / attn.size(-1)
+                else:
+                    valid = (~kv_pad_mask)[:, None, None, :].float()
+                    valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
+                    attn = (1 - eps) * attn + eps * valid
 
         attn = self.dropout(attn)
 
@@ -1139,7 +1163,6 @@ class CrossAttention(nn.Module):
                 "attn_map": attn.detach(),
             }
         return out
-
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
