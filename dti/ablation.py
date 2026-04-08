@@ -512,7 +512,21 @@ def visualize_one_qk_map(
 
     S_pl_vis = S_pl[~p_pad][:, ~l_pad]
     A_pl_vis = A_pl[~p_pad][:, ~l_pad]
+    # ---------------------------
+    # SYM: min(LP, PL^T)
+    # shape: (Ll, Lp)
+    # ---------------------------
+    S_sym = aux["qk_scores_sym"][sample_idx_in_batch].detach().float().cpu().numpy()
+    A_sym = aux["attn_map_sym"][sample_idx_in_batch].detach().float().cpu().numpy()
 
+    expected_sym = (len(l_pad), len(p_pad))
+    if S_sym.shape != expected_sym or A_sym.shape != expected_sym:
+        raise ValueError(
+            f"Unexpected SYM shape: S_sym={S_sym.shape}, A_sym={A_sym.shape}, expected={expected_sym}"
+        )
+
+    S_sym_vis = S_sym[~l_pad][:, ~p_pad]
+    A_sym_vis = A_sym[~l_pad][:, ~p_pad]
     # =========================================================
     # 1) LP QK
     # =========================================================
@@ -531,7 +545,55 @@ def visualize_one_qk_map(
     if save_dir is not None:
         plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_lp.png"), dpi=200, bbox_inches="tight")
     plt.close()
+    plt.figure(figsize=(10, 6))
+    plt.imshow(S_sym_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"Sym(min) QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+    plt.xlabel("Protein tokens")
+    plt.ylabel("Ligand tokens")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_sym.png"), dpi=200, bbox_inches="tight")
+    plt.close()
 
+    plt.figure(figsize=(10, 6))
+    plt.imshow(A_sym_vis, aspect="auto")
+    plt.colorbar()
+    plt.title(f"Sym(min) attention | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.xlabel("Protein tokens")
+    plt.ylabel("Ligand tokens")
+    plt.tight_layout()
+    if save_dir is not None:
+        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_sym.png"), dpi=200, bbox_inches="tight")
+    plt.close()
+    qk_sym_heads = aux["qk_scores_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
+    attn_sym_heads = aux["attn_map_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
+
+    for h in range(H):
+        qk_sym_h = qk_sym_heads[h][~l_pad][:, ~p_pad]
+        attn_sym_h = attn_sym_heads[h][~l_pad][:, ~p_pad]
+
+        plt.figure(figsize=(10, 6))
+        plt.imshow(qk_sym_h, aspect="auto")
+        plt.colorbar()
+        plt.title(f"Sym(min) QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+        plt.xlabel("Protein tokens")
+        plt.ylabel("Ligand tokens")
+        plt.tight_layout()
+        if save_dir is not None:
+            plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_sym.png"), dpi=200, bbox_inches="tight")
+        plt.close()
+
+        plt.figure(figsize=(10, 6))
+        plt.imshow(attn_sym_h, aspect="auto")
+        plt.colorbar()
+        plt.title(f"Sym(min) attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
+        plt.xlabel("Protein tokens")
+        plt.ylabel("Ligand tokens")
+        plt.tight_layout()
+        if save_dir is not None:
+            plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_sym.png"), dpi=200, bbox_inches="tight")
+        plt.close()
     # =========================================================
     # 2) LP attention
     # =========================================================
@@ -1177,6 +1239,7 @@ class FFN(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+
 class DualStreamBlock(nn.Module):
     def __init__(
         self,
@@ -1192,6 +1255,8 @@ class DualStreamBlock(nn.Module):
 
         self.ln_l_q = nn.LayerNorm(d_model)
         self.ln_l_kv = nn.LayerNorm(d_model)
+
+        self.ln_p_q = nn.LayerNorm(d_model)
         self.ln_p_kv = nn.LayerNorm(d_model)
 
         self.lig_from_prot = CrossAttention(
@@ -1204,13 +1269,30 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
         )
 
+        self.prot_from_lig = CrossAttention(
+            d_model,
+            n_heads,
+            dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+        )
+
         self.ln_l_ffn = nn.LayerNorm(d_model)
         self.ff_l = FFN(d_model, dropout)
 
+        self.ln_p_ffn = nn.LayerNorm(d_model)
+        self.ff_p = FFN(d_model, dropout)
+
     def forward(self, l_h, p_h, l_pad=None, p_pad=None, return_maps=False):
-        l_q = self.ln_l_q(l_h)  # Q = ligand
-        p_k = self.ln_p_kv(p_h)  # K = protein
-        p_v = self.ln_p_kv(p_h)  # V = protein
+        # -------------------------
+        # LP : ligand <- protein
+        # q = ligand, k/v = protein
+        # -------------------------
+        l_q = self.ln_l_q(l_h)
+        p_k = self.ln_p_kv(p_h)
+        p_v = self.ln_p_kv(p_h)
 
         if return_maps:
             l_ctx, aux_lp = self.lig_from_prot(l_q, p_k, p_v, p_pad, True)
@@ -1220,10 +1302,28 @@ class DualStreamBlock(nn.Module):
         l_h = l_h + l_ctx
         l_h = l_h + self.ff_l(self.ln_l_ffn(l_h))
 
+        # -------------------------
+        # PL : protein <- ligand
+        # q = protein, k/v = ligand
+        # -------------------------
+        p_q = self.ln_p_q(p_h)
+        l_k = self.ln_l_kv(l_h)
+        l_v = self.ln_l_kv(l_h)
+
+        if return_maps:
+            p_ctx, aux_pl = self.prot_from_lig(p_q, l_k, l_v, l_pad, True)
+        else:
+            p_ctx = self.prot_from_lig(p_q, l_k, l_v, l_pad, False)
+
+        p_h = p_h + p_ctx
+        p_h = p_h + self.ff_p(self.ln_p_ffn(p_h))
+
         if return_maps:
             return l_h, p_h, {
-                "attn_lp": aux_lp["attn_map"],
-                "qk_lp": aux_lp["qk_scores"],
+                "attn_lp": aux_lp["attn_map"],   # (B,H,Ll,Lp)
+                "qk_lp": aux_lp["qk_scores"],    # (B,H,Ll,Lp)
+                "attn_pl": aux_pl["attn_map"],   # (B,H,Lp,Ll)
+                "qk_pl": aux_pl["qk_scores"],    # (B,H,Lp,Ll)
             }
 
         return l_h, p_h
@@ -1355,9 +1455,25 @@ class DualStreamDTIClassifier(nn.Module):
         aux["logit_full"] = logit
 
         if last_aux is not None:
-            attn_lp = last_aux["attn_lp"]
-            qk_lp = last_aux["qk_lp"]
+            attn_lp = last_aux["attn_lp"]  # (B,H,Ll,Lp)
+            qk_lp = last_aux["qk_lp"]  # (B,H,Ll,Lp)
 
+            attn_pl = last_aux["attn_pl"]  # (B,H,Lp,Ll)
+            qk_pl = last_aux["qk_pl"]  # (B,H,Lp,Ll)
+
+            # PL を LP と同じ向き (Ll,Lp) に揃える
+            attn_pl_t = attn_pl.transpose(2, 3)  # (B,H,Ll,Lp)
+            qk_pl_t = qk_pl.transpose(2, 3)  # (B,H,Ll,Lp)
+
+            # -------------------------
+            # min 対称化
+            # 「両方向とも強い」pair だけ残す
+            # -------------------------
+            attn_sym = torch.minimum(attn_lp, attn_pl_t)  # (B,H,Ll,Lp)
+            qk_sym = torch.minimum(qk_lp, qk_pl_t)  # (B,H,Ll,Lp)
+
+            # entropy は対称化後で計算してもよいが、
+            # まずは LP 側のままでもOK
             attn_lp_safe = attn_lp.clamp(min=1e-8)
             ent_lp = -(attn_lp_safe * torch.log(attn_lp_safe)).sum(dim=-1)  # (B,H,Ll)
             ent_lp = ent_lp.masked_fill(l_pad[:, None, :], 0.0)
@@ -1365,20 +1481,28 @@ class DualStreamDTIClassifier(nn.Module):
             aux["attn_entropy"] = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads)).mean()
 
             if return_maps:
-                aux["qk_scores_lp"] = qk_lp.mean(dim=1)  # (B, Ll, Lp)
-                aux["attn_map_lp"] = attn_lp.mean(dim=1)  # (B, Ll, Lp)
+                # 元の本物 LP / PL も残す
+                aux["qk_scores_lp"] = qk_lp.mean(dim=1)  # (B,Ll,Lp)
+                aux["attn_map_lp"] = attn_lp.mean(dim=1)  # (B,Ll,Lp)
                 aux["qk_scores_lp_heads"] = qk_lp
                 aux["attn_map_lp_heads"] = attn_lp
 
-                aux["qk_scores_pl"] = qk_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
-                aux["attn_map_pl"] = attn_lp.mean(dim=1).transpose(1, 2)  # (B, Lp, Ll)
-                aux["qk_scores_pl_heads"] = qk_lp.transpose(2, 3)  # (B, H, Lp, Ll)
-                aux["attn_map_pl_heads"] = attn_lp.transpose(2, 3)  # (B, H, Lp, Ll)
+                aux["qk_scores_pl"] = qk_pl.mean(dim=1)  # (B,Lp,Ll)
+                aux["attn_map_pl"] = attn_pl.mean(dim=1)  # (B,Lp,Ll)
+                aux["qk_scores_pl_heads"] = qk_pl
+                aux["attn_map_pl_heads"] = attn_pl
 
-                aux["qk_scores"] = qk_lp.mean(dim=1)
-                aux["attn_map"] = attn_lp.mean(dim=1)
-                aux["qk_scores_heads"] = qk_lp
-                aux["attn_map_heads"] = attn_lp
+                # 対称化 min 版
+                aux["qk_scores_sym"] = qk_sym.mean(dim=1)  # (B,Ll,Lp)
+                aux["attn_map_sym"] = attn_sym.mean(dim=1)  # (B,Ll,Lp)
+                aux["qk_scores_sym_heads"] = qk_sym
+                aux["attn_map_sym_heads"] = attn_sym
+
+                # 既存の generic key は sym に差し替えておくと見やすい
+                aux["qk_scores"] = qk_sym.mean(dim=1)
+                aux["attn_map"] = attn_sym.mean(dim=1)
+                aux["qk_scores_heads"] = qk_sym
+                aux["attn_map_heads"] = attn_sym
 
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
@@ -1403,7 +1527,10 @@ class DualStreamDTIClassifier(nn.Module):
                 aux["attn_map"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
                 aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
                 aux["attn_map_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
+                aux["qk_scores_sym"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_sym"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_sym_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_sym_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
                 aux["p_pad"] = p_pad
                 aux["l_pad"] = l_pad
 
