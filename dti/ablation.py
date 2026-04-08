@@ -929,7 +929,7 @@ def train_one_epoch(
 
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                out = model(p_ids, p_msk, l_ids)
+                out = model(p_ids, p_msk, l_ids, return_maps=True)
 
                 if isinstance(out, tuple) and len(out) == 3:
                     logit, yhat_reg, aux = out
@@ -947,12 +947,12 @@ def train_one_epoch(
 
                 loss_entropy = torch.tensor(0.0, device=device)
                 if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                    loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
+                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"]
                 loss = loss_cls + loss_entropy
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
         else:
-            out = model(p_ids, p_msk, l_ids)
+            out = model(p_ids, p_msk, l_ids, return_maps=True)
 
             if isinstance(out, tuple) and len(out) == 3:
                 logit, yhat_reg, aux = out
@@ -970,7 +970,7 @@ def train_one_epoch(
 
             loss_entropy = torch.tensor(0.0, device=device)
             if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                loss_entropy = - attn_entropy_lambda * aux["attn_entropy"]
+                loss_entropy = attn_entropy_lambda * aux["attn_entropy"]
             loss = loss_cls + loss_entropy
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
