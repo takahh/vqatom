@@ -1131,9 +1131,9 @@ class CrossAttention(nn.Module):
                 attn = attn.masked_fill(mask, 0.0)
 
             # optional: 行方向に軽く正規化したいときだけ使う
-            if self.sigmoid_row_norm:
-                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-                attn = attn / denom
+            # if self.sigmoid_row_norm:
+            denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            attn = attn / denom
 
         else:
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
