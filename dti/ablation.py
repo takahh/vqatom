@@ -1301,6 +1301,12 @@ class DualStreamDTIClassifier(nn.Module):
         denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
         return x.sum(dim=1) / denom
 
+    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        x = x.masked_fill(pad.unsqueeze(-1), float("-inf"))
+        out = x.max(dim=1).values
+        out = torch.where(torch.isfinite(out), out, torch.zeros_like(out))
+        return out
+
     def _apply_token_dropout(self, pad_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
         if (not self.training) or drop_prob <= 0.0:
             return pad_mask
@@ -1355,7 +1361,7 @@ class DualStreamDTIClassifier(nn.Module):
                 l_tok, p_tok = blk(l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False)
         # まず protein は普通に集約
         # attention で更新された ligand token をそのまま集約
-        lig_vec = self._masked_mean(l_tok, l_pad)
+        lig_vec = self._masked_max(l_tok, l_pad)
 
         logit = self.cls_head(lig_vec).squeeze(-1)
         yhat_reg = self.reg_head(lig_vec).squeeze(-1)
