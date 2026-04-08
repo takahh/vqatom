@@ -1516,7 +1516,7 @@ def main():
     ap.add_argument("--lig_ckpt", type=str, required=True)
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--attn_activation", type=str, default="softmax",
-                    choices=["softmax", "entmax15"])
+                    choices=["softmax", "entmax15", "sigmoid"])
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
