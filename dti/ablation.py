@@ -1323,6 +1323,11 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
 
+        print("l_tok.std(dim=1).mean()")  # token間のばらつき
+        print(l_tok.std(dim=1).mean())  # token間のばらつき
+        print("l_tok.std(dim=2).mean()")  # 次元方向
+        print(l_tok.std(dim=2).mean())  # 次元方向
+
         p_pad = prot_pad_mask[:, 1:]
         l_pad = lig_pad_mask[:, 1:]
 
