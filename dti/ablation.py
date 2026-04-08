@@ -1053,7 +1053,7 @@ class CrossAttention(nn.Module):
         qk_norm=True,
         attn_smooth_eps=0.0,
         attn_activation="softmax",   # "softmax", "entmax15", "sigmoid"
-        sigmoid_row_norm=False,      # sigmoid時だけ使う
+        sigmoid_row_norm=False,
     ):
         super().__init__()
         assert d_model % n_heads == 0
@@ -1062,9 +1062,17 @@ class CrossAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
+        # headごとに完全独立
+        self.q_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+        self.k_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+        self.v_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+
         self.out_proj = nn.Linear(d_model, d_model)
 
         self.dropout = nn.Dropout(dropout)
@@ -1085,32 +1093,36 @@ class CrossAttention(nn.Module):
         if Lk != Lv:
             raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
-        q = self.q_proj(q_in)
-        k = self.k_proj(k_in)
-        v = self.v_proj(v_in)
+        # -------------------------
+        # 各headで別々に射影
+        # q_list[h]: (B, Lq, Dh)
+        # -------------------------
+        q_list = [proj(q_in) for proj in self.q_proj]
+        k_list = [proj(k_in) for proj in self.k_proj]
+        v_list = [proj(v_in) for proj in self.v_proj]
 
-        q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lq,D)
-        k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lk,D)
-        v = v.view(B, Lv, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lv,D)
+        # (B, H, L, Dh)
+        q = torch.stack(q_list, dim=1)
+        k = torch.stack(k_list, dim=1)
+        v = torch.stack(v_list, dim=1)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
-        attn_logits = torch.matmul(q, k.transpose(-2, -1))   # (B,H,Lq,Lk)
+        # (B, H, Lq, Lk)
+        attn_logits = torch.matmul(q, k.transpose(-2, -1))
         attn_logits = attn_logits * self.scale / self.attn_temp
 
         mask = None
         if kv_pad_mask is not None:
             mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
 
-        # ---- activation ----
         if self.attn_activation == "softmax":
             x = attn_logits
             if mask is not None:
                 x = x.masked_fill(mask, -1e9)
             attn = torch.softmax(x, dim=-1)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
@@ -1120,30 +1132,24 @@ class CrossAttention(nn.Module):
             if mask is not None:
                 x = x.masked_fill(mask, -1e9)
             attn = entmax15(x, dim=-1)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(attn_logits)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
-            # optional: 行方向に軽く正規化したいときだけ使う
-            # if self.sigmoid_row_norm:
-            # denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            # attn = attn / denom
+            if self.sigmoid_row_norm:
+                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                attn = attn / denom
 
         else:
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
-        # smoothing は softmax / entmax のときだけ推奨
         eps = self.attn_smooth_eps
         if eps > 0:
-            if self.attn_activation == "sigmoid":
-                pass
-            else:
+            if self.attn_activation != "sigmoid":
                 if mask is None:
                     attn = (1 - eps) * attn + eps / attn.size(-1)
                 else:
@@ -1153,7 +1159,10 @@ class CrossAttention(nn.Module):
 
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)   # (B,H,Lq,D)
+        # (B,H,Lq,Dh)
+        out = torch.matmul(attn, v)
+
+        # head concat
         out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
