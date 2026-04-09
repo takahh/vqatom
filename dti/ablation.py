@@ -484,7 +484,7 @@ def visualize_one_qk_map(
     # shape: (Ll, Lp)
     # rows = ligand, cols = protein
     # ---------------------------
-    S_lp = aux["qk_scores_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_lp = aux["qk_scores_lp_z"][sample_idx_in_batch].detach().float().cpu().numpy()
     A_lp = aux["attn_map_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
 
     expected_lp = (len(l_pad), len(p_pad))
@@ -501,7 +501,7 @@ def visualize_one_qk_map(
     # shape: (Lp, Ll)
     # rows = protein, cols = ligand
     # ---------------------------
-    S_pl = aux["qk_scores_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_pl = aux["qk_scores_pl_z"][sample_idx_in_batch].detach().float().cpu().numpy()
     A_pl = aux["attn_map_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
 
     expected_pl = (len(p_pad), len(l_pad))
