@@ -970,6 +970,9 @@ class OverlapInteraction(nn.Module):
         self.q_from_l = nn.Linear(d_model, d_model)
         self.k_from_p = nn.Linear(d_model, d_model)
 
+        # 追加
+        self.in_drop = nn.Dropout(dropout)
+
         self.drop = nn.Dropout(dropout)
 
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
@@ -985,6 +988,9 @@ class OverlapInteraction(nn.Module):
             z = (x - mu) / std
             z = z.masked_fill(~mask, 0.0)
             return z
+
+        p_tok = self.in_drop(p_tok)
+        l_tok = self.in_drop(l_tok)
 
         q_p = self.q_from_p(p_tok)
         k_l = self.k_from_l(l_tok)
@@ -1142,6 +1148,9 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_pad = (p_attn_mask == 0)[:, 1:]
         l_pad = (l_ids == self.lig_pad_id)[:, 1:]
+        
+        p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
+        l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
 
         eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
         p_tok_ids = p_input_ids[:, 1:]
