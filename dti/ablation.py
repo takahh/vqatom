@@ -411,6 +411,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
+
 def visualize_one_qk_map(
     model,
     loader,
@@ -422,7 +423,6 @@ def visualize_one_qk_map(
     prefix: str = "sample",
 ):
     import os
-    import numpy as np
     import matplotlib.pyplot as plt
     import torch
 
@@ -436,323 +436,64 @@ def visualize_one_qk_map(
     with torch.inference_mode():
         logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
 
-    p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)  # (Lp,)
-    l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)  # (Ll,)
+    p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
 
-    y_reg_pred = None
-    if yhat_reg is not None:
-        y_reg_pred = float(yhat_reg[sample_idx_in_batch].detach().cpu())
-
-    y_reg_true = None
-    if getattr(batch, "y_reg", None) is not None:
-        y_reg_true = float(batch.y_reg[sample_idx_in_batch].detach().cpu())
-
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
-    reg_txt = ""
-    if (y_reg_true is not None) and (y_reg_pred is not None):
-        reg_txt = f" y_reg={y_reg_true:.3f} pred={y_reg_pred:.3f}"
+    S_lp = aux["qk_lp"][sample_idx_in_batch].detach().float().cpu().numpy()       # (Lp, Ll)
+    S_pl = aux["qk_pl"][sample_idx_in_batch].detach().float().cpu().numpy()       # (Lp, Ll)
+    S_ov = aux["qk_overlap"][sample_idx_in_batch].detach().float().cpu().numpy()  # (Lp, Ll)
 
-    # ---------------------------
-    # token labels
-    # ---------------------------
-    p_tok_labels = None
-    l_tok_labels = None
-    if show_token_labels:
-        p_ids_1 = batch.p_input_ids[sample_idx_in_batch].detach().cpu().tolist()
-        p_tok_labels_all = esm_tokenizer.convert_ids_to_tokens(p_ids_1)[1:]  # drop CLS
-
-        eos_tok = getattr(esm_tokenizer, "eos_token", None)
-        p_tok_labels = []
-        for t, is_pad in zip(p_tok_labels_all, p_pad):
-            if is_pad:
-                continue
-            if eos_tok is not None and t == eos_tok:
-                continue
-            p_tok_labels.append(t)
-
-        l_ids_1 = batch.l_ids[sample_idx_in_batch].detach().cpu().tolist()
-        l_tok_labels_all = l_ids_1[1:]  # drop CLS
-        l_tok_labels = [str(t) for t, is_pad in zip(l_tok_labels_all, l_pad) if not is_pad]
-
-    # ---------------------------
-    # LP: ligand <- protein
-    # shape: (Ll, Lp)
-    # rows = ligand, cols = protein
-    # ---------------------------
-    S_lp = aux["qk_scores_lp_z"][sample_idx_in_batch].detach().float().cpu().numpy()
-    A_lp = aux["attn_map_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
-
-    expected_lp = (len(l_pad), len(p_pad))
-    if S_lp.shape != expected_lp or A_lp.shape != expected_lp:
-        raise ValueError(
-            f"Unexpected LP shape: S_lp={S_lp.shape}, A_lp={A_lp.shape}, expected={expected_lp}"
-        )
-
-    S_lp_vis = S_lp[~l_pad][:, ~p_pad]
-    A_lp_vis = A_lp[~l_pad][:, ~p_pad]
-
-    # ---------------------------
-    # PL: protein <- ligand
-    # shape: (Lp, Ll)
-    # rows = protein, cols = ligand
-    # ---------------------------
-    S_pl = aux["qk_scores_pl_z"][sample_idx_in_batch].detach().float().cpu().numpy()
-    A_pl = aux["attn_map_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
-
-    expected_pl = (len(p_pad), len(l_pad))
-    if S_pl.shape != expected_pl or A_pl.shape != expected_pl:
-        raise ValueError(
-            f"Unexpected PL shape: S_pl={S_pl.shape}, A_pl={A_pl.shape}, expected={expected_pl}"
-        )
-
+    S_lp_vis = S_lp[~p_pad][:, ~l_pad]
     S_pl_vis = S_pl[~p_pad][:, ~l_pad]
-    A_pl_vis = A_pl[~p_pad][:, ~l_pad]
-    # ---------------------------
-    # SYM: min(LP, PL^T) for QK only
-    # shape: (Ll, Lp)
-    # ---------------------------
-    S_sym = aux["qk_scores_sym"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_ov_vis = S_ov[~p_pad][:, ~l_pad]
 
-    expected_sym = (len(l_pad), len(p_pad))
-    if S_sym.shape != expected_sym:
-        raise ValueError(
-            f"Unexpected SYM shape: S_sym={S_sym.shape}, expected={expected_sym}"
-        )
-
-    S_sym_vis = S_sym[~l_pad][:, ~p_pad]
-    # =========================================================
-    # 1) LP QK
-    # =========================================================
     plt.figure(figsize=(10, 6))
     plt.imshow(S_lp_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Ligand <- Protein QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
-    plt.xlabel("Protein tokens")
-    plt.ylabel("Ligand tokens")
-    if show_token_labels:
-        if p_tok_labels is not None and len(p_tok_labels) <= 80:
-            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
-        if l_tok_labels is not None and len(l_tok_labels) <= 80:
-            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
+    plt.title(f"qk_lp | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.xlabel("Ligand tokens")
+    plt.ylabel("Protein tokens")
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_lp.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-    plt.figure(figsize=(10, 6))
-    plt.imshow(S_sym_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"Sym(min) QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
-    plt.xlabel("Protein tokens")
-    plt.ylabel("Ligand tokens")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_sym.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_lp.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    qk_sym_heads = aux["qk_scores_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
-
-    H = qk_sym_heads.shape[0]
-    for h in range(H):
-        qk_sym_h = qk_sym_heads[h][~l_pad][:, ~p_pad]
-
-        plt.figure(figsize=(10, 6))
-        plt.imshow(qk_sym_h, aspect="auto")
-        plt.colorbar()
-        plt.title(f"Sym(min) QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
-        plt.xlabel("Protein tokens")
-        plt.ylabel("Ligand tokens")
-        plt.tight_layout()
-        if save_dir is not None:
-            plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_sym.png"), dpi=200, bbox_inches="tight")
-        plt.close()
-    # =========================================================
-    # 2) LP attention
-    # =========================================================
-    plt.figure(figsize=(10, 6))
-    plt.imshow(A_lp_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"Ligand <- Protein attention | prob={prob:.4f} y_bin={y_bin:.0f}")
-    plt.xlabel("Protein tokens")
-    plt.ylabel("Ligand tokens")
-    if show_token_labels:
-        if p_tok_labels is not None and len(p_tok_labels) <= 80:
-            plt.xticks(range(len(p_tok_labels)), p_tok_labels, rotation=90, fontsize=6)
-        if l_tok_labels is not None and len(l_tok_labels) <= 80:
-            plt.yticks(range(len(l_tok_labels)), l_tok_labels, fontsize=6)
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_lp.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    # =========================================================
-    # 3) PL QK
-    # =========================================================
     plt.figure(figsize=(10, 6))
     plt.imshow(S_pl_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Protein <- Ligand QK | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
+    plt.title(f"qk_pl | prob={prob:.4f} y_bin={y_bin:.0f}")
     plt.xlabel("Ligand tokens")
     plt.ylabel("Protein tokens")
-    if show_token_labels:
-        if l_tok_labels is not None and len(l_tok_labels) <= 80:
-            plt.xticks(range(len(l_tok_labels)), l_tok_labels, rotation=90, fontsize=6)
-        if p_tok_labels is not None and len(p_tok_labels) <= 80:
-            plt.yticks(range(len(p_tok_labels)), p_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_pl.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_pl.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # =========================================================
-    # 4) PL attention
-    # =========================================================
     plt.figure(figsize=(10, 6))
-    plt.imshow(A_pl_vis, aspect="auto")
+    plt.imshow(S_ov_vis, aspect="auto")
     plt.colorbar()
-    plt.title(f"Protein <- Ligand attention | prob={prob:.4f} y_bin={y_bin:.0f}")
+    plt.title(f"qk_overlap | prob={prob:.4f} y_bin={y_bin:.0f}")
     plt.xlabel("Ligand tokens")
     plt.ylabel("Protein tokens")
-    if show_token_labels:
-        if l_tok_labels is not None and len(l_tok_labels) <= 80:
-            plt.xticks(range(len(l_tok_labels)), l_tok_labels, rotation=90, fontsize=6)
-        if p_tok_labels is not None and len(p_tok_labels) <= 80:
-            plt.yticks(range(len(p_tok_labels)), p_tok_labels, fontsize=6)
     plt.tight_layout()
     if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_pl.png"), dpi=200, bbox_inches="tight")
+        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_overlap.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    # =========================================================
-    # 5) summary lines
-    # =========================================================
-    # LP: ligandごとの protein attention 平均
-    plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_lp_vis.shape[0]), A_lp_vis.mean(axis=1))
-    plt.title(f"LP: ligand-token mean attention to protein | prob={prob:.4f}")
-    plt.xlabel("Ligand token index")
-    plt.ylabel("mean attention")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_lp_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    # LP: proteinごとの ligand からの平均 attention
-    plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_lp_vis.shape[1]), A_lp_vis.mean(axis=0))
-    plt.title(f"LP: protein-token mean attention from ligand | prob={prob:.4f}")
-    plt.xlabel("Protein token index")
-    plt.ylabel("mean attention")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_lp_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    # PL: proteinごとの ligand attention 平均
-    plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_pl_vis.shape[0]), A_pl_vis.mean(axis=1))
-    plt.title(f"PL: protein-token mean attention to ligand | prob={prob:.4f}")
-    plt.xlabel("Protein token index")
-    plt.ylabel("mean attention")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_pl_prot_token_attention_mean.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    # PL: ligandごとの protein からの平均 attention
-    plt.figure(figsize=(10, 4))
-    plt.plot(np.arange(A_pl_vis.shape[1]), A_pl_vis.mean(axis=0))
-    plt.title(f"PL: ligand-token mean attention from protein | prob={prob:.4f}")
-    plt.xlabel("Ligand token index")
-    plt.ylabel("mean attention")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_pl_lig_token_attention_mean.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-    # =========================================================
-    # 6) per-head visualize
-    # =========================================================
-    if return_maps := (
-        "qk_scores_lp_heads" in aux and
-        "attn_map_lp_heads" in aux and
-        "qk_scores_pl_heads" in aux and
-        "attn_map_pl_heads" in aux
-    ):
-        qk_lp_heads = aux["qk_scores_lp_heads"][sample_idx_in_batch].detach().float().cpu().numpy()   # (H, Ll, Lp)
-        attn_lp_heads = aux["attn_map_lp_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H, Ll, Lp)
-        qk_pl_heads = aux["qk_scores_pl_heads"][sample_idx_in_batch].detach().float().cpu().numpy()   # (H, Lp, Ll)
-        attn_pl_heads = aux["attn_map_pl_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H, Lp, Ll)
-
-        H = qk_lp_heads.shape[0]
-
-        for h in range(H):
-            # LP head h
-            qk_lp_h = qk_lp_heads[h][~l_pad][:, ~p_pad]
-            attn_lp_h = attn_lp_heads[h][~l_pad][:, ~p_pad]
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(qk_lp_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Ligand <- Protein QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
-            plt.xlabel("Protein tokens")
-            plt.ylabel("Ligand tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_lp.png"), dpi=200, bbox_inches="tight")
-            plt.close()
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(attn_lp_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Ligand <- Protein attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
-            plt.xlabel("Protein tokens")
-            plt.ylabel("Ligand tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_lp.png"), dpi=200, bbox_inches="tight")
-            plt.close()
-
-            # PL head h
-            qk_pl_h = qk_pl_heads[h][~p_pad][:, ~l_pad]
-            attn_pl_h = attn_pl_heads[h][~p_pad][:, ~l_pad]
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(qk_pl_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Protein <- Ligand QK | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}{reg_txt}")
-            plt.xlabel("Ligand tokens")
-            plt.ylabel("Protein tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_pl.png"), dpi=200, bbox_inches="tight")
-            plt.close()
-
-            plt.figure(figsize=(10, 6))
-            plt.imshow(attn_pl_h, aspect="auto")
-            plt.colorbar()
-            plt.title(f"Protein <- Ligand attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
-            plt.xlabel("Ligand tokens")
-            plt.ylabel("Protein tokens")
-            plt.tight_layout()
-            if save_dir is not None:
-                plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_pl.png"), dpi=200, bbox_inches="tight")
-            plt.close()
     return {
-        "qk_scores_lp": S_lp_vis,
-        "attn_map_lp": A_lp_vis,
-        "qk_scores_pl": S_pl_vis,
-        "attn_map_pl": A_pl_vis,
+        "qk_lp": S_lp_vis,
+        "qk_pl": S_pl_vis,
+        "qk_overlap": S_ov_vis,
         "prob": prob,
         "y_bin": y_bin,
-        "y_reg_pred": y_reg_pred,
-        "y_reg_true": y_reg_true,
-        "protein_tokens": p_tok_labels,
-        "ligand_tokens": l_tok_labels,
     }
+
 
 class ESMProteinEncoder(nn.Module):
     def __init__(self, model_name: str, device: torch.device, finetune: bool = False):
@@ -1217,6 +958,101 @@ class FFN(nn.Module):
         return self.net(x)
 
 
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class OverlapInteraction(nn.Module):
+    def __init__(self, d_model, dropout=0.1, qk_norm=True):
+        super().__init__()
+        self.qk_norm = qk_norm
+        self.scale = 1.0 / math.sqrt(d_model)
+
+        # protein -> ligand
+        self.q_from_p = nn.Linear(d_model, d_model)
+        self.k_from_l = nn.Linear(d_model, d_model)
+
+        # ligand -> protein
+        self.q_from_l = nn.Linear(d_model, d_model)
+        self.k_from_p = nn.Linear(d_model, d_model)
+
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
+        """
+        p_tok: (B, Lp, D)
+        l_tok: (B, Ll, D)
+        p_pad: (B, Lp) bool, True=pad
+        l_pad: (B, Ll) bool, True=pad
+        """
+        q_p = self.q_from_p(p_tok)   # (B, Lp, D)
+        k_l = self.k_from_l(l_tok)   # (B, Ll, D)
+
+        q_l = self.q_from_l(l_tok)   # (B, Ll, D)
+        k_p = self.k_from_p(p_tok)   # (B, Lp, D)
+
+        if self.qk_norm:
+            q_p = F.normalize(q_p, dim=-1)
+            k_l = F.normalize(k_l, dim=-1)
+            q_l = F.normalize(q_l, dim=-1)
+            k_p = F.normalize(k_p, dim=-1)
+
+        # protein -> ligand
+        s_pl = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale   # (B, Lp, Ll)
+
+        # ligand -> protein
+        s_lp = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale   # (B, Ll, Lp)
+        s_lp_t = s_lp.transpose(1, 2)                                # (B, Lp, Ll)
+
+        # 双方向一致のみ残す
+        s_ov = torch.minimum(s_pl, s_lp_t)                           # (B, Lp, Ll)
+
+        if p_pad is not None and l_pad is not None:
+            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)   # (B, Lp, Ll)
+            s_pl = s_pl.masked_fill(~pair_mask, 0.0)
+            s_lp_t = s_lp_t.masked_fill(~pair_mask, 0.0)
+            s_ov = s_ov.masked_fill(~pair_mask, 0.0)
+        else:
+            pair_mask = torch.ones_like(s_ov, dtype=torch.bool)
+
+        # simple pooled features
+        # 各protein tokenに対して best ligand を見て平均
+        f_row = s_ov.amax(dim=2).mean(dim=1, keepdim=True)   # (B,1)
+
+        # 各ligand tokenに対して best protein を見て平均
+        f_col = s_ov.amax(dim=1).mean(dim=1, keepdim=True)   # (B,1)
+
+        # 全体平均
+        denom = pair_mask.sum(dim=(1, 2)).clamp_min(1).to(s_ov.dtype)
+        f_mean = (s_ov.sum(dim=(1, 2)) / denom).unsqueeze(1) # (B,1)
+
+        feat = torch.cat([f_row, f_col, f_mean], dim=1)      # (B,3)
+        feat = self.drop(feat)
+
+        aux = {
+            "qk_pl": s_pl,
+            "qk_lp": s_lp_t,
+            "qk_overlap": s_ov,
+            "pair_mask": pair_mask,
+        }
+        return feat, aux
+
+
+class OverlapHead(nn.Module):
+    def __init__(self, in_dim=3, hidden_dim=32, dropout=0.1):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, feat):
+        return self.mlp(feat).squeeze(-1)
+
 class DualStreamBlock(nn.Module):
     def __init__(
         self,
@@ -1336,32 +1172,16 @@ class DualStreamDTIClassifier(nn.Module):
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
         self.qk_norm = qk_norm
         self.dropout = dropout
-        self.blocks = nn.ModuleList([
-            DualStreamBlock(
-                d_model=self.d_model,
-                n_heads=self.n_heads,
-                dropout=self.dropout,
-                attn_temp=attn_temp,
-                qk_norm=self.qk_norm,
-                attn_smooth_eps=attn_smooth_eps,
-                attn_activation=attn_activation,
-            )
-            for _ in range(n_layers)
-        ])
-        # CLSを使わないので 3D = [lig_vec, prot_vec, lig_vec*prot_vec]
-        self.cls_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
+        self.interaction = OverlapInteraction(
+            d_model=self.d_model,
+            dropout=dropout,
+            qk_norm=True,
         )
-        self.reg_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, 1),
+
+        self.cls_head = OverlapHead(
+            in_dim=3,
+            hidden_dim=32,
+            dropout=dropout,
         )
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
@@ -1386,179 +1206,37 @@ class DualStreamDTIClassifier(nn.Module):
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
+
         p_h = self.prot(p_input_ids, p_attn_mask)
         if self.p_proj is not None:
             p_h = self.p_proj(p_h)
 
         l_h = self.lig(l_ids)
 
-        prot_pad_mask = (p_attn_mask == 0)
-        lig_pad_mask = (l_ids == self.lig_pad_id)
-
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
 
-        p_pad = prot_pad_mask[:, 1:]
-        l_pad = lig_pad_mask[:, 1:]
+        p_pad = (p_attn_mask == 0)[:, 1:]
+        l_pad = (l_ids == self.lig_pad_id)[:, 1:]
 
-        eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
-        if eos_id is None:
-            eos_id = 2
+        eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # protein token dropout
-        p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
+        feat, inter_aux = self.interaction(
+            p_tok=p_tok,
+            l_tok=l_tok,
+            p_pad=p_pad,
+            l_pad=l_pad,
+        )
 
-        # ligand token dropout
-        l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
+        logit = self.cls_head(feat)
 
-        last_aux = None
-        for blk in self.blocks:
-            if return_maps:
-                l_tok, p_tok, blk_aux = blk(
-                    l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=True
-                )
-                last_aux = blk_aux
-            else:
-                l_tok, p_tok = blk(
-                    l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False
-                )
+        aux.update(inter_aux)
+        aux["p_pad"] = p_pad
+        aux["l_pad"] = l_pad
 
-        # attentionで更新された ligand token をそのまま集約
-        lig_vec = self._masked_mean(l_tok, l_pad)
-
-        logit = self.cls_head(lig_vec).squeeze(-1)
-        yhat_reg = self.reg_head(lig_vec).squeeze(-1)
-
-        aux["logit_delta"] = logit
-        aux["logit_full"] = logit
-
-        if last_aux is not None:
-            attn_lp = last_aux["attn_lp"]  # (B,H,Ll,Lp)
-            qk_lp   = last_aux["qk_lp"]    # (B,H,Ll,Lp)
-
-            attn_pl = last_aux["attn_pl"]  # (B,H,Lp,Ll)
-            qk_pl   = last_aux["qk_pl"]    # (B,H,Lp,Ll)
-
-            def masked_head_zscore(
-                x: torch.Tensor,
-                row_pad: torch.Tensor,
-                col_pad: torch.Tensor,
-                eps: float = 1e-6,
-            ) -> torch.Tensor:
-                # x: (B,H,Lr,Lc)
-                valid = (~row_pad)[:, None, :, None] & (~col_pad)[:, None, None, :]  # (B,1,Lr,Lc)
-                valid_f = valid.float()
-
-                denom = valid_f.sum(dim=(2, 3), keepdim=True).clamp(min=1.0)
-                mu = (x * valid_f).sum(dim=(2, 3), keepdim=True) / denom
-
-                xc = (x - mu) * valid_f
-                var = (xc * xc).sum(dim=(2, 3), keepdim=True) / denom
-                std = var.sqrt().clamp(min=eps)
-
-                z = (x - mu) / std
-                z = z.masked_fill(~valid, 0.0)
-                return z
-
-            # -------------------------
-            # qk は native orientation で head-wise 全体 z-score
-            # -------------------------
-            qk_lp_n = masked_head_zscore(qk_lp, l_pad, p_pad)  # (B,H,Ll,Lp)
-            qk_pl_n = masked_head_zscore(qk_pl, p_pad, l_pad)  # (B,H,Lp,Ll)
-
-            # PL を LP と同じ向き (Ll,Lp) に揃える
-            qk_pl_n_t = qk_pl_n.transpose(2, 3)                # (B,H,Ll,Lp)
-
-            # -------------------------
-            # qk のみ min 対称化
-            # -------------------------
-            qk_sym = torch.minimum(qk_lp_n, qk_pl_n_t)         # (B,H,Ll,Lp)
-
-            # entropy は LP側 attention のまま
-            attn_lp_safe = attn_lp.clamp(min=1e-8)
-            ent_lp = -(attn_lp_safe * torch.log(attn_lp_safe)).sum(dim=-1)  # (B,H,Ll)
-            ent_lp = ent_lp.masked_fill(l_pad[:, None, :], 0.0)
-            denom_l = (~l_pad).sum(dim=1).clamp(min=1)
-            aux["attn_entropy"] = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads)).mean()
-
-            if return_maps:
-                # -------------------------
-                # 本物の LP / PL
-                # -------------------------
-                aux["qk_scores_lp"] = qk_lp.mean(dim=1)         # (B,Ll,Lp)
-                aux["attn_map_lp"]  = attn_lp.mean(dim=1)       # (B,Ll,Lp)
-                aux["qk_scores_lp_heads"] = qk_lp               # (B,H,Ll,Lp)
-                aux["attn_map_lp_heads"]  = attn_lp             # (B,H,Ll,Lp)
-
-                aux["qk_scores_pl"] = qk_pl.mean(dim=1)         # (B,Lp,Ll)
-                aux["attn_map_pl"]  = attn_pl.mean(dim=1)       # (B,Lp,Ll)
-                aux["qk_scores_pl_heads"] = qk_pl               # (B,H,Lp,Ll)
-                aux["attn_map_pl_heads"]  = attn_pl             # (B,H,Lp,Ll)
-
-                # -------------------------
-                # z-score後の本物 LP / PL も保存しておくと便利
-                # -------------------------
-                aux["qk_scores_lp_z"] = qk_lp_n.mean(dim=1)     # (B,Ll,Lp)
-                aux["qk_scores_lp_z_heads"] = qk_lp_n           # (B,H,Ll,Lp)
-
-                aux["qk_scores_pl_z"] = qk_pl_n.mean(dim=1)     # (B,Lp,Ll)
-                aux["qk_scores_pl_z_heads"] = qk_pl_n           # (B,H,Lp,Ll)
-
-                # -------------------------
-                # qk 対称化版
-                # -------------------------
-                aux["qk_scores_sym"] = qk_sym.mean(dim=1)       # (B,Ll,Lp)
-                aux["qk_scores_sym_heads"] = qk_sym             # (B,H,Ll,Lp)
-
-                # generic key:
-                # qk は sym を使い、attention は LP をそのまま使う
-                aux["qk_scores"] = qk_sym.mean(dim=1)           # (B,Ll,Lp)
-                aux["qk_scores_heads"] = qk_sym                 # (B,H,Ll,Lp)
-
-                aux["attn_map"] = attn_lp.mean(dim=1)           # (B,Ll,Lp)
-                aux["attn_map_heads"] = attn_lp                 # (B,H,Ll,Lp)
-
-                aux["p_pad"] = p_pad
-                aux["l_pad"] = l_pad
-
-        else:
-            aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
-            if return_maps:
-                B = p_input_ids.size(0)
-                Ll = l_tok.size(1)
-                Lp = p_tok.size(1)
-
-                aux["qk_scores_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["attn_map_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["qk_scores_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-                aux["attn_map_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-                aux["qk_scores_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-                aux["attn_map_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-                aux["qk_scores_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-                aux["attn_map_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-
-                aux["qk_scores_lp_z"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["qk_scores_lp_z_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-                aux["qk_scores_pl_z"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-                aux["qk_scores_pl_z_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-
-                aux["qk_scores_sym"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["qk_scores_sym_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-                # generic key
-                aux["qk_scores"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-                aux["attn_map"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-                aux["attn_map_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-                aux["p_pad"] = p_pad
-                aux["l_pad"] = l_pad
-
-        return logit, yhat_reg, aux
+        return logit, None, aux
 
 # =========================================================
 # Optimizer
