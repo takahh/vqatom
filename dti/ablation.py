@@ -569,6 +569,7 @@ def visualize_one_qk_map(
     qk_sym_heads = aux["qk_scores_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
     attn_sym_heads = aux["attn_map_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
 
+    H = qk_sym_heads.shape[0]
     for h in range(H):
         qk_sym_h = qk_sym_heads[h][~l_pad][:, ~p_pad]
         attn_sym_h = attn_sym_heads[h][~l_pad][:, ~p_pad]
@@ -1115,7 +1116,7 @@ class CrossAttention(nn.Module):
         qk_norm=True,
         attn_smooth_eps=0.0,
         attn_activation="softmax",   # "softmax", "entmax15", "sigmoid"
-        sigmoid_row_norm=False,      # sigmoid時だけ使う
+        sigmoid_row_norm=False,
     ):
         super().__init__()
         assert d_model % n_heads == 0
@@ -1124,9 +1125,17 @@ class CrossAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
+        # headごとに独立 projection
+        self.q_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+        self.k_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+        self.v_proj = nn.ModuleList([
+            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
+        ])
+
         self.out_proj = nn.Linear(d_model, d_model)
 
         self.dropout = nn.Dropout(dropout)
@@ -1147,13 +1156,13 @@ class CrossAttention(nn.Module):
         if Lk != Lv:
             raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
-        q = self.q_proj(q_in)
-        k = self.k_proj(k_in)
-        v = self.v_proj(v_in)
-
-        q = q.view(B, Lq, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lq,D)
-        k = k.view(B, Lk, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lk,D)
-        v = v.view(B, Lv, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,Lv,D)
+        # -------------------------
+        # headごとに別々に射影
+        # stack後: (B,H,L,Dh)
+        # -------------------------
+        q = torch.stack([proj(q_in) for proj in self.q_proj], dim=1)
+        k = torch.stack([proj(k_in) for proj in self.k_proj], dim=1)
+        v = torch.stack([proj(v_in) for proj in self.v_proj], dim=1)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
@@ -1166,13 +1175,11 @@ class CrossAttention(nn.Module):
         if kv_pad_mask is not None:
             mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
 
-        # ---- activation ----
         if self.attn_activation == "softmax":
             x = attn_logits
             if mask is not None:
                 x = x.masked_fill(mask, -1e9)
             attn = torch.softmax(x, dim=-1)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
@@ -1182,30 +1189,24 @@ class CrossAttention(nn.Module):
             if mask is not None:
                 x = x.masked_fill(mask, -1e9)
             attn = entmax15(x, dim=-1)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(attn_logits)
-
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
-            # optional: 行方向に軽く正規化したいときだけ使う
-            # if self.sigmoid_row_norm:
-            # denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            # attn = attn / denom
+            if self.sigmoid_row_norm:
+                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                attn = attn / denom
 
         else:
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
-        # smoothing は softmax / entmax のときだけ推奨
         eps = self.attn_smooth_eps
         if eps > 0:
-            if self.attn_activation == "sigmoid":
-                pass
-            else:
+            if self.attn_activation != "sigmoid":
                 if mask is None:
                     attn = (1 - eps) * attn + eps / attn.size(-1)
                 else:
@@ -1215,7 +1216,7 @@ class CrossAttention(nn.Module):
 
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)   # (B,H,Lq,D)
+        out = torch.matmul(attn, v)   # (B,H,Lq,Dh)
         out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
@@ -1225,6 +1226,7 @@ class CrossAttention(nn.Module):
                 "attn_map": attn.detach(),
             }
         return out
+
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
