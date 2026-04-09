@@ -1409,181 +1409,181 @@ class DualStreamDTIClassifier(nn.Module):
                 out[b, keep_idx[b]] = False
         return out
 
-def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
-    aux = {}
-    p_h = self.prot(p_input_ids, p_attn_mask)
-    if self.p_proj is not None:
-        p_h = self.p_proj(p_h)
+    def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
+        aux = {}
+        p_h = self.prot(p_input_ids, p_attn_mask)
+        if self.p_proj is not None:
+            p_h = self.p_proj(p_h)
 
-    l_h = self.lig(l_ids)
+        l_h = self.lig(l_ids)
 
-    prot_pad_mask = (p_attn_mask == 0)
-    lig_pad_mask = (l_ids == self.lig_pad_id)
+        prot_pad_mask = (p_attn_mask == 0)
+        lig_pad_mask = (l_ids == self.lig_pad_id)
 
-    p_tok = p_h[:, 1:, :]
-    l_tok = l_h[:, 1:, :]
+        p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
 
-    p_pad = prot_pad_mask[:, 1:]
-    l_pad = lig_pad_mask[:, 1:]
+        p_pad = prot_pad_mask[:, 1:]
+        l_pad = lig_pad_mask[:, 1:]
 
-    eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
-    if eos_id is None:
-        eos_id = 2
-    p_tok_ids = p_input_ids[:, 1:]
-    p_pad = p_pad | (p_tok_ids == eos_id)
+        eos_id = getattr(self.prot.esm.config, "eos_token_id", None)
+        if eos_id is None:
+            eos_id = 2
+        p_tok_ids = p_input_ids[:, 1:]
+        p_pad = p_pad | (p_tok_ids == eos_id)
 
-    # protein token dropout
-    p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
+        # protein token dropout
+        p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
 
-    # ligand token dropout
-    l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
+        # ligand token dropout
+        l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
 
-    last_aux = None
-    for blk in self.blocks:
-        if return_maps:
-            l_tok, p_tok, blk_aux = blk(
-                l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=True
-            )
-            last_aux = blk_aux
+        last_aux = None
+        for blk in self.blocks:
+            if return_maps:
+                l_tok, p_tok, blk_aux = blk(
+                    l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=True
+                )
+                last_aux = blk_aux
+            else:
+                l_tok, p_tok = blk(
+                    l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False
+                )
+
+        # attentionで更新された ligand token をそのまま集約
+        lig_vec = self._masked_mean(l_tok, l_pad)
+
+        logit = self.cls_head(lig_vec).squeeze(-1)
+        yhat_reg = self.reg_head(lig_vec).squeeze(-1)
+
+        aux["logit_delta"] = logit
+        aux["logit_full"] = logit
+
+        if last_aux is not None:
+            attn_lp = last_aux["attn_lp"]  # (B,H,Ll,Lp)
+            qk_lp   = last_aux["qk_lp"]    # (B,H,Ll,Lp)
+
+            attn_pl = last_aux["attn_pl"]  # (B,H,Lp,Ll)
+            qk_pl   = last_aux["qk_pl"]    # (B,H,Lp,Ll)
+
+            def masked_head_zscore(
+                x: torch.Tensor,
+                row_pad: torch.Tensor,
+                col_pad: torch.Tensor,
+                eps: float = 1e-6,
+            ) -> torch.Tensor:
+                # x: (B,H,Lr,Lc)
+                valid = (~row_pad)[:, None, :, None] & (~col_pad)[:, None, None, :]  # (B,1,Lr,Lc)
+                valid_f = valid.float()
+
+                denom = valid_f.sum(dim=(2, 3), keepdim=True).clamp(min=1.0)
+                mu = (x * valid_f).sum(dim=(2, 3), keepdim=True) / denom
+
+                xc = (x - mu) * valid_f
+                var = (xc * xc).sum(dim=(2, 3), keepdim=True) / denom
+                std = var.sqrt().clamp(min=eps)
+
+                z = (x - mu) / std
+                z = z.masked_fill(~valid, 0.0)
+                return z
+
+            # -------------------------
+            # qk は native orientation で head-wise 全体 z-score
+            # -------------------------
+            qk_lp_n = masked_head_zscore(qk_lp, l_pad, p_pad)  # (B,H,Ll,Lp)
+            qk_pl_n = masked_head_zscore(qk_pl, p_pad, l_pad)  # (B,H,Lp,Ll)
+
+            # PL を LP と同じ向き (Ll,Lp) に揃える
+            qk_pl_n_t = qk_pl_n.transpose(2, 3)                # (B,H,Ll,Lp)
+
+            # -------------------------
+            # qk のみ min 対称化
+            # -------------------------
+            qk_sym = torch.minimum(qk_lp_n, qk_pl_n_t)         # (B,H,Ll,Lp)
+
+            # entropy は LP側 attention のまま
+            attn_lp_safe = attn_lp.clamp(min=1e-8)
+            ent_lp = -(attn_lp_safe * torch.log(attn_lp_safe)).sum(dim=-1)  # (B,H,Ll)
+            ent_lp = ent_lp.masked_fill(l_pad[:, None, :], 0.0)
+            denom_l = (~l_pad).sum(dim=1).clamp(min=1)
+            aux["attn_entropy"] = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads)).mean()
+
+            if return_maps:
+                # -------------------------
+                # 本物の LP / PL
+                # -------------------------
+                aux["qk_scores_lp"] = qk_lp.mean(dim=1)         # (B,Ll,Lp)
+                aux["attn_map_lp"]  = attn_lp.mean(dim=1)       # (B,Ll,Lp)
+                aux["qk_scores_lp_heads"] = qk_lp               # (B,H,Ll,Lp)
+                aux["attn_map_lp_heads"]  = attn_lp             # (B,H,Ll,Lp)
+
+                aux["qk_scores_pl"] = qk_pl.mean(dim=1)         # (B,Lp,Ll)
+                aux["attn_map_pl"]  = attn_pl.mean(dim=1)       # (B,Lp,Ll)
+                aux["qk_scores_pl_heads"] = qk_pl               # (B,H,Lp,Ll)
+                aux["attn_map_pl_heads"]  = attn_pl             # (B,H,Lp,Ll)
+
+                # -------------------------
+                # z-score後の本物 LP / PL も保存しておくと便利
+                # -------------------------
+                aux["qk_scores_lp_z"] = qk_lp_n.mean(dim=1)     # (B,Ll,Lp)
+                aux["qk_scores_lp_z_heads"] = qk_lp_n           # (B,H,Ll,Lp)
+
+                aux["qk_scores_pl_z"] = qk_pl_n.mean(dim=1)     # (B,Lp,Ll)
+                aux["qk_scores_pl_z_heads"] = qk_pl_n           # (B,H,Lp,Ll)
+
+                # -------------------------
+                # qk 対称化版
+                # -------------------------
+                aux["qk_scores_sym"] = qk_sym.mean(dim=1)       # (B,Ll,Lp)
+                aux["qk_scores_sym_heads"] = qk_sym             # (B,H,Ll,Lp)
+
+                # generic key:
+                # qk は sym を使い、attention は LP をそのまま使う
+                aux["qk_scores"] = qk_sym.mean(dim=1)           # (B,Ll,Lp)
+                aux["qk_scores_heads"] = qk_sym                 # (B,H,Ll,Lp)
+
+                aux["attn_map"] = attn_lp.mean(dim=1)           # (B,Ll,Lp)
+                aux["attn_map_heads"] = attn_lp                 # (B,H,Ll,Lp)
+
+                aux["p_pad"] = p_pad
+                aux["l_pad"] = l_pad
+
         else:
-            l_tok, p_tok = blk(
-                l_tok, p_tok, l_pad=l_pad, p_pad=p_pad, return_maps=False
-            )
+            aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
+            if return_maps:
+                B = p_input_ids.size(0)
+                Ll = l_tok.size(1)
+                Lp = p_tok.size(1)
 
-    # attentionで更新された ligand token をそのまま集約
-    lig_vec = self._masked_mean(l_tok, l_pad)
+                aux["qk_scores_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
-    logit = self.cls_head(lig_vec).squeeze(-1)
-    yhat_reg = self.reg_head(lig_vec).squeeze(-1)
+                aux["qk_scores_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
+                aux["attn_map_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
+                aux["qk_scores_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
+                aux["attn_map_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
 
-    aux["logit_delta"] = logit
-    aux["logit_full"] = logit
+                aux["qk_scores_lp_z"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_lp_z_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
-    if last_aux is not None:
-        attn_lp = last_aux["attn_lp"]  # (B,H,Ll,Lp)
-        qk_lp   = last_aux["qk_lp"]    # (B,H,Ll,Lp)
+                aux["qk_scores_pl_z"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
+                aux["qk_scores_pl_z_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
 
-        attn_pl = last_aux["attn_pl"]  # (B,H,Lp,Ll)
-        qk_pl   = last_aux["qk_pl"]    # (B,H,Lp,Ll)
+                aux["qk_scores_sym"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_sym_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
-        def masked_head_zscore(
-            x: torch.Tensor,
-            row_pad: torch.Tensor,
-            col_pad: torch.Tensor,
-            eps: float = 1e-6,
-        ) -> torch.Tensor:
-            # x: (B,H,Lr,Lc)
-            valid = (~row_pad)[:, None, :, None] & (~col_pad)[:, None, None, :]  # (B,1,Lr,Lc)
-            valid_f = valid.float()
+                # generic key
+                aux["qk_scores"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
+                aux["attn_map_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
 
-            denom = valid_f.sum(dim=(2, 3), keepdim=True).clamp(min=1.0)
-            mu = (x * valid_f).sum(dim=(2, 3), keepdim=True) / denom
+                aux["p_pad"] = p_pad
+                aux["l_pad"] = l_pad
 
-            xc = (x - mu) * valid_f
-            var = (xc * xc).sum(dim=(2, 3), keepdim=True) / denom
-            std = var.sqrt().clamp(min=eps)
-
-            z = (x - mu) / std
-            z = z.masked_fill(~valid, 0.0)
-            return z
-
-        # -------------------------
-        # qk は native orientation で head-wise 全体 z-score
-        # -------------------------
-        qk_lp_n = masked_head_zscore(qk_lp, l_pad, p_pad)  # (B,H,Ll,Lp)
-        qk_pl_n = masked_head_zscore(qk_pl, p_pad, l_pad)  # (B,H,Lp,Ll)
-
-        # PL を LP と同じ向き (Ll,Lp) に揃える
-        qk_pl_n_t = qk_pl_n.transpose(2, 3)                # (B,H,Ll,Lp)
-
-        # -------------------------
-        # qk のみ min 対称化
-        # -------------------------
-        qk_sym = torch.minimum(qk_lp_n, qk_pl_n_t)         # (B,H,Ll,Lp)
-
-        # entropy は LP側 attention のまま
-        attn_lp_safe = attn_lp.clamp(min=1e-8)
-        ent_lp = -(attn_lp_safe * torch.log(attn_lp_safe)).sum(dim=-1)  # (B,H,Ll)
-        ent_lp = ent_lp.masked_fill(l_pad[:, None, :], 0.0)
-        denom_l = (~l_pad).sum(dim=1).clamp(min=1)
-        aux["attn_entropy"] = (ent_lp.sum(dim=(1, 2)) / (denom_l * self.n_heads)).mean()
-
-        if return_maps:
-            # -------------------------
-            # 本物の LP / PL
-            # -------------------------
-            aux["qk_scores_lp"] = qk_lp.mean(dim=1)         # (B,Ll,Lp)
-            aux["attn_map_lp"]  = attn_lp.mean(dim=1)       # (B,Ll,Lp)
-            aux["qk_scores_lp_heads"] = qk_lp               # (B,H,Ll,Lp)
-            aux["attn_map_lp_heads"]  = attn_lp             # (B,H,Ll,Lp)
-
-            aux["qk_scores_pl"] = qk_pl.mean(dim=1)         # (B,Lp,Ll)
-            aux["attn_map_pl"]  = attn_pl.mean(dim=1)       # (B,Lp,Ll)
-            aux["qk_scores_pl_heads"] = qk_pl               # (B,H,Lp,Ll)
-            aux["attn_map_pl_heads"]  = attn_pl             # (B,H,Lp,Ll)
-
-            # -------------------------
-            # z-score後の本物 LP / PL も保存しておくと便利
-            # -------------------------
-            aux["qk_scores_lp_z"] = qk_lp_n.mean(dim=1)     # (B,Ll,Lp)
-            aux["qk_scores_lp_z_heads"] = qk_lp_n           # (B,H,Ll,Lp)
-
-            aux["qk_scores_pl_z"] = qk_pl_n.mean(dim=1)     # (B,Lp,Ll)
-            aux["qk_scores_pl_z_heads"] = qk_pl_n           # (B,H,Lp,Ll)
-
-            # -------------------------
-            # qk 対称化版
-            # -------------------------
-            aux["qk_scores_sym"] = qk_sym.mean(dim=1)       # (B,Ll,Lp)
-            aux["qk_scores_sym_heads"] = qk_sym             # (B,H,Ll,Lp)
-
-            # generic key:
-            # qk は sym を使い、attention は LP をそのまま使う
-            aux["qk_scores"] = qk_sym.mean(dim=1)           # (B,Ll,Lp)
-            aux["qk_scores_heads"] = qk_sym                 # (B,H,Ll,Lp)
-
-            aux["attn_map"] = attn_lp.mean(dim=1)           # (B,Ll,Lp)
-            aux["attn_map_heads"] = attn_lp                 # (B,H,Ll,Lp)
-
-            aux["p_pad"] = p_pad
-            aux["l_pad"] = l_pad
-
-    else:
-        aux["attn_entropy"] = torch.tensor(0.0, device=p_input_ids.device)
-        if return_maps:
-            B = p_input_ids.size(0)
-            Ll = l_tok.size(1)
-            Lp = p_tok.size(1)
-
-            aux["qk_scores_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["attn_map_lp"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["qk_scores_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-            aux["attn_map_lp_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-            aux["qk_scores_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-            aux["attn_map_pl"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-            aux["qk_scores_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-            aux["attn_map_pl_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-
-            aux["qk_scores_lp_z"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["qk_scores_lp_z_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-            aux["qk_scores_pl_z"] = torch.zeros(B, Lp, Ll, device=p_input_ids.device)
-            aux["qk_scores_pl_z_heads"] = torch.zeros(B, self.n_heads, Lp, Ll, device=p_input_ids.device)
-
-            aux["qk_scores_sym"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["qk_scores_sym_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-            # generic key
-            aux["qk_scores"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["qk_scores_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-            aux["attn_map"] = torch.zeros(B, Ll, Lp, device=p_input_ids.device)
-            aux["attn_map_heads"] = torch.zeros(B, self.n_heads, Ll, Lp, device=p_input_ids.device)
-
-            aux["p_pad"] = p_pad
-            aux["l_pad"] = l_pad
-
-    return logit, yhat_reg, aux
+        return logit, yhat_reg, aux
 
 # =========================================================
 # Optimizer
