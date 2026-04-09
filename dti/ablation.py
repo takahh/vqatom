@@ -1105,9 +1105,8 @@ class DualStreamDTIClassifier(nn.Module):
             attn_smooth_eps=attn_smooth_eps,
             attn_activation=attn_activation,
         )
-
         self.cls_head = nn.Sequential(
-            nn.Linear(self.d_model * 2, 128),
+            nn.Linear(self.d_model * 4, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1),
@@ -1134,6 +1133,17 @@ class DualStreamDTIClassifier(nn.Module):
             keep_idx = (~out).float().argmax(dim=1)
             for b in torch.where(all_dropped)[0]:
                 out[b, keep_idx[b]] = False
+        return out
+
+    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        neg_inf = torch.finfo(x.dtype).min
+        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
+        out = x_masked.max(dim=1).values
+
+        # 全部 pad の場合の保険
+        bad = torch.isinf(out)
+        if bad.any():
+            out = out.masked_fill(bad, 0.0)
         return out
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
@@ -1173,10 +1183,13 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=return_maps,
         )
 
-        p_pool = self._masked_mean(p_ctx, p_pad)  # (B, d)
-        l_pool = self._masked_mean(l_ctx, l_pad)  # (B, d)
+        p_mean = self._masked_mean(p_ctx, p_pad)  # (B, d)
+        p_max = self._masked_max(p_ctx, p_pad)  # (B, d)
 
-        feat = torch.cat([p_pool, l_pool], dim=-1)  # (B, 2d)
+        l_mean = self._masked_mean(l_ctx, l_pad)  # (B, d)
+        l_max = self._masked_max(l_ctx, l_pad)  # (B, d)
+
+        feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)  # (B, 4d)
         logit = self.cls_head(feat).squeeze(-1)
 
         aux.update(inter_aux)
