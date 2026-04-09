@@ -416,8 +416,12 @@ def plot_one(mat, title, save_path=None):
     plt.imshow(mat, aspect="auto")
     plt.colorbar()
     plt.title(title)
-    plt.xlabel("Ligand tokens")
-    plt.ylabel("Protein tokens")
+    if "lp" in save_path:
+        plt.ylabel("Ligand tokens")
+        plt.xlabel("Protein tokens")
+    else:
+        plt.xlabel("Ligand tokens")
+        plt.ylabel("Protein tokens")
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
@@ -1059,7 +1063,7 @@ class BidirectionalValueInteraction(nn.Module):
             }
 
         return p_out, l_out, aux
-    
+
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
