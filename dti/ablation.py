@@ -555,7 +555,7 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
 
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
-            if batch.y_reg is not None:
+            if (batch.y_reg is not None) and (yhat_reg is not None):
                 yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
                 yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
 
