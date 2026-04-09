@@ -973,6 +973,7 @@ class OverlapInteraction(nn.Module):
         self.drop = nn.Dropout(dropout)
 
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
+        from entmax import entmax15
 
         def masked_zscore(x, mask, eps=1e-6):
             m = mask.float()
@@ -997,20 +998,32 @@ class OverlapInteraction(nn.Module):
             k_p = F.normalize(k_p, dim=-1)
 
         if p_pad is not None and l_pad is not None:
-            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)
+            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)  # (B, Lp, Ll)
         else:
             pair_mask = torch.ones(
                 p_tok.size(0), p_tok.size(1), l_tok.size(1),
                 dtype=torch.bool, device=p_tok.device
             )
 
-        s_pl_raw = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale
-        s_lp_raw = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale
-        s_lp_t_raw = s_lp_raw.transpose(1, 2)
+        s_pl_raw = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale  # (B, Lp, Ll)
+        s_lp_raw = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale  # (B, Ll, Lp)
+        s_lp_t_raw = s_lp_raw.transpose(1, 2)  # (B, Lp, Ll)
 
         s_pl = masked_zscore(s_pl_raw, pair_mask)
         s_lp_t = masked_zscore(s_lp_t_raw, pair_mask)
-        s_ov = torch.minimum(s_pl, s_lp_t).masked_fill(~pair_mask, 0.0)
+
+        # overlap
+        s_ov_pre = torch.minimum(s_pl, s_lp_t).masked_fill(~pair_mask, 0.0)
+
+        # ------------------------------------------
+        # ligand列ごとに protein軸(dim=1) へ entmax
+        # ------------------------------------------
+        tau = 0.7  # まずは 0.5~1.0 くらいで試す
+        x = s_ov_pre / tau
+        x = x.masked_fill(~pair_mask, -1e9)
+
+        s_ov = entmax15(x, dim=1)  # 各 ligand token 列ごとに sparse 化
+        s_ov = s_ov.masked_fill(~pair_mask, 0.0)
 
         f_row = s_ov.amax(dim=2).mean(dim=1, keepdim=True)
         f_col = s_ov.amax(dim=1).mean(dim=1, keepdim=True)
@@ -1024,7 +1037,8 @@ class OverlapInteraction(nn.Module):
             "qk_lp_raw": s_lp_t_raw,
             "qk_pl": s_pl,
             "qk_lp": s_lp_t,
-            "qk_overlap": s_ov,
+            "qk_overlap_pre": s_ov_pre,  # entmax 前を見たいとき用
+            "qk_overlap": s_ov,  # entmax 後
             "pair_mask": pair_mask,
         }
         return feat, aux
