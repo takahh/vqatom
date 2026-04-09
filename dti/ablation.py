@@ -975,21 +975,6 @@ class OverlapInteraction(nn.Module):
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
         from entmax import entmax15
 
-        def diag_tok_stats(x, name):
-            import torch
-            import torch.nn.functional as F
-
-            std_token = x.std(dim=1).mean().item()
-            std_feat = x.std(dim=2).mean().item()
-
-            x_norm = F.normalize(x, dim=-1)
-            sim = torch.matmul(x_norm, x_norm.transpose(1, 2))
-            B, L, _ = sim.shape
-            eye = torch.eye(L, device=sim.device, dtype=torch.bool).unsqueeze(0)
-            sim_off = sim.masked_fill(eye, 0.0)
-            mean_sim = (sim_off.sum() / (B * L * (L - 1))).item()
-
-            print(f"[{name}] std_token={std_token:.4f} std_feat={std_feat:.4f} cos={mean_sim:.4f}")
         def masked_zscore(x, mask, eps=1e-6):
             m = mask.float()
             denom = m.sum(dim=(1, 2), keepdim=True).clamp_min(1.0)
@@ -1006,23 +991,11 @@ class OverlapInteraction(nn.Module):
         q_l = self.q_from_l(l_tok)
         k_p = self.k_from_p(p_tok)
 
-        if torch.rand(1).item() < 0.01:
-            diag_tok_stats(q_p, "q_from_p before norm")
-            diag_tok_stats(k_p, "k_from_p before norm")
-            diag_tok_stats(q_l, "q_from_l before norm")
-            diag_tok_stats(k_l, "k_from_l before norm")
-
         if self.qk_norm:
             q_p = F.normalize(q_p, dim=-1)
             k_l = F.normalize(k_l, dim=-1)
             q_l = F.normalize(q_l, dim=-1)
             k_p = F.normalize(k_p, dim=-1)
-
-        if torch.rand(1).item() < 0.01:
-            diag_tok_stats(q_p, "q_from_p after norm")
-            diag_tok_stats(k_p, "k_from_p after norm")
-            diag_tok_stats(q_l, "q_from_l after norm")
-            diag_tok_stats(k_l, "k_from_l after norm")
 
         if p_pad is not None and l_pad is not None:
             pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)  # (B, Lp, Ll)
@@ -1150,22 +1123,6 @@ class DualStreamDTIClassifier(nn.Module):
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
-
-        def diag_tok_stats(x, name):
-            import torch
-            import torch.nn.functional as F
-
-            std_token = x.std(dim=1).mean().item()
-            std_feat = x.std(dim=2).mean().item()
-
-            x_norm = F.normalize(x, dim=-1)
-            sim = torch.matmul(x_norm, x_norm.transpose(1, 2))
-            B, L, _ = sim.shape
-            eye = torch.eye(L, device=sim.device, dtype=torch.bool).unsqueeze(0)
-            sim_off = sim.masked_fill(eye, 0.0)
-            mean_sim = (sim_off.sum() / (B * L * (L - 1))).item()
-
-            print(f"[{name}] std_token={std_token:.4f} std_feat={std_feat:.4f} cos={mean_sim:.4f}")
 
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
 
