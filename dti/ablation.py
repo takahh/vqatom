@@ -411,6 +411,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
+def plot_one(mat, title, save_path=None):
+    plt.figure(figsize=(8, 5))
+    plt.imshow(mat, aspect="auto")
+    plt.colorbar()
+    plt.title(title)
+    plt.xlabel("Ligand tokens")
+    plt.ylabel("Protein tokens")
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        plt.close()
+    else:
+        plt.show()
 
 def visualize_one_qk_map(
     model,
@@ -422,10 +435,6 @@ def visualize_one_qk_map(
     save_dir: str | None = None,
     prefix: str = "sample",
 ):
-    import os
-    import matplotlib.pyplot as plt
-    import torch
-
     model.eval()
     batch = next(iter(loader))
 
@@ -436,60 +445,46 @@ def visualize_one_qk_map(
     with torch.inference_mode():
         logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
 
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
+
     p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
     l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
-    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
-    y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
+    S_pl_raw = aux["qk_pl_raw"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_lp_raw = aux["qk_lp_raw"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_pl = aux["qk_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_lp = aux["qk_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
+    S_ov = aux["qk_overlap"][sample_idx_in_batch].detach().float().cpu().numpy()
+
+    S_pl_raw = S_pl_raw[~p_pad][:, ~l_pad]
+    S_lp_raw = S_lp_raw[~p_pad][:, ~l_pad]
+    S_pl = S_pl[~p_pad][:, ~l_pad]
+    S_lp = S_lp[~p_pad][:, ~l_pad]
+    S_ov = S_ov[~p_pad][:, ~l_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
-    S_lp = aux["qk_lp"][sample_idx_in_batch].detach().float().cpu().numpy()       # (Lp, Ll)
-    S_pl = aux["qk_pl"][sample_idx_in_batch].detach().float().cpu().numpy()       # (Lp, Ll)
-    S_ov = aux["qk_overlap"][sample_idx_in_batch].detach().float().cpu().numpy()  # (Lp, Ll)
+    base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
-    S_lp_vis = S_lp[~p_pad][:, ~l_pad]
-    S_pl_vis = S_pl[~p_pad][:, ~l_pad]
-    S_ov_vis = S_ov[~p_pad][:, ~l_pad]
-
-    plt.figure(figsize=(10, 6))
-    plt.imshow(S_lp_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"qk_lp | prob={prob:.4f} y_bin={y_bin:.0f}")
-    plt.xlabel("Ligand tokens")
-    plt.ylabel("Protein tokens")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_lp.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    plt.figure(figsize=(10, 6))
-    plt.imshow(S_pl_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"qk_pl | prob={prob:.4f} y_bin={y_bin:.0f}")
-    plt.xlabel("Ligand tokens")
-    plt.ylabel("Protein tokens")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_pl.png"), dpi=200, bbox_inches="tight")
-    plt.close()
-
-    plt.figure(figsize=(10, 6))
-    plt.imshow(S_ov_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"qk_overlap | prob={prob:.4f} y_bin={y_bin:.0f}")
-    plt.xlabel("Ligand tokens")
-    plt.ylabel("Protein tokens")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_qk_overlap.png"), dpi=200, bbox_inches="tight")
-    plt.close()
+    plot_one(S_pl_raw, f"qk_pl_raw | prob={prob:.4f} y_bin={y_bin:.0f}",
+             os.path.join(save_dir, f"{base}_pl_raw.png") if save_dir else None)
+    plot_one(S_lp_raw, f"qk_lp_raw | prob={prob:.4f} y_bin={y_bin:.0f}",
+             os.path.join(save_dir, f"{base}_lp_raw.png") if save_dir else None)
+    plot_one(S_pl, f"qk_pl (zscore) | prob={prob:.4f} y_bin={y_bin:.0f}",
+             os.path.join(save_dir, f"{base}_pl.png") if save_dir else None)
+    plot_one(S_lp, f"qk_lp (zscore) | prob={prob:.4f} y_bin={y_bin:.0f}",
+             os.path.join(save_dir, f"{base}_lp.png") if save_dir else None)
+    plot_one(S_ov, f"qk_overlap (min) | prob={prob:.4f} y_bin={y_bin:.0f}",
+             os.path.join(save_dir, f"{base}_ov.png") if save_dir else None)
 
     return {
-        "qk_lp": S_lp_vis,
-        "qk_pl": S_pl_vis,
-        "qk_overlap": S_ov_vis,
+        "qk_pl_raw": S_pl_raw,
+        "qk_lp_raw": S_lp_raw,
+        "qk_pl": S_pl,
+        "qk_lp": S_lp,
+        "qk_overlap": S_ov,
         "prob": prob,
         "y_bin": y_bin,
     }
@@ -970,28 +965,30 @@ class OverlapInteraction(nn.Module):
         self.qk_norm = qk_norm
         self.scale = 1.0 / math.sqrt(d_model)
 
-        # protein -> ligand
         self.q_from_p = nn.Linear(d_model, d_model)
         self.k_from_l = nn.Linear(d_model, d_model)
-
-        # ligand -> protein
         self.q_from_l = nn.Linear(d_model, d_model)
         self.k_from_p = nn.Linear(d_model, d_model)
 
         self.drop = nn.Dropout(dropout)
 
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
-        """
-        p_tok: (B, Lp, D)
-        l_tok: (B, Ll, D)
-        p_pad: (B, Lp) bool, True=pad
-        l_pad: (B, Ll) bool, True=pad
-        """
-        q_p = self.q_from_p(p_tok)   # (B, Lp, D)
-        k_l = self.k_from_l(l_tok)   # (B, Ll, D)
 
-        q_l = self.q_from_l(l_tok)   # (B, Ll, D)
-        k_p = self.k_from_p(p_tok)   # (B, Lp, D)
+        def masked_zscore(x, mask, eps=1e-6):
+            m = mask.float()
+            denom = m.sum(dim=(1, 2), keepdim=True).clamp_min(1.0)
+            mu = (x * m).sum(dim=(1, 2), keepdim=True) / denom
+            xc = (x - mu) * m
+            var = (xc * xc).sum(dim=(1, 2), keepdim=True) / denom
+            std = var.sqrt().clamp_min(eps)
+            z = (x - mu) / std
+            z = z.masked_fill(~mask, 0.0)
+            return z
+
+        q_p = self.q_from_p(p_tok)
+        k_l = self.k_from_l(l_tok)
+        q_l = self.q_from_l(l_tok)
+        k_p = self.k_from_p(p_tok)
 
         if self.qk_norm:
             q_p = F.normalize(q_p, dim=-1)
@@ -999,46 +996,38 @@ class OverlapInteraction(nn.Module):
             q_l = F.normalize(q_l, dim=-1)
             k_p = F.normalize(k_p, dim=-1)
 
-        # protein -> ligand
-        s_pl = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale   # (B, Lp, Ll)
-
-        # ligand -> protein
-        s_lp = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale   # (B, Ll, Lp)
-        s_lp_t = s_lp.transpose(1, 2)                                # (B, Lp, Ll)
-
-        # 双方向一致のみ残す
-        s_ov = torch.minimum(s_pl, s_lp_t)                           # (B, Lp, Ll)
-
         if p_pad is not None and l_pad is not None:
-            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)   # (B, Lp, Ll)
-            s_pl = s_pl.masked_fill(~pair_mask, 0.0)
-            s_lp_t = s_lp_t.masked_fill(~pair_mask, 0.0)
-            s_ov = s_ov.masked_fill(~pair_mask, 0.0)
+            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)
         else:
-            pair_mask = torch.ones_like(s_ov, dtype=torch.bool)
+            pair_mask = torch.ones(
+                p_tok.size(0), p_tok.size(1), l_tok.size(1),
+                dtype=torch.bool, device=p_tok.device
+            )
 
-        # simple pooled features
-        # 各protein tokenに対して best ligand を見て平均
-        f_row = s_ov.amax(dim=2).mean(dim=1, keepdim=True)   # (B,1)
+        s_pl_raw = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale
+        s_lp_raw = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale
+        s_lp_t_raw = s_lp_raw.transpose(1, 2)
 
-        # 各ligand tokenに対して best protein を見て平均
-        f_col = s_ov.amax(dim=1).mean(dim=1, keepdim=True)   # (B,1)
+        s_pl = masked_zscore(s_pl_raw, pair_mask)
+        s_lp_t = masked_zscore(s_lp_t_raw, pair_mask)
+        s_ov = torch.minimum(s_pl, s_lp_t).masked_fill(~pair_mask, 0.0)
 
-        # 全体平均
+        f_row = s_ov.amax(dim=2).mean(dim=1, keepdim=True)
+        f_col = s_ov.amax(dim=1).mean(dim=1, keepdim=True)
         denom = pair_mask.sum(dim=(1, 2)).clamp_min(1).to(s_ov.dtype)
-        f_mean = (s_ov.sum(dim=(1, 2)) / denom).unsqueeze(1) # (B,1)
+        f_mean = (s_ov.sum(dim=(1, 2)) / denom).unsqueeze(1)
 
-        feat = torch.cat([f_row, f_col, f_mean], dim=1)      # (B,3)
-        feat = self.drop(feat)
+        feat = self.drop(torch.cat([f_row, f_col, f_mean], dim=1))
 
         aux = {
+            "qk_pl_raw": s_pl_raw,
+            "qk_lp_raw": s_lp_t_raw,
             "qk_pl": s_pl,
             "qk_lp": s_lp_t,
             "qk_overlap": s_ov,
             "pair_mask": pair_mask,
         }
         return feat, aux
-
 
 class OverlapHead(nn.Module):
     def __init__(self, in_dim=3, hidden_dim=32, dropout=0.1):
@@ -1088,7 +1077,7 @@ class DualStreamDTIClassifier(nn.Module):
         self.interaction = OverlapInteraction(
             d_model=self.d_model,
             dropout=dropout,
-            qk_norm=True,
+            qk_norm=self.qk_norm
         )
 
         self.cls_head = OverlapHead(
