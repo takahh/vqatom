@@ -1173,7 +1173,7 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             p_h = p_h_raw
 
-        p_h = self.p_ln(p_h)  # ← これ追加（最重要）
+        # p_h = self.p_ln(p_h)  # ← これ追加（最重要）
 
         l_h = self.lig(l_ids)
 
