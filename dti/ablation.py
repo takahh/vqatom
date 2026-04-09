@@ -1123,9 +1123,35 @@ class DualStreamDTIClassifier(nn.Module):
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
 
-        p_h = self.prot(p_input_ids, p_attn_mask)
+        def _diag_tok_stats(x, name):
+            import torch.nn.functional as F
+            x_tok = x[:, 1:, :]
+            std_token = x_tok.std(dim=1).mean().item()
+            std_feat = x_tok.std(dim=2).mean().item()
+            x_norm = F.normalize(x_tok, dim=-1)
+            sim = torch.matmul(x_norm, x_norm.transpose(1, 2))
+            B, L, _ = sim.shape
+            eye = torch.eye(L, device=sim.device, dtype=torch.bool).unsqueeze(0)
+            sim_off = sim.masked_fill(eye, 0.0)
+            mean_sim = (sim_off.sum() / (B * L * (L - 1))).item()
+            print(f"[{name}] std_token={std_token:.4f} std_feat={std_feat:.4f} cos={mean_sim:.4f}")
+
+        p_h_raw = self.prot(p_input_ids, p_attn_mask)
+
+        if torch.rand(1).item() < 0.01:
+            _diag_tok_stats(p_h_raw, "p_h_raw")
+
         if self.p_proj is not None:
-            p_h = self.p_proj(p_h)
+            p_h = self.p_proj(p_h_raw)
+        else:
+            p_h = p_h_raw
+
+        if torch.rand(1).item() < 0.01:
+            _diag_tok_stats(p_h, "p_h_after_proj")
+
+        # p_h = self.prot(p_input_ids, p_attn_mask)
+        # if self.p_proj is not None:
+        #     p_h = self.p_proj(p_h)
 
         if torch.rand(1).item() < 0.01:
             import torch.nn.functional as F
