@@ -1150,6 +1150,9 @@ class DualStreamDTIClassifier(nn.Module):
 
         l_h = self.lig(l_ids)
 
+        if torch.rand(1).item() < 0.01:
+            _diag_tok_stats_no_cls(l_h, "l_h_after projection")
+
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
 
