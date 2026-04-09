@@ -1093,7 +1093,7 @@ class DualStreamDTIClassifier(nn.Module):
             dropout=dropout,
             qk_norm=self.qk_norm
         )
-
+        self.p_ln = nn.LayerNorm(d_model)
         self.cls_head = OverlapHead(
             in_dim=3,
             hidden_dim=32,
@@ -1138,13 +1138,15 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
 
-        if torch.rand(1).item() < 0.01:
-            _diag_tok_stats_no_cls(p_h_raw, "p_h_raw")
-
         if self.p_proj is not None:
             p_h = self.p_proj(p_h_raw)
         else:
             p_h = p_h_raw
+
+        p_h = self.p_ln(p_h)  # ← これ追加（最重要）
+
+        if torch.rand(1).item() < 0.01:
+            _diag_tok_stats_no_cls(p_h_raw, "p_h_raw_after projection")
 
         l_h = self.lig(l_ids)
 
