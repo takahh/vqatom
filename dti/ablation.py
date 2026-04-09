@@ -1511,17 +1511,17 @@ def main():
               f"RMSE={v_r['rmse']:.4f}", f"SP={v_r['spearman']:.4f}")
         if final_m is not None:
             print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
-        if ep in [1, 2, 3, 4]:
-            visualize_one_qk_map(
-                model=model,
-                loader=valid_loader,
-                device=device,
-                esm_tokenizer=esm_tokenizer,
-                sample_idx_in_batch=0,
-                show_token_labels=False,
-                save_dir=qk_save_dir,
-                prefix=f"epoch{ep:03d}_valid_sample0",
-            )
+
+        visualize_one_qk_map(
+            model=model,
+            loader=valid_loader,
+            device=device,
+            esm_tokenizer=esm_tokenizer,
+            sample_idx_in_batch=0,
+            show_token_labels=False,
+            save_dir=qk_save_dir,
+            prefix=f"epoch{ep:03d}_valid_sample0",
+        )
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
 
