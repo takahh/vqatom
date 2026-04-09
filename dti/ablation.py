@@ -513,20 +513,18 @@ def visualize_one_qk_map(
     S_pl_vis = S_pl[~p_pad][:, ~l_pad]
     A_pl_vis = A_pl[~p_pad][:, ~l_pad]
     # ---------------------------
-    # SYM: min(LP, PL^T)
+    # SYM: min(LP, PL^T) for QK only
     # shape: (Ll, Lp)
     # ---------------------------
     S_sym = aux["qk_scores_sym"][sample_idx_in_batch].detach().float().cpu().numpy()
-    A_sym = aux["attn_map_sym"][sample_idx_in_batch].detach().float().cpu().numpy()
 
     expected_sym = (len(l_pad), len(p_pad))
-    if S_sym.shape != expected_sym or A_sym.shape != expected_sym:
+    if S_sym.shape != expected_sym:
         raise ValueError(
-            f"Unexpected SYM shape: S_sym={S_sym.shape}, A_sym={A_sym.shape}, expected={expected_sym}"
+            f"Unexpected SYM shape: S_sym={S_sym.shape}, expected={expected_sym}"
         )
 
     S_sym_vis = S_sym[~l_pad][:, ~p_pad]
-    A_sym_vis = A_sym[~l_pad][:, ~p_pad]
     # =========================================================
     # 1) LP QK
     # =========================================================
