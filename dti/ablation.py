@@ -451,40 +451,51 @@ def visualize_one_qk_map(
     p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
     l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
-    S_pl_raw = aux["qk_pl_raw"][sample_idx_in_batch].detach().float().cpu().numpy()
-    S_lp_raw = aux["qk_lp_raw"][sample_idx_in_batch].detach().float().cpu().numpy()
-    S_pl = aux["qk_pl"][sample_idx_in_batch].detach().float().cpu().numpy()
-    S_lp = aux["qk_lp"][sample_idx_in_batch].detach().float().cpu().numpy()
-    S_ov = aux["qk_overlap"][sample_idx_in_batch].detach().float().cpu().numpy()
+    # ligand queries protein: (H, Ll, Lp)
+    S_lp = aux["attn_lp_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
+    A_lp = aux["attn_lp"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
 
-    S_pl_raw = S_pl_raw[~p_pad][:, ~l_pad]
-    S_lp_raw = S_lp_raw[~p_pad][:, ~l_pad]
+    # protein queries ligand: (H, Lp, Ll)
+    S_pl = aux["attn_pl_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
+    A_pl = aux["attn_pl"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
+
+    # trim pads
+    S_lp = S_lp[~l_pad][:, ~p_pad]
+    A_lp = A_lp[~l_pad][:, ~p_pad]
     S_pl = S_pl[~p_pad][:, ~l_pad]
-    S_lp = S_lp[~p_pad][:, ~l_pad]
-    S_ov = S_ov[~p_pad][:, ~l_pad]
+    A_pl = A_pl[~p_pad][:, ~l_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
-    plot_one(S_pl_raw, f"qk_pl_raw | prob={prob:.4f} y_bin={y_bin:.0f}",
-             os.path.join(save_dir, f"{base}_pl_raw.png") if save_dir else None)
-    plot_one(S_lp_raw, f"qk_lp_raw | prob={prob:.4f} y_bin={y_bin:.0f}",
-             os.path.join(save_dir, f"{base}_lp_raw.png") if save_dir else None)
-    plot_one(S_pl, f"qk_pl (zscore) | prob={prob:.4f} y_bin={y_bin:.0f}",
-             os.path.join(save_dir, f"{base}_pl.png") if save_dir else None)
-    plot_one(S_lp, f"qk_lp (zscore) | prob={prob:.4f} y_bin={y_bin:.0f}",
-             os.path.join(save_dir, f"{base}_lp.png") if save_dir else None)
-    plot_one(S_ov, f"qk_overlap (min) | prob={prob:.4f} y_bin={y_bin:.0f}",
-             os.path.join(save_dir, f"{base}_ov.png") if save_dir else None)
+    plot_one(
+        S_lp,
+        f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_logits.png") if save_dir else None,
+    )
+    plot_one(
+        A_lp,
+        f"lig <- prot attn | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
+    )
+    plot_one(
+        S_pl,
+        f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
+    )
+    plot_one(
+        A_pl,
+        f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
+    )
 
     return {
-        "qk_pl_raw": S_pl_raw,
-        "qk_lp_raw": S_lp_raw,
-        "qk_pl": S_pl,
-        "qk_lp": S_lp,
-        "qk_overlap": S_ov,
+        "attn_lp_logits": S_lp,
+        "attn_lp": A_lp,
+        "attn_pl_logits": S_pl,
+        "attn_pl": A_pl,
         "prob": prob,
         "y_bin": y_bin,
     }
@@ -959,109 +970,96 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class OverlapInteraction(nn.Module):
-    def __init__(self, d_model, dropout=0.1, qk_norm=True):
+class BidirectionalValueInteraction(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        n_heads=4,
+        dropout=0.1,
+        attn_temp=1.0,
+        qk_norm=True,
+        attn_smooth_eps=0.0,
+        attn_activation="softmax",
+    ):
         super().__init__()
-        self.qk_norm = qk_norm
-        self.scale = 1.0 / math.sqrt(d_model)
 
-        self.q_from_p = nn.Linear(d_model, d_model)
-        self.k_from_l = nn.Linear(d_model, d_model)
-        self.q_from_l = nn.Linear(d_model, d_model)
-        self.k_from_p = nn.Linear(d_model, d_model)
-
-        # 追加
-        self.in_drop = nn.Dropout(dropout)
-
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, p_tok, l_tok, p_pad=None, l_pad=None):
-        from entmax import entmax15
-
-        def masked_zscore(x, mask, eps=1e-6):
-            m = mask.float()
-            denom = m.sum(dim=(1, 2), keepdim=True).clamp_min(1.0)
-            mu = (x * m).sum(dim=(1, 2), keepdim=True) / denom
-            xc = (x - mu) * m
-            var = (xc * xc).sum(dim=(1, 2), keepdim=True) / denom
-            std = var.sqrt().clamp_min(eps)
-            z = (x - mu) / std
-            z = z.masked_fill(~mask, 0.0)
-            return z
-
-        p_tok = self.in_drop(p_tok)
-        l_tok = self.in_drop(l_tok)
-
-        q_p = self.q_from_p(p_tok)
-        k_l = self.k_from_l(l_tok)
-        q_l = self.q_from_l(l_tok)
-        k_p = self.k_from_p(p_tok)
-
-        if self.qk_norm:
-            q_p = F.normalize(q_p, dim=-1)
-            k_l = F.normalize(k_l, dim=-1)
-            q_l = F.normalize(q_l, dim=-1)
-            k_p = F.normalize(k_p, dim=-1)
-
-        if p_pad is not None and l_pad is not None:
-            pair_mask = (~p_pad).unsqueeze(2) & (~l_pad).unsqueeze(1)  # (B, Lp, Ll)
-        else:
-            pair_mask = torch.ones(
-                p_tok.size(0), p_tok.size(1), l_tok.size(1),
-                dtype=torch.bool, device=p_tok.device
-            )
-
-        s_pl_raw = torch.matmul(q_p, k_l.transpose(1, 2)) * self.scale  # (B, Lp, Ll)
-        s_lp_raw = torch.matmul(q_l, k_p.transpose(1, 2)) * self.scale  # (B, Ll, Lp)
-        s_lp_t_raw = s_lp_raw.transpose(1, 2)  # (B, Lp, Ll)
-
-        s_pl = masked_zscore(s_pl_raw, pair_mask)
-        s_lp_t = masked_zscore(s_lp_t_raw, pair_mask)
-
-        # overlap
-        s_ov_pre = torch.minimum(s_pl, s_lp_t).masked_fill(~pair_mask, 0.0)
-
-        # ------------------------------------------
-        # ligand列ごとに protein軸(dim=1) へ entmax
-        # ------------------------------------------
-        tau = 0.7  # まずは 0.5~1.0 くらいで試す
-        x = s_ov_pre / tau
-        x = x.masked_fill(~pair_mask, -1e9)
-
-        s_ov = entmax15(x, dim=1)  # 各 ligand token 列ごとに sparse 化
-        s_ov = s_ov.masked_fill(~pair_mask, 0.0)
-
-        f_row = s_ov.amax(dim=2).mean(dim=1, keepdim=True)
-        f_col = s_ov.amax(dim=1).mean(dim=1, keepdim=True)
-        denom = pair_mask.sum(dim=(1, 2)).clamp_min(1).to(s_ov.dtype)
-        f_mean = (s_ov.sum(dim=(1, 2)) / denom).unsqueeze(1)
-
-        feat = self.drop(torch.cat([f_row, f_col, f_mean], dim=1))
-
-        aux = {
-            "qk_pl_raw": s_pl_raw,
-            "qk_lp_raw": s_lp_t_raw,
-            "qk_pl": s_pl,
-            "qk_lp": s_lp_t,
-            "qk_overlap_pre": s_ov_pre,  # entmax 前を見たいとき用
-            "qk_overlap": s_ov,  # entmax 後
-            "pair_mask": pair_mask,
-        }
-        return feat, aux
-
-class OverlapHead(nn.Module):
-    def __init__(self, in_dim=3, hidden_dim=32, dropout=0.1):
-        super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, 1),
+        self.l_from_p = CrossAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            dropout=dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
         )
 
-    def forward(self, feat):
-        return self.mlp(feat).squeeze(-1)
+        self.p_from_l = CrossAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            dropout=dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+        )
 
+        self.ln_l1 = nn.LayerNorm(d_model)
+        self.ln_l2 = nn.LayerNorm(d_model)
+        self.ln_p1 = nn.LayerNorm(d_model)
+        self.ln_p2 = nn.LayerNorm(d_model)
+
+        self.ffn_l = FFN(d_model, dropout=dropout)
+        self.ffn_p = FFN(d_model, dropout=dropout)
+        self.drop = nn.Dropout(dropout)
+
+    @staticmethod
+    def _attn_entropy(attn: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        # attn: (B, H, Lq, Lk)
+        p = attn.clamp_min(eps)
+        ent = -(p * p.log()).sum(dim=-1)   # (B,H,Lq)
+        return ent.mean()
+
+    def forward(self, p_tok, l_tok, p_pad=None, l_pad=None, return_maps=False):
+        # ligand <- protein   (Q=l, K/V=p)
+        l_ctx, aux_lp = self.l_from_p(
+            q_in=l_tok,
+            k_in=p_tok,
+            v_in=p_tok,
+            kv_pad_mask=p_pad,
+            return_maps=True,
+        )
+
+        # protein <- ligand   (Q=p, K/V=l)
+        p_ctx, aux_pl = self.p_from_l(
+            q_in=p_tok,
+            k_in=l_tok,
+            v_in=l_tok,
+            kv_pad_mask=l_pad,
+            return_maps=True,
+        )
+
+        l_out = self.ln_l1(l_tok + self.drop(l_ctx))
+        l_out = self.ln_l2(l_out + self.drop(self.ffn_l(l_out)))
+
+        p_out = self.ln_p1(p_tok + self.drop(p_ctx))
+        p_out = self.ln_p2(p_out + self.drop(self.ffn_p(p_out)))
+
+        aux = {}
+        if return_maps:
+            attn_entropy = 0.5 * (
+                self._attn_entropy(aux_lp["attn_map"]) +
+                self._attn_entropy(aux_pl["attn_map"])
+            )
+            aux = {
+                "attn_lp_logits": aux_lp["qk_scores"],   # ligand queries protein
+                "attn_lp": aux_lp["attn_map"],
+                "attn_pl_logits": aux_pl["qk_scores"],   # protein queries ligand
+                "attn_pl": aux_pl["attn_map"],
+                "attn_entropy": attn_entropy,
+            }
+
+        return p_out, l_out, aux
+    
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
@@ -1094,18 +1092,25 @@ class DualStreamDTIClassifier(nn.Module):
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
         self.qk_norm = qk_norm
         self.dropout = dropout
-        self.interaction = OverlapInteraction(
+        self.interaction = BidirectionalValueInteraction(
             d_model=self.d_model,
+            n_heads=self.n_heads,
             dropout=dropout,
-            qk_norm=self.qk_norm
+            attn_temp=attn_temp,
+            qk_norm=self.qk_norm,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+        )
+
+        self.cls_head = nn.Sequential(
+            nn.Linear(self.d_model * 2, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 1),
         )
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
-        self.cls_head = OverlapHead(
-            in_dim=3,
-            hidden_dim=32,
-            dropout=dropout,
-        )
+
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1148,7 +1153,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_pad = (p_attn_mask == 0)[:, 1:]
         l_pad = (l_ids == self.lig_pad_id)[:, 1:]
-        
+
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
 
@@ -1156,14 +1161,19 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        feat, inter_aux = self.interaction(
+        p_ctx, l_ctx, inter_aux = self.interaction(
             p_tok=p_tok,
             l_tok=l_tok,
             p_pad=p_pad,
             l_pad=l_pad,
+            return_maps=return_maps,
         )
 
-        logit = self.cls_head(feat)
+        p_pool = self._masked_mean(p_ctx, p_pad)  # (B, d)
+        l_pool = self._masked_mean(l_ctx, l_pad)  # (B, d)
+
+        feat = torch.cat([p_pool, l_pool], dim=-1)  # (B, 2d)
+        logit = self.cls_head(feat).squeeze(-1)
 
         aux.update(inter_aux)
         aux["p_pad"] = p_pad
