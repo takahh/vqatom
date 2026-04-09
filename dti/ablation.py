@@ -554,23 +554,11 @@ def visualize_one_qk_map(
         plt.savefig(os.path.join(save_dir, f"{prefix}_qk_scores_sym.png"), dpi=200, bbox_inches="tight")
     plt.close()
 
-    plt.figure(figsize=(10, 6))
-    plt.imshow(A_sym_vis, aspect="auto")
-    plt.colorbar()
-    plt.title(f"Sym(min) attention | prob={prob:.4f} y_bin={y_bin:.0f}")
-    plt.xlabel("Protein tokens")
-    plt.ylabel("Ligand tokens")
-    plt.tight_layout()
-    if save_dir is not None:
-        plt.savefig(os.path.join(save_dir, f"{prefix}_attn_map_sym.png"), dpi=200, bbox_inches="tight")
-    plt.close()
     qk_sym_heads = aux["qk_scores_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
-    attn_sym_heads = aux["attn_map_sym_heads"][sample_idx_in_batch].detach().float().cpu().numpy()  # (H,Ll,Lp)
 
     H = qk_sym_heads.shape[0]
     for h in range(H):
         qk_sym_h = qk_sym_heads[h][~l_pad][:, ~p_pad]
-        attn_sym_h = attn_sym_heads[h][~l_pad][:, ~p_pad]
 
         plt.figure(figsize=(10, 6))
         plt.imshow(qk_sym_h, aspect="auto")
@@ -581,17 +569,6 @@ def visualize_one_qk_map(
         plt.tight_layout()
         if save_dir is not None:
             plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_qk_sym.png"), dpi=200, bbox_inches="tight")
-        plt.close()
-
-        plt.figure(figsize=(10, 6))
-        plt.imshow(attn_sym_h, aspect="auto")
-        plt.colorbar()
-        plt.title(f"Sym(min) attention | head={h} | prob={prob:.4f} y_bin={y_bin:.0f}")
-        plt.xlabel("Protein tokens")
-        plt.ylabel("Ligand tokens")
-        plt.tight_layout()
-        if save_dir is not None:
-            plt.savefig(os.path.join(save_dir, f"{prefix}_head{h:02d}_attn_sym.png"), dpi=200, bbox_inches="tight")
         plt.close()
     # =========================================================
     # 2) LP attention
