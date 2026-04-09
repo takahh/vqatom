@@ -1463,16 +1463,32 @@ class DualStreamDTIClassifier(nn.Module):
             attn_pl = last_aux["attn_pl"]  # (B,H,Lp,Ll)
             qk_pl = last_aux["qk_pl"]  # (B,H,Lp,Ll)
 
+            def row_zscore(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+                # x: (B,H,Ll,Lp)
+                mu = x.mean(dim=-1, keepdim=True)
+                std = x.std(dim=-1, keepdim=True).clamp(min=eps)
+                return (x - mu) / std
+
             # PL を LP と同じ向き (Ll,Lp) に揃える
+            # -------------------------
+            # 向きを揃える
+            # -------------------------
             attn_pl_t = attn_pl.transpose(2, 3)  # (B,H,Ll,Lp)
             qk_pl_t = qk_pl.transpose(2, 3)  # (B,H,Ll,Lp)
 
             # -------------------------
-            # min 対称化
-            # 「両方向とも強い」pair だけ残す
+            # z-score 正規化
             # -------------------------
-            attn_sym = torch.minimum(attn_lp, attn_pl_t)  # (B,H,Ll,Lp)
-            qk_sym = torch.minimum(qk_lp, qk_pl_t)  # (B,H,Ll,Lp)
+            qk_lp_n = row_zscore(qk_lp)
+            qk_pl_n = row_zscore(qk_pl_t)
+
+            # -------------------------
+            # min 対称化
+            # -------------------------
+            qk_sym = torch.minimum(qk_lp_n, qk_pl_n)
+
+            # attention はそのままでOK（すでに正規化済）
+            attn_sym = torch.minimum(attn_lp, attn_pl_t)
 
             # entropy は対称化後で計算してもよいが、
             # まずは LP 側のままでもOK
