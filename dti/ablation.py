@@ -1121,6 +1121,7 @@ class DualStreamDTIClassifier(nn.Module):
             qk_norm=self.qk_norm
         )
         self.p_ln = nn.LayerNorm(d_model)
+        self.l_ln = nn.LayerNorm(d_model)
         self.cls_head = OverlapHead(
             in_dim=3,
             hidden_dim=32,
@@ -1173,9 +1174,11 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             p_h = p_h_raw
 
-        # p_h = self.p_ln(p_h)  # ← これ追加（最重要）
+        p_h = self.p_ln(p_h)  # ← これ追加（最重要）
 
         l_h = self.lig(l_ids)
+
+        l_h = self.l_ln(l_h)  # ← これ追加（最重要）
 
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
