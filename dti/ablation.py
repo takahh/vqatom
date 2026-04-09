@@ -1128,9 +1128,9 @@ class DualStreamDTIClassifier(nn.Module):
             p_h = self.p_proj(p_h)
 
         if torch.rand(1).item() < 0.01:
-            p_tok = p_h[:, 1:, :]
             import torch.nn.functional as F
 
+            p_tok = p_h[:, 1:, :]
             std_token = p_tok.std(dim=1).mean().item()
             std_feat = p_tok.std(dim=2).mean().item()
 
@@ -1138,8 +1138,9 @@ class DualStreamDTIClassifier(nn.Module):
             sim = torch.matmul(p_norm, p_norm.transpose(1, 2))
 
             B, L, _ = sim.shape
-            mask = ~torch.eye(L, dtype=torch.bool, device=sim.device).unsqueeze(0)
-            mean_sim = sim[mask].mean().item()
+            eye = torch.eye(L, device=sim.device, dtype=torch.bool).unsqueeze(0)
+            sim_off = sim.masked_fill(eye, 0.0)
+            mean_sim = (sim_off.sum() / (B * L * (L - 1))).item()
 
             print(f"[p_tok] std_token={std_token:.4f} std_feat={std_feat:.4f} cos={mean_sim:.4f}")
 
