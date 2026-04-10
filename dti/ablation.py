@@ -994,7 +994,7 @@ class CrossAttention(nn.Module):
         self.attn_smooth_eps = attn_smooth_eps
         self.attn_activation = attn_activation
         self.detach_attn_for_value = detach_attn_for_value
-        self.scale = 1.0 / math.sqrt(self.d_head)
+        self.scale = 5.0 / math.sqrt(self.d_head)
 
     def _split_heads(self, x):
         # x: (B, L, D)
@@ -1021,8 +1021,8 @@ class CrossAttention(nn.Module):
         q = self.q_proj(q_in)   # (B,Lq,D)
         k = self.k_proj(k_in)   # (B,Lk,D)
         v = self.v_proj(v_in)   # (B,Lk,D)
-        v = F.gelu(v)
-        
+        v = torch.tanh(v)  # or GELU
+
         q = self._split_heads(q)  # (B,H,Lq,Dh)
         k = self._split_heads(k)  # (B,H,Lk,Dh)
         v = self._split_heads(v)  # (B,H,Lk,Dh)
