@@ -990,6 +990,14 @@ class CrossAttention(nn.Module):
 
         if self.attn_activation == "softmax":
             attn = torch.softmax(logits, dim=-1)
+
+        elif self.attn_activation == "sigmoid":
+            attn = torch.sigmoid(logits)
+            if self.sigmoid_row_norm:
+                if mask is not None:
+                    attn = attn.masked_fill(mask, 0.0)
+                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                attn = attn / denom
         else:
             raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
 
