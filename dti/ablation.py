@@ -468,40 +468,57 @@ def visualize_one_qk_map(
     # ---------------------------
     # 基本マップ
     # ---------------------------
-    S_lp = aux["attn_lp_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)  # (Ll, Lp)
-    A_lp = aux["attn_lp"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)         # (Ll, Lp)
+    # (B,H,Ll,Lp) -> (Ll,Lp)
+    S_lp = (
+        aux["attn_lp_logits"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    A_lp = (
+        aux["attn_lp"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
 
-    S_pl = aux["attn_pl_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)  # (Lp, Ll)
-    A_pl = aux["attn_pl"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)         # (Lp, Ll)
+    # (B,H,Lp,Ll) -> (Lp,Ll)
+    S_pl = (
+        aux["attn_pl_logits"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    A_pl = (
+        aux["attn_pl"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
 
     # ---------------------------
-    # 本物の 2D attn_v heatmap
-    # weighted_v を feature norm -> head mean
+    # 軽量版 attn_x_v 可視化
+    # (B,H,L,Dh) -> head mean -> (L,Dh)
     # ---------------------------
-    # ligand queries protein: (H, Ll, Lp, Dh) -> (Ll, Lp)
-    W_lp = aux["attn_lp_weighted_v"][sample_idx_in_batch].detach().float().cpu()
-    W_lp = torch.norm(W_lp, dim=-1).mean(dim=0).numpy()
+    X_lp = (
+        aux["attn_lp_x_v"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )  # (Ll, Dh)
 
-    # protein queries ligand: (H, Lp, Ll, Dh) -> (Lp, Ll)
-    W_pl = aux["attn_pl_weighted_v"][sample_idx_in_batch].detach().float().cpu()
-    W_pl = torch.norm(W_pl, dim=-1).mean(dim=0).numpy()
+    X_pl = (
+        aux["attn_pl_x_v"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )  # (Lp, Dh)
 
     # ---------------------------
     # pad trim
     # ---------------------------
     S_lp = S_lp[~l_pad][:, ~p_pad]
     A_lp = A_lp[~l_pad][:, ~p_pad]
-    W_lp = W_lp[~l_pad][:, ~p_pad]
+    X_lp = X_lp[~l_pad]
 
     S_pl = S_pl[~p_pad][:, ~l_pad]
     A_pl = A_pl[~p_pad][:, ~l_pad]
-    W_pl = W_pl[~p_pad][:, ~l_pad]
+    X_pl = X_pl[~p_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
+    # ligand <- protein
     plot_one(
         S_lp,
         f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
@@ -513,11 +530,12 @@ def visualize_one_qk_map(
         os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
     )
     plot_one(
-        W_lp,
-        f"lig <- prot attn×V (2D) | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_attn_v2d.png") if save_dir else None,
+        X_lp,
+        f"lig <- prot attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_attn_v_summary.png") if save_dir else None,
     )
 
+    # protein <- ligand
     plot_one(
         S_pl,
         f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
@@ -529,18 +547,18 @@ def visualize_one_qk_map(
         os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
     )
     plot_one(
-        W_pl,
-        f"prot <- lig attn×V (2D) | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_attn_v2d.png") if save_dir else None,
+        X_pl,
+        f"prot <- lig attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_attn_v_summary.png") if save_dir else None,
     )
 
     return {
         "attn_lp_logits": S_lp,
         "attn_lp": A_lp,
-        "attn_lp_attn_v2d": W_lp,
+        "attn_lp_x_v": X_lp,
         "attn_pl_logits": S_pl,
         "attn_pl": A_pl,
-        "attn_pl_attn_v2d": W_pl,
+        "attn_pl_x_v": X_pl,
         "prob": prob,
         "y_bin": y_bin,
     }
@@ -731,7 +749,7 @@ def train_one_epoch(
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
     base_loss_alpha=0.3,
-    epoch=1
+    epoch=1,
 ) -> Dict[str, float]:
     model.train()
 
@@ -744,6 +762,9 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
+
+    # attn entropy を使う時だけ map を返す
+    need_maps = (attn_entropy_lambda != 0.0)
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -759,8 +780,46 @@ def train_one_epoch(
 
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                out = model(p_ids, p_msk, l_ids, return_maps=True)
+                out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
 
+                if need_maps:
+                    if not (isinstance(out, tuple) and len(out) == 3):
+                        raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
+                    logit, yhat_reg, aux = out
+                else:
+                    # return_maps=False でも現在の model は (logit, yhat_reg, aux) を返しているはず
+                    if isinstance(out, tuple) and len(out) == 3:
+                        logit, yhat_reg, aux = out
+                    elif isinstance(out, tuple) and len(out) == 2:
+                        logit, aux = out
+                        yhat_reg = None
+                    else:
+                        raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+
+                loss_cls = bce(logit.float(), y_bin.float())
+
+                loss_reg = torch.tensor(0.0, device=device)
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
+
+                loss_entropy = torch.tensor(0.0, device=device)
+                if attn_entropy_lambda != 0.0:
+                    if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
+                        raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
+                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
+
+                loss = loss_cls + loss_entropy
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss = loss + reg_lambda * loss_reg
+
+        else:
+            out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
+
+            if need_maps:
+                if not (isinstance(out, tuple) and len(out) == 3):
+                    raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
+                logit, yhat_reg, aux = out
+            else:
                 if isinstance(out, tuple) and len(out) == 3:
                     logit, yhat_reg, aux = out
                 elif isinstance(out, tuple) and len(out) == 2:
@@ -769,38 +828,18 @@ def train_one_epoch(
                 else:
                     raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
 
-                loss_cls = bce(logit, y_bin)
-
-                loss_reg = torch.tensor(0.0, device=device)
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg)
-
-                loss_entropy = torch.tensor(0.0, device=device)
-                if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"]
-                loss = loss_cls + loss_entropy
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss = loss + reg_lambda * loss_reg
-        else:
-            out = model(p_ids, p_msk, l_ids, return_maps=True)
-
-            if isinstance(out, tuple) and len(out) == 3:
-                logit, yhat_reg, aux = out
-            elif isinstance(out, tuple) and len(out) == 2:
-                logit, aux = out
-                yhat_reg = None
-            else:
-                raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
-
-            loss_cls = bce(logit, y_bin)
+            loss_cls = bce(logit.float(), y_bin.float())
 
             loss_reg = torch.tensor(0.0, device=device)
             if (y_reg is not None) and (yhat_reg is not None):
-                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg)
+                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
             loss_entropy = torch.tensor(0.0, device=device)
-            if attn_entropy_lambda != 0.0 and "attn_entropy" in aux:
-                loss_entropy = attn_entropy_lambda * aux["attn_entropy"]
+            if attn_entropy_lambda != 0.0:
+                if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
+                    raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
+                loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
+
             loss = loss_cls + loss_entropy
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
@@ -822,6 +861,7 @@ def train_one_epoch(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
+            ent=f"{losses_entropy[-1]:.4f}",
         )
 
     pbar.close()
@@ -832,6 +872,7 @@ def train_one_epoch(
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
     }
+
 
 # =========================================================
 # Save/load
@@ -872,7 +913,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 class CrossAttention(nn.Module):
     def __init__(
         self,
@@ -892,7 +932,6 @@ class CrossAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
 
-        # headごとに独立 projection
         self.q_proj = nn.ModuleList([
             nn.Linear(d_model, self.d_head) for _ in range(n_heads)
         ])
@@ -912,11 +951,11 @@ class CrossAttention(nn.Module):
         self.attn_activation = attn_activation
         self.sigmoid_row_norm = sigmoid_row_norm
         self.scale = 1.0 / math.sqrt(self.d_head)
+
         self.v_ln = nn.LayerNorm(self.d_head)
         self.v_gate_proj = nn.ModuleList([
             nn.Linear(self.d_head, self.d_head) for _ in range(n_heads)
         ])
-        self.v_gate_bias = nn.Parameter(torch.zeros(n_heads, self.d_head))
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
         if v_in is None:
@@ -928,25 +967,18 @@ class CrossAttention(nn.Module):
         if Lk != Lv:
             raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
-        # --------------------------------
-        # headごとに独立 projection
-        # q, k, v: (B, H, L, Dh)
-        # --------------------------------
+        # (B,H,L,Dh)
         q = torch.stack([proj(q_in) for proj in self.q_proj], dim=1)
         k = torch.stack([proj(k_in) for proj in self.k_proj], dim=1)
         v = torch.stack([proj(v_in) for proj in self.v_proj], dim=1)
 
-        # Q/K は normalize
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
-        # V は normalize しない
         v = self.v_ln(v)
 
-        # --------------------------------
-        # attention logits: (B, H, Lq, Lk)
-        # --------------------------------
+        # (B,H,Lq,Lk)
         attn_logits = torch.matmul(q, k.transpose(-2, -1))
         attn_logits = attn_logits * self.scale / self.attn_temp
 
@@ -963,16 +995,16 @@ class CrossAttention(nn.Module):
                 attn = attn.masked_fill(mask, 0.0)
 
         elif self.attn_activation == "sigmoid":
+            x = attn_logits
             if mask is not None:
-                attn_logits = attn_logits.masked_fill(mask, -10.0)
-            attn = torch.sigmoid(attn_logits)
+                x = x.masked_fill(mask, -10.0)
+            attn = torch.sigmoid(x)
 
             if self.sigmoid_row_norm:
                 if mask is not None:
                     attn = attn.masked_fill(mask, 0.0)
                 denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 attn = attn / denom
-
         else:
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
@@ -987,37 +1019,30 @@ class CrossAttention(nn.Module):
 
         attn = self.dropout(attn)
 
-        # --------------------------------
-        # query-dependent gate for V
-        # gate: (B, H, Lq, Dh)
-        # --------------------------------
+        # query-dependent gate: (B,H,Lq,Dh)
         gate = torch.stack(
             [torch.sigmoid(proj(q[:, h])) for h, proj in enumerate(self.v_gate_proj)],
             dim=1
-        )  # (B,H,Lq,Dh)
+        )
 
-        gated_v = v[:, :, None, :, :] * (1.0 + gate[:, :, :, None, :])
-
-        # 集約前の q-k ごとの value flow
-        weighted_v = attn[..., None] * gated_v  # (B,H,Lq,Lk,Dh)
-
-        # 集約後
-        attn_x_v = weighted_v.sum(dim=-2)  # (B,H,Lq,Dh)
+        # ここが重要:
+        # 5D展開せず、通常の attn@v の後で gate をかける
+        base_attn_x_v = torch.matmul(attn, v)      # (B,H,Lq,Dh)
+        attn_x_v = base_attn_x_v * (1.0 + gate)    # (B,H,Lq,Dh)
 
         out = attn_x_v.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
         if return_maps:
             return out, {
-                "qk_scores": attn_logits.detach(),
-                "attn_map": attn.detach(),
-                "gate": gate.detach(),  # (B,H,Lq,Dh)
-                "gated_v": gated_v.detach(),  # (B,H,Lq,Lk,Dh)
-                "weighted_v": weighted_v.detach(),  # (B,H,Lq,Lk,Dh)
-                "attn_x_v": attn_x_v.detach(),  # (B,H,Lq,Dh)
+                "qk_scores": attn_logits.detach(),   # (B,H,Lq,Lk)
+                "attn_map": attn.detach(),           # (B,H,Lq,Lk)
+                "gate": gate.detach(),               # (B,H,Lq,Dh)
+                "attn_x_v": attn_x_v.detach(),       # (B,H,Lq,Dh)
             }
 
         return out
+
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1088,22 +1113,20 @@ class BidirectionalValueInteraction(nn.Module):
         return ent.mean()
 
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None, return_maps=False):
-        # ligand <- protein   (Q=l, K/V=p)
         l_ctx, aux_lp = self.l_from_p(
             q_in=l_tok,
             k_in=p_tok,
             v_in=p_tok,
             kv_pad_mask=p_pad,
-            return_maps=True,
+            return_maps=return_maps,
         )
 
-        # protein <- ligand   (Q=p, K/V=l)
         p_ctx, aux_pl = self.p_from_l(
             q_in=p_tok,
             k_in=l_tok,
             v_in=l_tok,
             kv_pad_mask=l_pad,
-            return_maps=True,
+            return_maps=return_maps,
         )
 
         l_out = self.ln_l1(l_tok + self.drop(l_ctx))
@@ -1115,24 +1138,23 @@ class BidirectionalValueInteraction(nn.Module):
         aux = {}
         if return_maps:
             attn_entropy = 0.5 * (
-                    self._attn_entropy(aux_lp["attn_map"]) +
-                    self._attn_entropy(aux_pl["attn_map"])
+                self._attn_entropy(aux_lp["attn_map"]) +
+                self._attn_entropy(aux_pl["attn_map"])
             )
             aux = {
-                "attn_lp_logits": aux_lp["qk_scores"],  # (B,H,Ll,Lp)
-                "attn_lp": aux_lp["attn_map"],  # (B,H,Ll,Lp)
-                "attn_lp_weighted_v": aux_lp["weighted_v"],  # (B,H,Ll,Lp,Dh)
-                "attn_lp_x_v": aux_lp["attn_x_v"],  # (B,H,Ll,Dh)
+                "attn_lp_logits": aux_lp["qk_scores"],   # (B,H,Ll,Lp)
+                "attn_lp": aux_lp["attn_map"],           # (B,H,Ll,Lp)
+                "attn_lp_x_v": aux_lp["attn_x_v"],       # (B,H,Ll,Dh)
 
-                "attn_pl_logits": aux_pl["qk_scores"],  # (B,H,Lp,Ll)
-                "attn_pl": aux_pl["attn_map"],  # (B,H,Lp,Ll)
-                "attn_pl_weighted_v": aux_pl["weighted_v"],  # (B,H,Lp,Ll,Dh)
-                "attn_pl_x_v": aux_pl["attn_x_v"],  # (B,H,Lp,Dh)
+                "attn_pl_logits": aux_pl["qk_scores"],   # (B,H,Lp,Ll)
+                "attn_pl": aux_pl["attn_map"],           # (B,H,Lp,Ll)
+                "attn_pl_x_v": aux_pl["attn_x_v"],       # (B,H,Lp,Dh)
 
                 "attn_entropy": attn_entropy,
             }
 
         return p_out, l_out, aux
+
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
