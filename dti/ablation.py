@@ -1055,16 +1055,17 @@ class CrossAttention(nn.Module):
         # ここが重要
         attn_for_v = attn.detach() if self.detach_attn_for_value else attn
 
-        ctx = torch.matmul(attn_for_v, v)   # (B,H,Lq,Dh)
-        out = self._merge_heads(ctx)        # (B,Lq,D)
-        out = self.out_proj(out)            # (B,Lq,D)
+        ctx = torch.matmul(attn_for_v, v)  # (B,H,Lq,Dh)
+        ctx = ctx * q  # q で gate
+        out = self._merge_heads(ctx)  # (B,Lq,D)
+        out = self.out_proj(out)  # (B,Lq,D)
 
         if return_maps:
             return out, {
-                "qk_logits": logits,   # (B,H,Lq,Lk)
-                "attn_map": attn,      # (B,H,Lq,Lk)
-                "v_proj": v,           # (B,H,Lk,Dh)
-                "ctx": ctx,            # (B,H,Lq,Dh)
+                "qk_logits": logits,
+                "attn_map": attn,
+                "v_proj": v,
+                "ctx": ctx,
             }
         return out
 
