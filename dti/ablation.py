@@ -994,7 +994,7 @@ class CrossAttention(nn.Module):
         self.attn_smooth_eps = attn_smooth_eps
         self.attn_activation = attn_activation
         self.detach_attn_for_value = detach_attn_for_value
-        self.scale = 5.0 / math.sqrt(self.d_head)
+        self.scale = 1.0 / math.sqrt(self.d_head)
 
     def _split_heads(self, x):
         # x: (B, L, D)
