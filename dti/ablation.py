@@ -913,6 +913,10 @@ class CrossAttention(nn.Module):
         self.sigmoid_row_norm = sigmoid_row_norm
         self.scale = 1.0 / math.sqrt(self.d_head)
         self.v_ln = nn.LayerNorm(self.d_head)
+        self.v_gate_proj = nn.ModuleList([
+            nn.Linear(self.d_head, self.d_head) for _ in range(n_heads)
+        ])
+        self.v_gate_bias = nn.Parameter(torch.zeros(n_heads, self.d_head))
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
         if v_in is None:
@@ -936,7 +940,9 @@ class CrossAttention(nn.Module):
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
-            v = F.normalize(v, dim=-1)
+
+        # V は normalize しない
+        v = self.v_ln(v)
 
         # --------------------------------
         # attention logits: (B, H, Lq, Lk)
@@ -958,17 +964,12 @@ class CrossAttention(nn.Module):
 
         elif self.attn_activation == "sigmoid":
             if mask is not None:
-                attn_logits = attn_logits.masked_fill(mask, -10.0)  # ← -1e9より安定
-
+                attn_logits = attn_logits.masked_fill(mask, -10.0)
             attn = torch.sigmoid(attn_logits)
 
             if self.sigmoid_row_norm:
                 if mask is not None:
                     attn = attn.masked_fill(mask, 0.0)
-                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-                attn = attn / denom
-
-            if self.sigmoid_row_norm:
                 denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 attn = attn / denom
 
@@ -987,21 +988,31 @@ class CrossAttention(nn.Module):
         attn = self.dropout(attn)
 
         # --------------------------------
-        # 集約前の q-k ごとの value flow
-        # weighted_v: (B, H, Lq, Lk, Dh)
+        # query-dependent gate for V
+        # gate: (B, H, Lq, Dh)
         # --------------------------------
-        weighted_v = attn[..., None] * v[:, :, None, :, :]
+        gate = torch.stack(
+            [torch.sigmoid(proj(q[:, h])) for h, proj in enumerate(self.v_gate_proj)],
+            dim=1
+        )  # (B,H,Lq,Dh)
 
-        # 集約後: (B, H, Lq, Dh)
-        attn_x_v = weighted_v.sum(dim=-2)
+        gated_v = v[:, :, None, :, :] * (1.0 + gate[:, :, :, None, :])
+
+        # 集約前の q-k ごとの value flow
+        weighted_v = attn[..., None] * gated_v  # (B,H,Lq,Lk,Dh)
+
+        # 集約後
+        attn_x_v = weighted_v.sum(dim=-2)  # (B,H,Lq,Dh)
 
         out = attn_x_v.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
         if return_maps:
             return out, {
-                "qk_scores": attn_logits.detach(),  # (B,H,Lq,Lk)
-                "attn_map": attn.detach(),  # (B,H,Lq,Lk)
+                "qk_scores": attn_logits.detach(),
+                "attn_map": attn.detach(),
+                "gate": gate.detach(),  # (B,H,Lq,Dh)
+                "gated_v": gated_v.detach(),  # (B,H,Lq,Lk,Dh)
                 "weighted_v": weighted_v.detach(),  # (B,H,Lq,Lk,Dh)
                 "attn_x_v": attn_x_v.detach(),  # (B,H,Lq,Dh)
             }
