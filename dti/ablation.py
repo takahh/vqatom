@@ -1319,8 +1319,12 @@ def main():
 
     ap.add_argument("--lig_ckpt", type=str, required=True)
     ap.add_argument("--vq_ckpt", type=str, default=None)
-    ap.add_argument("--attn_activation", type=str, default="softmax",
-                    choices=["softmax", "entmax15", "sigmoid"])
+    ap.add_argument(
+        "--attn_activation",
+        type=str,
+        default="softmax",
+        choices=["softmax", "entmax15", "sigmoid"],
+    )
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
@@ -1358,10 +1362,12 @@ def main():
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
     ap.add_argument("--qk_norm", action="store_true")
+
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
     print("DEBUG use_train_valid_csv:", args.use_train_valid_csv)
+
     if not args.eval_only and not args.train_csv and not args.train_shard_dir:
         raise ValueError("Provide --train_csv or --train_shard_dir unless --eval_only is set.")
 
@@ -1410,23 +1416,110 @@ def main():
             shuffle=shuffle,
             num_workers=0,
             pin_memory=False,
-            collate_fn=lambda xs: collate_fn(xs, esm_tokenizer=esm_tokenizer, lig_pad=lig_enc.pad_id, lig_cls=lig_enc.cls_id),
+            collate_fn=lambda xs: collate_fn(
+                xs,
+                esm_tokenizer=esm_tokenizer,
+                lig_pad=lig_enc.pad_id,
+                lig_cls=lig_enc.cls_id,
+            ),
         )
 
-    valid_ds = DTIDataset(args.valid_csv, y_thr=float(args.y_thr), drop_missing_y=True,
-    lig_cls_id=lig_enc.cls_id,)
+    # -------------------------------------------------
+    # Build train dataset FIRST so its y_reg mean/std
+    # can be reused for valid/final/test.
+    # -------------------------------------------------
+    fixed_train_loader = None
+    fixed_train_ds = None
+    train_shard_paths = None
+    train_y_mean = 0.0
+    train_y_std = 1.0
+
+    if args.use_train_valid_csv:
+        if args.train_csv is None:
+            raise ValueError("--use_train_valid_csv requires --train_csv")
+
+        if args.train_size is None:
+            fixed_train_ds = DTIDataset(
+                csv_path=args.train_csv,
+                y_thr=float(args.y_thr),
+                drop_missing_y=True,
+                lig_cls_id=lig_enc.cls_id,
+            )
+        else:
+            all_rows = read_csv_rows(args.train_csv)
+            train_rows = all_rows[: int(args.train_size)]
+            fixed_train_ds = DTIDataset(
+                rows=train_rows,
+                y_thr=float(args.y_thr),
+                drop_missing_y=True,
+                lig_cls_id=lig_enc.cls_id,
+            )
+
+        fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
+        train_y_mean = float(fixed_train_ds.y_reg_mean)
+        train_y_std = float(fixed_train_ds.y_reg_std)
+
+    else:
+        train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
+
+        # For shard mode, estimate regression normalization from train_csv if available.
+        if args.train_csv is not None:
+            if args.train_size is None:
+                tmp_train_ds = DTIDataset(
+                    csv_path=args.train_csv,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                    lig_cls_id=lig_enc.cls_id,
+                )
+            else:
+                all_rows = read_csv_rows(args.train_csv)
+                train_rows = all_rows[: int(args.train_size)]
+                tmp_train_ds = DTIDataset(
+                    rows=train_rows,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                    lig_cls_id=lig_enc.cls_id,
+                )
+            train_y_mean = float(tmp_train_ds.y_reg_mean)
+            train_y_std = float(tmp_train_ds.y_reg_std)
+        else:
+            print("[warn] shard mode without train_csv: using default y_reg_mean=0.0, y_reg_std=1.0")
+
+    # -------------------------------------------------
+    # Build eval datasets using TRAIN normalization
+    # -------------------------------------------------
+    valid_ds = DTIDataset(
+        csv_path=args.valid_csv,
+        y_thr=float(args.y_thr),
+        drop_missing_y=True,
+        lig_cls_id=lig_enc.cls_id,
+        y_reg_mean=train_y_mean,
+        y_reg_std=train_y_std,
+    )
     valid_loader = make_loader(valid_ds, shuffle=False)
 
     final_eval_loader = None
     if args.final_eval_csv:
-        final_eval_ds = DTIDataset(args.final_eval_csv, y_thr=float(args.y_thr), drop_missing_y=True,
-    lig_cls_id=lig_enc.cls_id,)
+        final_eval_ds = DTIDataset(
+            csv_path=args.final_eval_csv,
+            y_thr=float(args.y_thr),
+            drop_missing_y=True,
+            lig_cls_id=lig_enc.cls_id,
+            y_reg_mean=train_y_mean,
+            y_reg_std=train_y_std,
+        )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
     test_loader = None
     if args.test_csv:
-        test_ds = DTIDataset(args.test_csv, y_thr=float(args.y_thr), drop_missing_y=True,
-    lig_cls_id=lig_enc.cls_id)
+        test_ds = DTIDataset(
+            csv_path=args.test_csv,
+            y_thr=float(args.y_thr),
+            drop_missing_y=True,
+            lig_cls_id=lig_enc.cls_id,
+            y_reg_mean=train_y_mean,
+            y_reg_std=train_y_std,
+        )
         test_loader = make_loader(test_ds, shuffle=False)
 
     optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
@@ -1453,47 +1546,54 @@ def main():
             test_r = eval_reg_metrics(yhatr_t, yr_t)
             print("[TEST ]", test_m)
 
-        save_json(os.path.join(args.out_dir, "eval_only.json"), {
-            "mode": "eval_only",
-            "valid": v_m,
-            "valid_reg": v_r,
-            "test": test_m,
-            "test_reg": test_r,
-            "valid_csv": args.valid_csv,
-            "test_csv": args.test_csv,
-            "dti_ckpt": args.dti_ckpt,
-        })
+        save_json(
+            os.path.join(args.out_dir, "eval_only.json"),
+            {
+                "mode": "eval_only",
+                "valid": v_m,
+                "valid_reg": v_r,
+                "test": test_m,
+                "test_reg": test_r,
+                "valid_csv": args.valid_csv,
+                "test_csv": args.test_csv,
+                "dti_ckpt": args.dti_ckpt,
+                "train_y_reg_mean": train_y_mean,
+                "train_y_reg_std": train_y_std,
+            },
+        )
         return
 
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
-    fixed_train_loader = None
-    fixed_train_ds = None
-    train_shard_paths = None
-
-    if args.use_train_valid_csv:
-        if args.train_size is None:
-            # use full train.csv
-            fixed_train_ds = DTIDataset(args.train_csv, y_thr=float(args.y_thr), drop_missing_y=True,
-    lig_cls_id=lig_enc.cls_id,)
-            fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
-        else:
-            # use first N rows
-            all_rows = read_csv_rows(args.train_csv)
-            train_rows = all_rows[: int(args.train_size)]
-            fixed_train_ds = DTIDataset(rows=train_rows, y_thr=float(args.y_thr), drop_missing_y=True,
-    lig_cls_id=lig_enc.cls_id,)
-            fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
-    else:
-        train_shard_paths = list_train_shards(args.train_shard_dir, args.train_shard_glob)
 
     for ep in range(1, args.epochs + 1):
         qk_save_dir = os.path.join(args.out_dir, "qk_maps")
-        if args.use_train_valid_csv and args.train_size is not None:
+
+        if args.use_train_valid_csv:
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
         else:
-            epoch_train_ds = fixed_train_ds
-            train_loader = fixed_train_loader
+            # Minimal shard-mode support
+            epoch_shards = pick_epoch_shards_random(
+                shard_paths=train_shard_paths,
+                train_size=args.train_size,
+                shard_size=args.train_shard_size,
+                epoch=ep,
+                seed=args.seed,
+                num_shards_per_epoch=args.train_num_shards_per_epoch,
+            )
+            ds_list = [
+                DTIDataset(
+                    csv_path=p,
+                    y_thr=float(args.y_thr),
+                    drop_missing_y=True,
+                    lig_cls_id=lig_enc.cls_id,
+                    y_reg_mean=train_y_mean,
+                    y_reg_std=train_y_std,
+                )
+                for p in epoch_shards
+            ]
+            epoch_train_ds = ConcatDataset(ds_list)
+            train_loader = make_loader(epoch_train_ds, shuffle=True)
 
         print("epoch train n:", len(epoch_train_ds))
         pos_weight = compute_pos_weight_from_dataset(epoch_train_ds)
@@ -1524,17 +1624,26 @@ def main():
             scheduler.step(float(v_m[args.select_on]))
 
         if float(v_m[args.select_on]) > float(best[args.select_on]):
-            best.update({
-                "ap": float(v_m["ap"]),
-                "auroc": float(v_m["auroc"]),
-                "f1": float(v_m["f1"]),
-                "epoch": ep,
-            })
+            best.update(
+                {
+                    "ap": float(v_m["ap"]),
+                    "auroc": float(v_m["auroc"]),
+                    "f1": float(v_m["f1"]),
+                    "epoch": ep,
+                }
+            )
             save_path = os.path.join(args.out_dir, "best.pt")
             save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
             print("  saved:", save_path)
 
-        save_dti_checkpoint(os.path.join(args.out_dir, "last.pt"), model, args, lig_enc, epoch=ep, best=best)
+        save_dti_checkpoint(
+            os.path.join(args.out_dir, "last.pt"),
+            model,
+            args,
+            lig_enc,
+            epoch=ep,
+            best=best,
+        )
 
         test_m, test_r = None, None
         if test_loader is not None:
@@ -1548,29 +1657,52 @@ def main():
             final_m = eval_metrics(yhat_f, yb_f)
             final_r = eval_reg_metrics(yhatr_f, yr_f)
 
-        save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), {
-            "epoch": ep,
-            "train_stat": tr_stat,
-            "train_metrics": tr_m,
-            "train_reg_metrics": tr_r,
-            "valid_metrics": v_m,
-            "valid_reg_metrics": v_r,
-            "final_eval_metrics": final_m,
-            "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
-            "test_metrics": test_m,
-            "test_reg_metrics": test_r if test_loader is not None else None,
-            "pos_weight": pos_weight,
-        })
+        save_json(
+            os.path.join(args.out_dir, f"epoch_{ep:03d}.json"),
+            {
+                "epoch": ep,
+                "train_stat": tr_stat,
+                "train_metrics": tr_m,
+                "train_reg_metrics": tr_r,
+                "valid_metrics": v_m,
+                "valid_reg_metrics": v_r,
+                "final_eval_metrics": final_m,
+                "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
+                "test_metrics": test_m,
+                "test_reg_metrics": test_r if test_loader is not None else None,
+                "pos_weight": pos_weight,
+                "train_y_reg_mean": train_y_mean,
+                "train_y_reg_std": train_y_std,
+            },
+        )
 
         print(f"\n===== Epoch {ep} =====")
-        print("[train]",
-              f"AUC={tr_m['auroc']:.4f}", f"AP={tr_m['ap']:.4f}", f"F1={tr_m['f1']:.4f}",
-              f"RMSE={tr_r['rmse']:.4f}", f"SP={tr_r['spearman']:.4f}")
-        print("[valid]",
-              f"AUC={v_m['auroc']:.4f}", f"AP={v_m['ap']:.4f}", f"F1={v_m['f1']:.4f}",
-              f"RMSE={v_r['rmse']:.4f}", f"SP={v_r['spearman']:.4f}")
+        print(
+            "[train]",
+            f"AUC={tr_m['auroc']:.4f}",
+            f"AP={tr_m['ap']:.4f}",
+            f"F1={tr_m['f1']:.4f}",
+            f"RMSE={tr_r['rmse']:.4f}",
+            f"SP={tr_r['spearman']:.4f}",
+        )
+        print(
+            "[valid]",
+            f"AUC={v_m['auroc']:.4f}",
+            f"AP={v_m['ap']:.4f}",
+            f"F1={v_m['f1']:.4f}",
+            f"RMSE={v_r['rmse']:.4f}",
+            f"SP={v_r['spearman']:.4f}",
+        )
         if final_m is not None:
-            print("[final]", f"AUC={final_m['auroc']:.4f}", f"AP={final_m['ap']:.4f}", f"F1={final_m['f1']:.4f}", f"EF1={final_m['ef1']:.3f}", f"EF5={final_m['ef5']:.3f}", f"EF10={final_m['ef10']:.3f}")
+            print(
+                "[final]",
+                f"AUC={final_m['auroc']:.4f}",
+                f"AP={final_m['ap']:.4f}",
+                f"F1={final_m['f1']:.4f}",
+                f"EF1={final_m['ef1']:.3f}",
+                f"EF5={final_m['ef5']:.3f}",
+                f"EF10={final_m['ef10']:.3f}",
+            )
 
         visualize_one_qk_map(
             model=model,
@@ -1582,9 +1714,9 @@ def main():
             save_dir=qk_save_dir,
             prefix=f"epoch{ep:03d}_valid_sample0",
         )
+
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
-
 
 if __name__ == "__main__":
     main()
