@@ -960,10 +960,17 @@ class CrossAttention(nn.Module):
                 attn = attn.masked_fill(mask, 0.0)
 
         elif self.attn_activation == "sigmoid":
-            attn = torch.sigmoid(attn_logits)
             if mask is not None:
-                attn = attn.masked_fill(mask, 0.0)
+                attn_logits = attn_logits.masked_fill(mask, -10.0)  # ← -1e9より安定
 
+            attn = torch.sigmoid(attn_logits)
+
+            if self.sigmoid_row_norm:
+                if mask is not None:
+                    attn = attn.masked_fill(mask, 0.0)
+                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                attn = attn / denom
+                
             if self.sigmoid_row_norm:
                 denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 attn = attn / denom
