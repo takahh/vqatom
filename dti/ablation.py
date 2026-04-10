@@ -465,19 +465,37 @@ def visualize_one_qk_map(
     p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
     l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
-    # ligand queries protein: (H, Ll, Lp)
-    S_lp = aux["attn_lp_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
-    A_lp = aux["attn_lp"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
+    # ---------------------------
+    # 基本マップ
+    # ---------------------------
+    S_lp = aux["attn_lp_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)  # (Ll, Lp)
+    A_lp = aux["attn_lp"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)         # (Ll, Lp)
 
-    # protein queries ligand: (H, Lp, Ll)
-    S_pl = aux["attn_pl_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
-    A_pl = aux["attn_pl"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
+    S_pl = aux["attn_pl_logits"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)  # (Lp, Ll)
+    A_pl = aux["attn_pl"][sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)         # (Lp, Ll)
 
-    # trim pads
+    # ---------------------------
+    # 本物の 2D attn_v heatmap
+    # weighted_v を feature norm -> head mean
+    # ---------------------------
+    # ligand queries protein: (H, Ll, Lp, Dh) -> (Ll, Lp)
+    W_lp = aux["attn_lp_weighted_v"][sample_idx_in_batch].detach().float().cpu()
+    W_lp = torch.norm(W_lp, dim=-1).mean(dim=0).numpy()
+
+    # protein queries ligand: (H, Lp, Ll, Dh) -> (Lp, Ll)
+    W_pl = aux["attn_pl_weighted_v"][sample_idx_in_batch].detach().float().cpu()
+    W_pl = torch.norm(W_pl, dim=-1).mean(dim=0).numpy()
+
+    # ---------------------------
+    # pad trim
+    # ---------------------------
     S_lp = S_lp[~l_pad][:, ~p_pad]
     A_lp = A_lp[~l_pad][:, ~p_pad]
+    W_lp = W_lp[~l_pad][:, ~p_pad]
+
     S_pl = S_pl[~p_pad][:, ~l_pad]
     A_pl = A_pl[~p_pad][:, ~l_pad]
+    W_pl = W_pl[~p_pad][:, ~l_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
@@ -495,6 +513,12 @@ def visualize_one_qk_map(
         os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
     )
     plot_one(
+        W_lp,
+        f"lig <- prot attn×V (2D) | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_attn_v2d.png") if save_dir else None,
+    )
+
+    plot_one(
         S_pl,
         f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
         os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
@@ -504,12 +528,19 @@ def visualize_one_qk_map(
         f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
         os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
     )
+    plot_one(
+        W_pl,
+        f"prot <- lig attn×V (2D) | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_attn_v2d.png") if save_dir else None,
+    )
 
     return {
         "attn_lp_logits": S_lp,
         "attn_lp": A_lp,
+        "attn_lp_attn_v2d": W_lp,
         "attn_pl_logits": S_pl,
         "attn_pl": A_pl,
+        "attn_pl_attn_v2d": W_pl,
         "prob": prob,
         "y_bin": y_bin,
     }
@@ -881,6 +912,7 @@ class CrossAttention(nn.Module):
         self.attn_activation = attn_activation
         self.sigmoid_row_norm = sigmoid_row_norm
         self.scale = 1.0 / math.sqrt(self.d_head)
+        self.v_ln = nn.LayerNorm(self.d_head)
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
         if v_in is None:
@@ -892,19 +924,27 @@ class CrossAttention(nn.Module):
         if Lk != Lv:
             raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
-        # -------------------------
-        # headごとに別々に射影
-        # stack後: (B,H,L,Dh)
-        # -------------------------
+        # --------------------------------
+        # headごとに独立 projection
+        # q, k, v: (B, H, L, Dh)
+        # --------------------------------
         q = torch.stack([proj(q_in) for proj in self.q_proj], dim=1)
         k = torch.stack([proj(k_in) for proj in self.k_proj], dim=1)
         v = torch.stack([proj(v_in) for proj in self.v_proj], dim=1)
 
+        # Q/K は normalize
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
-        attn_logits = torch.matmul(q, k.transpose(-2, -1))   # (B,H,Lq,Lk)
+        # V は normalize しない
+        # ただしスケールは整える
+        v = self.v_ln(v)
+
+        # --------------------------------
+        # attention logits: (B, H, Lq, Lk)
+        # --------------------------------
+        attn_logits = torch.matmul(q, k.transpose(-2, -1))
         attn_logits = attn_logits * self.scale / self.attn_temp
 
         mask = None
@@ -932,28 +972,37 @@ class CrossAttention(nn.Module):
             raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
 
         eps = self.attn_smooth_eps
-        if eps > 0:
-            if self.attn_activation != "sigmoid":
-                if mask is None:
-                    attn = (1 - eps) * attn + eps / attn.size(-1)
-                else:
-                    valid = (~kv_pad_mask)[:, None, None, :].float()
-                    valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
-                    attn = (1 - eps) * attn + eps * valid
+        if eps > 0 and self.attn_activation != "sigmoid":
+            if mask is None:
+                attn = (1.0 - eps) * attn + eps / attn.size(-1)
+            else:
+                valid = (~kv_pad_mask)[:, None, None, :].float()
+                valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
+                attn = (1.0 - eps) * attn + eps * valid
 
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)   # (B,H,Lq,Dh)
-        out = out.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
+        # --------------------------------
+        # 集約前の q-k ごとの value flow
+        # weighted_v: (B, H, Lq, Lk, Dh)
+        # --------------------------------
+        weighted_v = attn[..., None] * v[:, :, None, :, :]
+
+        # 集約後: (B, H, Lq, Dh)
+        attn_x_v = weighted_v.sum(dim=-2)
+
+        out = attn_x_v.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
         if return_maps:
             return out, {
-                "qk_scores": attn_logits.detach(),
-                "attn_map": attn.detach(),
+                "qk_scores": attn_logits.detach(),  # (B,H,Lq,Lk)
+                "attn_map": attn.detach(),  # (B,H,Lq,Lk)
+                "weighted_v": weighted_v.detach(),  # (B,H,Lq,Lk,Dh)
+                "attn_x_v": attn_x_v.detach(),  # (B,H,Lq,Dh)
             }
-        return out
 
+        return out
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1019,9 +1068,8 @@ class BidirectionalValueInteraction(nn.Module):
 
     @staticmethod
     def _attn_entropy(attn: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-        # attn: (B, H, Lq, Lk)
         p = attn.clamp_min(eps)
-        ent = -(p * p.log()).sum(dim=-1)   # (B,H,Lq)
+        ent = -(p * p.log()).sum(dim=-1)
         return ent.mean()
 
     def forward(self, p_tok, l_tok, p_pad=None, l_pad=None, return_maps=False):
@@ -1052,19 +1100,24 @@ class BidirectionalValueInteraction(nn.Module):
         aux = {}
         if return_maps:
             attn_entropy = 0.5 * (
-                self._attn_entropy(aux_lp["attn_map"]) +
-                self._attn_entropy(aux_pl["attn_map"])
+                    self._attn_entropy(aux_lp["attn_map"]) +
+                    self._attn_entropy(aux_pl["attn_map"])
             )
             aux = {
-                "attn_lp_logits": aux_lp["qk_scores"],   # ligand queries protein
-                "attn_lp": aux_lp["attn_map"],
-                "attn_pl_logits": aux_pl["qk_scores"],   # protein queries ligand
-                "attn_pl": aux_pl["attn_map"],
+                "attn_lp_logits": aux_lp["qk_scores"],  # (B,H,Ll,Lp)
+                "attn_lp": aux_lp["attn_map"],  # (B,H,Ll,Lp)
+                "attn_lp_weighted_v": aux_lp["weighted_v"],  # (B,H,Ll,Lp,Dh)
+                "attn_lp_x_v": aux_lp["attn_x_v"],  # (B,H,Ll,Dh)
+
+                "attn_pl_logits": aux_pl["qk_scores"],  # (B,H,Lp,Ll)
+                "attn_pl": aux_pl["attn_map"],  # (B,H,Lp,Ll)
+                "attn_pl_weighted_v": aux_pl["weighted_v"],  # (B,H,Lp,Ll,Dh)
+                "attn_pl_x_v": aux_pl["attn_x_v"],  # (B,H,Lp,Dh)
+
                 "attn_entropy": attn_entropy,
             }
 
         return p_out, l_out, aux
-
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
