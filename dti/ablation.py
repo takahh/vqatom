@@ -936,10 +936,7 @@ class CrossAttention(nn.Module):
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
-
-        # V は normalize しない
-        # ただしスケールは整える
-        v = self.v_ln(v)
+            v = F.normalize(v, dim=-1)
 
         # --------------------------------
         # attention logits: (B, H, Lq, Lk)
@@ -970,7 +967,7 @@ class CrossAttention(nn.Module):
                     attn = attn.masked_fill(mask, 0.0)
                 denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 attn = attn / denom
-                
+
             if self.sigmoid_row_norm:
                 denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 attn = attn / denom
