@@ -967,7 +967,6 @@ class CrossAttention(nn.Module):
         if Lk != Lv:
             raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
 
-        # (B,H,L,Dh)
         q = torch.stack([proj(q_in) for proj in self.q_proj], dim=1)
         k = torch.stack([proj(k_in) for proj in self.k_proj], dim=1)
         v = torch.stack([proj(v_in) for proj in self.v_proj], dim=1)
@@ -978,13 +977,12 @@ class CrossAttention(nn.Module):
 
         v = self.v_ln(v)
 
-        # (B,H,Lq,Lk)
         attn_logits = torch.matmul(q, k.transpose(-2, -1))
         attn_logits = attn_logits * self.scale / self.attn_temp
 
         mask = None
         if kv_pad_mask is not None:
-            mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
+            mask = kv_pad_mask[:, None, None, :]
 
         if self.attn_activation == "softmax":
             x = attn_logits
@@ -999,7 +997,6 @@ class CrossAttention(nn.Module):
             if mask is not None:
                 x = x.masked_fill(mask, -10.0)
             attn = torch.sigmoid(x)
-
             if self.sigmoid_row_norm:
                 if mask is not None:
                     attn = attn.masked_fill(mask, 0.0)
@@ -1019,30 +1016,30 @@ class CrossAttention(nn.Module):
 
         attn = self.dropout(attn)
 
-        # query-dependent gate: (B,H,Lq,Dh)
         gate = torch.stack(
             [torch.sigmoid(proj(q[:, h])) for h, proj in enumerate(self.v_gate_proj)],
             dim=1
-        )
+        )  # (B,H,Lq,Dh)
 
-        # ここが重要:
-        # 5D展開せず、通常の attn@v の後で gate をかける
-        base_attn_x_v = torch.matmul(attn, v)      # (B,H,Lq,Dh)
-        attn_x_v = base_attn_x_v * (1.0 + gate)    # (B,H,Lq,Dh)
+        base_attn_x_v = torch.matmul(attn, v)  # (B,H,Lq,Dh)
+        attn_x_v = base_attn_x_v * (1.0 + gate)  # (B,H,Lq,Dh)
 
         out = attn_x_v.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
         out = self.out_proj(out)
 
+        aux = {
+            "attn_entropy": (-(attn.clamp_min(1e-8) * attn.clamp_min(1e-8).log()).sum(dim=-1).mean())
+        }
+
         if return_maps:
-            return out, {
-                "qk_scores": attn_logits.detach(),   # (B,H,Lq,Lk)
-                "attn_map": attn.detach(),           # (B,H,Lq,Lk)
-                "gate": gate.detach(),               # (B,H,Lq,Dh)
-                "attn_x_v": attn_x_v.detach(),       # (B,H,Lq,Dh)
-            }
+            aux.update({
+                "qk_scores": attn_logits.detach(),
+                "attn_map": attn.detach(),
+                "gate": gate.detach(),
+                "attn_x_v": attn_x_v.detach(),
+            })
 
-        return out
-
+        return out, aux
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1135,26 +1132,24 @@ class BidirectionalValueInteraction(nn.Module):
         p_out = self.ln_p1(p_tok + self.drop(p_ctx))
         p_out = self.ln_p2(p_out + self.drop(self.ffn_p(p_out)))
 
-        aux = {}
+        aux = {
+            "attn_entropy": 0.5 * (aux_lp["attn_entropy"] + aux_pl["attn_entropy"])
+        }
+
         if return_maps:
-            attn_entropy = 0.5 * (
-                self._attn_entropy(aux_lp["attn_map"]) +
-                self._attn_entropy(aux_pl["attn_map"])
-            )
-            aux = {
-                "attn_lp_logits": aux_lp["qk_scores"],   # (B,H,Ll,Lp)
-                "attn_lp": aux_lp["attn_map"],           # (B,H,Ll,Lp)
-                "attn_lp_x_v": aux_lp["attn_x_v"],       # (B,H,Ll,Dh)
+            aux.update({
+                "attn_lp_logits": aux_lp["qk_scores"],
+                "attn_lp": aux_lp["attn_map"],
+                "attn_lp_x_v": aux_lp["attn_x_v"],
+                "attn_lp_gate": aux_lp["gate"],
 
-                "attn_pl_logits": aux_pl["qk_scores"],   # (B,H,Lp,Ll)
-                "attn_pl": aux_pl["attn_map"],           # (B,H,Lp,Ll)
-                "attn_pl_x_v": aux_pl["attn_x_v"],       # (B,H,Lp,Dh)
-
-                "attn_entropy": attn_entropy,
-            }
+                "attn_pl_logits": aux_pl["qk_scores"],
+                "attn_pl": aux_pl["attn_map"],
+                "attn_pl_x_v": aux_pl["attn_x_v"],
+                "attn_pl_gate": aux_pl["gate"],
+            })
 
         return p_out, l_out, aux
-
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
