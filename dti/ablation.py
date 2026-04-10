@@ -1105,14 +1105,19 @@ class DualStreamDTIClassifier(nn.Module):
             attn_smooth_eps=attn_smooth_eps,
             attn_activation=attn_activation,
         )
-        self.cls_head = nn.Sequential(
-            nn.Linear(self.d_model * 4, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 1),
-        )
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
+
+        feat_dim = self.d_model * 6  # p_cls, l_cls, p_mean, p_max, l_mean, l_max
+
+        self.shared_head = nn.Sequential(
+            nn.Linear(feat_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+
+        self.cls_head = nn.Linear(256, 1)
+        self.reg_head = nn.Linear(256, 1)
 
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
@@ -1164,6 +1169,8 @@ class DualStreamDTIClassifier(nn.Module):
 
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
+        p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
 
         p_pad = (p_attn_mask == 0)[:, 1:]
         l_pad = (l_ids == self.lig_pad_id)[:, 1:]
@@ -1183,20 +1190,23 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=return_maps,
         )
 
-        p_mean = self._masked_mean(p_ctx, p_pad)  # (B, d)
-        p_max = self._masked_max(p_ctx, p_pad)  # (B, d)
+        p_mean = self._masked_mean(p_ctx, p_pad)
+        p_max = self._masked_max(p_ctx, p_pad)
 
-        l_mean = self._masked_mean(l_ctx, l_pad)  # (B, d)
-        l_max = self._masked_max(l_ctx, l_pad)  # (B, d)
+        l_mean = self._masked_mean(l_ctx, l_pad)
+        l_max = self._masked_max(l_ctx, l_pad)
 
-        feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)  # (B, 4d)
-        logit = self.cls_head(feat).squeeze(-1)
+        feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+
+        h = self.shared_head(feat)
+        logit = self.cls_head(h).squeeze(-1)
+        yhat_reg = self.reg_head(h).squeeze(-1)
 
         aux.update(inter_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
 
-        return logit, None, aux
+        return logit, yhat_reg, aux
 
 # =========================================================
 # Optimizer
