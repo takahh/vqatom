@@ -743,12 +743,13 @@ def train_one_epoch(
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
+    sym_lambda: float = 0.0,   # <- 追加
     base_loss_alpha=0.3,
     epoch=1,
 ) -> Dict[str, float]:
     model.train()
 
-    losses, losses_cls, losses_reg, losses_entropy = [], [], [], []
+    losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
     use_amp = (device.type == "cuda")
 
     bce = nn.BCEWithLogitsLoss(
@@ -761,6 +762,29 @@ def train_one_epoch(
     need_maps = False
     # attn entropy を使う時だけ map を返す
     # need_maps = (attn_entropy_lambda != 0.0)
+
+    def attention_symmetry_loss(attn_lp, attn_pl, p_pad=None, l_pad=None):
+        """
+        attn_lp: (B, H, Ll, Lp)   ligand <- protein
+        attn_pl: (B, H, Lp, Ll)   protein <- ligand
+
+        比較対象:
+          attn_lp  vs  transpose(attn_pl)
+        """
+
+        # (B,H,Ll,Lp)
+        attn_pl_t = attn_pl.transpose(-1, -2)
+
+        diff = (attn_lp - attn_pl_t) ** 2  # (B,H,Ll,Lp)
+
+        if (p_pad is not None) and (l_pad is not None):
+            # p_pad: (B, Lp), l_pad: (B, Ll), True=PAD
+            valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+            diff = diff.masked_fill(~valid, 0.0)
+            denom = valid.float().sum().clamp_min(1.0)
+            return diff.sum() / denom
+
+        return diff.mean()
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -804,7 +828,16 @@ def train_one_epoch(
                         raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
                     loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
 
-                loss = loss_cls + loss_entropy
+                loss_sym = torch.tensor(0.0, device=device)
+                if sym_lambda != 0.0:
+                    loss_sym = attention_symmetry_loss(
+                        aux["lp_attn"].float(),
+                        aux["pl_attn"].float(),
+                        p_pad=aux["p_pad"],
+                        l_pad=aux["l_pad"],
+                    )
+
+                loss = loss_cls + loss_entropy + sym_lambda * loss_sym
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
 
@@ -836,7 +869,16 @@ def train_one_epoch(
                     raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
                 loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
 
-            loss = loss_cls + loss_entropy
+            loss_sym = torch.tensor(0.0, device=device)
+            if sym_lambda != 0.0:
+                loss_sym = attention_symmetry_loss(
+                    aux["lp_attn"].float(),
+                    aux["pl_attn"].float(),
+                    p_pad=aux["p_pad"],
+                    l_pad=aux["l_pad"],
+                )
+
+            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
 
@@ -851,6 +893,7 @@ def train_one_epoch(
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
+        losses_sym.append(float(loss_sym.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
@@ -867,6 +910,7 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
+        "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
     }
 
 
@@ -1411,7 +1455,7 @@ def main():
     ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
     ap.add_argument("--train_shard_size", type=int, default=1000)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
-
+    ap.add_argument("--sym_lambda", type=float, default=0.0)
     ap.add_argument("--lig_ckpt", type=str, required=True)
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument(
@@ -1708,6 +1752,7 @@ def main():
             grad_clip=float(args.grad_clip),
             attn_entropy_lambda=float(args.attn_entropy_lambda),
             reg_lambda=float(args.reg_lambda),
+            sym_lambda=float(args.sym_lambda),  # <- 追加
             base_loss_alpha=0.3,
             epoch=ep,
         )
