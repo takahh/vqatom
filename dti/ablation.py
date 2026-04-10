@@ -920,15 +920,6 @@ class CrossAttention(nn.Module):
             if mask is not None:
                 attn = attn.masked_fill(mask, 0.0)
 
-        elif self.attn_activation == "entmax15":
-            from entmax import entmax15
-            x = attn_logits
-            if mask is not None:
-                x = x.masked_fill(mask, -1e9)
-            attn = entmax15(x, dim=-1)
-            if mask is not None:
-                attn = attn.masked_fill(mask, 0.0)
-
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(attn_logits)
             if mask is not None:
