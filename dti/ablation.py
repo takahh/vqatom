@@ -472,37 +472,30 @@ def visualize_one_qk_map(
     # ---------------------------
     # (B,H,Ll,Lp) -> (Ll,Lp)
     S_lp = (
-        aux["attn_lp_logits"][sample_idx_in_batch]
+        aux["lp_qk_logits"][sample_idx_in_batch]
         .detach().float().cpu().numpy().mean(axis=0)
     )
     A_lp = (
-        aux["attn_lp"][sample_idx_in_batch]
+        aux["lp_attn"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    X_lp = (
+        aux["lp_ctx"][sample_idx_in_batch]
         .detach().float().cpu().numpy().mean(axis=0)
     )
 
-    # (B,H,Lp,Ll) -> (Lp,Ll)
     S_pl = (
-        aux["attn_pl_logits"][sample_idx_in_batch]
+        aux["pl_qk_logits"][sample_idx_in_batch]
         .detach().float().cpu().numpy().mean(axis=0)
     )
     A_pl = (
-        aux["attn_pl"][sample_idx_in_batch]
+        aux["pl_attn"][sample_idx_in_batch]
         .detach().float().cpu().numpy().mean(axis=0)
     )
-
-    # ---------------------------
-    # 軽量版 attn_x_v 可視化
-    # (B,H,L,Dh) -> head mean -> (L,Dh)
-    # ---------------------------
-    X_lp = (
-        aux["attn_lp_x_v"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )  # (Ll, Dh)
-
     X_pl = (
-        aux["attn_pl_x_v"][sample_idx_in_batch]
+        aux["pl_ctx"][sample_idx_in_batch]
         .detach().float().cpu().numpy().mean(axis=0)
-    )  # (Lp, Dh)
+    )
 
     # ---------------------------
     # pad trim
@@ -916,6 +909,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
 class CrossAttention(nn.Module):
     def __init__(
         self,
@@ -925,8 +924,8 @@ class CrossAttention(nn.Module):
         attn_temp=1.0,
         qk_norm=True,
         attn_smooth_eps=0.0,
-        attn_activation="softmax",   # "softmax", "entmax15", "sigmoid"
-        sigmoid_row_norm=False,
+        attn_activation="softmax",   # "softmax" only for now
+        detach_attn_for_value=False, # <- 追加
     ):
         super().__init__()
         assert d_model % n_heads == 0
@@ -935,16 +934,9 @@ class CrossAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
 
-        self.q_proj = nn.ModuleList([
-            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
-        ])
-        self.k_proj = nn.ModuleList([
-            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
-        ])
-        self.v_proj = nn.ModuleList([
-            nn.Linear(d_model, self.d_head) for _ in range(n_heads)
-        ])
-
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
 
         self.dropout = nn.Dropout(dropout)
@@ -952,97 +944,76 @@ class CrossAttention(nn.Module):
         self.qk_norm = qk_norm
         self.attn_smooth_eps = attn_smooth_eps
         self.attn_activation = attn_activation
-        self.sigmoid_row_norm = sigmoid_row_norm
+        self.detach_attn_for_value = detach_attn_for_value
         self.scale = 1.0 / math.sqrt(self.d_head)
 
-        self.v_ln = nn.LayerNorm(self.d_head)
-        self.v_gate_proj = nn.ModuleList([
-            nn.Linear(self.d_head, self.d_head) for _ in range(n_heads)
-        ])
+    def _split_heads(self, x):
+        # x: (B, L, D)
+        B, L, _ = x.shape
+        x = x.view(B, L, self.n_heads, self.d_head).transpose(1, 2)  # (B,H,L,Dh)
+        return x
+
+    def _merge_heads(self, x):
+        # x: (B,H,L,Dh)
+        B, H, L, Dh = x.shape
+        x = x.transpose(1, 2).contiguous().view(B, L, H * Dh)  # (B,L,D)
+        return x
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
+        """
+        q_in: (B, Lq, D)
+        k_in: (B, Lk, D)
+        v_in: (B, Lk, D) or None
+        kv_pad_mask: (B, Lk)  True=PAD
+        """
         if v_in is None:
             v_in = k_in
 
-        B, Lq, _ = q_in.shape
-        _, Lk, _ = k_in.shape
-        _, Lv, _ = v_in.shape
-        if Lk != Lv:
-            raise ValueError(f"K/V length mismatch: Lk={Lk}, Lv={Lv}")
+        q = self.q_proj(q_in)   # (B,Lq,D)
+        k = self.k_proj(k_in)   # (B,Lk,D)
+        v = self.v_proj(v_in)   # (B,Lk,D)
 
-        q = torch.stack([proj(q_in) for proj in self.q_proj], dim=1)
-        k = torch.stack([proj(k_in) for proj in self.k_proj], dim=1)
-        v = torch.stack([proj(v_in) for proj in self.v_proj], dim=1)
+        q = self._split_heads(q)  # (B,H,Lq,Dh)
+        k = self._split_heads(k)  # (B,H,Lk,Dh)
+        v = self._split_heads(v)  # (B,H,Lk,Dh)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
             k = F.normalize(k, dim=-1)
 
-        v = self.v_ln(v)
+        logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
+        # logits: (B,H,Lq,Lk)
 
-        attn_logits = torch.matmul(q, k.transpose(-2, -1))
-        attn_logits = attn_logits * self.scale / self.attn_temp
-
-        mask = None
         if kv_pad_mask is not None:
-            mask = kv_pad_mask[:, None, None, :]
+            mask = kv_pad_mask[:, None, None, :]  # (B,1,1,Lk)
+            logits = logits.masked_fill(mask, -1e4)
 
         if self.attn_activation == "softmax":
-            x = attn_logits
-            if mask is not None:
-                x = x.masked_fill(mask, -1e9)
-            attn = torch.softmax(x, dim=-1)
-            if mask is not None:
-                attn = attn.masked_fill(mask, 0.0)
-
-        elif self.attn_activation == "sigmoid":
-            x = attn_logits
-            if mask is not None:
-                x = x.masked_fill(mask, -10.0)
-            attn = torch.sigmoid(x)
-            if self.sigmoid_row_norm:
-                if mask is not None:
-                    attn = attn.masked_fill(mask, 0.0)
-                denom = attn.sum(dim=-1, keepdim=True).clamp(min=1e-8)
-                attn = attn / denom
+            attn = torch.softmax(logits, dim=-1)
         else:
-            raise ValueError(f"Unknown attn_activation: {self.attn_activation}")
+            raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
 
-        eps = self.attn_smooth_eps
-        if eps > 0 and self.attn_activation != "sigmoid":
-            if mask is None:
-                attn = (1.0 - eps) * attn + eps / attn.size(-1)
-            else:
-                valid = (~kv_pad_mask)[:, None, None, :].float()
-                valid = valid / valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
-                attn = (1.0 - eps) * attn + eps * valid
+        if self.attn_smooth_eps > 0:
+            Lk = attn.size(-1)
+            attn = (1.0 - self.attn_smooth_eps) * attn + self.attn_smooth_eps / Lk
 
         attn = self.dropout(attn)
 
-        gate = torch.stack(
-            [torch.sigmoid(proj(q[:, h])) for h, proj in enumerate(self.v_gate_proj)],
-            dim=1
-        )  # (B,H,Lq,Dh)
+        # ここが重要
+        attn_for_v = attn.detach() if self.detach_attn_for_value else attn
 
-        base_attn_x_v = torch.matmul(attn, v)  # (B,H,Lq,Dh)
-        attn_x_v = base_attn_x_v * (1.0 + gate)  # (B,H,Lq,Dh)
-
-        out = attn_x_v.transpose(1, 2).contiguous().view(B, Lq, self.d_model)
-        out = self.out_proj(out)
-
-        aux = {
-            "attn_entropy": (-(attn.clamp_min(1e-8) * attn.clamp_min(1e-8).log()).sum(dim=-1).mean())
-        }
+        ctx = torch.matmul(attn_for_v, v)   # (B,H,Lq,Dh)
+        out = self._merge_heads(ctx)        # (B,Lq,D)
+        out = self.out_proj(out)            # (B,Lq,D)
 
         if return_maps:
-            aux.update({
-                "qk_scores": attn_logits.detach(),
-                "attn_map": attn.detach(),
-                "gate": gate.detach(),
-                "attn_x_v": attn_x_v.detach(),
-            })
-
-        return out, aux
+            return out, {
+                "qk_logits": logits,   # (B,H,Lq,Lk)
+                "attn_map": attn,      # (B,H,Lq,Lk)
+                "v_proj": v,           # (B,H,Lk,Dh)
+                "ctx": ctx,            # (B,H,Lq,Dh)
+            }
+        return out
 
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
@@ -1064,95 +1035,104 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class BidirectionalValueInteraction(nn.Module):
+class DualStreamBlock(nn.Module):
     def __init__(
         self,
         d_model,
-        n_heads=4,
+        n_heads,
         dropout=0.1,
         attn_temp=1.0,
         qk_norm=True,
-        attn_smooth_eps=0.0,
-        attn_activation="softmax",
+        detach_attn_for_value=False,
     ):
         super().__init__()
 
-        self.l_from_p = CrossAttention(
+        self.ln_l_q = nn.LayerNorm(d_model)
+        self.ln_l_kv = nn.LayerNorm(d_model)
+        self.ln_p_q = nn.LayerNorm(d_model)
+        self.ln_p_kv = nn.LayerNorm(d_model)
+
+        # ligand query, protein key/value
+        self.lig_from_prot = CrossAttention(
             d_model=d_model,
             n_heads=n_heads,
             dropout=dropout,
             attn_temp=attn_temp,
             qk_norm=qk_norm,
-            attn_smooth_eps=attn_smooth_eps,
-            attn_activation=attn_activation,
+            detach_attn_for_value=detach_attn_for_value,
         )
 
-        self.p_from_l = CrossAttention(
+        # protein query, ligand key/value
+        self.prot_from_lig = CrossAttention(
             d_model=d_model,
             n_heads=n_heads,
             dropout=dropout,
             attn_temp=attn_temp,
             qk_norm=qk_norm,
-            attn_smooth_eps=attn_smooth_eps,
-            attn_activation=attn_activation,
+            detach_attn_for_value=detach_attn_for_value,
         )
 
-        self.ln_l1 = nn.LayerNorm(d_model)
-        self.ln_l2 = nn.LayerNorm(d_model)
-        self.ln_p1 = nn.LayerNorm(d_model)
-        self.ln_p2 = nn.LayerNorm(d_model)
-
-        self.ffn_l = FFN(d_model, dropout=dropout)
-        self.ffn_p = FFN(d_model, dropout=dropout)
         self.drop = nn.Dropout(dropout)
 
-    @staticmethod
-    def _attn_entropy(attn: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-        p = attn.clamp_min(eps)
-        ent = -(p * p.log()).sum(dim=-1)
-        return ent.mean()
+        self.ffn_l = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+        self.ffn_p = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
 
-    def forward(self, p_tok, l_tok, p_pad=None, l_pad=None, return_maps=False):
-        l_ctx, aux_lp = self.l_from_p(
-            q_in=l_tok,
-            k_in=p_tok,
-            v_in=p_tok,
+    def forward(self, p_h, l_h, p_pad=None, l_pad=None, return_maps=False):
+        # query側と key/value側を別LN
+        l_q = self.ln_l_q(l_h)
+        p_kv = self.ln_p_kv(p_h)
+
+        p_q = self.ln_p_q(p_h)
+        l_kv = self.ln_l_kv(l_h)
+
+        l_ctx, aux_lp = self.lig_from_prot(
+            q_in=l_q,
+            k_in=p_kv,
+            v_in=p_kv,
             kv_pad_mask=p_pad,
-            return_maps=return_maps,
+            return_maps=True,
         )
 
-        p_ctx, aux_pl = self.p_from_l(
-            q_in=p_tok,
-            k_in=l_tok,
-            v_in=l_tok,
+        p_ctx, aux_pl = self.prot_from_lig(
+            q_in=p_q,
+            k_in=l_kv,
+            v_in=l_kv,
             kv_pad_mask=l_pad,
-            return_maps=return_maps,
+            return_maps=True,
         )
 
-        l_out = self.ln_l1(l_tok + self.drop(l_ctx))
-        l_out = self.ln_l2(l_out + self.drop(self.ffn_l(l_out)))
+        l_h = l_h + self.drop(l_ctx)
+        p_h = p_h + self.drop(p_ctx)
 
-        p_out = self.ln_p1(p_tok + self.drop(p_ctx))
-        p_out = self.ln_p2(p_out + self.drop(self.ffn_p(p_out)))
-
-        aux = {
-            "attn_entropy": 0.5 * (aux_lp["attn_entropy"] + aux_pl["attn_entropy"])
-        }
+        l_h = l_h + self.drop(self.ffn_l(l_h))
+        p_h = p_h + self.drop(self.ffn_p(p_h))
 
         if return_maps:
-            aux.update({
-                "attn_lp_logits": aux_lp["qk_scores"],
-                "attn_lp": aux_lp["attn_map"],
-                "attn_lp_x_v": aux_lp["attn_x_v"],
-                "attn_lp_gate": aux_lp["gate"],
+            return p_h, l_h, {
+                "lp_qk_logits": aux_lp["qk_logits"],
+                "lp_attn": aux_lp["attn_map"],
+                "lp_ctx": aux_lp["ctx"],
+                "lp_v": aux_lp["v_proj"],
 
-                "attn_pl_logits": aux_pl["qk_scores"],
-                "attn_pl": aux_pl["attn_map"],
-                "attn_pl_x_v": aux_pl["attn_x_v"],
-                "attn_pl_gate": aux_pl["gate"],
-            })
+                "pl_qk_logits": aux_pl["qk_logits"],
+                "pl_attn": aux_pl["attn_map"],
+                "pl_ctx": aux_pl["ctx"],
+                "pl_v": aux_pl["v_proj"],
+            }
 
-        return p_out, l_out, aux
+        return p_h, l_h
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
@@ -1168,6 +1148,9 @@ class DualStreamDTIClassifier(nn.Module):
         qk_norm: bool = True,
         attn_smooth_eps: float = 0.02,
         attn_activation: str = "softmax",
+        detach_attn_for_value: bool = False,   # <- 追加
+        use_cls_in_head: bool = False,         # <- 追加
+        use_reg_head: bool = False,            # <- 追加
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1179,62 +1162,39 @@ class DualStreamDTIClassifier(nn.Module):
         self.protein_token_dropout = float(protein_token_dropout)
         self.ligand_token_dropout = float(ligand_token_dropout)
         self.lig_pad_id = int(self.lig.pad_id)
+        self.use_cls_in_head = bool(use_cls_in_head)
+        self.use_reg_head = bool(use_reg_head)
 
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-        self.qk_norm = qk_norm
-        self.dropout = dropout
-        self.interaction = BidirectionalValueInteraction(
+
+        self.p_ln = nn.LayerNorm(d_model)
+        self.l_ln = nn.LayerNorm(d_model)
+
+        self.interaction = DualStreamBlock(
             d_model=self.d_model,
             n_heads=self.n_heads,
             dropout=dropout,
             attn_temp=attn_temp,
-            qk_norm=self.qk_norm,
-            attn_smooth_eps=attn_smooth_eps,
-            attn_activation=attn_activation,
+            qk_norm=qk_norm,
+            detach_attn_for_value=detach_attn_for_value,
         )
-        self.p_ln = nn.LayerNorm(d_model)
-        self.l_ln = nn.LayerNorm(d_model)
 
-        feat_dim = self.d_model * 6  # p_cls, l_cls, p_mean, p_max, l_mean, l_max
+        if self.use_cls_in_head:
+            feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
+        else:
+            feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
 
         self.shared_head = nn.Sequential(
+            nn.LayerNorm(feat_dim),
             nn.Linear(feat_dim, 256),
-            nn.ReLU(),
+            nn.GELU(),
             nn.Dropout(dropout),
         )
 
         self.cls_head = nn.Linear(256, 1)
-        self.reg_head = nn.Linear(256, 1)
-
-
-    def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
-        x = x.masked_fill(pad.unsqueeze(-1), 0.0)
-        denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
-        return x.sum(dim=1) / denom
-
-    def _apply_token_dropout(self, pad_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
-        if (not self.training) or drop_prob <= 0.0:
-            return pad_mask
-        drop_mask = (torch.rand_like(pad_mask.float()) < drop_prob) & (~pad_mask)
-        out = pad_mask | drop_mask
-
-        # 全drop防止
-        all_dropped = out.all(dim=1)
-        if all_dropped.any():
-            out = out.clone()
-            keep_idx = (~out).float().argmax(dim=1)
-            for b in torch.where(all_dropped)[0]:
-                out[b, keep_idx[b]] = False
-        return out
-
-    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
-        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
-        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
-        out = x_masked.max(dim=1).values
-        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
-        return out
+        self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
@@ -1246,17 +1206,17 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             p_h = p_h_raw
 
-        p_h = self.p_ln(p_h)  # ← これ追加（最重要）
-
+        p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
+        l_h = self.l_ln(l_h)
 
-        l_h = self.l_ln(l_h)  # ← これ追加（最重要）
-
+        # CLS 分離
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
         p_cls = p_h[:, 0, :]
         l_cls = l_h[:, 0, :]
 
+        # PAD
         p_pad = (p_attn_mask == 0)[:, 1:]
         l_pad = (l_ids == self.lig_pad_id)[:, 1:]
 
@@ -1267,29 +1227,47 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        p_ctx, l_ctx, inter_aux = self.interaction(
-            p_tok=p_tok,
-            l_tok=l_tok,
-            p_pad=p_pad,
-            l_pad=l_pad,
-            return_maps=return_maps,
-        )
+        # ここが新block
+        if return_maps:
+            p_ctx, l_ctx, inter_aux = self.interaction(
+                p_h=p_tok,
+                l_h=l_tok,
+                p_pad=p_pad,
+                l_pad=l_pad,
+                return_maps=True,
+            )
+        else:
+            p_ctx, l_ctx = self.interaction(
+                p_h=p_tok,
+                l_h=l_tok,
+                p_pad=p_pad,
+                l_pad=l_pad,
+                return_maps=False,
+            )
+            inter_aux = {}
 
         p_mean = self._masked_mean(p_ctx, p_pad)
         p_max = self._masked_max(p_ctx, p_pad)
-
         l_mean = self._masked_mean(l_ctx, l_pad)
         l_max = self._masked_max(l_ctx, l_pad)
 
-        feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+        if self.use_cls_in_head:
+            feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+        else:
+            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
-        yhat_reg = self.reg_head(h).squeeze(-1)
+
+        yhat_reg = None
+        if self.reg_head is not None:
+            yhat_reg = self.reg_head(h).squeeze(-1)
 
         aux.update(inter_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
+        aux["p_ctx_tok"] = p_ctx
+        aux["l_ctx_tok"] = l_ctx
 
         return logit, yhat_reg, aux
 
@@ -1419,7 +1397,9 @@ def main():
     ap.add_argument("--lig_lr_mult", type=float, default=0.1)
     ap.add_argument("--weight_decay", type=float, default=1e-2)
     ap.add_argument("--seed", type=int, default=0)
-
+    ap.add_argument("--detach_attn_for_value", action="store_true")
+    ap.add_argument("--use_cls_in_head", action="store_true")
+    ap.add_argument("--use_reg_head", action="store_true")
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--grad_clip", type=float, default=1.0)
     ap.add_argument("--plateau", action="store_true")
@@ -1478,6 +1458,9 @@ def main():
         qk_norm=args.qk_norm,
         attn_smooth_eps=args.attn_smooth_eps,
         attn_activation=args.attn_activation,
+        detach_attn_for_value=args.detach_attn_for_value,
+        use_cls_in_head=args.use_cls_in_head,
+        use_reg_head=args.use_reg_head,
     ).to(device)
 
     if args.dti_ckpt is not None:
