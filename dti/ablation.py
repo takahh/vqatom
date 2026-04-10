@@ -1021,8 +1021,8 @@ class CrossAttention(nn.Module):
         q = self.q_proj(q_in)   # (B,Lq,D)
         k = self.k_proj(k_in)   # (B,Lk,D)
         v = self.v_proj(v_in)   # (B,Lk,D)
-        v = torch.tanh(v)  # or GELU
-
+        v = F.gelu(v)
+        
         q = self._split_heads(q)  # (B,H,Lq,Dh)
         k = self._split_heads(k)  # (B,H,Lk,Dh)
         v = self._split_heads(v)  # (B,H,Lk,Dh)
