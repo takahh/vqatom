@@ -759,7 +759,11 @@ def train_one_epoch(
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
     # train中は絶対に重いmapを返さない（OOM対策）
-    need_maps = False
+    # train中は map を返さない
+    # need_maps = False
+
+    # sym loss か entropy loss を使うときだけ map を返す
+    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0)
     # attn entropy を使う時だけ map を返す
     # need_maps = (attn_entropy_lambda != 0.0)
 
@@ -901,6 +905,7 @@ def train_one_epoch(
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
             ent=f"{losses_entropy[-1]:.4f}",
+            sym=f"{losses_sym[-1]:.4f}",
         )
 
     pbar.close()
