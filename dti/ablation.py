@@ -426,12 +426,14 @@ def plot_one(mat, title, save_path=None):
     plt.imshow(mat, aspect="auto")
     plt.colorbar()
     plt.title(title)
-    if "lp" in save_path:
+
+    if save_path is not None and "lp" in save_path:
         plt.ylabel("Ligand tokens")
         plt.xlabel("Protein tokens")
     else:
         plt.xlabel("Ligand tokens")
         plt.ylabel("Protein tokens")
+
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
@@ -762,9 +764,10 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-
+    # train中は絶対に重いmapを返さない（OOM対策）
+    need_maps = False
     # attn entropy を使う時だけ map を返す
-    need_maps = (attn_entropy_lambda != 0.0)
+    # need_maps = (attn_entropy_lambda != 0.0)
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
