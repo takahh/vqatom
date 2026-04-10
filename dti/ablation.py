@@ -1044,6 +1044,8 @@ class DualStreamBlock(nn.Module):
         attn_temp=1.0,
         qk_norm=True,
         detach_attn_for_value=False,
+        attn_smooth_eps=0.0,
+        attn_activation="softmax",
     ):
         super().__init__()
 
@@ -1060,6 +1062,8 @@ class DualStreamBlock(nn.Module):
             attn_temp=attn_temp,
             qk_norm=qk_norm,
             detach_attn_for_value=detach_attn_for_value,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
         )
 
         # protein query, ligand key/value
@@ -1179,6 +1183,8 @@ class DualStreamDTIClassifier(nn.Module):
             attn_temp=attn_temp,
             qk_norm=qk_norm,
             detach_attn_for_value=detach_attn_for_value,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
         )
 
         if self.use_cls_in_head:
@@ -1195,6 +1201,33 @@ class DualStreamDTIClassifier(nn.Module):
 
         self.cls_head = nn.Linear(256, 1)
         self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
+
+    def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        x = x.masked_fill(pad.unsqueeze(-1), 0.0)
+        denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
+        return x.sum(dim=1) / denom
+
+    def _apply_token_dropout(self, pad_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
+        if (not self.training) or drop_prob <= 0.0:
+            return pad_mask
+        drop_mask = (torch.rand_like(pad_mask.float()) < drop_prob) & (~pad_mask)
+        out = pad_mask | drop_mask
+
+        all_dropped = out.all(dim=1)
+        if all_dropped.any():
+            out = out.clone()
+            for b in torch.where(all_dropped)[0]:
+                keep_idx = (~pad_mask[b]).nonzero(as_tuple=False)
+                if keep_idx.numel() > 0:
+                    out[b, keep_idx[0, 0]] = False
+        return out
+
+    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
+        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
+        out = x_masked.max(dim=1).values
+        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
+        return out
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
