@@ -152,7 +152,9 @@ class DTIDataset(Dataset):
         rows: Optional[List[Dict[str, str]]] = None,
         y_thr: float = Y_THR,
         drop_missing_y: bool = True,
-        lig_cls_id: int = 0,   # 必要なら外から渡す
+        lig_cls_id: int = 0,
+        y_reg_mean: Optional[float] = None,
+        y_reg_std: Optional[float] = None,
     ):
         if rows is not None:
             raw_rows = rows
@@ -190,12 +192,20 @@ class DTIDataset(Dataset):
             raise ValueError("No usable rows in dataset")
 
         ys = [float(r["y"]) for r in self.rows if not np.isnan(float(r["y"]))]
-        if len(ys) == 0:
-            mean = 0.0
-            std = 1.0
+
+        if y_reg_mean is None or y_reg_std is None:
+            if len(ys) == 0:
+                mean = 0.0
+                std = 1.0
+            else:
+                mean = float(np.mean(ys))
+                std = float(np.std(ys)) + 1e-6
         else:
-            mean = float(np.mean(ys))
-            std = float(np.std(ys)) + 1e-6
+            mean = float(y_reg_mean)
+            std = float(y_reg_std)
+
+        self.y_reg_mean = mean
+        self.y_reg_std = std
 
         for r in self.rows:
             y = float(r["y"])
@@ -1141,14 +1151,10 @@ class DualStreamDTIClassifier(nn.Module):
         return out
 
     def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
-        neg_inf = torch.finfo(x.dtype).min
+        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
         x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
         out = x_masked.max(dim=1).values
-
-        # 全部 pad の場合の保険
-        bad = torch.isinf(out)
-        if bad.any():
-            out = out.masked_fill(bad, 0.0)
+        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
         return out
 
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
