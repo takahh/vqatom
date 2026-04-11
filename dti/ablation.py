@@ -1822,17 +1822,17 @@ def main():
                 f"EF5={final_m['ef5']:.3f}",
                 f"EF10={final_m['ef10']:.3f}",
             )
-
-        visualize_one_qk_map(
-            model=model,
-            loader=valid_loader,
-            device=device,
-            esm_tokenizer=esm_tokenizer,
-            sample_idx_in_batch=0,
-            show_token_labels=False,
-            save_dir=qk_save_dir,
-            prefix=f"epoch{ep:03d}_valid_sample0",
-        )
+        #
+        # visualize_one_qk_map(
+        #     model=model,
+        #     loader=valid_loader,
+        #     device=device,
+        #     esm_tokenizer=esm_tokenizer,
+        #     sample_idx_in_batch=0,
+        #     show_token_labels=False,
+        #     save_dir=qk_save_dir,
+        #     prefix=f"epoch{ep:03d}_valid_sample0",
+        # )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
