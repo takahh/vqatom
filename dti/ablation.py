@@ -953,16 +953,7 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
     model.to(device)
     return ckpt, missing, unexpected
 
-import math
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 
 class CrossAttention(nn.Module):
     def __init__(
@@ -1020,6 +1011,7 @@ class CrossAttention(nn.Module):
         return attn * keep.to(attn.dtype)
 
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
+        import torch.nn.functional as F
         if v_in is None:
             v_in = k_in
 
@@ -1077,7 +1069,7 @@ class CrossAttention(nn.Module):
                 "ctx": ctx,
             }
         return out
-    
+
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
         super().__init__()
