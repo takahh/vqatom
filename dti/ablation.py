@@ -1231,7 +1231,7 @@ class SimplePairDTIClassifier(nn.Module):
 
         # base: p_mean, p_max, l_mean, l_max, p*l, |p-l| = 6*d
         # clsも入れるなら + p_cls, l_cls = 8*d
-        feat_dim = d_model * (8 if self.use_cls_in_head else 6)
+        feat_dim = d_model * 2
 
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
