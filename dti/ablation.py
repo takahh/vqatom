@@ -1310,9 +1310,8 @@ class SimplePairDTIClassifier(nn.Module):
         # -----------------------------
         # 2) proteinの影響を少し弱める
         # -----------------------------
-        p_mean_det = p_mean.detach()
-        p_gated = p_mean_det * gate * 0.5
-
+        # p_mean_det = p_mean.detach()
+        p_gated = p_mean * gate  # detachなし
         # -----------------------------
         # 3) ligand単独特徴も追加
         # -----------------------------
