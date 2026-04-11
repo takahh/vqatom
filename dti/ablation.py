@@ -1231,7 +1231,7 @@ class SimplePairDTIClassifier(nn.Module):
 
         # base: p_mean, p_max, l_mean, l_max, p*l, |p-l| = 6*d
         # clsも入れるなら + p_cls, l_cls = 8*d
-        feat_dim = d_model * 3
+        feat_dim = d_model
         self.gate_proj = nn.Linear(d_model, d_model)
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
@@ -1297,30 +1297,9 @@ class SimplePairDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # pooling
-        p_mean = self._masked_mean(p_tok, p_pad)
+        # ligand-only pooling
         l_mean = self._masked_mean(l_tok, l_pad)
-
-        # -----------------------------
-        # 1) gateを強くする
-        # -----------------------------
-        gate = torch.sigmoid(self.gate_proj(l_mean) * 2.0)
-        gate = gate ** 2
-
-        # -----------------------------
-        # 2) proteinの影響を少し弱める
-        # -----------------------------
-        p_mean_det = p_mean.detach()
-        p_gated = p_mean_det * gate * 0.5
-
-        # -----------------------------
-        # 3) ligand単独特徴も追加
-        # -----------------------------
-        feat = torch.cat([
-            p_gated * l_mean,
-            torch.abs(p_gated - l_mean),
-            l_mean,
-        ], dim=-1)
+        feat = l_mean
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
@@ -1334,10 +1313,9 @@ class SimplePairDTIClassifier(nn.Module):
         aux["p_tok"] = p_tok
         aux["l_tok"] = l_tok
         aux["feat"] = feat
-        aux["gate"] = gate
-        aux["p_gated"] = p_gated
 
         return logit, yhat_reg, aux
+
 # =========================================================
 # Optimizer
 # =========================================================
