@@ -1313,7 +1313,6 @@ class SimplePairDTIClassifier(nn.Module):
         #         dim=-1
         #     )
         # else:
-        print(f"newly edited lines")
         # 最小変更
         p_mean = p_mean.detach()
 
