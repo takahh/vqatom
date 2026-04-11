@@ -1313,10 +1313,13 @@ class SimplePairDTIClassifier(nn.Module):
                 dim=-1
             )
         else:
-            feat = torch.cat(
-                [p_mean, p_max, l_mean, l_max, pl_mul, pl_abs],
-                dim=-1
-            )
+            # 最小変更
+            p_mean = p_mean.detach()
+
+            feat = torch.cat([
+                p_mean * l_mean,
+                torch.abs(p_mean - l_mean)
+            ], dim=-1)
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
