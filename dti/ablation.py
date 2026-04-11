@@ -1232,7 +1232,7 @@ class SimplePairDTIClassifier(nn.Module):
         # base: p_mean, p_max, l_mean, l_max, p*l, |p-l| = 6*d
         # clsも入れるなら + p_cls, l_cls = 8*d
         feat_dim = d_model * 2
-
+        self.gate_proj = nn.Linear(d_model, d_model)
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
             nn.Linear(feat_dim, 256),
@@ -1314,6 +1314,8 @@ class SimplePairDTIClassifier(nn.Module):
         #     )
         # else:
         # 最小変更
+        gate = torch.sigmoid(self.gate_proj(l_mean))
+        p_mean = p_mean * gate
         p_mean = p_mean.detach()
 
         feat = torch.cat([
