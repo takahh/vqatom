@@ -1299,28 +1299,28 @@ class SimplePairDTIClassifier(nn.Module):
 
         # pooling
         p_mean = self._masked_mean(p_tok, p_pad)
-        p_max  = self._masked_max(p_tok, p_pad)
+        # p_max  = self._masked_max(p_tok, p_pad)
         l_mean = self._masked_mean(l_tok, l_pad)
-        l_max  = self._masked_max(l_tok, l_pad)
+        # l_max  = self._masked_max(l_tok, l_pad)
 
         # まずは mean 同士で interaction を作るのがおすすめ
         pl_mul = p_mean * l_mean
         pl_abs = torch.abs(p_mean - l_mean)
 
-        if self.use_cls_in_head:
-            feat = torch.cat(
-                [p_cls, l_cls, p_mean, p_max, l_mean, l_max, pl_mul, pl_abs],
-                dim=-1
-            )
-        else:
-            print(f"newly edited lines")
-            # 最小変更
-            p_mean = p_mean.detach()
+        # if self.use_cls_in_head:
+        #     feat = torch.cat(
+        #         [p_cls, l_cls, p_mean, p_max, l_mean, l_max, pl_mul, pl_abs],
+        #         dim=-1
+        #     )
+        # else:
+        print(f"newly edited lines")
+        # 最小変更
+        p_mean = p_mean.detach()
 
-            feat = torch.cat([
-                p_mean * l_mean,
-                torch.abs(p_mean - l_mean)
-            ], dim=-1)
+        feat = torch.cat([
+            p_mean * l_mean,
+            torch.abs(p_mean - l_mean)
+        ], dim=-1)
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
