@@ -1199,25 +1199,16 @@ class DualStreamBlock(nn.Module):
 
         return p_h, l_h
 
-class DualStreamDTIClassifier(nn.Module):
+class SimplePairDTIClassifier(nn.Module):
     def __init__(
         self,
         protein_encoder: ESMProteinEncoder,
         ligand_encoder: PretrainedLigandEncoder,
         dropout: float,
-        n_heads: int = 4,
-        n_layers: int = 2,
         protein_token_dropout: float = 0.0,
         ligand_token_dropout: float = 0.0,
-        attn_temp: float = 2.0,
-        qk_norm: bool = True,
-        attn_smooth_eps: float = 0.02,
-        attn_activation: str = "softmax",
-        detach_attn_for_value: bool = False,   # <- 追加
-        use_cls_in_head: bool = False,         # <- 追加
-        use_reg_head: bool = False,            # <- 追加
-        pair_gate_threshold: float = 0.5,
-        topk_frac: float = 0.1,
+        use_cls_in_head: bool = False,
+        use_reg_head: bool = False,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1225,7 +1216,6 @@ class DualStreamDTIClassifier(nn.Module):
 
         d_model = self.lig.d_model
         self.d_model = d_model
-        self.n_heads = int(n_heads)
         self.protein_token_dropout = float(protein_token_dropout)
         self.ligand_token_dropout = float(ligand_token_dropout)
         self.lig_pad_id = int(self.lig.pad_id)
@@ -1239,23 +1229,9 @@ class DualStreamDTIClassifier(nn.Module):
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
 
-        self.interaction = DualStreamBlock(
-            d_model=self.d_model,
-            n_heads=self.n_heads,
-            dropout=dropout,
-            attn_temp=attn_temp,
-            qk_norm=qk_norm,
-            detach_attn_for_value=detach_attn_for_value,
-            attn_smooth_eps=attn_smooth_eps,
-            attn_activation=attn_activation,
-            pair_gate_threshold=pair_gate_threshold,
-            topk_frac=topk_frac,
-        )
-
-        if self.use_cls_in_head:
-            feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
-        else:
-            feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
+        # base: p_mean, p_max, l_mean, l_max, p*l, |p-l| = 6*d
+        # clsも入れるなら + p_cls, l_cls = 8*d
+        feat_dim = d_model * (8 if self.use_cls_in_head else 6)
 
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
@@ -1263,7 +1239,6 @@ class DualStreamDTIClassifier(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
-
         self.cls_head = nn.Linear(256, 1)
         self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
 
@@ -1271,6 +1246,13 @@ class DualStreamDTIClassifier(nn.Module):
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
         denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
         return x.sum(dim=1) / denom
+
+    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
+        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
+        out = x_masked.max(dim=1).values
+        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
+        return out
 
     def _apply_token_dropout(self, pad_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
         if (not self.training) or drop_prob <= 0.0:
@@ -1287,28 +1269,18 @@ class DualStreamDTIClassifier(nn.Module):
                     out[b, keep_idx[0, 0]] = False
         return out
 
-    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
-        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
-        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
-        out = x_masked.max(dim=1).values
-        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
-        return out
-
     def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
         aux = {}
 
+        # encoder
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
-
-        if self.p_proj is not None:
-            p_h = self.p_proj(p_h_raw)
-        else:
-            p_h = p_h_raw
-
+        p_h = self.p_proj(p_h_raw) if self.p_proj is not None else p_h_raw
         p_h = self.p_ln(p_h)
+
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
 
-        # CLS 分離
+        # CLS分離
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
         p_cls = p_h[:, 0, :]
@@ -1325,34 +1297,26 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # ここが新block
-        if return_maps:
-            p_ctx, l_ctx, inter_aux = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=True,
-            )
-        else:
-            p_ctx, l_ctx = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=False,
-            )
-            inter_aux = {}
+        # pooling
+        p_mean = self._masked_mean(p_tok, p_pad)
+        p_max  = self._masked_max(p_tok, p_pad)
+        l_mean = self._masked_mean(l_tok, l_pad)
+        l_max  = self._masked_max(l_tok, l_pad)
 
-        p_mean = self._masked_mean(p_ctx, p_pad)
-        p_max = self._masked_max(p_ctx, p_pad)
-        l_mean = self._masked_mean(l_ctx, l_pad)
-        l_max = self._masked_max(l_ctx, l_pad)
+        # まずは mean 同士で interaction を作るのがおすすめ
+        pl_mul = p_mean * l_mean
+        pl_abs = torch.abs(p_mean - l_mean)
 
         if self.use_cls_in_head:
-            feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+            feat = torch.cat(
+                [p_cls, l_cls, p_mean, p_max, l_mean, l_max, pl_mul, pl_abs],
+                dim=-1
+            )
         else:
-            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+            feat = torch.cat(
+                [p_mean, p_max, l_mean, l_max, pl_mul, pl_abs],
+                dim=-1
+            )
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
@@ -1361,11 +1325,11 @@ class DualStreamDTIClassifier(nn.Module):
         if self.reg_head is not None:
             yhat_reg = self.reg_head(h).squeeze(-1)
 
-        aux.update(inter_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
-        aux["p_ctx_tok"] = p_ctx
-        aux["l_ctx_tok"] = l_ctx
+        aux["p_tok"] = p_tok
+        aux["l_tok"] = l_tok
+        aux["feat"] = feat
 
         return logit, yhat_reg, aux
 
@@ -1545,23 +1509,14 @@ def main():
     )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
-    model = DualStreamDTIClassifier(
+    model = SimplePairDTIClassifier(
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
         dropout=args.dropout,
-        n_heads=args.n_heads,
-        n_layers=args.dual_stream_layers,
         protein_token_dropout=args.protein_token_dropout,
         ligand_token_dropout=args.ligand_token_dropout,
-        attn_temp=args.attn_temp,
-        qk_norm=args.qk_norm,
-        attn_smooth_eps=args.attn_smooth_eps,
-        attn_activation=args.attn_activation,
-        detach_attn_for_value=args.detach_attn_for_value,
         use_cls_in_head=args.use_cls_in_head,
         use_reg_head=args.use_reg_head,
-        pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
-        topk_frac=args.topk_frac,  # ← 追加
     ).to(device)
 
     if args.dti_ckpt is not None:
