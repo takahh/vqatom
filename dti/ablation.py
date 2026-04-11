@@ -1297,9 +1297,12 @@ class SimplePairDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # ligand-only pooling
-        l_mean = self._masked_mean(l_tok, l_pad)
-        feat = l_mean
+        # # ligand-only pooling
+        # l_mean = self._masked_mean(l_tok, l_pad)
+        # feat = l_mean
+        # protein-only pooling
+        p_mean = self._masked_mean(p_tok, p_pad)
+        feat = p_mean
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
