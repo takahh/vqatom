@@ -1,0 +1,3561 @@
+import torch.distributed as distributed
+from einops import rearrange, repeat, pack, unpack
+from utils import CBDICT
+from torch import nn, einsum
+
+from args import get_args
+
+
+def exists(val):
+    return val is not None
+
+
+def default(val, d):
+    return val if exists(val) else d
+
+
+def noop(*args, **kwargs):
+    pass
+
+
+def l2norm(t):
+    return F.normalize(t, p=2, dim=-1)
+
+
+def log(t, eps=1e-20):
+    return torch.log(t.clamp(min=eps))
+
+
+def uniform_init(*shape):
+    t = torch.empty(shape)
+    nn.init.kaiming_uniform_(t)
+    return t
+
+
+def gumbel_noise(t):
+    noise = torch.zeros_like(t).uniform_(0, 1)
+    return -log(-log(noise))
+
+
+def laplace_smoothing(x, n_categories, eps=1e-5):
+    return (x + eps) / (x.sum() + n_categories * eps)
+
+
+def sample_vectors(samples, num):
+    num_samples, device = samples.shape[0], samples.device
+    if num_samples >= num:
+        indices = torch.randperm(num_samples, device=device)[:num]
+    else:
+        indices = torch.randint(0, num_samples, (num,), device=device)
+
+    return samples[indices]
+
+
+def batched_sample_vectors(samples, num):
+    return torch.stack([sample_vectors(sample, num) for sample in samples.unbind(dim=0)], dim=0)
+
+
+def pad_shape(shape, size, dim=0):
+    return [size if i == dim else s for i, s in enumerate(shape)]
+
+
+def sample_multinomial(total_count, probs):
+    device = probs.device
+    probs = probs.cpu()
+
+    total_count = probs.new_full((), total_count)
+    remainder = probs.new_ones(())
+    sample = torch.empty_like(probs, dtype=torch.long)
+
+    for i, p in enumerate(probs):
+        s = torch.binomial(total_count, p / remainder)
+        sample[i] = s
+        total_count -= s
+        remainder -= p
+
+    return sample.to(device)
+
+
+def all_gather_sizes(x, dim):
+    size = torch.tensor(x.shape[dim], dtype=torch.long, device=x.device)
+    all_sizes = [torch.empty_like(size) for _ in range(distributed.get_world_size())]
+    distributed.all_gather(all_sizes, size)
+    return torch.stack(all_sizes)
+
+
+def all_gather_variably_sized(x, sizes, dim=0):
+    rank = distributed.get_rank()
+    all_x = []
+
+    for i, size in enumerate(sizes):
+        t = x if i == rank else x.new_empty(pad_shape(x.shape, size, dim))
+        distributed.broadcast(t, src=i, async_op=True)
+        all_x.append(t)
+
+    distributed.barrier()
+    return all_x
+
+from einops import rearrange, repeat
+
+def l2norm(t, dim=-1, eps=1e-8):
+    return F.normalize(t, dim=dim, eps=eps)
+
+import torch
+
+def noop(x):
+    return x
+
+def batched_bincount(x: torch.Tensor, minlength: int) -> torch.Tensor:
+    # x: [H, N] int64 on CUDA
+    H, N = x.shape
+    out = torch.zeros(H, minlength, device=x.device, dtype=torch.int64)
+    one = torch.ones_like(x, dtype=torch.int64)
+    out.scatter_add_(1, x, one)            # all CUDA if x is CUDA
+    return out
+
+import torch
+from typing import Optional, Sequence, Dict, Tuple
+
+
+def kmeans(
+    samples: torch.Tensor,          # [H, N, D]
+    num_clusters: int,
+    use_cosine_sim: bool = False,
+    all_reduce_fn = lambda x: None, # in-place sum for DDP (noop by default)
+    eps: float = 1e-12,
+    max_iters: int = 20,
+    tol: float = 0.0,
+    n_block: int = 131072,          # tile size over N (points)
+    k_block: int = 4096,            # tile size over K (centers)
+    element_names=None,             # optional labels for heads (e.g., ["C","N","O",...])
+):
+    """
+    Lloyd K-Means w/ K-Means++ init, streaming/blocked (no [H,N,K] allocation).
+
+    Returns:
+        means:          [H, K, D]
+        bins:           [H, K]        # counts per cluster
+        used_per_head:  [H]           # number of non-empty clusters per head
+        used_per_label: dict[str,int] # only if element_names provided, else None
+    """
+    import math
+    import torch
+
+    # ----------------------------
+    # device / shape
+    # ----------------------------
+    samples = samples.to("cuda", non_blocking=True)
+    H, N, D = samples.shape
+    device, dtype = samples.device, samples.dtype
+
+    if max_iters <= 0:
+        base = 20
+        extra = int(10 * max(0.0, math.log10(max(N, 1)) - 2.0))
+        max_iters = min(100, base + extra)
+
+    K = int(min(num_clusters, N))
+    if K <= 0:
+        raise ValueError("No samples to cluster.")
+
+    if use_cosine_sim:
+        samples = torch.nn.functional.normalize(samples, p=2, dim=-1)
+
+    # ----------------------------
+    # deterministic helpers
+    # ----------------------------
+    def _determinism_enabled() -> bool:
+        # True if torch.use_deterministic_algorithms(True) has been set
+        return torch.are_deterministic_algorithms_enabled()
+
+    def _with_nondet_allowed(fn, *args, **kwargs):
+        """
+        Run fn with deterministic algorithms temporarily disabled (only if they are enabled),
+        to avoid hard errors on ops like CUDA cumsum.
+        """
+        prev = _determinism_enabled()
+        if not prev:
+            return fn(*args, **kwargs)
+        try:
+            torch.use_deterministic_algorithms(False)
+            return fn(*args, **kwargs)
+        finally:
+            torch.use_deterministic_algorithms(True)
+
+    # ----------------------------
+    # KMeans++ init (blockwise, deterministic-safe)
+    # ----------------------------
+    @torch.no_grad()
+    def kmeanspp_init_blockwise(
+        X: torch.Tensor,                 # [H,N,D] on GPU
+        K: int,
+        cosine: bool = False,
+        eps: float = 1e-12,
+        sample_block_elems: int = 262_144,
+        dtype_prob: torch.dtype = torch.float32,
+        deterministic: str = "auto",     # "cpu_cumsum" | "gpu_cumsum" | "gpu_cumsum_nondet_ok" | "auto"
+    ) -> torch.Tensor:
+        """
+        Memory-safe KMeans++ initializer with deterministic-safe sampling.
+
+        Modes:
+          - "cpu_cumsum": fully deterministic, does sampling cumsum/searchsorted on CPU.
+          - "gpu_cumsum": uses GPU cumsum (will ERROR if deterministic_algorithms=True).
+          - "gpu_cumsum_nondet_ok": uses GPU cumsum but temporarily disables determinism just for cumsum.
+          - "auto": if determinism enabled -> cpu_cumsum else -> gpu_cumsum
+        """
+        assert deterministic in ("cpu_cumsum", "gpu_cumsum", "gpu_cumsum_nondet_ok", "auto")
+        if deterministic == "auto":
+            deterministic = "cpu_cumsum" if _determinism_enabled() else "gpu_cumsum"
+
+        H, N, D = X.shape
+        dev = X.device
+        C = torch.empty((H, K, D), device=dev, dtype=X.dtype)
+
+        if cosine:
+            Xwork = torch.nn.functional.normalize(X, p=2, dim=-1)
+            x2 = None
+        else:
+            Xwork = X
+            x2 = (X ** 2).sum(-1).to(dtype_prob)  # [H,N] fp32
+
+        # first seed per head
+        idx0 = torch.randint(0, N, (H, 1), device=dev)
+        C[:, 0, :] = X.gather(1, idx0.unsqueeze(-1).expand(H, 1, D)).squeeze(1)
+
+        def dist_to_center(x_all: torch.Tensor, c_one: torch.Tensor) -> torch.Tensor:
+            # x_all: [H,N,D], c_one: [H,D] -> [H,N] (dtype_prob)
+            if cosine:
+                d = (1.0 - (x_all * c_one.unsqueeze(1)).sum(-1)).clamp_min_(0)
+            else:
+                c2 = (c_one ** 2).sum(-1)                 # [H]
+                xc = (x_all * c_one.unsqueeze(1)).sum(-1) # [H,N]
+                d = (x2 + c2.unsqueeze(1) - 2.0 * xc).clamp_min_(0)
+            return d.to(dtype_prob)
+
+        # closest squared distance to chosen centers so far
+        closest = dist_to_center(Xwork, C[:, 0, :])  # [H,N] fp32
+
+        def _sample_block_gpu_cumsum(prob: torch.Tensor) -> torch.Tensor:
+            """
+            prob: [H,N] nonnegative, fp32
+            Return idx: [H] long on GPU
+            """
+            totals = prob.sum(dim=1)                         # [H]
+            zero_mask = totals <= 0
+            u = torch.rand(H, device=dev, dtype=prob.dtype) * torch.clamp(totals, min=eps)
+
+            idx_out = torch.empty(H, device=dev, dtype=torch.long)
+            cum = torch.zeros(H, device=dev, dtype=prob.dtype)
+            found = torch.zeros(H, device=dev, dtype=torch.bool)
+
+            start = 0
+            while start < N:
+                end = min(start + sample_block_elems, N)
+                block = prob[:, start:end]                  # [H,B]
+                block_sum = block.sum(dim=1)                # [H]
+
+                target = (~found) & (cum + block_sum >= u)
+                if target.any():
+                    h_idx = target.nonzero(as_tuple=False).squeeze(1)
+                    block_h = block[h_idx]                  # [Hsel,B]
+                    need = (u[h_idx] - cum[h_idx]).unsqueeze(1)
+
+                    # ---- THIS is the deterministic trouble-maker on CUDA ----
+                    block_cum = block_h.cumsum(dim=1)
+                    pos = torch.searchsorted(block_cum, need, right=False).squeeze(1)
+                    pos = pos.clamp_max(block_h.size(1) - 1)
+
+                    idx_out[h_idx] = start + pos
+                    found[h_idx] = True
+
+                nf = ~found
+                if nf.any():
+                    cum[nf] = cum[nf] + block_sum[nf]
+
+                start = end
+                if found.all():
+                    break
+
+            if (~found).any():
+                idx_out[~found] = N - 1
+            if zero_mask.any():
+                idx_out[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device=dev)
+            return idx_out
+
+        def _sample_block_cpu_cumsum(prob: torch.Tensor) -> torch.Tensor:
+            """
+            Deterministic sampling on CPU:
+            prob: [H,N] on GPU fp32 -> moves one head-block at a time as needed.
+            Returns idx: [H] on GPU long
+            """
+            # Move whole prob to CPU can be expensive; but N is big and sampling happens K times.
+            # We'll do it blockwise on CPU to keep memory manageable.
+            totals = prob.sum(dim=1).detach().cpu()  # [H]
+            zero_mask = (totals <= 0)
+            # u on CPU for deterministic path
+            u = (torch.rand(H, dtype=torch.float64) * torch.clamp(totals.to(torch.float64), min=float(eps))).to(torch.float64)
+
+            idx_out_cpu = torch.empty(H, dtype=torch.long)
+            cum = torch.zeros(H, dtype=torch.float64)
+            found = torch.zeros(H, dtype=torch.bool)
+
+            start = 0
+            while start < N:
+                end = min(start + sample_block_elems, N)
+                block = prob[:, start:end].detach().cpu().to(torch.float64)  # [H,B]
+                block_sum = block.sum(dim=1)                                 # [H]
+
+                target = (~found) & (cum + block_sum >= u)
+                if target.any():
+                    h_idx = target.nonzero(as_tuple=False).squeeze(1)
+                    block_h = block[h_idx]                                   # [Hsel,B]
+                    need = (u[h_idx] - cum[h_idx]).unsqueeze(1)              # [Hsel,1]
+                    block_cum = block_h.cumsum(dim=1)                        # CPU cumsum deterministic
+                    pos = torch.searchsorted(block_cum, need, right=False).squeeze(1)
+                    pos = torch.clamp(pos, max=block_h.size(1) - 1)
+                    idx_out_cpu[h_idx] = start + pos
+                    found[h_idx] = True
+
+                nf = ~found
+                if nf.any():
+                    cum[nf] = cum[nf] + block_sum[nf]
+
+                start = end
+                if found.all():
+                    break
+
+            if (~found).any():
+                idx_out_cpu[~found] = N - 1
+            if zero_mask.any():
+                # random but deterministic algorithms demand doesn't constrain RNG reproducibility unless you seed;
+                # still fine. If you want fully repeatable, seed torch before calling kmeans.
+                idx_out_cpu[zero_mask] = torch.randint(0, N, (int(zero_mask.sum()),), device="cpu")
+
+            return idx_out_cpu.to(device=dev)
+
+        # choose sampler
+        def sample_idx(prob: torch.Tensor) -> torch.Tensor:
+            if deterministic == "cpu_cumsum":
+                return _sample_block_cpu_cumsum(prob)
+            elif deterministic == "gpu_cumsum":
+                return _sample_block_gpu_cumsum(prob)  # may error if deterministic_algorithms=True
+            elif deterministic == "gpu_cumsum_nondet_ok":
+                return _with_nondet_allowed(_sample_block_gpu_cumsum, prob)
+            else:
+                raise RuntimeError("unreachable")
+
+        # pick K-1 more centers
+        for k in range(1, K):
+            # stabilized probs from closest distances
+            prob = closest
+            prob = (prob - prob.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
+            prob = prob * prob  # standard kmeans++ uses d^2 weighting
+
+            idxk = sample_idx(prob)  # [H] long on GPU
+            C[:, k, :] = X[torch.arange(H, device=dev), idxk, :]
+
+            dk = dist_to_center(Xwork, C[:, k, :])  # [H,N]
+            closest = torch.minimum(closest, dk)
+
+        if cosine:
+            C = torch.nn.functional.normalize(C, p=2, dim=-1)
+        return C
+
+    # ---- IMPORTANT CHANGE ----
+    # If determinism is enabled, default to CPU sampling (no crash).
+    # If you prefer "allow nondet only for cumsum", set deterministic="gpu_cumsum_nondet_ok".
+    means = kmeanspp_init_blockwise(
+        samples,
+        K,
+        cosine=use_cosine_sim,
+        eps=eps,
+        deterministic="gpu_cumsum_nondet_ok",
+    )
+
+    # ----------------------------
+    # Lloyd steps (streaming/blocked)
+    # ----------------------------
+    def assign_pass(X, C):
+        """
+        Returns buckets [H,N] (long)
+        Streaming over K tiles and N tiles to find argmin per point.
+        """
+        H, N, D = X.shape
+        _, K, _ = C.shape
+        buckets = torch.empty(H, N, device=device, dtype=torch.long)
+
+        for h in range(H):
+            if use_cosine_sim:
+                best_val = torch.full((N,), -float("inf"), device=device, dtype=X.dtype)
+            else:
+                best_val = torch.full((N,), float("inf"), device=device, dtype=X.dtype)
+            best_idx = torch.zeros((N,), device=device, dtype=torch.long)
+
+            if not use_cosine_sim:
+                x2_full = (X[h] ** 2).sum(-1)  # [N]
+
+            for k0 in range(0, K, k_block):
+                k1 = min(k0 + k_block, K)
+                Ck = C[h, k0:k1]  # [kb,D]
+
+                if use_cosine_sim:
+                    for n0 in range(0, N, n_block):
+                        n1 = min(n0 + n_block, N)
+                        sims = X[h, n0:n1] @ Ck.T            # [nb,kb]
+                        vals, idxs = sims.max(dim=1)         # [nb]
+                        update = vals > best_val[n0:n1]
+                        best_val[n0:n1] = torch.where(update, vals, best_val[n0:n1])
+                        best_idx[n0:n1] = torch.where(update, idxs + k0, best_idx[n0:n1])
+                else:
+                    c2 = (Ck ** 2).sum(-1)                   # [kb]
+                    for n0 in range(0, N, n_block):
+                        n1 = min(n0 + n_block, N)
+                        xc = X[h, n0:n1] @ Ck.T              # [nb,kb]
+                        d2 = (x2_full[n0:n1].unsqueeze(1) + c2.unsqueeze(0) - 2 * xc).clamp_min_(0)
+                        vals, idxs = d2.min(dim=1)           # [nb]
+                        update = vals < best_val[n0:n1]
+                        best_val[n0:n1] = torch.where(update, vals, best_val[n0:n1])
+                        best_idx[n0:n1] = torch.where(update, idxs + k0, best_idx[n0:n1])
+
+            buckets[h] = best_idx
+
+        return buckets
+
+    def update_pass(X, buckets, K, old_means):
+        """
+        Accumulates sums and counts in chunks of N.
+        Returns:
+          new_means [H,K,D], bins [H,K]
+        """
+        H, N, D = X.shape
+        new_means = torch.zeros(H, K, D, device=device, dtype=X.dtype)
+        bins = torch.zeros(H, K, device=device, dtype=torch.long)
+
+        ones = None
+        for h in range(H):
+            for n0 in range(0, N, n_block):
+                n1 = min(n0 + n_block, N)
+                b = buckets[h, n0:n1]                       # [nb]
+                x = X[h, n0:n1]                             # [nb,D]
+                if ones is None or ones.numel() != b.numel():
+                    ones = torch.ones_like(b, dtype=torch.long, device=device)
+                bins[h].index_add_(0, b, ones)
+                new_means[h].index_add_(0, b, x)
+
+        all_reduce_fn(bins)
+        all_reduce_fn(new_means)
+
+        zero = (bins == 0)
+        denom = bins.clamp_min(1).unsqueeze(-1)             # [H,K,1]
+        new_means = new_means / denom
+
+        # keep old center for empty bins
+        new_means = torch.where(zero.unsqueeze(-1), old_means, new_means)
+
+        if use_cosine_sim:
+            new_means = torch.nn.functional.normalize(new_means, p=2, dim=-1)
+
+        return new_means, bins
+
+    prev_means = None
+    for it in range(max_iters):
+        buckets = assign_pass(samples, means)                 # [H,N]
+        new_means, bins = update_pass(samples, buckets, K, means)
+        if tol > 0.0:
+            prev_means = means
+        means = new_means
+        if tol > 0.0:
+            shift = (means - prev_means).pow(2).sum(-1).sqrt().mean()
+            if float(shift) <= tol:
+                break
+
+    # final counts matched to final means
+    buckets = assign_pass(samples, means)
+    _, bins = update_pass(samples, buckets, K, means)
+
+    used_per_head = (bins > 0).sum(dim=1)
+
+    used_per_label = None
+    if element_names is not None:
+        if len(element_names) != H:
+            raise ValueError(f"element_names must have length H={H}, got {len(element_names)}")
+        used_per_label = {element_names[h]: int(used_per_head[h].item()) for h in range(H)}
+
+    return means, bins, used_per_head, used_per_label
+
+
+
+def compact_clusters(means: torch.Tensor, bins: torch.Tensor, pad_to_max: bool = True):
+    """
+    Filter out empty clusters head-by-head.
+
+    Args:
+        means: [H, K, D]
+        bins:  [H, K]
+        pad_to_max: if True, returns padded tensors [H, K_used_max, ...];
+                    if False, returns Python lists per head (ragged).
+
+    Returns:
+        If pad_to_max:
+            used_means:  [H, K_used_max, D]
+            used_bins:   [H, K_used_max]
+            used_mask:   [H, K] boolean (where original clusters were used)
+        Else:
+            used_means_list: list of H tensors with shapes [K_h, D]
+            used_bins_list:  list of H tensors with shapes [K_h]
+            used_mask:       [H, K] boolean
+    """
+    H, K, D = means.shape
+    used_mask = bins > 0
+
+    if not pad_to_max:
+        means_list, bins_list = [], []
+        for h in range(H):
+            m = means[h, used_mask[h]]
+            b = bins[h, used_mask[h]]
+            means_list.append(m)
+            bins_list.append(b)
+        return means_list, bins_list, used_mask
+
+    max_used = int(used_mask.sum(dim=1).max().item()) if H > 0 else 0
+    used_means = means.new_zeros((H, max_used, D))
+    used_bins = bins.new_zeros((H, max_used), dtype=bins.dtype)
+    for h in range(H):
+        idx = used_mask[h].nonzero(as_tuple=False).squeeze(-1)
+        k_h = idx.numel()
+        if k_h > 0:
+            used_means[h, :k_h] = means[h, idx]
+            used_bins[h, :k_h] = bins[h, idx]
+    return used_means, used_bins, used_mask
+
+
+def batched_embedding(indices, embed):
+    embed = embed.squeeze(0)              # (K, D)
+    indices = indices.view(-1).long()     # Ensure shape (B,) and dtype long
+    quantized = F.embedding(indices, embed)  # (B, D)
+    return quantized.unsqueeze(0)         # (1, B, D)
+
+
+import torch
+import torch.nn as nn
+
+
+class ContrastiveLoss(nn.Module):
+    def __init__(self, latent_dim, atom_feat_dim, margin=0.5, temperature=0.1, init_sigmoid_base=0.5):
+        super().__init__()
+        self.margin = nn.Parameter(torch.tensor(margin))
+        self.temperature = temperature
+        self.sigmoid_base = nn.Parameter(torch.tensor(init_sigmoid_base))
+        self.layer_norm_z = nn.LayerNorm(latent_dim)
+        self.layer_norm_atom = nn.LayerNorm(latent_dim)
+        args = get_args()
+        if args.dynamic_threshold:
+            self.use_dynamic_threshold = True
+        else:
+            self.use_dynamic_threshold = False
+
+    def sample_cap(self, t, max_n=200_000, with_replacement=False):
+        """
+        t: 1D/任意形状 Tensor（flattenして扱う場合は呼び出し側で調整）
+        max_n: 取り出す最大サンプル数
+        with_replacement: True なら重複あり（超省メモリ）
+        """
+        import torch
+        n = t.numel()
+        if n <= max_n:
+            return t
+
+        if with_replacement:
+            # 重複あり：最小メモリ（長さ max_n のみ確保）
+            idx = torch.randint(0, n, (max_n,), device=t.device)
+            return t[idx]
+
+        # 重複なし：GPU OOM回避のため CPU で randperm
+        idx_cpu = torch.randperm(n, device='cpu')[:max_n]
+        idx = idx_cpu.to(t.device, non_blocking=True)
+        return t[idx]
+
+    def forward(self, z, chunk, logger, codebook, key):
+        import torch
+        import torch.nn.functional as F
+
+        device = z.device
+        z = z.squeeze()
+        if z.dim() == 1:
+            z = z.unsqueeze(0)
+
+        B, D = z.shape
+        if B <= 1:
+            return 0, 0, 0, 0, 0
+
+        # ------------------------------------------------------------
+        # 0) NORMALIZATION SWITCH (make geometry consistent everywhere)
+        # ------------------------------------------------------------
+        use_unit_norm = bool(getattr(self, "repel_use_unit_norm", True))
+        # If you prefer to follow your VQ setting:
+        # use_unit_norm = bool(getattr(self, "use_cosine_sim", False))
+
+        if use_unit_norm:
+            # keep gradients; eps avoids NaNs when norm ~ 0
+            z_used = F.normalize(z, p=2, dim=-1, eps=1e-8)
+            cb_used = F.normalize(codebook, p=2, dim=-1, eps=1e-8) if codebook is not None else None
+        else:
+            z_used = z
+            cb_used = codebook
+
+        N = z_used.shape[0]
+
+        # ---- 0. Subsample for pdist to avoid O(N^2) explosion ----
+        max_pdist_points = int(getattr(self, "max_pdist_points", 4096))
+
+        if N > max_pdist_points:
+            perm = torch.randperm(N, device=device)
+            idx = perm[:max_pdist_points]
+            z_for_pdist = z_used.index_select(0, idx)
+        else:
+            z_for_pdist = z_used
+
+        # pairwise distances in the SAME geometry as everything else
+        pdist_z = torch.pdist(z_for_pdist, p=2)  # 1D
+
+        # （巨大時）サンプルを間引き
+        sample = pdist_z
+        if sample.numel() > 1_000_000:
+            sample = self.sample_cap(sample, max_n=200_000)
+
+        with torch.no_grad():
+            dynamic_threshold = torch.quantile(sample, 0.10)
+            lower_thresh = torch.quantile(sample, 0.25)
+            upper_thresh = torch.quantile(sample, 0.75)
+            center = (lower_thresh + upper_thresh) / 2
+
+        # ---- ログ（負荷・転送を抑えて）----
+        if chunk % 32 == 0:
+            with torch.no_grad():
+                s = sample
+                if s.numel() > 100_000:
+                    ridx = torch.randperm(s.numel(), device=s.device)[:100_000]
+                    s = s.index_select(0, ridx)
+                s_cpu = s.detach().to("cpu", dtype=torch.float32).flatten()
+                hist = torch.histc(s_cpu, bins=10, min=0.0, max=1.0)
+                vals = hist.tolist()
+                # logger.info(f"[VQ_REPEL_HIST] key={key} {vals}")
+
+        # ------------------------------------------------------------
+        # 1) latent repel (blockwise) in the SAME geometry
+        # ------------------------------------------------------------
+        def latent_repel_mid_chunked(
+            z_in,
+            low,
+            high,
+            center,
+            sigma=3.0,
+            sharp=20.0,
+            row_block=0,
+            col_block=0,
+            detach_weight=True,
+            use_checkpoint=True,
+            stream_backward=False,
+            eps=1e-8,
+        ):
+            import torch
+            import torch.utils.checkpoint as cp
+
+            if (not z_in.requires_grad) or (not z_in.is_leaf and z_in.grad_fn is None):
+                # encoder freeze / no_grad / detach のときは、この損失は意味がないので 0 にする
+                return z_in.new_zeros(())
+            assert not (use_checkpoint and stream_backward), \
+                "checkpoint と streaming backward は同時に使えません。"
+
+            B, D = z_in.shape
+            device, dtype = z_in.device, z_in.dtype
+
+            if self.training:
+                assert z_in.requires_grad, "INPUT ERROR: z.requires_grad=False"
+
+            band = float(abs(high - low))
+            sigma_val = max(1e-4, 0.20 * band)
+            sharp_val = float(sharp) if sharp is not None else 10.0
+
+            low_t = torch.as_tensor(low, device=device, dtype=dtype)
+            high_t = torch.as_tensor(high, device=device, dtype=dtype)
+            center_t = torch.as_tensor(center, device=device, dtype=dtype)
+            sigma_t = torch.as_tensor(sigma_val, device=device, dtype=dtype)
+
+            if row_block <= 0 or row_block > B:
+                row_block = B
+            if col_block <= 0 or col_block > B:
+                col_block = B
+
+            def count_blocks(B, rb, cb):
+                cnt = 0
+                i = 0
+                while i < B:
+                    j = i
+                    while j < B:
+                        cnt += 1
+                        j += cb
+                    i += rb
+                return max(cnt, 1)
+
+            n_blocks_total = count_blocks(B, row_block, col_block)
+
+            def block_loss(zi, zj, low_t, high_t, center_t, sigma_t):
+                if self.training:
+                    assert zi.requires_grad and zj.requires_grad
+
+                if zi.numel() == 0 or zj.numel() == 0:
+                    return zi.sum() * 0 + zj.sum() * 0
+
+                # IMPORTANT: do distances in float32 for stability
+                zi32 = zi.float()
+                zj32 = zj.float()
+
+                low32 = low_t.float()
+                high32 = high_t.float()
+                center32 = center_t.float()
+                sigma32 = torch.clamp(sigma_t.float(), min=1e-6)
+
+                d = torch.cdist(zi32, zj32, p=2)
+
+                mask = torch.triu(torch.ones_like(d, dtype=torch.bool), diagonal=1)
+                d = d[mask]
+                if d.numel() == 0:
+                    return zi.sum() * 0 + zj.sum() * 0
+
+                x1 = (sharp_val * (d - low32)).clamp(-40, 40)
+                x2 = (sharp_val * (high32 - d)).clamp(-40, 40)
+                w = torch.sigmoid(x1) * torch.sigmoid(x2)
+                if detach_weight:
+                    w = w.detach()
+
+                exp_arg = -((d - center32) ** 2) / (2 * sigma32 * sigma32)
+                exp_arg = exp_arg.clamp(-60, 0)
+                bell = torch.exp(exp_arg)
+
+                out = (w * bell).sum() / w.sum().clamp_min(eps)
+                out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+                if self.training:
+                    assert out.requires_grad
+                return out
+
+            def block_loss_ckpt(zi, zj, low_t, high_t, center_t, sigma_t):
+                return block_loss(zi, zj, low_t, high_t, center_t, sigma_t)
+
+            total = z_in.new_zeros(())
+            i = 0
+            while i < B:
+                bi = min(row_block, B - i)
+                zi = z_in[i:i + bi]
+
+                j = i
+                while j < B:
+                    bj = min(col_block, B - j)
+                    zj = z_in[j:j + bj]
+
+                    if use_checkpoint:
+                        lb = cp.checkpoint(
+                            block_loss_ckpt,
+                            zi, zj, low_t, high_t, center_t, sigma_t,
+                            use_reentrant=False,
+                        )
+                    else:
+                        lb = block_loss(zi, zj, low_t, high_t, center_t, sigma_t)
+
+                    total = total + lb
+                    j += col_block
+                i += row_block
+
+            out = total / n_blocks_total
+            if self.training:
+                assert out.requires_grad
+            return out
+
+        latent_repel_loss_mid = latent_repel_mid_chunked(
+            z_used,
+            low=lower_thresh, high=upper_thresh, center=center,
+            sigma=1.0, sharp=20.0,
+            row_block=1024, col_block=1024,
+            detach_weight=True,
+            use_checkpoint=True,
+            stream_backward=False,
+        )
+
+        # ------------------------------------------------------------
+        # 2) codebook repel (recommend normalize if use_unit_norm)
+        # ------------------------------------------------------------
+        def repel_codebooks_chunked(cb, sigma=1.0, block=4096):
+            """
+            cb: [K, D]
+            returns avg exp(-d^2/(2*sigma^2)) over all pairs
+            """
+            K = cb.size(0)
+            sum_val = cb.new_zeros(())
+            cnt = 0
+
+            for i in range(0, K, block):
+                ci = cb[i:i + block]
+
+                if ci.size(0) >= 2:
+                    dij = torch.pdist(ci.float(), p=2)
+                    if dij.numel() > 0:
+                        li = torch.exp(-dij.pow(2) / (2 * sigma ** 2))
+                        sum_val = sum_val + li.sum()
+                        cnt += li.numel()
+                    del dij
+
+                for j in range(i + block, K, block):
+                    cj = cb[j:j + block]
+                    if ci.numel() > 0 and cj.numel() > 0:
+                        d = torch.cdist(ci.float(), cj.float(), p=2)
+                        lj = torch.exp(-d.pow(2) / (2 * sigma ** 2))
+                        sum_val = sum_val + lj.sum()
+                        cnt += lj.numel()
+                        del d, lj
+                    del cj
+                del ci
+
+            if cnt == 0:
+                return sum_val
+            return sum_val / cnt
+
+        cb_loss = repel_codebooks_chunked(cb_used) if cb_used is not None else z_used.new_zeros(())
+
+        # ------------------------------------------------------------
+        # 3) auxiliary terms (same geometry)
+        # ------------------------------------------------------------
+        repel_from_2 = torch.exp(- (pdist_z - 2.0) ** 2 / (2 * 3.0 ** 2)).mean()
+
+        def repel_from_zero_1d(d, margin):
+            return torch.relu(margin - d).mean()
+
+        latent_repel_loss = repel_from_zero_1d(pdist_z, lower_thresh) + cb_loss
+
+        repel_weight = 1.0
+        final_loss = repel_weight * latent_repel_loss_mid
+        neg_loss = z.new_tensor(1.0)
+
+        return final_loss, neg_loss, repel_from_2, cb_loss, latent_repel_loss
+
+
+import torch.nn.functional as F
+
+import torch
+import torch.nn as nn
+from einops import rearrange
+
+# 必要なら
+# from utils import CORE_ELEMENTS
+# from your_kmeans_module import kmeans
+# from your_sampling_module import batched_sample_vectors, sample_vectors_distributed
+# from your_distributed_module import distributed, noop
+# from your_config_module import get_args
+# from your_cb_dict import CBDICT
+
+import re
+import torch
+import torch.nn as nn
+from einops import rearrange
+
+class EuclideanCodebook(nn.Module):
+    def __init__(
+        self,
+        dim,
+        codebook_size,
+        num_codebooks=1,
+        kmeans_init=True,
+        kmeans_iters=100,
+        sync_kmeans=True,
+        decay=0.1,
+        eps=1e-5,
+        threshold_ema_dead_code=2,
+        use_ddp=False,
+        learnable_codebook=False,
+        sample_codebook_temp=0,
+    ):
+        super().__init__()
+
+        self.decay = float(decay)
+        self.codebook_size = codebook_size
+        self.num_codebooks = num_codebooks
+        self.eps = eps
+        self.threshold_ema_dead_code = threshold_ema_dead_code
+        self.sample_codebook_temp = sample_codebook_temp
+
+        args = get_args()
+        self.epoch_at_mode_shift = args.epoch_at_mode_shift
+        self.train_or_infer = args.train_or_infer
+        self.use_checkpoint = args.use_checkpoint
+
+        self.cb_dict = CBDICT  # {element_key(str or int): K_e}
+
+        assert not (
+            use_ddp and num_codebooks > 1 and kmeans_init
+        ), "kmeans init is not compatible with multiple codebooks in distributed environment for now"
+
+        self.sample_fn = (
+            sample_vectors_distributed if use_ddp and sync_kmeans else batched_sample_vectors
+        )
+        self.kmeans_all_reduce_fn = (
+            distributed.all_reduce if use_ddp and sync_kmeans else noop
+        )
+        self.all_reduce_fn = distributed.all_reduce if use_ddp else noop
+
+        # kmeans 済みかどうか
+        self.register_buffer("initted", torch.tensor([not kmeans_init], dtype=torch.bool))
+
+        # --- cluster_size / embed_avg (float32 固定) ---
+        for elem in self.cb_dict.keys():
+            K_e = int(self.cb_dict[elem])
+            elem_str = str(elem)
+            self.register_buffer(
+                f"cluster_size_{elem_str}",
+                torch.zeros(K_e, dtype=torch.float32),
+            )
+            self.register_buffer(
+                f"embed_avg_{elem_str}",
+                torch.zeros(K_e, dim, dtype=torch.float32),
+            )
+
+        self.learnable_codebook = learnable_codebook
+
+        # element ごとのコードブック本体（ParameterDict のキーは「安全キー」に変換）
+        self.embed = nn.ParameterDict()
+        self.key_to_safe = {}  # original_key(str) -> safe_key(str)
+        self.safe_to_key = {}  # safe_key(str) -> original_key(str)
+
+        for key in self.cb_dict.keys():
+            orig = str(key)
+            K_e = int(self.cb_dict[key])
+            safe = self._get_or_create_safe_key(orig, K_e, dim, device="cpu")
+        self.ss_max_total_latent_count = args.ss_max_total_latent_count
+        self.latent_size_sum = 0
+        self.embed_ind_dict = {}
+        self.quantize_dict = {}
+
+    # ------------------------------------------------------------------
+    # key まわりのユーティリティ
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _safe_key(k: str) -> str:
+        """ParameterDict 用の安全なキーに変換（属性名として有効な文字列）。"""
+        s = re.sub(r"[^0-9A-Za-z_]", "_", k)
+        if not s or not (s[0].isalpha() or s[0] == "_"):
+            s = "k_" + s
+        return s
+
+    def ensure_from_state_dict(self, state_dict, prefix: str = ""):
+        """
+        state_dict に含まれる codebook 関連の buffer/parameter を事前に登録して、
+        load_state_dict(strict=True) が通るようにする。
+
+        prefix 例:
+          - model 側で呼ぶなら: prefix="vq._codebook."
+          - EuclideanCodebook 自身に渡すなら: prefix=""（推奨）
+        """
+        import torch
+        import re
+        from torch import nn
+
+        # 1) cluster_size_*, embed_avg_* から orig key を拾って buffers を作る
+        cs_pat = re.compile(rf"^{re.escape(prefix)}cluster_size_(.+)$")
+        ea_pat = re.compile(rf"^{re.escape(prefix)}embed_avg_(.+)$")
+
+        # まず embed_avg の D を拾いやすいので embed_avg を優先
+        for k, v in state_dict.items():
+            m = ea_pat.match(k)
+            if not m:
+                continue
+            orig = m.group(1)  # 例: "6_-1_3_0_0_0"
+            if not torch.is_tensor(v):
+                continue
+            K, D = int(v.shape[0]), int(v.shape[1])
+
+            # buffers (orig 名)
+            buf_cs = f"cluster_size_{orig}"
+            buf_ea = f"embed_avg_{orig}"
+
+            if not hasattr(self, buf_cs):
+                self.register_buffer(buf_cs, torch.zeros((K,), dtype=torch.float32))
+            if not hasattr(self, buf_ea):
+                self.register_buffer(buf_ea, torch.zeros((K, D), dtype=torch.float32))
+
+            # embed parameter (safe 名)
+            safe = self._get_or_create_safe_key(orig, K_e=K, D=D, device="cpu")
+            # ここで self.embed[safe] が無ければ作られる
+
+        # embed_avg が無いケース向けに cluster_size だけでも拾う
+        for k, v in state_dict.items():
+            m = cs_pat.match(k)
+            if not m:
+                continue
+            orig = m.group(1)
+            if not torch.is_tensor(v):
+                continue
+            K = int(v.shape[0])
+
+            buf_cs = f"cluster_size_{orig}"
+            if not hasattr(self, buf_cs):
+                self.register_buffer(buf_cs, torch.zeros((K,), dtype=torch.float32))
+
+            # embed_avg が state に無い場合、D が不明なので embed はここでは作らない
+            # （embed 側 key が state にあれば後段で作れる）
+
+        # 2) embed.<safe> から safe key を拾って足りない Parameter を作る
+        #    （orig が逆引きできない場合もあるので、とりあえず safe=orig 扱いで作る）
+        emb_pat = re.compile(rf"^{re.escape(prefix)}embed\.(.+)$")
+        for k, v in state_dict.items():
+            m = emb_pat.match(k)
+            if not m:
+                continue
+            safe = m.group(1)  # 例: "k_6__1_3_0_0_0"
+            if not torch.is_tensor(v):
+                continue
+
+            # v の shape は [K, D] を想定（あなたの実装）
+            if v.ndim != 2:
+                continue
+            K, D = int(v.shape[0]), int(v.shape[1])
+
+            # safe をすでに持っていなければ Parameter を作る
+            if safe not in self.embed:
+                init = torch.randn((K, D), device="cpu") * 0.01
+                self.embed[safe] = nn.Parameter(init, requires_grad=True)
+
+            # mapping も最低限埋める（orig が分からなければ safe を orig 扱いに）
+            if safe not in self.safe_to_key:
+                self.safe_to_key[safe] = safe
+            if self.safe_to_key[safe] not in self.key_to_safe:
+                self.key_to_safe[self.safe_to_key[safe]] = safe
+
+    def _get_or_create_safe_key(self, skey: str, K_e=None, D=None, device=None) -> str:
+        """
+        original key (skey) から safe_key を取得。
+        必要なら Parameter を作成（K_e, D, device が与えられている場合）。
+        """
+        skey = str(skey)
+        if skey in self.key_to_safe:
+            safe = self.key_to_safe[skey]
+        else:
+            safe = self._safe_key(skey)
+            self.key_to_safe[skey] = safe
+            self.safe_to_key[safe] = skey
+
+        if safe not in self.embed and K_e is not None and D is not None and device is not None:
+            init = torch.randn(K_e, D, device=device) * 0.01
+            self.embed[safe] = nn.Parameter(init, requires_grad=True)
+
+        return safe
+
+    # ------------------------------------------------------------------
+    # ユーティリティ / 初期化系
+    # ------------------------------------------------------------------
+    def reset_kmeans(self):
+        self.initted.data.fill_(False)
+
+    def copy_codebook_(self, embed: torch.Tensor, init: torch.Tensor, fill="data", data=None):
+        """
+        embed: [K, D] or [D, K] current codebook
+        init : [K_used, D] or [D, K_used] initializer
+        fill : "data" | "repeat" | "randn"
+        data : [N, D] latents to sample from if fill=="data"
+        """
+        def to_KD(t, D_expected):
+            if t.shape[-1] == D_expected:
+                return t  # [K_used, D]
+            if t.shape[0] == D_expected:
+                return t.t().contiguous()
+            raise ValueError(f"init shape {tuple(t.shape)} not compatible with D={D_expected}")
+
+        if embed.shape[-1] < embed.shape[0]:  # [K, D] とみなす
+            K, D = embed.shape
+            initKD = to_KD(init, D)
+            K_used = initKD.shape[0]
+            n = min(K, K_used)
+            embed[:n].copy_(initKD[:n])
+
+            if K > n:
+                if fill == "data" and data is not None and data.numel() > 0:
+                    idx = torch.randint(0, data.size(0), (K - n,), device=embed.device)
+                    embed[n:K].copy_(data[idx])
+                elif fill == "repeat" and n > 0:
+                    reps = (K - n + n - 1) // n
+                    embed[n:K].copy_(initKD[:n].repeat((reps, 1))[: K - n])
+                elif fill == "randn":
+                    embed[n:K].normal_(0, 1e-3)
+                else:
+                    embed[n:K].copy_(embed[:1])
+        else:  # [D, K]
+            D, K = embed.shape
+            initKD = to_KD(init, D)
+            initDK = initKD.t().contiguous()  # [D, K_used]
+            n = min(K, initDK.shape[1])
+            embed[:, :n].copy_(initDK[:, :n])
+            if K > n:
+                if fill == "randn":
+                    embed[:, n:K].normal_(0, 1e-3)
+                else:
+                    embed[:, n:K].copy_(embed[:, :1])
+
+
+    @staticmethod
+    def silhouette_score_torch(
+        X,
+        labels,
+        row_block: int = 8192,
+        device: str | torch.device | None = None,
+    ) -> float:
+        """
+        Compute Silhouette score in (mini)blocks, on GPU if available.
+
+        Parameters
+        ----------
+        X : Tensor or nn.Module or nn.ParameterDict
+            - Tensor: shape [N, D]
+            - nn.Module: must have `.weight` or `.embed` tensor
+            - nn.ParameterDict: values are [K, D] parameters → concatenated to [N, D]
+        labels : Tensor
+            Cluster labels of shape [N] (int).
+        row_block : int
+            Block size along N for pairwise distance computation.
+        device : str or torch.device or None
+            Target device. If None: "cuda" if available else "cpu".
+        """
+
+        # ---- 0. 正しいテンソル X を取り出す ------------------------------------
+        # ParameterDict (or類似) の場合：中身を縦に concat
+        if isinstance(X, nn.ParameterDict):
+            # 各 value が [K, D] を想定
+            X = torch.cat([p.view(p.shape[0], -1) for p in X.values()], dim=0)  # [N, D]
+
+        # nn.Module の場合：.embed または .weight を拾う
+        elif isinstance(X, nn.Module):
+            weight = getattr(X, "weight", None)
+            embed = getattr(X, "embed", None)
+            if embed is not None:
+                X = embed
+            elif weight is not None:
+                X = weight
+            else:
+                raise TypeError("X is a module without .embed/.weight tensor.")
+
+        # ここまで来たら X は Tensor のはず
+        if not torch.is_tensor(X):
+            raise TypeError(
+                f"X must be a Tensor or Module/ParameterDict of Tensors, but got {type(X)}"
+            )
+
+        # ---- 1. デバイス決定 & 型整形 -----------------------------------------
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        # X: float32, labels: long に統一
+        X = X.detach().to(device=device, dtype=torch.float32, non_blocking=True)
+        labels = labels.detach().to(device=device, dtype=torch.long, non_blocking=True)
+
+        # 余計な次元を削る (e.g. [N, D, 1] → [N, D])
+        X = X.squeeze()
+        labels = labels.squeeze()
+
+        # N チェック
+        if X.ndim == 1:
+            X = X.unsqueeze(1)  # [N] → [N, 1]
+
+        N = X.shape[0]
+        if N <= 1:
+            return 0.0
+
+        # ---- 2. ラベルを 0..K-1 にリマップ（空クラスタがあっても無視される） ----
+        uniq, inv = labels.unique(sorted=True, return_inverse=True)  # inv: [N] in 0..K-1
+        K = uniq.numel()
+        if K <= 1:
+            return 0.0
+
+        counts = torch.bincount(inv, minlength=K).to(device)  # >0 by construction
+        counts_f = counts.float()
+
+        # ---- 3. ブロック毎に Silhouette を計算 --------------------------------
+        sil_sum = 0.0
+        processed = 0
+
+        for start in range(0, N, row_block):
+            end = min(start + row_block, N)
+            B = end - start
+
+            # このブロックのサンプル
+            Xb = X[start:end]  # [B, D]
+
+            # [B, N] の距離行列
+            d_block = torch.cdist(Xb, X, p=2)  # Euclid
+
+            # クラスタごとの距離総和を計算
+            inv_index = inv.view(1, N).expand(B, N)  # [B, N]
+            sums_per_cluster = torch.zeros(B, K, device=device, dtype=d_block.dtype)
+            sums_per_cluster.scatter_add_(1, inv_index, d_block)  # [B, K]
+
+            # クラスタごとの平均距離
+            means_per_cluster = sums_per_cluster / counts_f.view(1, K)  # [B, K]
+
+            # ----- a(i): 同じクラスタ内の平均距離（自分自身を除外） -------------
+            k_block = inv[start:end]  # [B]
+            a_counts = counts[k_block] - 1  # 自分自身を除いた個数
+
+            # とりあえず "含自分" の平均距離
+            a_mean = means_per_cluster.gather(1, k_block[:, None]).squeeze(1)  # [B]
+
+            # クラスタサイズが 1 の場合は 0、>1 の場合だけ補正係数を載せる
+            scale = torch.zeros_like(a_counts, dtype=a_mean.dtype)
+            mask_gt1 = a_counts > 0
+            if mask_gt1.any():
+                # n / (n - 1) で「自分自身 (距離0) を除いた平均」に補正
+                n = counts[k_block][mask_gt1].float()
+                scale[mask_gt1] = n / (n - 1.0)
+            a_i = a_mean * scale  # [B]; クラスタサイズ 1 のものは 0 のまま
+
+            # ----- b(i): 他クラスタの平均距離の最小値 ---------------------------
+            # 自分のクラスタの列は無限大にして除外
+            means_per_cluster.scatter_(1, k_block[:, None], float("inf"))
+            b_i, _ = means_per_cluster.min(dim=1)  # [B]
+
+            # ----- Silhouette: (b - a) / max(a, b) -------------------------------
+            denom = torch.maximum(a_i, b_i)
+            sil_block = (b_i - a_i) / denom
+            sil_block = torch.nan_to_num(
+                sil_block, nan=0.0, posinf=0.0, neginf=0.0
+            )
+
+            sil_sum += sil_block.sum().item()
+            processed += B
+
+            # メモリ解放
+            del Xb, d_block, sums_per_cluster, means_per_cluster, a_mean, a_i, b_i, sil_block
+
+        return float(sil_sum / max(processed, 1))
+
+    import math
+    import torch
+
+    @torch.jit.ignore
+    def compute_cluster_metrics(self, y: torch.Tensor, K_req: int = None, topk: int = 5):
+        """
+        y: int64 labels, shape [N] (already compressed to 0..nuniq-1 recommended)
+        Returns:
+          N, K_req, K_eff, max_frac, topk_frac, entropy, perplexity,
+          singleton_ratio (clusters), singleton_point_ratio (points)
+        """
+        # y must be 1D long
+        if y is None or y.numel() == 0:
+            return {
+                "N": 0,
+                "K_req": int(K_req) if K_req is not None else None,
+                "K_eff": 0,
+                "max_frac": 0.0,
+                "topk_frac": 0.0,
+                "entropy": 0.0,
+                "perplexity": 1.0,
+                "singleton_ratio": 0.0,
+                "singleton_point_ratio": 0.0,
+            }
+
+        y = y.long().view(-1)
+        N = int(y.numel())
+
+        # compress labels to 0..nuniq-1 (robust even if already compressed)
+        _, y = torch.unique(y, return_inverse=True)
+
+        bc = torch.bincount(y)  # shape [nuniq]
+        nz_mask = (bc > 0)
+        bc_nz = bc[nz_mask]
+        K_eff = int(bc_nz.numel())
+
+        # fractions
+        bc_float = bc_nz.float()
+        denom = float(max(1, N))
+        p = (bc_float / denom).clamp_min(0.0)  # sum to 1 over active clusters
+
+        # max_frac
+        max_frac = float(p.max().item()) if K_eff > 0 else 0.0
+
+        # topk_frac
+        k = int(min(max(1, topk), K_eff)) if K_eff > 0 else 1
+        if K_eff > 0:
+            topk_vals = torch.topk(p, k=k, largest=True).values
+            topk_frac = float(topk_vals.sum().item())
+        else:
+            topk_frac = 0.0
+
+        # entropy (natural log) and perplexity
+        # H = -sum p log p
+        # perplexity = exp(H)
+        import math
+        if K_eff > 0:
+            H = float((-(p * torch.log(p.clamp_min(1e-12))).sum()).item())
+            ppl = float(math.exp(H))
+        else:
+            H, ppl = 0.0, 1.0
+
+        # singleton ratios
+        singletons = (bc_nz == 1).sum()
+        singleton_ratio = float((singletons.float() / max(1.0, float(K_eff))).item())  # clusters
+        singleton_point_ratio = float((bc_nz[bc_nz == 1].sum().float() / denom).item())  # points
+
+        out = {
+            "N": N,
+            "K_req": int(K_req) if K_req is not None else None,
+            "K_eff": K_eff,
+            "max_frac": max_frac,
+            "topk_frac": topk_frac,
+            "entropy": H,
+            "perplexity": ppl,
+            "singleton_ratio": singleton_ratio,
+            "singleton_point_ratio": singleton_point_ratio,
+        }
+        return out
+
+    @torch.jit.ignore
+    def init_embed_(self, data, logger, epoch, mask_dict=None, use_cosine_sim: bool = False):
+        """
+        Initialize per-element codebooks (absolute K from self.cb_dict).
+
+        Option A alignment:
+          - store centers as unit-norm at init
+          - init EMA buffers consistent with unit-norm centers
+          - cluster metrics computed in the same unit-norm space (cosine assignment)
+        """
+        import os
+        import torch
+        import torch.nn as nn
+
+        assert mask_dict is not None, "mask_dict is required"
+        device = data.device
+        D = int(data.shape[-1])
+
+        # -------------------------
+        # helpers
+        # -------------------------
+        def _get_from_dict(d, k):
+            if k in d:
+                return d[k]
+            return d.get(str(k), None)
+
+        def _get_absK(d, k):
+            v = _get_from_dict(d, k)
+            return None if v is None else int(v)
+
+        def _safe_l2norm(t: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+            den = t.norm(dim=-1, keepdim=True).clamp_min(eps)
+            t = t / den
+            return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+
+        def _stats(x_nd: torch.Tensor):
+            """Robust data stats for padding. Returns (mu, sigma) or None."""
+            if x_nd is None or x_nd.numel() == 0:
+                return None
+            mu = x_nd.mean(dim=0)
+            with torch.no_grad():
+                devv = (x_nd - mu).pow(2).sum(dim=1).sqrt()
+                sigma = torch.quantile(devv, 0.5)
+            return (mu, sigma)
+
+        def _pad_to_K(means_1kd, counts_1k, K_req: int, data_stats=None):
+            """
+            means_1kd: [1, K_run, D]
+            counts_1k: [1, K_run]
+            return:
+              means_kd: [K_req, D]
+              counts_k: [K_req]
+            """
+            H, K_run, Dd = means_1kd.shape
+            assert H == 1 and Dd == D
+
+            means_kd = means_1kd[0]  # (K_run, D)
+            counts_k = counts_1k[0]  # (K_run,)
+
+            if K_req <= K_run:
+                return means_kd[:K_req].contiguous(), counts_k[:K_req].contiguous()
+
+            K_pad = K_req - K_run
+            out_means = torch.empty((K_req, D), device=means_kd.device, dtype=means_kd.dtype)
+            out_counts = torch.zeros((K_req,), device=counts_k.device, dtype=counts_k.dtype)
+
+            out_means[:K_run].copy_(means_kd)
+            out_counts[:K_run].copy_(counts_k)
+
+            if data_stats is not None:
+                mu, sigma = data_stats
+                noise = torch.randn((K_pad, D), device=means_kd.device, dtype=means_kd.dtype) * (0.01 * sigma + 1e-6)
+                out_means[K_run:] = mu + noise
+            else:
+                out_means[K_run:].zero_()
+
+            return out_means, out_counts
+
+        def _ensure_param(safe: str, shape):
+            """Ensure self.embed[safe] exists with exact shape (recreate if mismatch)."""
+            if (safe not in self.embed) or (tuple(self.embed[safe].shape) != tuple(shape)):
+                self.embed[safe] = nn.Parameter(
+                    torch.zeros(shape, device=device, dtype=torch.float32),
+                    requires_grad=True,
+                )
+
+        def _safe_var_mean(x: torch.Tensor):
+            """Mean variance over dim=0, never NaN for N==1."""
+            if x is None or x.numel() == 0:
+                return float("nan")
+            if x.shape[0] < 2:
+                return 0.0
+            return x.float().var(dim=0, correction=0).mean().item()
+
+        def _safe_std_1d(x: torch.Tensor):
+            """Std over a 1D tensor, never NaN for len==1."""
+            if x is None or x.numel() == 0:
+                return float("nan")
+            if x.numel() < 2:
+                return 0.0
+            return x.float().std(correction=0).item()
+
+        # -------------------------
+        # main loop
+        # -------------------------
+        for raw_key in sorted(mask_dict.keys(), key=lambda x: str(x)):
+            skey = str(raw_key)
+
+            idx = _get_from_dict(mask_dict, raw_key)
+            if idx is None:
+                idx = _get_from_dict(mask_dict, skey)
+            if idx is None:
+                continue
+
+            masked = data[0][idx]  # (N_i, D)
+            N_i = int(masked.shape[0])
+            if N_i == 0:
+                continue
+
+            # optional dump for UMAP/debug
+            if skey == "6_0_3_1_1_0":
+                os.makedirs("dumps", exist_ok=True)
+                path = f"dumps/masked_latents_epoch{epoch}_{skey}.pt"
+                torch.save(
+                    {
+                        "epoch": int(epoch) if epoch is not None else None,
+                        "key": skey,
+                        "masked_latents": masked.detach().to("cpu", dtype=torch.float16),
+                        "N": int(masked.shape[0]),
+                        "D": int(masked.shape[1]),
+                    },
+                    path,
+                )
+
+            # K settings
+            K_req = _get_absK(self.cb_dict, skey)
+            if K_req is None or K_req <= 0:
+                K_req = 1
+            K_run = min(K_req, N_i)
+
+            # safe key and buffer names
+            safe = self._get_or_create_safe_key(skey, K_req, D, device=device)
+            buf_name_cs = f"cluster_size_{skey}"
+            buf_name_ea = f"embed_avg_{skey}"
+
+            # -------------------------
+            # 1) Initialize ONLY at epoch 1
+            #    epoch>1: if missing -> hard error
+            # -------------------------
+            missing_param = (safe not in self.embed)
+            missing_bufs = (not hasattr(self, buf_name_cs)) or (not hasattr(self, buf_name_ea))
+
+            if epoch == 1:
+                need_init = True
+            else:
+                if missing_param or missing_bufs:
+                    raise RuntimeError(
+                        f"[init_embed_] missing at epoch={epoch} key={skey} "
+                        f"missing_param={missing_param} missing_bufs={missing_bufs} safe={safe}"
+                    )
+                need_init = False
+
+            if need_init:
+                samples = masked.to(device).float()
+                samples = torch.nn.functional.normalize(samples, dim=-1)  # <-- force L2=1
+                norms = samples.norm(dim=-1)
+                print("post_norm mean/std:", norms.mean().item(), norms.std().item())
+
+                # and pass samples.unsqueeze(0) into kmeans
+                print(
+                    f"[KMEANS-CALL] epoch={epoch} skey={skey} use_cosine_sim={use_cosine_sim} "
+                    f"samples_norm_mean={norms.mean().item():.4f} "
+                    f"samples_norm_std={_safe_std_1d(norms.reshape(-1)):.4f} "
+                    f"samples_var={samples.float().var(dim=-1, correction=0).mean().item():.4e}"
+                )
+
+                means_1kd, counts_1k, *_ = kmeans(
+                    masked.unsqueeze(0).to(device),
+                    num_clusters=K_run,
+                    use_cosine_sim=use_cosine_sim,
+                )
+
+                ds = _stats(masked)
+                means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=ds)
+
+                # -------------------------
+                # Option A: normalize centers at init (CRITICAL)
+                # -------------------------
+                means_kd = _safe_l2norm(means_kd.detach().to(device=device, dtype=torch.float32))
+
+                # ensure parameter exists with correct shape, then copy
+                _ensure_param(safe, (K_req, D))
+                self.embed[safe].data.copy_(means_kd.to(device=device, dtype=self.embed[safe].dtype))
+
+                # init EMA buffers (float32): ea consistent with normalized means
+                cs = counts_k.to(device=device, dtype=torch.float32)  # (K_req,)
+                ea = means_kd.to(device=device, dtype=torch.float32) * cs.view(-1, 1)  # (K_req, D)
+
+                # replace buffers safely
+                if hasattr(self, buf_name_cs):
+                    delattr(self, buf_name_cs)
+                if hasattr(self, buf_name_ea):
+                    delattr(self, buf_name_ea)
+                self.register_buffer(buf_name_cs, cs)
+                self.register_buffer(buf_name_ea, ea)
+
+                nz = int((cs > 0).sum().item())
+                logger.info(f"[init_embed_] Z={skey} N={N_i} K_req={K_req} K_run={K_run} K_used={nz}/{K_req}")
+
+            # -------------------------
+            # 2) Cluster metrics every epoch (Option A-consistent)
+            # -------------------------
+            with torch.no_grad():
+                centers_clst = self.embed[safe].detach()  # (K_req, D)
+
+                # active count is just for logging/diagnostics
+                cs_now = getattr(self, buf_name_cs, None)
+                active = (cs_now > 0) if cs_now is not None else None
+                K_active = int(active.sum().item()) if active is not None else -1
+
+                max_n = int(getattr(self, "clst_max_n", 20000))
+
+                # subsample X first (avoid full argmin on huge N)
+                if masked.shape[0] > max_n:
+                    perm = torch.randperm(masked.shape[0], device=masked.device)[:max_n]
+                    x_eval = masked[perm]
+                else:
+                    x_eval = masked
+
+                # Option A: normalize BOTH before argmax_sim
+                x_eval_n = _safe_l2norm(x_eval.float())
+                c_n = _safe_l2norm(centers_clst.float())
+
+                # diagnostics
+                def diag(tag: str, X: torch.Tensor, centers: torch.Tensor):
+                    cn = centers.float().norm(dim=-1)
+                    print(
+                        f"[DIAG]{tag} "
+                        f"X shape={tuple(X.shape)} centers shape={tuple(centers.shape)} "
+                        f"X finite={torch.isfinite(X).all().item()} "
+                        f"C finite={torch.isfinite(centers).all().item()} "
+                        f"X var={_safe_var_mean(X):.3e} "
+                        f"C var={_safe_var_mean(centers):.3e} "
+                        f"C mean-norm={cn.mean().item():.3e} "
+                        f"C std-norm={_safe_std_1d(cn):.3e}"
+                    )
+
+                diag(" clst", x_eval_n, c_n)
+
+                # assign labels using ALL centers (K_req) in unit-norm space
+                y_eval = self.argmax_sim_blockwise(x_eval_n, c_n, k_block=1024)
+
+                # compute metrics from labels only
+                metrics = self.compute_cluster_metrics(y_eval, K_req=K_req, topk=5)
+
+                logger.info(
+                    f"[CLST] key={skey} epoch={epoch} "
+                    f"N={metrics['N']} K_req={metrics['K_req']} K_eff={metrics['K_eff']} "
+                    f"max_frac={metrics['max_frac']:.4f} top5_frac={metrics['topk_frac']:.4f} "
+                    f"H={metrics['entropy']:.4f} ppl={metrics['perplexity']:.2f} "
+                    f"singleton_ratio={metrics['singleton_ratio']:.4f} "
+                    f"singleton_point_ratio={metrics['singleton_point_ratio']:.4f} "
+                    f"(K_active={K_active})"
+                )
+
+    def _normalize_mask_dict(self, mask_dict, device=None):
+        import numpy as np
+
+        if mask_dict is None:
+            return None
+        norm = {}
+        for k, v in mask_dict.items():
+            k_int = int(k) if isinstance(k, str) and k.isdigit() else k
+            k_str = str(k_int)
+
+            if isinstance(v, (list, tuple, np.ndarray)):
+                v = torch.as_tensor(v, dtype=torch.long, device=device)
+            elif isinstance(v, torch.Tensor) and v.dtype == torch.bool:
+                v = torch.nonzero(v.flatten(), as_tuple=False).flatten().long().to(device)
+
+            norm[k_int] = v
+            norm[k_str] = v
+        return norm
+
+    import torch
+
+    import torch
+    import torch.nn.functional as F
+
+    @torch.no_grad()
+    def argmax_sim_blockwise(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024, eps: float = 1e-12):
+        """
+        x:    [N, D]
+        code: [K, D]
+        return best_idx: [N]  (argmax dot similarity)
+
+        A方針なら、呼び出し側で x/code を unit-norm に揃えるのが基本。
+        ただし安全のためここでも正規化オプションを入れたいなら後述。
+        """
+        x_f = x.float()
+        c_f = code.float()
+
+        # 早期診断（必要ならコメントアウト）
+        if not torch.isfinite(x_f).all():
+            bad = (~torch.isfinite(x_f)).sum().item()
+            print(f"[argmax] non-finite x: {bad}")
+        if not torch.isfinite(c_f).all():
+            bad = (~torch.isfinite(c_f)).sum().item()
+            print(f"[argmax] non-finite code: {bad}")
+
+        # 念のため：ゼロノルムがあると dot が全部0になったりするのでチェック
+        # （Aなら本来あり得ないはず）
+        x_norm = x_f.norm(dim=1)
+        c_norm = c_f.norm(dim=1)
+        if (x_norm <= 0).any():
+            print(f"[argmax] WARNING: {(x_norm <= 0).sum().item()} zero-norm x rows.")
+        if (c_norm <= 0).any():
+            print(f"[argmax] WARNING: {(c_norm <= 0).sum().item()} zero-norm code rows.")
+
+        best_val = torch.full((x_f.size(0),), -float("inf"), device=x.device, dtype=torch.float32)
+        best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
+
+        K = c_f.size(0)
+        for k0 in range(0, K, k_block):
+            k1 = min(k0 + k_block, K)
+            ck = c_f[k0:k1]  # [kb, D]
+
+            sims = x_f @ ck.t()  # [N, kb]
+
+            # ★ NaN/Inf を潰す：NaNは -inf、inf はそのままでもいいが、保守的に posinfも大きくしてOK
+            sims = torch.nan_to_num(sims, nan=-float("inf"), posinf=float("inf"), neginf=-float("inf"))
+
+            vals, idxs = sims.max(dim=1)
+
+            update = vals > best_val
+            best_val = torch.where(update, vals, best_val)
+            best_idx = torch.where(update, idxs + k0, best_idx)
+
+        if torch.isneginf(best_val).any():
+            n_bad = torch.isneginf(best_val).sum().item()
+            print(f"[argmax] WARNING: {n_bad} points never updated (all sims non-finite).")
+
+        return best_idx
+
+    # @torch.no_grad()
+    # def split_the_winner_ema(
+    #         self,
+    #         embed,  # (K, D)  centers tensor (writeable view)
+    #         ema_sum,  # (K, D)  EMA sum of assigned latents (same shape as embed)
+    #         ema_count,  # (K,)    EMA count
+    #         usage_ema,  # (K,)    EMA usage (for split decision)
+    #         batch_counts,  # (K,)    batch histogram (float)
+    #         batch_counts2,
+    #         split_thr=0.15,
+    #         prune_src_thr=0.005,  # prefer donor codes with p < this
+    #         noise_scale=0.02,
+    #         cooldown=None,  # (K,) int/long buffer
+    #         cooldown_steps=2000,
+    #         eps=1e-8,
+    # ):
+
+    import torch
+
+    @torch.no_grad()
+    def split_the_winner_ema(
+            self,
+            *,
+            embed,  # (K,D)  <-- IMPORTANT: MEANS view, writable
+            ema_sum,  # (K,D)  <-- EMA SUM buffer (embed_avg_*), writable
+            ema_count,  # (K,)   <-- EMA COUNT buffer (cluster_size_*), writable
+            usage_ema,  # (K,)   <-- usage EMA (already updated outside), writable
+            batch_counts,  # (K,)   <-- current minibatch histogram (float)
+            batch_counts2=None,  # unused
+            # PCA-guided split inputs (per-key, per-minibatch)
+            X_batch=None,  # (N_i, D) latents for THIS key in THIS minibatch
+            assign=None,  # (N_i,) hard assignment in [0..K-1] for THIS key
+            split_thr=0.15,
+            prune_src_thr=0.005,
+            noise_scale=0.02,
+            cooldown=None,  # (K,) long (or int), optional
+            cooldown_steps=2000,
+            eps=1e-8,
+            min_points=32,  # PCA needs enough points
+            pca_power=0.5,  # step ~ pca_power * std along top PC
+            fallback_to_noise=True,
+    ):
+        """
+        Split-the-winner (PCA-guided) that **persists** under EMA recomputation.
+
+        Contract:
+          - `embed` is interpreted as MEANS (centers): embed[k] = ema_sum[k] / (ema_count[k] + eps)
+          - This function updates BOTH:
+              (A) embed[winner], embed[donor]  (means)
+              (B) ema_sum / ema_count         so next `means = ema_sum/ema_count` preserves the split
+              (C) usage_ema                   split 50/50 so donor doesn't inherit full popularity
+              (D) cooldown (optional)
+
+        Winner selection is based on usage_ema distribution p = usage_ema / sum(usage_ema).
+        Donor is chosen among low-usage codes if possible.
+        PCA direction uses points currently assigned to the winner in THIS minibatch.
+        """
+
+        import torch
+
+        # -------------------------
+        # 0) basic checks
+        # -------------------------
+        if embed is None or usage_ema is None:
+            return False
+
+        K, D = embed.shape
+        device = embed.device
+
+        # -------------------------
+        # 1) cooldown tick (optional)
+        # -------------------------
+        if cooldown is not None:
+            # in-place decrement
+            cooldown.sub_(1).clamp_(min=0)
+
+        # -------------------------
+        # 2) compute p from usage_ema
+        # -------------------------
+        total = usage_ema.sum()
+        if float(total.item()) <= 0.0 or (not torch.isfinite(total)):
+            return False
+
+        p = usage_ema / (total + float(eps))
+
+        # -------------------------
+        # 3) eligibility mask
+        # -------------------------
+        if cooldown is not None:
+            eligible = (cooldown <= 0)
+        else:
+            eligible = torch.ones(K, dtype=torch.bool, device=device)
+
+        if not bool(eligible.any()):
+            return False
+
+        # -------------------------
+        # 4) pick winner among eligible
+        # -------------------------
+        neg_inf = -float("inf")
+        p_eligible = torch.where(eligible, p, torch.full_like(p, neg_inf))
+        winner = int(torch.argmax(p_eligible).item())
+
+        winner_p = float(p[winner].item())
+        if (not torch.isfinite(p_eligible[winner])) or (winner_p <= float(split_thr)):
+            return False
+
+        # -------------------------
+        # 5) pick donor (prefer low-usage)
+        # -------------------------
+        low = (p < float(prune_src_thr)) & eligible
+        low[winner] = False
+
+        if bool(low.any()):
+            p_low = torch.where(low, p, torch.full_like(p, float("inf")))
+            donor = int(torch.argmin(p_low).item())
+        else:
+            elig2 = eligible.clone()
+            elig2[winner] = False
+            if not bool(elig2.any()):
+                return False
+            p_elig2 = torch.where(elig2, p, torch.full_like(p, float("inf")))
+            donor = int(torch.argmin(p_elig2).item())
+
+        if donor == winner:
+            return False
+
+        # -------------------------
+        # 6) need per-key batch points to do a meaningful split
+        # -------------------------
+        if (X_batch is None) or (assign is None):
+            return False  # don't split without local evidence
+
+        if not (X_batch.ndim == 2 and assign.ndim == 1 and X_batch.shape[0] == assign.shape[0]):
+            return False
+
+        # ensure device & dtype for stability
+        Xb = X_batch.to(device=device, dtype=torch.float32)
+        yb = assign.to(device=device)
+
+        # -------------------------
+        # 7) isolate winner's assigned points (this is what matters)
+        # -------------------------
+        aw = (yb == int(winner))
+        n_w = int(aw.sum().item())
+
+        # KEY FIX: gate by winner-support only (NOT by K)
+        if n_w < int(min_points):
+            return False
+
+        Xw = Xb[aw]  # (n_w, D)
+
+        # -------------------------
+        # 8) determine split direction (PCA if possible)
+        # -------------------------
+        did_pca = False
+        cw = embed[winner].clone()  # current winner center (mean)
+
+        # center points
+        mu = Xw.mean(dim=0, keepdim=True)
+        Y = Xw - mu
+
+        # guard: if variance is almost zero, PCA is meaningless
+        if torch.isfinite(Y).all():
+            var_mean = float(Y.var(dim=0, unbiased=False).mean().item())
+        else:
+            var_mean = 0.0
+
+        if var_mean > 1e-12:
+            try:
+                # top principal direction via SVD
+                # Y: (n_w, D), Vh: (D, D) or (r, D)
+                U, S, Vh = torch.linalg.svd(Y, full_matrices=False)
+                v = Vh[0]  # (D,)
+                if torch.isfinite(v).all():
+                    proj = (Y @ v)  # (n_w,)
+                    std = proj.std(unbiased=False) + float(eps)
+                    step = float(pca_power) * float(std.item())
+
+                    if torch.isfinite(std).all() and step > 0.0:
+                        # move winner and donor in opposite directions
+                        embed[winner].copy_(cw - v * step)
+                        embed[donor].copy_(cw + v * step)
+                        did_pca = True
+            except Exception:
+                did_pca = False
+
+        # -------------------------
+        # 9) fallback: small noise if PCA failed
+        # -------------------------
+        if (not did_pca) and fallback_to_noise:
+            # scale noise by center RMS so it is neither tiny nor huge
+            rms = torch.sqrt((cw * cw).mean() + float(eps))
+            noise = torch.randn(D, device=device, dtype=torch.float32) * (float(noise_scale) * float(rms.item()))
+            embed[winner].copy_(cw)  # keep winner as-is
+            embed[donor].copy_(cw + noise)  # seed donor near winner
+
+        if (not did_pca) and (not fallback_to_noise):
+            return False
+
+        # -------------------------
+        # 10) persist split into EMA buffers
+        # -------------------------
+        if (ema_sum is not None) and (ema_count is not None):
+            # IMPORTANT: do in-place on the original buffers (avoid rebinds)
+            if ema_sum.dtype != torch.float32:
+                # if your buffers are float32 already, remove this branch
+                ema_sum_fp32 = ema_sum.float()
+                # but we should not silently detach from the real buffer
+                # so instead: write via temporary then copy back
+            if ema_count.dtype != torch.float32:
+                ema_count_fp32 = ema_count.float()
+
+            # count guard
+            cw_cnt = float(ema_count[winner].item())
+            if cw_cnt <= 0.0 or (not torch.isfinite(ema_count[winner])):
+                seed = 1.0
+                ema_count[winner] = seed
+                ema_sum[winner].copy_(embed[winner] * seed)
+                cw_cnt = seed
+
+            # 50/50 split counts (preserve total)
+            cnt_w_new = ema_count[winner] * 0.5
+            cnt_d_new = ema_count[winner] - cnt_w_new
+
+            ema_count[winner] = cnt_w_new
+            ema_count[donor] = cnt_d_new
+
+            # reconstruct sums from the NEW means so consistency is exact:
+            # ema_sum[k] ~= embed[k] * ema_count[k]
+            ema_sum[winner].copy_(embed[winner] * ema_count[winner].unsqueeze(0))
+            ema_sum[donor].copy_(embed[donor] * ema_count[donor].unsqueeze(0))
+
+        # -------------------------
+        # 11) split usage_ema too (so donor survives)
+        # -------------------------
+        usage_w = usage_ema[winner].clone()
+        usage_ema[winner].mul_(0.5)
+        usage_ema[donor] = usage_w * 0.5
+
+        # -------------------------
+        # 12) cooldown both (optional)
+        # -------------------------
+        if cooldown is not None:
+            cooldown[winner] = int(cooldown_steps)
+            cooldown[donor] = int(cooldown_steps)
+
+        return True
+
+    def _resolve_existing_safe_key(self, skey: str) -> str | None:
+        """
+        Infer時に「既存キーしか使わない」ための safe key 解決。
+
+        返すのは self.embed に実在する safe key だけ。
+        ここでは絶対に Parameter を新規作成しない（= _get_or_create_safe_key を呼ばない）。
+        """
+        skey = str(skey)
+
+        # 1) すでに mapping があるならそれを最優先（これが最も安全）
+        safe = None
+        if hasattr(self, "key_to_safe") and isinstance(self.key_to_safe, dict):
+            safe = self.key_to_safe.get(skey, None)
+            if safe is not None and safe in self.embed:
+                return safe
+
+        # 2) “規則変換” した safe 候補が実在すれば採用（作成はしない）
+        cand = self._safe_key(skey)
+        if cand in self.embed:
+            return cand
+
+        # 3) 最後の保険：safe_to_key があれば逆引き（skeyに一致するものを探す）
+        if hasattr(self, "safe_to_key") and isinstance(self.safe_to_key, dict):
+            for s, orig in self.safe_to_key.items():
+                if str(orig) == skey and s in self.embed:
+                    return s
+
+        # 4) それでも無理なら諦める（inferでは「unknown key」としてスキップ）
+        return None
+
+    # ------------------------------------------------------------------
+    # Forward: ここで EMA update を dtype 安全 & safe-key 化
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Forward: dtype-safe, safe-key buffers, no crash on empty masks,
+    #          entropy as METRIC (not differentiable in hard-argmin EMA),
+    #          optional per-key logging.
+    # ------------------------------------------------------------------
+    import torch
+    from einops import rearrange
+    @torch.amp.autocast("cuda", enabled=False)
+    def forward(
+            self,
+            x,
+            feature=None,
+            mask_dict=None,
+            logger=None,
+            chunk_i=None,
+            epoch=None,
+            mode=None,
+            is_last_batch: bool = False,
+    ):
+        """
+        Per-element vector quantization codebook forward (Option A: unified L2-normalized space).
+
+        Option A invariant:
+          - centers (self.embed[safe]) are stored L2-normalized (unit norm)
+          - assignment uses Xn (normalized latents) vs C (already normalized centers)
+          - EMA uses Xn, then writes back normalized means to self.embed[safe]
+
+        IMPORTANT OUTPUT CONTRACT (for commitment_loss consistency):
+          - self.embed_ind_dict[skey] MUST be {"ind": LongTensor(Ni), "safe": str}
+            where "safe" is the exact safe-key used to index self.embed[safe] in this forward.
+          - Holds for mode="infer" and mode="train"/"eval".
+
+        Returns:
+          - mode="infer": (key_id_full[int32], cluster_id_full[int32], id2safe_dict)
+          - else       : (quantize_st[1,B,D], embed_ind_dict, self.embed, ent_metric_total[scalar])
+        """
+        import os, time
+        import torch
+        from einops import rearrange
+
+        # ------------------------------------------------------------------
+        # helpers
+        # ------------------------------------------------------------------
+        def _log(msg: str):
+            if logger is not None:
+                logger.info(msg)
+            else:
+                print(msg)
+
+        def _safe_l2norm(t: torch.Tensor, eps_: float = 1e-12) -> torch.Tensor:
+            den = t.norm(dim=-1, keepdim=True).clamp_min(eps_)
+            t = t / den
+            return torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+
+        def _target_max_p(N: int) -> float:
+            if N >= 1_000_000:
+                return float(getattr(self, "split_thr_big", 0.05))
+            if N >= 200_000:
+                return float(getattr(self, "split_thr_mid", 0.08))
+            if N >= 50_000:
+                return float(getattr(self, "split_thr_small", 0.12))
+            return float(getattr(self, "split_thr_default", 0.20))
+
+        def _hist_sig(idx: torch.Tensor, K: int):
+            bc = torch.bincount(idx.long(), minlength=K).float()
+            tot = bc.sum().clamp_min(1.0)
+            used = int((bc > 0).sum().item())
+            maxc = float(bc.max().item()) if bc.numel() else 0.0
+            maxp = float((bc / tot).max().item()) if bc.numel() else 0.0
+            return used, maxc, maxp
+
+        # Buffers: robust getter that preserves registration
+        def _get_buf(name: str, shape, dtype, device):
+            shape = tuple(shape)
+            t = getattr(self, name, None)
+            if isinstance(t, torch.Tensor) and t.dtype == dtype and tuple(t.shape) == shape and t.device == device:
+                return t
+            new_t = torch.zeros(*shape, device=device, dtype=dtype)
+            # If already registered buffer, replace it in-place in _buffers to keep state_dict behavior.
+            if hasattr(self, "_buffers") and (name in self._buffers):
+                self._buffers[name] = new_t
+            else:
+                self.register_buffer(name, new_t)
+            return new_t
+
+        # ------------------------------------------------------------------
+        # config (override via self.*)
+        # ------------------------------------------------------------------
+        k_block = int(getattr(self, "assign_k_block", 1024))
+
+        do_split = bool(getattr(self, "do_split_the_winner", True))
+        split_once_per_epoch = bool(getattr(self, "split_once_per_epoch", False))
+        split_only_last_batch = bool(getattr(self, "split_only_last_batch", False))
+
+        usage_mom = float(getattr(self, "usage_ema_mom", 0.97))
+        decay = float(getattr(self, "decay", 0.9))
+        eps = float(getattr(self, "eps", 1e-8))
+        prune_src_thr = float(getattr(self, "prune_src_thr", 0.005))
+
+        maxp_mix_alpha = float(getattr(self, "maxp_mix_alpha", 0.5))
+        maxp_growth_delta = float(getattr(self, "maxp_growth_delta", 0.02))
+        min_points_for_split = int(getattr(self, "split_min_points", 32))
+        min_N_for_split = int(getattr(self, "split_min_N", 200))
+
+        debug_center_norm = bool(getattr(self, "debug_center_norm", False))
+
+        # revive config
+        revive_dead = bool(getattr(self, "revive_dead", True))
+        revive_k = int(getattr(self, "revive_k", 512))
+        revive_thr = float(getattr(self, "revive_thr", 0.10))
+        revive_noise = float(getattr(self, "revive_noise", 0.01))
+        revive_use_batch = bool(getattr(self, "revive_use_batch", False))
+        revive_every_steps = int(getattr(self, "revive_every_steps", 5))
+
+        # prune-by-age (epoch-last only)
+        prune_after_epochs = int(getattr(self, "prune_after_epochs", 3))
+        prune_seed_cs = float(getattr(self, "prune_seed_cs", 0.0))
+        prune_reseed_from_batch = bool(getattr(self, "prune_reseed_from_batch", True))
+
+        # ------------------------------------------------------------------
+        # 0) global offset management (per chunk)
+        # ------------------------------------------------------------------
+        if not hasattr(self, "latent_size_sum"):
+            self.latent_size_sum = 0
+        if chunk_i is not None and int(chunk_i) == 0:
+            self.latent_size_sum = 0
+
+        # ------------------------------------------------------------------
+        # 1) reshape -> flatten (1,B,D)
+        # ------------------------------------------------------------------
+        x = x.float()
+        if x.ndim < 4:
+            x = rearrange(x, "... -> 1 ...")
+        flatten = x.view(x.shape[0], -1, x.shape[-1])  # (1,B,D)
+        B, D = int(flatten.shape[1]), int(flatten.shape[2])
+
+        global_start = int(self.latent_size_sum)
+        global_end = global_start + B
+
+        # per-forward outputs (must be reset each call)
+        self.quantize_dict = {}
+        self.embed_ind_dict = {}
+
+        mask_dict = self._normalize_mask_dict(mask_dict, device=flatten.device)
+
+        # ------------------------------------------------------------------
+        # 2) safe-key <-> int id mapping
+        # ------------------------------------------------------------------
+        if not hasattr(self, "_safe2id"):
+            self._safe2id = {}
+        if not hasattr(self, "_id2safe"):
+            self._id2safe = {}
+        if not hasattr(self, "cb_dict"):
+            self.cb_dict = {}
+
+        def _safe_id(safe: str) -> int:
+            sid = self._safe2id.get(safe)
+            if sid is None:
+                sid = len(self._safe2id)
+                self._safe2id[safe] = sid
+                self._id2safe[sid] = safe
+            return sid
+
+        def _get_safe_and_code_existing_only(skey: str):
+            """
+            infer 専用：
+              - safe key を解決するが、既存しか使わない
+              - 見つからなければ (None, None, None) を返す
+            """
+            safe = self._resolve_existing_safe_key(skey)
+            if safe is None:
+                return None, None, None
+
+            code_param = self.embed[safe]  # ParameterDict の既存キー参照のみ
+            code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
+            return safe, code_param, code
+
+        # ------------------------------------------------------------------
+        # 3) infer: IDs only (no EMA, no split, no revive, no prune)
+        #    returns: (key_id_full, cluster_id_full, global_id_full, id2safe)
+        # ------------------------------------------------------------------
+        if mode == "infer":
+            if mask_dict is None:
+                raise ValueError("mode='infer' requires mask_dict (global indices).")
+
+            # --------------------------------------------------------------
+            # Build / cache global offsets (safe -> offset) ONCE.
+            # infer doesn't grow/split, so this stays valid for the whole run.
+            # --------------------------------------------------------------
+            if not hasattr(self, "_global_offsets") or not hasattr(self, "_global_vocab_size"):
+                # IMPORTANT: fix ordering deterministically
+                safe_keys = sorted(self.embed.keys())
+                offsets = {}
+                cur = 0
+                for s in safe_keys:
+                    K = int(self.embed[s].shape[0] if self.embed[s].ndim == 2 else self.embed[s].shape[1])
+                    offsets[s] = cur
+                    cur += K
+                self._global_offsets = offsets
+                self._global_vocab_size = int(cur)
+
+            offsets = self._global_offsets  # dict: safe -> int offset
+
+            key_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int32)
+            cluster_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int32)
+            global_id_full = torch.full((B,), -1, device=flatten.device, dtype=torch.int64)
+
+            for key, idx_global in mask_dict.items():
+                if idx_global is None or idx_global.numel() == 0:
+                    continue
+
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not bool(gmask.any()):
+                    continue
+
+                idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                X = flatten[0].index_select(0, idx_local)  # (Ni,D)
+                if X.numel() == 0:
+                    continue
+
+                skey = str(key)
+
+                safe, _code_param, C = _get_safe_and_code_existing_only(skey)
+                if safe is None:
+                    # unknown / not present in checkpoint codebook => skip (leave -1)
+                    if logger is not None:
+                        logger.warning(f"[infer] unknown skey not in existing codebook: {skey} (skipped)")
+                    continue
+
+                sid = _safe_id(safe)
+
+                with torch.no_grad():
+                    Xn = _safe_l2norm(X)
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
+
+                # key_id / cluster_id
+                key_id_full.index_copy_(
+                    0, idx_local,
+                    torch.full((idx_local.numel(),), sid, device=flatten.device, dtype=torch.int32),
+                )
+                cluster_id_full.index_copy_(0, idx_local, idx_code.to(dtype=torch.int32))
+
+                # global_id = offset[safe] + cid
+                off = offsets.get(safe, None)
+                if off is None:
+                    # safe は存在するが offsets に無い = offsets 構築時の embed keys とズレてる
+                    # → ここではスキップして -1 のままにする（安全側）
+                    if logger is not None:
+                        logger.warning(f"[infer] safe exists but missing in global_offsets: {safe} (skipped)")
+                    continue
+
+                global_id_full.index_copy_(
+                    0, idx_local,
+                    (idx_code.to(dtype=torch.int64) + off)
+                )
+
+                # contract for debugging
+                self.embed_ind_dict[skey] = {"ind": idx_code, "safe": safe}
+
+                if off is None:
+                    # unknown key for this checkpoint: mark as UNK and continue
+                    # (keep -1 in key_id/cluster_id/global_id)
+                    # optional: log once
+                    if logger is not None:
+                        logger.warning(f"[infer] unknown key not in ckpt/global_offsets: {safe} (skipped)")
+                    continue
+
+                global_id_full.index_copy_(
+                    0, idx_local,
+                    (idx_code.to(dtype=torch.int64) + off)
+                )
+
+                # keep contract for commitment_loss debugging (optional)
+                self.embed_ind_dict[skey] = {"ind": idx_code, "safe": safe}
+
+            self.latent_size_sum = global_end
+            return key_id_full, cluster_id_full, global_id_full, dict(self._id2safe)
+
+        # ------------------------------------------------------------------
+        # 4) init_kmeans_final: init + dump then return
+        # ------------------------------------------------------------------
+        if mode == "init_kmeans_final":
+            self.init_embed_(flatten, logger, epoch, mask_dict=mask_dict)
+
+            if mask_dict is None:
+                self.latent_size_sum = global_end
+                return 0
+
+            if not hasattr(self, "_kmeans_dump"):
+                self._kmeans_dump = {}
+            if not hasattr(self, "_kmeans_sig"):
+                self._kmeans_sig = {}
+
+            for key, idx_global in mask_dict.items():
+                if idx_global is None or idx_global.numel() == 0:
+                    continue
+
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not bool(gmask.any()):
+                    continue
+
+                idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+                X = flatten[0].index_select(0, idx_local)
+                if X.numel() == 0:
+                    continue
+
+                skey = str(key)
+                safe, _code_param, C = _get_safe_and_code(skey)
+
+                with torch.no_grad():
+                    Xn = _safe_l2norm(X)
+                    idx_code = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
+                    bc0 = torch.bincount(idx_code, minlength=C.shape[0]).float()
+                    sig0 = torch.stack([
+                        bc0.sum(),
+                        (bc0 > 0).sum().float(),
+                        bc0.max(),
+                        (bc0 / bc0.sum().clamp_min(1)).max()
+                    ])
+                    self._kmeans_sig[skey] = {
+                        "safe": safe,
+                        "C_norm_mean": C.detach().float().norm(dim=1).mean().item(),
+                        "sig": sig0.cpu(),
+                    }
+
+                entry = self._kmeans_dump.get(skey)
+                if entry is None:
+                    entry = {"latents": [], "centers": None, "assign": [], "safe": safe}
+                    self._kmeans_dump[skey] = entry
+
+                entry["latents"].append(X.detach().to("cpu", dtype=torch.float16))
+                entry["assign"].append(idx_code.detach().to("cpu"))
+                entry["safe"] = safe
+                if entry["centers"] is None:
+                    entry["centers"] = C.detach().to("cpu", dtype=torch.float16)
+
+            out = {}
+            for k, v in self._kmeans_dump.items():
+                out[k] = {
+                    "safe": v.get("safe", None),
+                    "latents": torch.cat(v["latents"], dim=0) if len(v["latents"]) else None,
+                    "centers": v["centers"],
+                    "assign": torch.cat(v["assign"], dim=0) if len(v["assign"]) else None,
+                    "quantize": None,
+                }
+
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            path = os.path.join("dumps", f"init_kmeans_final_dump_{stamp}.pt")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            torch.save(out, path)
+            self._kmeans_dump = {}
+
+            self.latent_size_sum = global_end
+            return 0
+
+        # ------------------------------------------------------------------
+        # 5) train/eval: quantize + EMA + split + revive + prune
+        # ------------------------------------------------------------------
+        ent_metric_total = torch.zeros((), device=flatten.device, dtype=torch.float32)
+        do_ema = bool(self.training and (mode == "train") and (epoch is not None))
+
+        # epoch-wise collectors
+        if not hasattr(self, "_mp_epoch"):
+            self._mp_epoch = None
+        if not hasattr(self, "_mp_list"):
+            self._mp_list = []
+        if not hasattr(self, "_mp_list_keys"):
+            self._mp_list_keys = []
+
+        if epoch is not None:
+            ep_int = int(epoch)
+            if self._mp_epoch != ep_int:
+                self._mp_epoch = ep_int
+                self._mp_list = []
+                self._mp_list_keys = []
+
+        # per-epoch split gate
+        if do_ema and split_once_per_epoch:
+            if not hasattr(self, "_split_epoch"):
+                self._split_epoch = None
+            if not hasattr(self, "_split_done_epoch"):
+                self._split_done_epoch = set()
+            if self._split_epoch != int(epoch):
+                self._split_epoch = int(epoch)
+                self._split_done_epoch.clear()
+
+        # prev max_p / step counter
+        if do_ema and not hasattr(self, "_prev_maxp"):
+            self._prev_maxp = {}
+        if do_ema and not hasattr(self, "_step_counter"):
+            self._step_counter = 0
+        if do_ema:
+            self._step_counter += 1
+
+        def _revive_dead_centers_if_needed(
+                *,
+                means: torch.Tensor,  # (K,D) normalized
+                ea: torch.Tensor,  # (K,D)
+                cs: torch.Tensor,  # (K,)
+                ue: torch.Tensor,  # (K,)
+                Xn_dev: torch.Tensor,  # (N,D) normalized
+                idx_dev: torch.Tensor,  # (N,) long
+        ) -> bool:
+            if not revive_dead:
+                return False
+            if revive_every_steps > 0 and (int(self._step_counter) % int(revive_every_steps)) != 0:
+                return False
+
+            K = int(means.shape[0])
+            dead = (cs < float(revive_thr))
+            n_dead = int(dead.sum().item())
+            if n_dead <= 0:
+                return False
+
+            if Xn_dev is None or Xn_dev.numel() == 0:
+                revive_from_batch = True
+            else:
+                revive_from_batch = bool(revive_use_batch)
+
+            # how many to revive
+            max_seeds = K if revive_from_batch else int(Xn_dev.shape[0])
+            k = min(int(revive_k), n_dead, max_seeds)
+            if k <= 0:
+                return False
+
+            dead_idx = torch.nonzero(dead, as_tuple=False).flatten()[:k]
+
+            if revive_from_batch and (idx_dev is not None) and (idx_dev.numel() > 0):
+                bc = torch.bincount(idx_dev, minlength=K).float()
+                winners = torch.argsort(bc, descending=True)
+                src = winners[:k]
+                seeds = means.index_select(0, src).clone()
+            else:
+                perm = torch.randperm(int(Xn_dev.shape[0]), device=Xn_dev.device)[:k]
+                seeds = Xn_dev.index_select(0, perm).clone()
+
+            seeds = _safe_l2norm(seeds + revive_noise * torch.randn_like(seeds), eps_=1e-12)
+            means.index_copy_(0, dead_idx, seeds)
+
+            # give them a small nonzero state so they can compete
+            cs.index_fill_(0, dead_idx, float(min_points_for_split))
+            ue.index_fill_(0, dead_idx, float(min_points_for_split))
+            den = cs.unsqueeze(-1).clamp_min(1e-5)
+            ea.copy_(means * den)
+            return True
+
+        # main per-key loop
+        for key, idx_global in (mask_dict.items() if mask_dict is not None else []):
+            if idx_global is None or idx_global.numel() == 0:
+                continue
+
+            gmask = (idx_global >= global_start) & (idx_global < global_end)
+            if not bool(gmask.any()):
+                continue
+
+            idx_local = (idx_global[gmask] - global_start).to(device=flatten.device, dtype=torch.long)
+            X = flatten[0].index_select(0, idx_local)  # (Ni,D)
+            if X.numel() == 0:
+                continue
+
+            skey = str(key)
+            safe, code_param, C = _get_safe_and_code(skey)
+
+            if debug_center_norm and (epoch == 1) and (chunk_i == 0):
+                with torch.no_grad():
+                    cn = C.detach().float().norm(dim=1)
+                    _log(f"[DBG][C-NORM] key={skey} mean={cn.mean().item():.4f} std={cn.std(correction=0).item():.4f}")
+
+            # normalize latents ONCE per key
+            Xn = _safe_l2norm(X.to(dtype=torch.float32), eps_=1e-12)
+
+            # hard assignment: C assumed normalized
+            with torch.no_grad():
+                idx_code_long = self.argmax_sim_blockwise(Xn, C, k_block=k_block).to(dtype=torch.long)
+
+            Q = C.index_select(0, idx_code_long)
+            self.quantize_dict[skey] = Q
+            self.embed_ind_dict[skey] = {"ind": idx_code_long, "safe": safe}
+
+            # -------------------------
+            # EMA + split + revive + prune
+            # -------------------------
+            if do_ema:
+                dev = code_param.device
+                if code_param.ndim == 3:
+                    K_e, D_e = int(code_param.shape[1]), int(code_param.shape[2])
+                else:
+                    K_e, D_e = int(code_param.shape[0]), int(code_param.shape[1])
+
+                # record per-skey K (final truth for this step)
+                self.cb_dict[skey] = int(K_e)
+
+                # buffers (registered)
+                cs = _get_buf(f"cluster_size_{safe}", (K_e,), torch.float32, dev)
+                ea = _get_buf(f"embed_avg_{safe}", (K_e, D_e), torch.float32, dev)
+                ue = _get_buf(f"usage_ema_{safe}", (K_e,), torch.float32, dev)
+                cd = _get_buf(f"split_cd_{safe}", (K_e,), torch.long, dev)
+                ever = _get_buf(f"ever_used_{safe}", (K_e,), torch.uint8, dev)
+                lue = _get_buf(f"last_used_ep_{safe}", (K_e,), torch.int32, dev)
+
+                with torch.no_grad():
+                    ep_i = int(epoch)
+
+                    idx_dev = idx_code_long.to(device=dev)
+
+                    # snapshot BEFORE update (MUST clone for correct delta/logging)
+                    C_pre = code_param.detach()
+                    C_pre = C_pre.squeeze(0) if C_pre.ndim == 3 else C_pre
+                    C_pre = C_pre.to(device=dev, dtype=torch.float32).clone()
+
+                    # batch counts (K,)
+                    batch_counts = torch.zeros((K_e,), device=dev, dtype=torch.float32)
+                    batch_counts.index_add_(0, idx_dev, torch.ones_like(idx_dev, device=dev, dtype=torch.float32))
+
+                    # Xn on dev
+                    Xn_dev = Xn.to(device=dev, dtype=torch.float32)
+
+                    # batch sum (K,D)
+                    batch_sum = torch.zeros((K_e, D_e), device=dev, dtype=torch.float32)
+                    batch_sum.index_add_(0, idx_dev, Xn_dev)
+
+                    # update ever/last_used_epoch
+                    used_now = torch.nonzero(batch_counts > 0, as_tuple=False).squeeze(1)
+                    if used_now.numel() > 0:
+                        ever.index_fill_(0, used_now, 1)
+                        lue.index_fill_(0, used_now, ep_i)
+
+                    # Entropy regularizer (optional metric accumulation only)
+                    denom = batch_counts.sum()
+                    if denom.item() > 0.0:
+                        p = batch_counts / (denom + 1e-8)
+                        H = -(p * (p + 1e-12).log()).sum()
+
+                        ent_w = getattr(self, "entropy_weight", 1e-3)
+                        ent_w = 0.0 if ent_w is None else float(ent_w)
+
+                        contrib = (-H) * ent_w
+                        ent_metric_total = ent_metric_total + contrib
+
+                        if chunk_i == 0:
+                            effK = int((batch_counts > 0).sum().item())
+                            max_p_b = float(p.max().item())
+                            _log(
+                                f"[ENT] epoch={epoch} key={skey} "
+                                f"H={H.item():.4f} effK={effK} max_p={max_p_b:.4f} "
+                                f"ent_w={ent_w:.3g} contrib={contrib.item():.6f}"
+                            )
+
+                    # usage_ema
+                    ue.mul_(usage_mom).add_(batch_counts, alpha=(1.0 - usage_mom))
+
+                    # EMA update
+                    one_m = 1.0 - decay
+                    cs.mul_(decay).add_(batch_counts, alpha=one_m)
+                    ea.mul_(decay).add_(batch_sum, alpha=one_m)
+
+                    # means (K,D) and normalize
+                    den = cs.unsqueeze(-1).clamp_min(1e-5)
+                    means = _safe_l2norm(ea / den, eps_=1e-12)
+
+                    # keep inactive as previous center
+                    active = (cs > 0.0)
+                    if active.any():
+                        means[~active] = _safe_l2norm(C_pre[~active], eps_=1e-12)
+                    else:
+                        means.copy_(_safe_l2norm(C_pre, eps_=1e-12))
+
+                    # keep ea consistent
+                    ea.copy_(means * den)
+
+                    if (epoch == 1) and (chunk_i == 0):
+                        mn = means[active].norm(dim=1).mean().item() if active.any() else float("nan")
+                        used_u, _maxc_u, maxp_u_batch = _hist_sig(idx_dev, K_e)
+                        _log(
+                            f"[EMA-MEANS] ep={epoch} key={skey} cs_sum={float(cs.sum()):.1f} "
+                            f"used={used_u} maxp_batch={maxp_u_batch:.4f} means_mean_norm(active)={mn:.3f}"
+                        )
+
+                    # ---------------------------------------------------------
+                    # Max_p policy: mix(cs_dist, ue_dist)
+                    # ---------------------------------------------------------
+                    total_cs = cs.sum().clamp_min(1e-8)
+                    p_cs = cs / total_cs
+                    max_p_cs = float(p_cs.max().item())
+
+                    total_u = ue.sum().clamp_min(1e-8)
+                    p_u = ue / total_u
+                    max_p_u = float(p_u.max().item())
+
+                    a = float(maxp_mix_alpha)
+                    p_mix = (1.0 - a) * p_cs + a * p_u
+                    max_p = float(p_mix.max().item())
+
+                    N_key = int(cs.sum().item())
+                    thr = _target_max_p(N_key)
+
+                    prev = float(self._prev_maxp.get(skey, 0.0))
+                    grew = (max_p > prev + float(maxp_growth_delta))
+                    self._prev_maxp[skey] = max_p
+
+                    # split gate
+                    can_split_now = do_split and (not split_only_last_batch or bool(is_last_batch))
+                    can_split_now = can_split_now and (not split_once_per_epoch or (skey not in self._split_done_epoch))
+
+                    if can_split_now and (chunk_i == 0):
+                        _log(
+                            f"[SPLIT-POLICY] epoch={epoch} key={skey} N~{float(cs.sum()):.1f} "
+                            f"max_p={max_p:.4f} (cs={max_p_cs:.4f}, ue={max_p_u:.4f}, prev={prev:.4f}) "
+                            f"thr={thr:.4f} K={K_e} grew={bool(grew)}"
+                        )
+
+                    do_it = (
+                            can_split_now
+                            and ((max_p > thr) or bool(grew))
+                            and (N_key >= min_N_for_split)
+                            and (K_e > 2)
+                    )
+                    if do_it:
+                        did = self.split_the_winner_ema(
+                            embed=means,
+                            ema_sum=ea,
+                            ema_count=cs,
+                            usage_ema=ue,
+                            batch_counts=batch_counts,
+                            batch_counts2=batch_counts,
+                            X_batch=Xn_dev,
+                            assign=idx_dev.to(device=dev, dtype=torch.long),
+                            split_thr=float(thr),
+                            prune_src_thr=float(prune_src_thr),
+                            cooldown=cd,
+                            cooldown_steps=int(getattr(self, "split_cooldown_steps", 2000)),
+                            eps=float(eps),
+                            min_points=int(min_points_for_split),
+                            pca_power=float(getattr(self, "split_pca_power", 0.5)),
+                            noise_scale=float(getattr(self, "split_noise_scale", 0.02)),
+                            fallback_to_noise=bool(getattr(self, "split_fallback_to_noise", True)),
+                        )
+
+                        if split_once_per_epoch:
+                            self._split_done_epoch.add(skey)
+
+                        if did:
+                            means.copy_(_safe_l2norm(means, eps_=1e-12))
+                            den2 = cs.unsqueeze(-1).clamp_min(1e-5)
+                            ea.copy_(means * den2)
+
+                            total_cs2 = cs.sum().clamp_min(1e-8)
+                            p_cs2 = cs / total_cs2
+                            max_p_cs2 = float(p_cs2.max().item())
+
+                            total_u2 = ue.sum().clamp_min(1e-8)
+                            p_u2 = ue / total_u2
+                            max_p_u2 = float(p_u2.max().item())
+
+                            p_mix2 = (1.0 - a) * p_cs2 + a * p_u2
+                            max_p_after = float(p_mix2.max().item())
+
+                            _log(
+                                f"[SPLIT][N-DEP] epoch={epoch} key={skey} did_split=True "
+                                f"N~{N_key} thr={thr:.4f} max_p_before={max_p:.4f} "
+                                f"max_p_after={max_p_after:.4f} (cs={max_p_cs2:.4f}, ue={max_p_u2:.4f})"
+                            )
+                            self._prev_maxp[skey] = max_p_after
+
+                    # revive
+                    revived = _revive_dead_centers_if_needed(
+                        means=means, ea=ea, cs=cs, ue=ue, Xn_dev=Xn_dev, idx_dev=idx_dev
+                    )
+                    if revived:
+                        _log(f"[REVIVE] epoch={epoch} key={skey} revived_some_dead_centers=True")
+
+                    # prune-by-age (epoch last batch only)
+                    do_prune_now = bool(is_last_batch) and (prune_after_epochs > 0)
+                    if do_prune_now:
+                        age = ep_i - lue.to(torch.int32)
+                        stale = (ever > 0) & (age >= int(prune_after_epochs))
+                        stale_idx = torch.nonzero(stale, as_tuple=False).squeeze(1)
+                        n_stale = int(stale_idx.numel())
+
+                        if n_stale > 0:
+                            if prune_reseed_from_batch and (Xn_dev is not None) and (Xn_dev.numel() > 0):
+                                Nn = int(Xn_dev.shape[0])
+                                perm = torch.randperm(Nn, device=dev)
+                                pick = perm[:n_stale] if Nn >= n_stale else perm.repeat((n_stale + Nn - 1) // Nn)[
+                                    :n_stale]
+                                seeds = _safe_l2norm(Xn_dev.index_select(0, pick).clone(), eps_=1e-12)
+                            else:
+                                seeds = _safe_l2norm(
+                                    means.index_select(0, stale_idx).clone() + 0.01 * torch.randn((n_stale, D_e),
+                                                                                                  device=dev),
+                                    eps_=1e-12,
+                                )
+
+                            means.index_copy_(0, stale_idx, seeds)
+
+                            # dormant reset
+                            cs.index_fill_(0, stale_idx, float(prune_seed_cs))
+                            ue.index_fill_(0, stale_idx, 0.0)
+                            ea.index_fill_(0, stale_idx, 0.0)
+
+                            # treat as never-used again
+                            ever.index_fill_(0, stale_idx, 0)
+                            lue.index_fill_(0, stale_idx, 0)
+
+                            if chunk_i == 0:
+                                _log(
+                                    f"[PRUNE] epoch={epoch} key={skey} pruned={n_stale} after={prune_after_epochs}ep (dormant reset)")
+
+                    # diagnostics
+                    if chunk_i == 0:
+                        dead_mask = (cs < 1e-3)
+                        near_dead_mask = (cs < 0.1)
+                        n_dead = int(dead_mask.sum().item())
+                        n_near_dead = int(near_dead_mask.sum().item())
+                        frac_dead = n_dead / float(K_e)
+                        frac_near_dead = n_near_dead / float(K_e)
+                        n_ever = int((ever > 0).sum().item())
+                        _log(
+                            f"[DEAD] epoch={epoch} key={skey} dead={n_dead}/{K_e} ({frac_dead:.3f}) "
+                            f"near_dead={n_near_dead}/{K_e} ({frac_near_dead:.3f}) ever_used={n_ever}/{K_e}"
+                        )
+
+                    # record max_p for epoch summary
+                    total_csR = cs.sum().clamp_min(1e-8)
+                    p_csR = cs / total_csR
+                    total_uR = ue.sum().clamp_min(1e-8)
+                    p_uR = ue / total_uR
+                    p_mixR = (1.0 - a) * p_csR + a * p_uR
+                    max_p_R = float(p_mixR.max().item())
+                    self._mp_list.append(max_p_R)
+                    self._mp_list_keys.append((skey, max_p_R, int(cs.sum().item()), int(K_e)))
+
+                    # write centers back to parameter (already normalized)
+                    if code_param.ndim == 3:
+                        code_param.data.copy_(means.unsqueeze(0).to(dtype=code_param.dtype))
+                    else:
+                        code_param.data.copy_(means.to(dtype=code_param.dtype))
+
+                    if (epoch == 1) and (chunk_i == 0):
+                        C_post = code_param.detach()
+                        C_post = C_post.squeeze(0) if C_post.ndim == 3 else C_post
+                        delta = (C_post.float() - C_pre).abs().mean().item()
+                        if not (delta == delta):
+                            raise RuntimeError(f"[EMA-WRITE] delta NaN key={skey}")
+                        _log(f"[EMA-WRITE] ep={epoch} key={skey} mean_abs_delta={delta:.3e}")
+
+            # cleanup per key (keep memory pressure low)
+            del X, Xn, C, idx_code_long, Q
+
+        # ------------------------------------------------------------------
+        # 6) rebuild quantized tensor in original atom order
+        # ------------------------------------------------------------------
+        quantize_full = torch.empty((B, D), device=flatten.device, dtype=flatten.dtype)
+
+        if mask_dict is not None:
+            for key, idx_global in mask_dict.items():
+                skey = str(key)
+                qk = self.quantize_dict.get(skey, None)
+                if qk is None:
+                    continue
+                gmask = (idx_global >= global_start) & (idx_global < global_end)
+                if not bool(gmask.any()):
+                    continue
+                idx_local = (idx_global[gmask] - global_start).to(device=quantize_full.device, dtype=torch.long)
+                qk = qk.to(device=quantize_full.device, dtype=quantize_full.dtype)
+                if idx_local.numel() > 0:
+                    quantize_full.index_copy_(0, idx_local, qk)
+
+        # fill unused positions with identity
+        all_local = []
+        if mask_dict is not None:
+            for idx in mask_dict.values():
+                if idx is None or idx.numel() == 0:
+                    continue
+                in_chunk = idx[(idx >= global_start) & (idx < global_end)]
+                if in_chunk.numel() > 0:
+                    all_local.append(in_chunk - global_start)
+
+        used = (
+            torch.unique(torch.cat(all_local, dim=0))
+            if len(all_local) > 0
+            else torch.tensor([], dtype=torch.long, device=flatten.device)
+        )
+        unused = torch.ones(B, dtype=torch.bool, device=flatten.device)
+        if used.numel() > 0:
+            unused[used] = False
+        if bool(unused.any()):
+            quantize_full[unused] = flatten[0][unused]
+
+        # straight-through
+        quantize_st = flatten[0] + (quantize_full - flatten[0]).detach()
+        quantize_st = quantize_st.unsqueeze(0)
+
+        if chunk_i is not None:
+            self.latent_size_sum = global_end
+
+        # ------------------------------------------------------------------
+        # end-of-epoch report (only on last batch)
+        # ------------------------------------------------------------------
+        if (epoch is not None) and bool(is_last_batch) and (logger is not None):
+            if len(self._mp_list) > 0:
+                mp = torch.tensor(self._mp_list, dtype=torch.float32)
+                qs = torch.quantile(mp, torch.tensor([0.5, 0.75, 0.9, 0.95, 0.99]))
+                logger.info(
+                    f"[MAXP][epoch={int(epoch)}] "
+                    f"n_keys={len(self._mp_list)} "
+                    f"mean={mp.mean().item():.4f} std={mp.std(unbiased=False).item():.4f} "
+                    f"p50={qs[0].item():.4f} p75={qs[1].item():.4f} "
+                    f"p90={qs[2].item():.4f} p95={qs[3].item():.4f} p99={qs[4].item():.4f} "
+                    f"max={mp.max().item():.4f}"
+                )
+
+                topK = int(getattr(self, "maxp_report_topK", 20))
+                worst = sorted(self._mp_list_keys, key=lambda t: t[1], reverse=True)[:topK]
+                for (k, v, nkey, Ke) in worst:
+                    logger.info(f"[MAXP-WORST][epoch={int(epoch)}] key={k} max_p={v:.4f} N~{nkey} K={Ke}")
+
+                if bool(getattr(self, "save_maxp_each_epoch", True)):
+                    os.makedirs("dumps", exist_ok=True)
+                    out = {"epoch": int(epoch), "maxp_list": self._mp_list, "detail": self._mp_list_keys}
+                    torch.save(out, f"dumps/maxp_epoch_{int(epoch):04d}.pt")
+        if (epoch is not None) and (logger is not None):
+            # そのepochで見えた skey->K の合計（枠）
+            cb_sum = int(sum(int(v) for v in getattr(self, "cb_dict", {}).values()))
+            logger.info(f"[VOCAB-CHECK][epoch={int(epoch)}] cb_dict_sum={cb_sum} vocab_size_if_fixed={cb_sum + 2}")
+
+        return quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
+
+
+class VectorQuantize(nn.Module):
+    def __init__(
+            self,
+            dim,
+            codebook_size,
+            codebook_dim=None,
+            heads=1,
+            separate_codebook_per_head=False,
+            decay=0.8,
+            eps=1e-5,
+            kmeans_init=True,
+            kmeans_iters=600,
+            sync_kmeans=True,
+            use_cosine_sim=False,
+            threshold_ema_dead_code=0,
+            channel_last=True,
+            accept_image_fmap=False,
+            margin_weight=1,
+            spread_weight=0.2,
+            pair_weight=0.01,
+            lamb_div_ele=1,
+            lamb_div_bonds=1,
+            lamb_div_aroma=1,
+            lamb_div_ringy=1,
+            lamb_div_h_num=1,
+            lamb_div_equidist=1,
+            lamb_div_elec_state=1,
+            lamb_div_charge=1,
+            commitment_weight=1000,  # using
+            codebook_weight=1,  # using
+            lamb_sil=0.00001,           # using
+            lamb_cb=0.01,           # using
+            lamb_div=0.01,           # using
+            lamb_equiv_atom=1,
+            orthogonal_reg_active_codes_only=False,
+            orthogonal_reg_max_codes=None,
+            sample_codebook_temp=0.,
+            sync_codebook=False,
+            use_cosine=False,
+            target_radius=3.0,  # soft cap for ||z||
+            radius_weight=1e-3,  # weight for norm regularizer
+            tau_init=0.5,  # starting temperature (distance scale)
+            tau_min=0.05,
+            tau_max=2.0,  # clamp for temperature
+            tau_ema=0.9,  # EMA for temperature
+    ):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.separate_codebook_per_head = separate_codebook_per_head
+
+        codebook_dim = default(codebook_dim, dim)  # use coocbook_dim if not None
+        codebook_input_dim = codebook_dim * heads
+        requires_projection = codebook_input_dim != dim
+        # self.project_in = nn.Linear(dim, codebook_input_dim) if requires_projection else nn.Identity()
+        self.project_out = nn.Linear(codebook_input_dim, dim) if requires_projection else nn.Identity()
+
+        self.eps = eps
+        self.tau_ema = 0.9
+        self.commitment_weight = commitment_weight
+        self.codebook_weight = codebook_weight
+
+        has_codebook_orthogonal_loss = margin_weight > 0
+
+        self.margin_weight = margin_weight
+        self.spread_weight = spread_weight
+        self.lamb_div_ele = lamb_div_ele
+        self.lamb_div_bonds = lamb_div_bonds
+        self.lamb_div_aroma = lamb_div_aroma
+        self.lamb_div_ringy = lamb_div_ringy
+        self.lamb_div_h_num = lamb_div_h_num
+        self.lamb_div_elec_state = lamb_div_elec_state
+        self.lamb_div_charge = lamb_div_charge
+        self.lamb_equiv_atom = lamb_equiv_atom
+        self.lamb_sil = lamb_sil
+        self.lamb_div = lamb_div
+        self.lamb_cb = lamb_cb
+        self.lamb_div_equidist = lamb_div_equidist
+        self.pair_weight = pair_weight
+        self.orthogonal_reg_active_codes_only = orthogonal_reg_active_codes_only
+        self.orthogonal_reg_max_codes = orthogonal_reg_max_codes
+        codebook_max_norm = None  # e.g., 4.0 to clamp code vectors
+        codebook_class = EuclideanCodebook # if not use_cosine_sim else CosineSimCodebook
+        self._codebook = codebook_class(
+            dim=codebook_dim,
+            num_codebooks=heads if separate_codebook_per_head else 1,
+            codebook_size=codebook_size,
+            kmeans_init=kmeans_init,
+            kmeans_iters=kmeans_iters,
+            sync_kmeans=sync_kmeans,
+            decay=decay,
+            eps=eps,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            use_ddp=sync_codebook,
+            learnable_codebook=has_codebook_orthogonal_loss,
+            sample_codebook_temp=sample_codebook_temp,
+        )
+        args = get_args()
+        self.epoch_at_mode_shift = args.epoch_at_mode_shift
+        self.codebook_size = codebook_size
+        self.accept_image_fmap = accept_image_fmap
+        self.channel_last = channel_last
+        self.compute_contrastive_loss = ContrastiveLoss(dim, 136)
+
+        self.use_cosine = use_cosine
+        self.target_radius = float(target_radius)
+        self.radius_weight = float(radius_weight)
+        self.register_buffer("_tau", torch.tensor(float(tau_init)))
+        self.tau_min, self.tau_max = float(tau_min), float(tau_max)
+        self.tau_ema = float(tau_ema)
+        self.codebook_max_norm = codebook_max_norm
+
+    @property
+    def codebook(self):
+        codebook = self._codebook.embed
+        if self.separate_codebook_per_head:
+            return codebook
+
+        return rearrange(codebook, '1 ... -> ...')
+
+    def _cb_to_tensor(self, cb):
+        """
+        Normalize various "codebook" containers to a [K, D] Tensor.
+
+        対応する型:
+          - torch.Tensor
+          - nn.Parameter
+          - nn.Module (EuclideanCodebook 含む)
+              * .weight を持つ場合 → それを使う
+              * .embed を持つ場合 → embed.weight か embed 自体を使う
+              * .codebook / .codes / .embedding を持つ場合 → それを使う
+              * 上記が無くても、named_parameters / named_buffers から
+                最初の 2 次元テンソル ([K, D]) を拾う
+          - nn.ParameterDict（[K_i, D] を縦に concat）
+          - dict[key -> (上記のいずれか)]（縦に concat）
+        """
+        import torch
+        import torch.nn as nn
+
+        # -------- 1. すでに Tensor/Parameter の場合 --------
+        if isinstance(cb, torch.Tensor):
+            return cb
+        if isinstance(cb, nn.Parameter):
+            return cb
+
+        # -------- 2. nn.Module (EuclideanCodebook を含む) --------
+        if isinstance(cb, nn.Module):
+            # (a) .weight を持つモジュール（Embedding, Linear など）
+            if hasattr(cb, "weight") and isinstance(cb.weight, torch.Tensor):
+                return cb.weight
+
+            # (b) EuclideanCodebook などで .embed を使っている場合
+            if hasattr(cb, "embed"):
+                e = cb.embed
+                if isinstance(e, nn.Embedding):
+                    return e.weight
+                if isinstance(e, (torch.Tensor, nn.Parameter)):
+                    return e
+
+            # (c) その他ありがちな名前をチェック
+            for attr in ("codebook", "codes", "embedding"):
+                if hasattr(cb, attr):
+                    t = getattr(cb, attr)
+                    if isinstance(t, (torch.Tensor, nn.Parameter)):
+                        return t
+
+            # (d) 最後のフォールバック:
+            #     モジュール内の parameter / buffer から
+            #     「次元数が 2 のテンソル」を探して最初のものを使う
+            #     (recurse=True なので embed.weight のような下位モジュールも拾える)
+            for name, p in cb.named_parameters(recurse=True):
+                if isinstance(p, torch.Tensor) and p.ndim == 2:
+                    # print(f"[DEBUG] using parameter {name} from {type(cb)} as codebook")  # 必要ならログ
+                    return p
+
+            for name, b in cb.named_buffers(recurse=True):
+                if isinstance(b, torch.Tensor) and b.ndim == 2:
+                    # print(f"[DEBUG] using buffer {name} from {type(cb)} as codebook")
+                    return b
+
+            # ここまで来ると、2D テンソルが一つも見つからない本当にイレギュラーなケース
+            raise TypeError(
+                f"_cb_to_tensor: unsupported nn.Module type {type(cb)} "
+                f"(no usable weight/embed/codebook/codes/embedding or 2D param/buffer)"
+            )
+
+        # -------- 3. nn.ParameterDict: values を全部縦に concat --------
+        if isinstance(cb, nn.ParameterDict):
+            tensors = []
+            for k in sorted(cb.keys()):
+                v = cb[k]
+                if isinstance(v, (torch.Tensor, nn.Parameter)):
+                    tensors.append(v)
+                else:
+                    raise TypeError(
+                        f"_cb_to_tensor: unsupported leaf type {type(v)} "
+                        f"in ParameterDict for key {k!r}"
+                    )
+            if not tensors:
+                raise ValueError("_cb_to_tensor: empty ParameterDict")
+            return torch.cat(tensors, dim=0)
+
+        # -------- 4. dict: value ごとに再帰的にテンソル化して concat --------
+        if isinstance(cb, dict):
+            tensors = []
+            for k in sorted(cb.keys()):
+                v = cb[k]
+                t = self._cb_to_tensor(v)  # 再帰
+                tensors.append(t)
+            if not tensors:
+                raise ValueError("_cb_to_tensor: empty dict")
+            return torch.cat(tensors, dim=0)
+
+        # -------- 5. それ以外はサポート外 --------
+        raise TypeError(f"_cb_to_tensor: unsupported type {type(cb)}")
+
+    def get_codes_from_indices(self, indices):
+        indices = indices.long()
+        codebook = self.codebook
+        is_multiheaded = codebook.ndim > 2
+
+        if not is_multiheaded:
+            codes = codebook[indices]
+            return rearrange(codes, '... h d -> ... (h d)')
+
+        indices, ps = pack([indices], 'b * h')
+        indices = rearrange(indices, 'b n h -> b h n')
+
+        indices = repeat(indices, 'b h n -> b h n d', d=codebook.shape[-1])
+        codebook = repeat(codebook, 'h n d -> b h n d', b=indices.shape[0])
+
+        codes = codebook.gather(2, indices)
+        codes = rearrange(codes, 'b h n d -> b n (h d)')
+        codes, = unpack(codes, ps, 'b * d')
+        return codes
+
+    import torch
+
+    def fast_find_equivalence_groups(self, latents):
+        from collections import defaultdict
+        hash_map = defaultdict(list)
+        for idx, vector in enumerate(latents):
+            key = tuple(vector.tolist())  # Convert tensor to a hashable tuple
+            hash_map[key].append(idx)
+        equivalence_groups = [group for group in hash_map.values() if len(group) > 1]
+        return equivalence_groups
+
+    def _unwrap_codebook_entry(self, cb):
+        """
+        Accept: Tensor, nn.Parameter, dict/ParameterDict possibly holding 'embed'.
+        Return: Tensor (or Parameter) with shape [K,D] or [1,K,D].
+        """
+        if isinstance(cb, (torch.Tensor, nn.Parameter)):
+            return cb
+        if isinstance(cb, (dict, nn.ParameterDict)):
+            if 'embed' in cb:
+                return self._unwrap_codebook_entry(cb['embed'])
+        raise TypeError(f"Unsupported codebook entry type: {type(cb)}. "
+                        "Expected Tensor/Parameter or dict/ParameterDict with 'embed'.")
+
+    def commitment_loss(
+            self,
+            encoder_outputs,
+            mask_dict,
+            codebook,
+            codebook_mod=None,
+            logger=None,
+            chunk_start=None,
+            beta=0.25,
+            temperature=None,
+            use_cosine=False,
+            embed_ind_dict=None,
+    ):
+        """
+        Per-element commitment + codebook + repel losses (assignment-consistent).
+
+        Returns:
+            commit_loss, codebook_loss, repel_loss, cb_repel_loss
+
+        Assumptions / fixes vs your version:
+          ✅ embed_ind_dict provides assignments consistent with VQ forward (EMA/entropy/split).
+             - Most commonly: embed_ind_dict[skey] is length-B (the whole chunk) and aligned to encoder_outputs
+             - Sometimes: embed_ind_dict[skey] is already length-N_i (masked-only). We support both.
+          ✅ repel losses are computed ONCE (your code double-counted them).
+          ✅ safe-key is resolved WITHOUT creating new keys in this loss function:
+             - Prefer (safe, indices) packed in embed_ind_dict[skey] if you provide it
+             - Else try to find an existing safe key in `codebook` by matching tensor shape
+             - If not found, raise (so you don’t accidentally create new clusters during loss)
+
+        Notes:
+          - temperature/use_cosine are kept in signature for compatibility; assignment is taken from embed_ind_dict.
+          - codebook is expected to be dict/ParameterDict-like where codebook[safe] gives [K_e, D] or [1,K_e,D].
+        """
+        import torch
+        import torch.nn.functional as F
+        import torch.nn as nn
+
+        # ---- 0) shape normalize ----
+        encoder_outputs = encoder_outputs.reshape(-1, encoder_outputs.shape[-1])
+        device = encoder_outputs.device
+        B, D = encoder_outputs.shape
+        dtype = encoder_outputs.dtype
+
+        if chunk_start is None:
+            chunk_start = 0
+        chunk_end = chunk_start + B
+
+        # ---- 1) empty mask_dict => return graph-connected zeros ----
+        if mask_dict is None or len(mask_dict) == 0:
+            zero = encoder_outputs.sum() * 0.0
+            return zero, zero, zero, zero
+
+        # ---- 2) helpers ----
+        def _log(msg: str):
+            if logger is not None:
+                logger.info(msg)
+            else:
+                # comment out if noisy
+                # print(msg)
+                pass
+
+        def _as_long_index(x):
+            if isinstance(x, (list, tuple)):
+                if len(x) == 0:
+                    return None
+                x = torch.as_tensor(x, device=device)
+            elif not isinstance(x, torch.Tensor):
+                try:
+                    x = torch.as_tensor(x, device=device)
+                except Exception as e:
+                    raise TypeError(f"mask_dict entry has unsupported type {type(x)}") from e
+            else:
+                x = x.to(device)
+
+            if x.numel() == 0:
+                return None
+            if x.dtype == torch.bool:
+                x = torch.nonzero(x, as_tuple=False).view(-1)
+                if x.numel() == 0:
+                    return None
+            return x.long()
+
+        def _unwrap_codebook_tensor(cb_param):
+            # cb_param: [K,D] or [1,K,D] or nn.Embedding etc.
+            if hasattr(self, "_cb_to_tensor"):
+                t = self._cb_to_tensor(cb_param)
+            else:
+                # minimal fallback
+                if isinstance(cb_param, nn.Embedding):
+                    t = cb_param.weight
+                else:
+                    t = cb_param
+            if t.ndim == 3 and t.shape[0] == 1:
+                t = t.squeeze(0)
+            return t
+
+        def _find_existing_safe_key(skey: str, K_e: int, D: int):
+            """
+            Try to find an existing safe key in `codebook` whose tensor shape matches (K_e, D).
+            This avoids calling _get_or_create_safe_key() inside loss.
+            """
+            if not isinstance(codebook, (dict, nn.ModuleDict, nn.ParameterDict)):
+                return None
+
+            candidates = []
+            for kk in codebook.keys():
+                try:
+                    t = _unwrap_codebook_tensor(codebook[kk])
+                    if t.ndim == 2 and t.shape[0] == K_e and t.shape[1] == D:
+                        # weak string match: safe keys usually contain skey
+                        if skey in str(kk):
+                            candidates.append(kk)
+                except Exception:
+                    continue
+
+            if len(candidates) == 1:
+                return candidates[0]
+
+            # fallback: if exact skey exists and matches shape
+            if skey in codebook:
+                t = _unwrap_codebook_tensor(codebook[skey])
+                if t.ndim == 2 and t.shape[0] == K_e and t.shape[1] == D:
+                    return skey
+
+            return None
+
+        def _extract_assign_and_safe(skey: str):
+            """
+            Supports multiple embed_ind_dict formats:
+              A) embed_ind_dict[skey] = LongTensor of shape (B,)  (aligned with encoder_outputs)
+              B) embed_ind_dict[skey] = LongTensor of shape (N_i,) (already masked-only)
+              C) embed_ind_dict[skey] = {"ind": LongTensor, "safe": <safe_key_string>}
+              D) embed_ind_dict[skey] = (LongTensor, safe_key_string)
+            Returns: (nn_all_or_nn_masked, safe_from_dict_or_None)
+            """
+            if embed_ind_dict is None:
+                raise RuntimeError(
+                    "[VQ_COMMIT] embed_ind_dict is required to keep assignments consistent with EMA/entropy/split."
+                )
+            if skey not in embed_ind_dict:
+                raise KeyError(f"[VQ_COMMIT] embed_ind_dict missing skey={skey}")
+
+            obj = embed_ind_dict[skey]
+
+            safe_from_dict = None
+            nn_obj = None
+
+            if isinstance(obj, dict):
+                # common keys: "ind", "idx", "nn_idx", "safe"
+                for key in ("ind", "idx", "nn_idx", "assign"):
+                    if key in obj:
+                        nn_obj = obj[key]
+                        break
+                safe_from_dict = obj.get("safe", None)
+            elif isinstance(obj, (tuple, list)) and len(obj) == 2:
+                nn_obj, safe_from_dict = obj[0], obj[1]
+            else:
+                nn_obj = obj
+
+            if not isinstance(nn_obj, torch.Tensor):
+                nn_obj = torch.as_tensor(nn_obj, device=device)
+            nn_obj = nn_obj.to(device=device, dtype=torch.long).reshape(-1)
+
+            return nn_obj, safe_from_dict
+
+        # ---- 3) accumulators ----
+        total_latent = 0
+        total_cb_count = 0
+
+        commit_num = encoder_outputs.new_zeros(())
+        codebk_num = encoder_outputs.new_zeros(())
+        repel_num = encoder_outputs.new_zeros(())
+        cb_repel_num = encoder_outputs.new_zeros(())
+
+        # ---- 4) main loop over keys ----
+        for k, g_idx in mask_dict.items():
+            g_idx = _as_long_index(g_idx)
+            if g_idx is None:
+                continue
+
+            # select indices that fall within this chunk
+            in_chunk = (g_idx >= chunk_start) & (g_idx < chunk_end)
+            if not torch.any(in_chunk):
+                continue
+
+            local_idx = (g_idx[in_chunk] - chunk_start).long()
+            if local_idx.numel() == 0:
+                continue
+
+            z = encoder_outputs.index_select(0, local_idx)  # [N_i, D]
+            N_i = z.shape[0]
+            if N_i == 0:
+                continue
+
+            skey = str(k)
+
+            # determine desired K_e (requested size)
+            K_e_default = int(
+                getattr(self, "cb_dict", {}).get(
+                    skey,
+                    getattr(self, "codebook_size", 0)
+                )
+            )
+            if K_e_default <= 0:
+                raise RuntimeError(f"[VQ_COMMIT] invalid K_e_default for skey={skey}: {K_e_default}")
+
+            # get assignment tensor (either length-B or length-N_i) and optional safe key
+            nn_all_or_masked, safe_from_dict = _extract_assign_and_safe(skey)
+
+            # resolve safe key WITHOUT creating anything
+            safe = None
+            if safe_from_dict is not None:
+                safe = safe_from_dict
+            else:
+                safe = _find_existing_safe_key(skey, K_e_default, D)
+
+            if safe is None:
+                raise RuntimeError(
+                    f"[VQ_COMMIT] Could not resolve existing safe key for skey={skey} "
+                    f"(wanted shape K_e={K_e_default}, D={D}).\n"
+                    f"Fix: pass safe key alongside embed_ind_dict, e.g.\n"
+                    f"  embed_ind_dict[skey] = {{'ind': <(B,)>, 'safe': <safe_key>}}\n"
+                    f"or ensure codebook contains a key that includes '{skey}' with tensor shape ({K_e_default},{D})."
+                )
+
+            if safe not in codebook:
+                raise KeyError(
+                    f"[VQ_COMMIT] safe-key '{safe}' not found in codebook (from skey='{skey}')."
+                )
+
+            cb_param = codebook[safe]
+            cb = _unwrap_codebook_tensor(cb_param).to(device=device, dtype=dtype)  # [K_e, D]
+            if cb.ndim != 2 or cb.shape[1] != D:
+                raise RuntimeError(
+                    f"[VQ_COMMIT] codebook tensor shape mismatch skey={skey} safe={safe}: got {tuple(cb.shape)}, expected (*,{D})"
+                )
+            K_e = cb.shape[0]
+            if K_e != K_e_default:
+                # not fatal, but warn; assignment OOB check uses actual K_e
+                _log(f"[VQ_COMMIT][WARN] skey={skey} expected K_e={K_e_default}, actual K_e={K_e} (safe={safe})")
+
+            # ---- assignment selection aligned with z ----
+            # Case A: nn_all_or_masked is length-B (aligned to encoder_outputs)
+            # Case B: nn_all_or_masked is length-N_i (already masked-only)
+            if nn_all_or_masked.numel() == B:
+                nn_idx = nn_all_or_masked.index_select(0, local_idx)  # [N_i]
+            elif nn_all_or_masked.numel() == N_i:
+                nn_idx = nn_all_or_masked
+            else:
+                raise ValueError(
+                    f"[VQ_COMMIT] nn_idx length mismatch skey={skey}: "
+                    f"got {nn_all_or_masked.numel()} (expected B={B} or N_i={N_i})."
+                )
+
+            # ---- OOB guard before indexing ----
+            min_i = int(nn_idx.min().item())
+            max_i = int(nn_idx.max().item())
+            if (min_i < 0) or (max_i >= K_e):
+                raise RuntimeError(
+                    f"[VQ_COMMIT][OOB] skey={skey} safe={safe} "
+                    f"K_e={K_e} nn_idx range=[{min_i},{max_i}] cb.shape={tuple(cb.shape)}"
+                )
+
+            # ---- gather and losses ----
+            e_star = cb.index_select(0, nn_idx)  # [N_i, D]
+            _log(f"[VQ_COMMIT][DBG] skey={skey} "
+                 f"z_norm={z.float().norm(dim=-1).mean().item():.4f} "
+                 f"e_norm={e_star.float().norm(dim=-1).mean().item():.4f} "
+                 f"mse32={F.mse_loss(z.float(), e_star.detach().float()).item():.3e}")
+
+            commit_part = F.mse_loss(z, e_star.detach(), reduction="mean")
+            codebk_part = F.mse_loss(e_star, z.detach(), reduction="mean")
+
+            total_latent += int(N_i)
+            logger.info(f"commit_part {commit_part}, N_i {N_i}")
+            commit_num = commit_num + commit_part * N_i
+            codebk_num = codebk_num + codebk_part * N_i
+
+            # ---- repel ONCE (your code double-counted this) ----
+            # Keep your existing API. We pass cb_param (original object) to preserve old behavior.
+            ret = self.compute_contrastive_loss(z, 0, logger, cb_param, k)
+            repel_val = ret[0]
+            cb_repel_val = ret[3]  # NOTE: verify your compute_contrastive_loss return layout!
+
+            repel_num = repel_num + repel_val * N_i
+
+            total_cb_count += int(K_e)
+            cb_repel_num = cb_repel_num + cb_repel_val * K_e
+
+        # ---- 5) aggregate ----
+        if total_latent == 0:
+            zero = encoder_outputs.sum() * 0.0
+            _log(f"[VQ_EMPTY] total_latent=0 in chunk [{chunk_start},{chunk_end})")
+            return zero, zero, zero, zero
+
+        commit_loss = beta * (commit_num / float(total_latent))
+        codebook_loss = (codebk_num / float(total_latent))
+        repel_loss = (repel_num / float(total_latent))
+
+        if total_cb_count > 0:
+            cb_repel_loss = cb_repel_num / float(total_cb_count)
+        else:
+            cb_repel_loss = cb_repel_num * 0.0
+
+        return commit_loss, codebook_loss, repel_loss, cb_repel_loss
+
+    import torch
+    import torch.nn.functional as F
+    from einops import rearrange
+
+    @torch.amp.autocast("cuda", enabled=False)
+    def forward(
+            self,
+            x,
+            feature=None,
+            mask_dict=None,
+            logger=None,
+            chunk_i=None,
+            epoch=None,
+            mode=None,
+    ):
+        """
+        Forward pass with per-element quantization + EMA update + commitment loss.
+
+        Contract (IMPORTANT):
+          - _codebook() must return embed_ind_dict such that:
+                embed_ind_dict[skey] = {"ind": LongTensor(N_i), "safe": str}
+            (If your _codebook currently returns only LongTensor, update _codebook first.)
+          - commitment_loss will use safe from embed_ind_dict to index the codebook container.
+        """
+        import torch
+        from einops import rearrange
+        import math
+
+        # -----------------------------
+        # 0) Global latent offset
+        # -----------------------------
+        if not hasattr(self, "latent_size_sum"):
+            self.latent_size_sum = 0
+
+        if mode in ("eval", "test", "init_kmeans_final"):
+            self.latent_size_sum = 0
+        elif chunk_i is not None and chunk_i == 0:
+            self.latent_size_sum = 0
+
+        # -----------------------------
+        # 1) Flatten encoder outputs -> [B_total, D]
+        # -----------------------------
+        x = x.float()
+
+        if getattr(self, "accept_image_fmap", False) and x.ndim == 4:
+            encoder_outputs = rearrange(x, "b c h w -> (b h w) c")
+        else:
+            encoder_outputs = x.reshape(-1, x.size(-1))
+
+        B = int(encoder_outputs.size(0))
+        device = encoder_outputs.device
+        dtype = encoder_outputs.dtype
+
+        global_start = int(self.latent_size_sum)
+        global_end = global_start + B
+
+        # -----------------------------
+        # 2) Special modes: init_kmeans_final / infer
+        # -----------------------------
+        if mode == "init_kmeans_final":
+            _ = self._codebook(
+                encoder_outputs,
+                feature=feature,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode=mode,
+            )
+            z = torch.zeros((), device=device, dtype=dtype)
+            return z, (z, z, z, z)
+
+        if mode == "infer":
+            out = self._codebook(
+                encoder_outputs,
+                feature=feature,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode=mode,
+            )
+
+            # Preferred / canonical contract from _codebook:
+            # (key_id_full, cluster_id_full, global_id_full, id2safe)
+            if isinstance(out, (tuple, list)) and len(out) == 4:
+                key_id_full, cluster_id_full, global_id_full, id2safe = out
+                key_id_full = key_id_full.reshape(-1).long()
+                cluster_id_full = cluster_id_full.reshape(-1).long()
+                global_id_full = global_id_full.reshape(-1).long()
+
+                n = key_id_full.numel()
+                if cluster_id_full.numel() != n or global_id_full.numel() != n:
+                    raise ValueError(
+                        f"[vq.forward] infer length mismatch: "
+                        f"kid={n}, cid={cluster_id_full.numel()}, gid={global_id_full.numel()}"
+                    )
+                if not isinstance(id2safe, dict):
+                    id2safe = {}
+
+                return key_id_full, cluster_id_full, global_id_full, id2safe
+
+            # Backward compat (very old checkpoints) — keep as fallback if you want:
+            if isinstance(out, (tuple, list)) and len(out) == 3:
+                # old: (key_id_full, cluster_id_full, id2safe)  -> use key_id as global_id
+                key_id_full, cluster_id_full, id2safe = out
+                key_id_full = key_id_full.reshape(-1).long()
+                cluster_id_full = cluster_id_full.reshape(-1).long()
+                if key_id_full.numel() != cluster_id_full.numel():
+                    raise ValueError("[vq.forward] infer length mismatch (tuple3)")
+                global_id_full = key_id_full
+                if not isinstance(id2safe, dict):
+                    id2safe = {}
+                return key_id_full, cluster_id_full, global_id_full, id2safe
+
+            raise TypeError(
+                f"[vq.forward] mode='infer' expects _codebook() -> "
+                f"(key_id_full, cluster_id_full, global_id_full, id2safe), got {type(out)} "
+                f"len={len(out) if isinstance(out, (tuple, list)) else 'n/a'}"
+            )
+
+        # -----------------------------
+        # 3) Debug index sanity (optional)
+        # -----------------------------
+        if getattr(self, "debug_index", False) and (mask_dict is not None) and (B > 0):
+            if mode in ("eval", "test", "init_kmeans_final") or (chunk_i == 0):
+                assert global_start == 0, f"[INDEX_MISMATCH] chunk head but global_start={global_start}"
+
+            n_checked, n_oob = 0, 0
+            for k, idxs in mask_dict.items():
+                if idxs is None:
+                    continue
+                gi = idxs.to(device=device) if isinstance(idxs, torch.Tensor) else torch.as_tensor(idxs, device=device)
+                if gi.numel() == 0:
+                    continue
+                gi = gi.reshape(-1)
+                if gi.numel() > 256:
+                    gi = gi[:256]
+                in_chunk = (gi >= global_start) & (gi < global_end)
+                n_oob += int((~in_chunk).sum().item())
+                n_checked += int(gi.numel())
+                if n_checked >= 1024:
+                    break
+
+            assert n_oob == 0, (
+                f"[INDEX_MISMATCH] mask_dict contains out-of-chunk indices. "
+                f"global_range=[{global_start},{global_end}), checked={n_checked}, oob={n_oob}."
+            )
+
+            # quick latent check (cheap)
+            k0 = next(iter(mask_dict.keys()), None)
+            if k0 is not None:
+                gi0 = mask_dict[k0][0] if isinstance(mask_dict[k0], (list, tuple)) else mask_dict[k0].reshape(-1)[
+                    0].item()
+                li0 = int(gi0) - global_start
+                if 0 <= li0 < B:
+                    z_norm = float(encoder_outputs[li0].norm().item())
+                    assert (z_norm > 0) and (
+                        not math.isnan(z_norm)), f"latent invalid at global_id={gi0}, local_id={li0}"
+
+        # -----------------------------
+        # 4) Default losses (0-dim tensors)
+        # -----------------------------
+        z0 = torch.zeros((), device=device, dtype=dtype)
+        commit_loss = z0
+        codebook_loss = z0
+        repel_loss = z0
+        cb_repel_loss = z0
+        ent_loss = z0
+
+        # -----------------------------
+        # 5) Train path: run _codebook first (assign + EMA + entropy)
+        # -----------------------------
+        if (mask_dict is not None) and (B > 0):
+            # quantize_st, self.embed_ind_dict, self.embed, ent_metric_total
+            quantize_st, embed_ind_dict, codebook_container, ent_loss = self._codebook(
+                encoder_outputs,
+                feature=feature,
+                mask_dict=mask_dict,
+                logger=logger,
+                chunk_i=chunk_i,
+                epoch=epoch,
+                mode="train",
+            )
+
+            # ---- HARD REQUIRE: embed_ind_dict contains {"ind","safe"} per skey
+            # This prevents "Could not resolve existing safe key..."
+            # and keeps commitment aligned with EMA/split assignment.
+            if not isinstance(embed_ind_dict, dict):
+                raise TypeError("[vq.forward] embed_ind_dict must be dict")
+            # (light check only)
+            for _k, _v in list(embed_ind_dict.items())[:3]:
+                if not (isinstance(_v, dict) and ("ind" in _v) and ("safe" in _v)):
+                    raise RuntimeError(
+                        "[vq.forward] embed_ind_dict must store {'ind':..., 'safe':...} per skey. "
+                        "Fix _codebook() to return that structure."
+                    )
+
+            # ---- commitment loss uses assignments from embed_ind_dict
+            commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
+                encoder_outputs=encoder_outputs,
+                mask_dict=mask_dict,
+                codebook=codebook_container,  # <-- IMPORTANT: must support codebook[safe]
+                codebook_mod=self._codebook,  # ok to keep for helpers/logging
+                logger=logger,
+                chunk_start=global_start,
+                beta=getattr(self, "beta", 0.25),
+                temperature=getattr(self, "temperature", None),
+                use_cosine=getattr(self, "use_cosine", False),
+                embed_ind_dict=embed_ind_dict,  # contains safe + ind
+            )
+
+        # -----------------------------
+        # 6) Update global offset (train only)
+        # -----------------------------
+        if mode not in ("eval", "test", "init_kmeans_final"):
+            self.latent_size_sum = global_end
+
+        # -----------------------------
+        # 7) Return
+        # -----------------------------
+        # (あなたの今の return に合わせて: total_loss = commit + ent)
+        total_loss = self.commitment_weight * commit_loss + ent_loss
+        logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
+        return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
