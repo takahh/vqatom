@@ -22,12 +22,12 @@ random.seed(SEED_SAMPLE)
 # ============================================================
 # INPUT (final discretize SMILES)
 # ============================================================
-DISCRETIZE_SMI = "/Users/mac/Documents/transformer_tape_dnabert/2024NEW/data_prep/final_splits_200k/discretize.noleak.final.smi"
+DISCRETIZE_SMI = "/Users/taka/Documents/DTI/discretize.noleak.final.smi"
 
 # ============================================================
 # OUTPUT
 # ============================================================
-SAVE_DIR_DISC = "/Volumes/Untitled/2024NEW/discret_final/"
+SAVE_DIR_DISC = "/Users/taka/Documents/DTI/data/"
 os.makedirs(SAVE_DIR_DISC, exist_ok=True)
 
 # ============================================================

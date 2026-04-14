@@ -54,7 +54,7 @@ OUT_DIR = Path(
 )
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-MMCIF_DIR = Path("/Volumes/Untitled/mmcif")
+MMCIF_DIR = Path("/Users/taka/Documents/mmcif")
 
 PDB_CACHE_DB = OUT_DIR / "pdb_chain_cache.sqlite"
 DEDUP_DB = OUT_DIR / "dedup.sqlite"
@@ -118,9 +118,10 @@ SQLITE_PRAGMAS = [
     "PRAGMA temp_store=MEMORY;",
     "PRAGMA cache_size=-200000;",
 ]
+USE_CORE_FILTER = False
 
 # if True, exclude any seq appearing in core, even with different smiles
-EXCLUDE_ANY_CORE_SEQ = True
+EXCLUDE_ANY_CORE_SEQ = False
 
 # split settings
 SPLIT_RATIOS = {"train": 0.8, "valid": 0.1, "test": 0.1}
@@ -374,12 +375,13 @@ def get_ligand_atoms(structure):
 
 def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int]:
     """
-    chain selection rule:
-      - protein chain が 0 本: fail
-      - protein chain が 1 本: それを採用（接触 0 でも採用）
-      - protein chain が 2 本以上: ligand との接触数が最大の chain を採用
     returns:
       (best_chain_id, best_seq, status, top_contacts, second_contacts)
+
+    status:
+      ok_single_chain     : exactly one usable protein chain in structure
+      ok                  : multiple usable protein chains; selected by ligand contacts
+      no_file / parse_error / no_model / no_protein_chains / no_ligand_atoms / no_atoms / bad_top_seq
     """
     try:
         structure = open_mmcif_structure(pdbid)
@@ -388,7 +390,6 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
     except Exception as e:
         return "", "", f"parse_error:{type(e).__name__}:{e}", 0, 0
 
-    # first model only
     try:
         model = next(structure.get_models())
     except StopIteration:
@@ -396,7 +397,6 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
 
     ligand_atoms = get_ligand_atoms(structure)
 
-    # protein chain 候補を全部集める
     protein_chain_rows = []
     for chain in model:
         seq = residue_sequence_from_chain(chain)
@@ -423,7 +423,7 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
     if not protein_chain_rows:
         return "", "", "no_protein_chains", 0, 0
 
-    # protein chain が1本しかなければそれを採用
+    # single-chain case: no inspection needed
     if len(protein_chain_rows) == 1:
         row = protein_chain_rows[0]
         best_seq = clean_protein_seq(row["seq"])
@@ -431,7 +431,7 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
             return "", "", "bad_top_seq", 0, 0
         return row["chain_id"], best_seq, "ok_single_chain", 0, 0
 
-    # 2本以上ある場合は接触数で選ぶ
+    # multi-chain case: inspect by contacts
     if not ligand_atoms:
         return "", "", "no_ligand_atoms", 0, 0
 
@@ -467,6 +467,7 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
         return "", "", "bad_top_seq", best_contacts, second_contacts
 
     return best_chain, best_seq, "ok", best_contacts, second_contacts
+
 
 # ============================================================
 # PDB cache stage
@@ -510,9 +511,11 @@ def init_pdb_cache_db(db_path: Path) -> sqlite3.Connection:
 
 
 def _worker_choose_best_chain(pdbid: str):
-    chain_id, seq, status, top_contacts, second_contacts = choose_best_chain_from_pdb_impl(pdbid)
-    return pdbid, chain_id, seq, status, top_contacts, second_contacts
-
+    try:
+        chain_id, seq, status, top_contacts, second_contacts = choose_best_chain_from_pdb_impl(pdbid)
+        return pdbid, chain_id, seq, status, top_contacts, second_contacts
+    except Exception as e:
+        return pdbid, "", "", f"worker_error:{type(e).__name__}:{e}", 0, 0
 
 def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
     print(f"[pdb-cache] building for {len(unique_pdbids):,} unique pdb ids")
@@ -520,14 +523,16 @@ def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
     cur = con.cursor()
 
     failures = []
+    done = 0
 
     with Pool(processes=PDB_PARSE_NPROC) as pool:
         for rec in tqdm(
-            pool.imap_unordered(_worker_choose_best_chain, unique_pdbids, chunksize=20),
+            pool.imap_unordered(_worker_choose_best_chain, unique_pdbids, chunksize=1),
             total=len(unique_pdbids),
             desc=f"build pdb cache ({PDB_PARSE_NPROC} proc)"
         ):
             pdbid, chain_id, seq, status, top_contacts, second_contacts = rec
+
             cur.execute("""
                 INSERT INTO pdb_chain_cache(pdbid, chain_id, seq, status, top_contacts, second_contacts)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -535,6 +540,11 @@ def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
 
             if not status.startswith("ok"):
                 failures.append((pdbid, status, top_contacts, second_contacts))
+
+            done += 1
+            if done % 1000 == 0:
+                con.commit()
+                print(f"[pdb-cache] committed {done:,}/{len(unique_pdbids):,}")
 
     con.commit()
     con.close()
@@ -573,21 +583,16 @@ def choose_best_chain_across_pdbids_cached(
     pdb_cache_map: Dict[str, Tuple[str, str, str, int, int]],
 ):
     """
-    複数PDB候補の中から、cache済み結果を使って最良 chain を選ぶ。
-    ルール:
-      - status が ok / ok_single_chain のものだけ候補
-      - top_contacts が最大のものを採用
+    Priority:
+      1) ok_single_chain  -> accept directly
+      2) ok               -> choose highest-contact multi-chain candidate
+      3) otherwise fail
     returns:
       (best_pdbid, best_chain, best_seq, debug_status)
     """
-    best_pdbid = None
-    best_chain = None
-    best_seq = None
-    best_contacts = -1
-    best_second = 0
-
     debug = []
 
+    # first: any single-chain success
     for pdbid in pdbids:
         row = pdb_cache_map.get(pdbid)
         if row is None:
@@ -597,7 +602,23 @@ def choose_best_chain_across_pdbids_cached(
         chain_id, seq, status, top_contacts, second_contacts = row
         debug.append(f"{pdbid}:{status}:{top_contacts}:{second_contacts}")
 
-        if not status.startswith("ok"):
+        if status == "ok_single_chain":
+            return pdbid, chain_id, seq, "ok_single_chain"
+
+    # second: best multi-chain success
+    best_pdbid = None
+    best_chain = None
+    best_seq = None
+    best_contacts = -1
+    best_second = 0
+
+    for pdbid in pdbids:
+        row = pdb_cache_map.get(pdbid)
+        if row is None:
+            continue
+
+        chain_id, seq, status, top_contacts, second_contacts = row
+        if status != "ok":
             continue
 
         if top_contacts > best_contacts:
@@ -607,10 +628,11 @@ def choose_best_chain_across_pdbids_cached(
             best_contacts = top_contacts
             best_second = second_contacts
 
-    if best_pdbid is None:
-        return None, None, None, "all_failed|" + "|".join(debug)
+    if best_pdbid is not None:
+        return best_pdbid, best_chain, best_seq, f"ok:{best_contacts}:{best_second}"
 
-    return best_pdbid, best_chain, best_seq, f"ok:{best_contacts}:{best_second}"
+    return None, None, None, "all_failed|" + "|".join(debug)
+
 
 def choose_best_chain_across_pdbids_no_cache(pdbids: List[str]):
     best_pdbid = None
@@ -648,6 +670,9 @@ def load_core_exact_pairs(core_csv: Path):
     core_pairs = set()
     core_seqs = set()
 
+    if not USE_CORE_FILTER:
+        return core_pairs, core_seqs
+
     if not core_csv.exists():
         return core_pairs, core_seqs
 
@@ -661,7 +686,6 @@ def load_core_exact_pairs(core_csv: Path):
                 core_seqs.add(seq)
 
     return core_pairs, core_seqs
-
 
 # ============================================================
 # Pass 1: clean + dedup by (seq, smiles) in SQLite
@@ -708,13 +732,46 @@ def flush_pair_batch(cur: sqlite3.Cursor, con: sqlite3.Connection, batch: List[T
     con.commit()
     batch.clear()
 
+def analyze_pdb_chain_types():
+    import sqlite3
+    from collections import Counter
+
+    con = sqlite3.connect(str(PDB_CACHE_DB))
+    cur = con.cursor()
+
+    counter = Counter()
+    total = 0
+
+    for (status,) in cur.execute("SELECT status FROM pdb_chain_cache"):
+        total += 1
+
+        if status.startswith("ok_single_chain"):
+            counter["single_chain"] += 1
+        elif status.startswith("ok"):
+            counter["multi_chain"] += 1
+        else:
+            counter["failed"] += 1
+
+    con.close()
+
+    print("\n=== PDB chain type stats ===")
+    print(f"total pdbids: {total:,}")
+
+    for k, v in counter.items():
+        frac = v / max(1, total)
+        print(f"{k:15s}: {v:,} ({frac:.2%})")
+
 def pass1_clean_and_dedup():
     core_pairs, core_seqs = load_core_exact_pairs(CORE_FINAL_EVAL_CSV)
-
+    from collections import Counter
+    drop_counter = Counter()
+    keep_counter = Counter()
     # build/load pdb chain cache once
     if not PDB_CACHE_DB.exists():
         unique_pdbids = collect_unique_bindingdb_pdbids(BINDINGDB_TSV, PDB_COL)
         build_pdb_chain_cache(unique_pdbids)
+    else:
+        print(f"[pdb-cache] reuse existing: {PDB_CACHE_DB}")
 
     pdb_cache_map = load_pdb_cache_map(PDB_CACHE_DB)
     con = init_dedup_db(DEDUP_DB)
@@ -742,35 +799,45 @@ def pass1_clean_and_dedup():
                     pdb_cache_map,
                 )
                 if best_seq is None:
+                    drop_counter["no_valid_pdb_chain"] += 1
                     err_w.writerow([row_id, "no_valid_pdb_chain", best_status])
                     continue
+
+                keep_counter[best_status.split(":")[0]] += 1
 
                 seq = best_seq
                 src_pdbid = best_pdbid
                 src_chain = best_chain
 
                 if not seq:
+                    drop_counter["bad_bindingdb_seq1"] += 1
                     err_w.writerow([row_id, "bad_bindingdb_seq1", ""])
                     continue
 
                 raw_smiles = row.get("Ligand SMILES", "")
                 can_smiles = canonicalize_smiles_cached(raw_smiles)
                 if not can_smiles:
+                    drop_counter["bad_smiles"] += 1
                     err_w.writerow([row_id, "bad_smiles", raw_smiles])
                     continue
 
                 if (seq, can_smiles) in core_pairs:
+                    drop_counter["core_pair"] += 1
                     continue
+
                 if EXCLUDE_ANY_CORE_SEQ and seq in core_seqs:
+                    drop_counter["core_seq"] += 1
                     continue
 
                 aff_type, aff_nm = pick_affinity_nm(row)
                 if aff_nm is None:
+                    drop_counter["no_affinity"] += 1
                     err_w.writerow([row_id, "no_affinity", ""])
                     continue
 
                 y = affinity_to_pvalue_from_nm(aff_nm)
                 if y is None:
+                    drop_counter["bad_affinity"] += 1
                     err_w.writerow([row_id, "bad_affinity", aff_nm])
                     continue
 
@@ -779,19 +846,21 @@ def pass1_clean_and_dedup():
 
                 if len(batch) >= PASS1_BATCH_SIZE:
                     flush_pair_batch(cur, con, batch)
-
                 if seen % 10000 == 0:
                     err_f.flush()
 
     flush_pair_batch(cur, con, batch)
 
+    n_unique = cur.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
+    n_duplicates_collapsed = kept - n_unique
+
     with PASS1_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["seq", "smiles", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain"])
         for row in cur.execute("""
-            SELECT seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain
-            FROM pairs
-        """):
+                               SELECT seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain
+                               FROM pairs
+                               """):
             w.writerow(row)
 
     with UNIQUE_SMILES_CSV.open("w", encoding="utf-8", newline="") as f:
@@ -799,13 +868,33 @@ def pass1_clean_and_dedup():
         w.writerow(["smiles"])
         for row in cur.execute("SELECT DISTINCT smiles FROM pairs"):
             w.writerow([row[0]])
+    n_unique_seq = cur.execute("SELECT COUNT(DISTINCT seq) FROM pairs").fetchone()[0]
+    n_unique_smiles = cur.execute("SELECT COUNT(DISTINCT smiles) FROM pairs").fetchone()[0]
 
+    print(f"[pass1] unique seq={n_unique_seq:,}")
+    print(f"[pass1] unique smiles={n_unique_smiles:,}")
     con.close()
 
-    print(f"[pass1] seen={seen:,} pre_kept={kept:,}")
+    print("\n=== pass1 drop summary ===")
+    for k, v in drop_counter.most_common():
+        print(f"{k:25s}: {v:,}")
+
+    print(f"\n[pass1] seen={seen:,}")
+    print(f"[pass1] kept(before dedup)={kept:,}")
+    print(f"[pass1] unique pairs(after dedup)={n_unique:,}")
+    print(f"[pass1] duplicates collapsed={n_duplicates_collapsed:,}")
     print(f"[pass1] wrote: {PASS1_CSV}")
     print(f"[pass1] wrote: {UNIQUE_SMILES_CSV}")
     print(f"[pass1] wrote: {ERROR_TSV}")
+    print("\n=== pass1 keep summary ===")
+    for k, v in keep_counter.most_common():
+        print(f"{k:25s}: {v:,}")
+    n_kept_total = sum(keep_counter.values())
+    if n_kept_total:
+        print("\n=== pass1 kept row fractions ===")
+        for k in ["ok_single_chain", "ok"]:
+            v = keep_counter.get(k, 0)
+            print(f"{k:25s}: {v:,} ({v / n_kept_total:.2%})")
 
 
 # ============================================================
@@ -815,19 +904,32 @@ def pass1_clean_and_dedup():
 def _tokenize_one_smiles(smi: str):
     smi = (smi or "").strip()
     if not smi:
-        return None
+        return None, "empty_smiles"
+
     try:
         ids = encode_smiles_to_atom_tokens(smi)
-    except Exception:
-        return None
-    if not ids:
-        return None
-    try:
-        lig_tok = " ".join(str(int(x)) for x in ids)
-    except Exception:
-        return None
-    return smi, lig_tok
+    except Exception as e:
+        return None, f"encode_exception:{type(e).__name__}:{e}"
 
+    if ids is None:
+        return None, "ids_is_none"
+
+    try:
+        ids_list = list(ids)
+    except Exception as e:
+        return None, f"ids_not_iterable:{type(e).__name__}:{e}"
+
+    if len(ids_list) == 0:
+        return None, "ids_empty"
+
+    try:
+        lig_tok = " ".join(str(int(x)) for x in ids_list)
+    except Exception as e:
+        return None, f"int_cast_exception:{type(e).__name__}:{e}"
+
+    return (smi, lig_tok), None
+
+from collections import Counter
 
 def pass2_make_smiles_token_map_parallel():
     smiles_list = []
@@ -839,19 +941,31 @@ def pass2_make_smiles_token_map_parallel():
 
     total = len(smiles_list)
     ok = 0
+    fail_counter = Counter()
 
-    with SMILES_TOK_CSV.open("w", encoding="utf-8", newline="") as fout:
+    fail_tsv = OUT_DIR / "tokenize_failures.tsv"
+
+    with SMILES_TOK_CSV.open("w", encoding="utf-8", newline="") as fout, \
+         fail_tsv.open("w", encoding="utf-8", newline="") as ferr:
+
         w = csv.writer(fout)
         w.writerow(["smiles", "lig_tok"])
 
+        ew = csv.writer(ferr, delimiter="\t")
+        ew.writerow(["smiles", "reason"])
+
         with Pool(processes=TOKENIZE_NPROC) as pool:
-            for out in tqdm(
+            for out, err in tqdm(
                 pool.imap_unordered(_tokenize_one_smiles, smiles_list, chunksize=TOKENIZE_CHUNKSIZE),
                 total=total,
                 desc=f"pass2 tokenize unique smiles ({TOKENIZE_NPROC} proc)"
             ):
-                if out is None:
+                if err is not None:
+                    fail_counter[err] += 1
+                    # out is None here, so write original smiles only if needed by restructuring more;
+                    # for now just record reason count below
                     continue
+
                 smi, lig_tok = out
                 w.writerow([smi, lig_tok])
                 ok += 1
@@ -861,7 +975,11 @@ def pass2_make_smiles_token_map_parallel():
 
     print(f"[pass2] unique_smiles={total:,} tokenized={ok:,}")
     print(f"[pass2] wrote: {SMILES_TOK_CSV}")
+    print(f"[pass2] wrote failures: {fail_tsv}")
 
+    print("[pass2] failure summary:")
+    for reason, n in fail_counter.most_common(20):
+        print(f"  {reason}: {n}")
 
 # ============================================================
 # Pass 3: join pass1 rows with token map
@@ -1269,14 +1387,12 @@ def print_entity_pair_stats(rows: List[Dict[str, str]], name: str):
             f"prot_pairs_min={min(prot_vals)}"
         )
 
-def stage4_make_double_cold_splits_balanced():
+def stage4_double_cold_balanced_components():
     rows = read_final_rows(FINAL_CSV)
     if not rows:
         raise RuntimeError(f"No rows found in {FINAL_CSV}")
 
-    # ------------------------------------------------------------
-    # 0) attach y_bin first
-    # ------------------------------------------------------------
+    # 0) attach y_bin
     rows0 = []
     n_missing_y = 0
     for row in rows:
@@ -1292,17 +1408,13 @@ def stage4_make_double_cold_splits_balanced():
     if not rows0:
         raise RuntimeError("No usable rows after y parsing")
 
-    # ------------------------------------------------------------
     # 1) protein clustering
-    # ------------------------------------------------------------
     write_unique_seq_fasta(rows0, SPLIT_FASTA)
     cluster_tsv = run_mmseqs_cluster(SPLIT_FASTA, MMSEQS_DIR, MMSEQS_TMP)
     seq_to_cluster = build_seq_to_cluster_map(cluster_tsv, SPLIT_FASTA)
     save_seq_to_cluster_map(seq_to_cluster, SEQ_TO_CLUSTER_CSV)
 
-    # ------------------------------------------------------------
-    # 2) annotate protein_cluster + scaffold
-    # ------------------------------------------------------------
+    # 2) annotate protein_cluster + ligand_scaffold
     kept_rows = []
     dropped_no_cluster = 0
     dropped_no_scaffold = 0
@@ -1331,197 +1443,197 @@ def stage4_make_double_cold_splits_balanced():
         f"dropped_no_scaffold={dropped_no_scaffold:,}"
     )
     if not kept_rows:
-        raise RuntimeError("No usable rows after protein-cluster / scaffold annotation")
+        raise RuntimeError("No usable rows after annotation")
 
-    # ------------------------------------------------------------
-    # helper: greedy balanced split by ROW COUNTS
-    # ------------------------------------------------------------
-    def greedy_split_by_weight(weight_map, seed):
-        rng = random.Random(seed)
-
-        items = list(weight_map.items())
-        rng.shuffle(items)
-        items.sort(key=lambda x: (-x[1], str(x[0])))
-
-        total_weight = sum(w for _, w in items)
-        targets = {
-            "train": total_weight * SPLIT_RATIOS["train"],
-            "valid": total_weight * SPLIT_RATIOS["valid"],
-            "test":  total_weight * SPLIT_RATIOS["test"],
-        }
-
-        split_sets = {"train": set(), "valid": set(), "test": set()}
-        split_weights = {"train": 0, "valid": 0, "test": 0}
-        split_order = ["train", "valid", "test"]
-
-        for item, w in items:
-            deficits = {s: targets[s] - split_weights[s] for s in split_order}
-            best_split = max(split_order, key=lambda s: (deficits[s], -split_weights[s]))
-            split_sets[best_split].add(item)
-            split_weights[best_split] += w
-
-        print("[split] balanced assignment summary")
-        for s in split_order:
-            frac = split_weights[s] / max(1, total_weight)
-            print(
-                f"    {s}: target={targets[s]:,.1f} assigned={split_weights[s]:,} "
-                f"({frac:.3%}) items={len(split_sets[s]):,}"
-            )
-
-        return split_sets, split_weights
-
-    # ------------------------------------------------------------
-    # 3) split protein clusters by row count
-    # ------------------------------------------------------------
-    prot_cluster_rowcount = defaultdict(int)
-    for row in kept_rows:
-        prot_cluster_rowcount[row["protein_cluster"]] += 1
-
-    prot_split, _ = greedy_split_by_weight(
-        prot_cluster_rowcount,
-        SPLIT_SEED,
-    )
-
-    # ------------------------------------------------------------
-    # 4) split scaffolds by row count
-    # ------------------------------------------------------------
-    scaffold_rowcount = defaultdict(int)
-    for row in kept_rows:
-        scaffold_rowcount[row["ligand_scaffold"]] += 1
-
-    scaf_split, _ = greedy_split_by_weight(
-        scaffold_rowcount,
-        SPLIT_SEED + 1,
-    )
-
-    # ------------------------------------------------------------
-    # 5) keep only rows where protein split == scaffold split
-    # ------------------------------------------------------------
-    final_rows = []
-    dropped_conflict = 0
+    # ============================================================
+    # 3) Build bipartite connected components:
+    #    protein_cluster <-> ligand_scaffold
+    # ============================================================
+    prot_to_scaf = defaultdict(set)
+    scaf_to_prot = defaultdict(set)
 
     for row in kept_rows:
         p = row["protein_cluster"]
         s = row["ligand_scaffold"]
+        prot_to_scaf[p].add(s)
+        scaf_to_prot[s].add(p)
 
-        assigned = None
-        for split in ["train", "valid", "test"]:
-            if p in prot_split[split] and s in scaf_split[split]:
-                assigned = split
-                break
+    all_prots = set(prot_to_scaf.keys())
+    all_scafs = set(scaf_to_prot.keys())
 
-        if assigned is None:
-            dropped_conflict += 1
+    visited_prots = set()
+    visited_scafs = set()
+    components = []
+
+    for start_p in all_prots:
+        if start_p in visited_prots:
             continue
 
-        row["split"] = assigned
-        final_rows.append(row)
+        q = deque([("p", start_p)])
+        comp_prots = set()
+        comp_scafs = set()
 
-    print(f"[split] after double-cold intersection kept={len(final_rows):,} dropped_conflict={dropped_conflict:,}")
-    if not final_rows:
-        raise RuntimeError("No rows survived protein+scaffold intersection")
+        while q:
+            kind, node = q.popleft()
 
-    # ------------------------------------------------------------
-    # 6) iterative filtering + balancing
-    # ------------------------------------------------------------
-    current_rows = list(final_rows)
+            if kind == "p":
+                if node in visited_prots:
+                    continue
+                visited_prots.add(node)
+                comp_prots.add(node)
 
-    for it in range(BALANCE_MAX_ITERS):
-        print(f"\n[balance] iteration {it+1}/{BALANCE_MAX_ITERS} start rows={len(current_rows):,}")
+                for s in prot_to_scaf[node]:
+                    if s not in visited_scafs:
+                        q.append(("s", s))
 
-        # 6a) filter by ligand/protein constraints
-        filtered_rows, lig_stats, prot_stats, good_ligs, good_prots = filter_rows_by_entity_constraints(
-            current_rows,
-            lig_min_pairs=LIG_MIN_PAIRS,
-            prot_min_pairs=PROT_MIN_PAIRS,
-            low=POS_RATE_LOW,
-            high=POS_RATE_HIGH,
-        )
+            else:
+                if node in visited_scafs:
+                    continue
+                visited_scafs.add(node)
+                comp_scafs.add(node)
 
+                for p in scaf_to_prot[node]:
+                    if p not in visited_prots:
+                        q.append(("p", p))
+
+        components.append({
+            "prots": comp_prots,
+            "scafs": comp_scafs,
+        })
+
+    # handle isolated scaffolds if any
+    for s in all_scafs:
+        if s not in visited_scafs:
+            components.append({
+                "prots": set(),
+                "scafs": {s},
+            })
+
+    # compute component weights by row count
+    comp_rows = []
+    for i, comp in enumerate(components):
+        comp_prots = comp["prots"]
+        comp_scafs = comp["scafs"]
+
+        rows_i = [
+            row for row in kept_rows
+            if row["protein_cluster"] in comp_prots and row["ligand_scaffold"] in comp_scafs
+        ]
+
+        comp_rows.append({
+            "comp_id": i,
+            "prots": comp_prots,
+            "scafs": comp_scafs,
+            "rows": rows_i,
+            "weight": len(rows_i),
+        })
+
+    comp_rows = [c for c in comp_rows if c["weight"] > 0]
+    total_weight = sum(c["weight"] for c in comp_rows)
+
+    print(f"[split] connected components={len(comp_rows):,} total_rows={total_weight:,}")
+    if not comp_rows:
+        raise RuntimeError("No non-empty connected components")
+
+    # ============================================================
+    # 4) Assign whole components to train/valid/test greedily
+    # ============================================================
+    rng = random.Random(SPLIT_SEED)
+    rng.shuffle(comp_rows)
+    comp_rows.sort(key=lambda x: (-x["weight"], x["comp_id"]))
+
+    targets = {
+        "train": total_weight * SPLIT_RATIOS["train"],
+        "valid": total_weight * SPLIT_RATIOS["valid"],
+        "test":  total_weight * SPLIT_RATIOS["test"],
+    }
+    split_weights = {"train": 0, "valid": 0, "test": 0}
+    split_comps = {"train": [], "valid": [], "test": []}
+    split_order = ["train", "valid", "test"]
+
+    for comp in comp_rows:
+        deficits = {s: targets[s] - split_weights[s] for s in split_order}
+        best_split = max(split_order, key=lambda s: (deficits[s], -split_weights[s]))
+        split_comps[best_split].append(comp)
+        split_weights[best_split] += comp["weight"]
+
+    print("[split] component assignment summary")
+    for s in split_order:
+        frac = split_weights[s] / max(1, total_weight)
         print(
-            f"[balance] after filter rows={len(filtered_rows):,} "
-            f"good_ligs={len(good_ligs):,} good_prots={len(good_prots):,}"
+            f"    {s}: target={targets[s]:,.1f} assigned={split_weights[s]:,} "
+            f"({frac:.3%}) comps={len(split_comps[s]):,}"
         )
 
-        if not filtered_rows:
-            print("[balance] no rows after filtering; stop")
-            current_rows = filtered_rows
-            break
+    # ============================================================
+    # 5) Materialize final rows
+    # ============================================================
+    final_rows = []
+    for split in split_order:
+        for comp in split_comps[split]:
+            for row in comp["rows"]:
+                row2 = dict(row)
+                row2["split"] = split
+                final_rows.append(row2)
 
-        # 6b) balance by ligand first
-        balanced_lig = balance_rows_within_entity(
-            filtered_rows,
-            key="lig_tok",
-            seed=SPLIT_SEED + 100 + it,
-        )
-        print(f"[balance] after ligand balance rows={len(balanced_lig):,}")
+    if not final_rows:
+        raise RuntimeError("No rows assigned after component splitting")
 
-        if not balanced_lig:
-            print("[balance] no rows after ligand balancing; stop")
-            current_rows = balanced_lig
-            break
-
-        # 6c) then balance by protein
-        balanced_prot = balance_rows_within_entity(
-            balanced_lig,
-            key="seq",
-            seed=SPLIT_SEED + 200 + it,
-        )
-        print(f"[balance] after protein balance rows={len(balanced_prot):,}")
-
-        if not balanced_prot:
-            print("[balance] no rows after protein balancing; stop")
-            current_rows = balanced_prot
-            break
-
-        # 6d) stop if converged
-        if len(balanced_prot) == len(current_rows):
-            current_rows = balanced_prot
-            print("[balance] converged")
-            break
-
-        current_rows = balanced_prot
-
-    if not current_rows:
-        raise RuntimeError("No rows remain after balancing")
-
-    # ------------------------------------------------------------
-    # 7) final summaries
-    # ------------------------------------------------------------
+    # ============================================================
+    # 6) final summaries
+    # ============================================================
     after_counts = defaultdict(int)
-    for row in current_rows:
+    for row in final_rows:
         after_counts[row["split"]] += 1
 
-    total_final = len(current_rows)
-    print("\n[split] final row counts after balancing")
+    total_final = len(final_rows)
+    print("\n[split] final row counts")
     for s in ["train", "valid", "test"]:
         frac = after_counts[s] / max(1, total_final)
         print(f"    {s}: rows={after_counts[s]:,} ({frac:.3%})")
 
-    summarize_splits(current_rows)
-    summarize_binary_balance(current_rows, "final")
-    print_entity_pair_stats(current_rows, "final")
+    summarize_splits(final_rows)
+    summarize_binary_balance(final_rows, "double_cold_component_split")
+    print_entity_pair_stats(final_rows, "double_cold_component_split")
 
-    # ------------------------------------------------------------
-    # 8) write outputs
-    # ------------------------------------------------------------
-    write_split_csvs(current_rows)
-    write_annotated_rows(current_rows, ROW_ANNOT_CSV)
+    # sanity checks
+    train_prot = {r["protein_cluster"] for r in final_rows if r["split"] == "train"}
+    valid_prot = {r["protein_cluster"] for r in final_rows if r["split"] == "valid"}
+    test_prot  = {r["protein_cluster"] for r in final_rows if r["split"] == "test"}
+
+    train_scaf = {r["ligand_scaffold"] for r in final_rows if r["split"] == "train"}
+    valid_scaf = {r["ligand_scaffold"] for r in final_rows if r["split"] == "valid"}
+    test_scaf  = {r["ligand_scaffold"] for r in final_rows if r["split"] == "test"}
+
+    print("\n=== overlap sanity check ===")
+    print(f"protein overlap train-valid: {len(train_prot & valid_prot)}")
+    print(f"protein overlap train-test : {len(train_prot & test_prot)}")
+    print(f"protein overlap valid-test : {len(valid_prot & test_prot)}")
+    print(f"scaffold overlap train-valid: {len(train_scaf & valid_scaf)}")
+    print(f"scaffold overlap train-test : {len(train_scaf & test_scaf)}")
+    print(f"scaffold overlap valid-test : {len(valid_scaf & test_scaf)}")
+
+    write_split_csvs(final_rows)
+    write_annotated_rows(final_rows, ROW_ANNOT_CSV)
+
 
 def debug_tokenizer_once():
     with UNIQUE_SMILES_CSV.open("r", encoding="utf-8", newline="") as f:
         r = csv.DictReader(f)
         first = next(r)["smiles"]
 
-    print("[debug] first smiles:", first)
 
     try:
         ids = encode_smiles_to_atom_tokens(first)
-        print("[debug] ids:", ids[:20] if ids else ids)
-        print("[debug] n_ids:", 0 if ids is None else len(ids))
     except Exception as e:
-        print("[debug] tokenizer exception:", repr(e))
         raise
+
+def debug_tokenizer_once():
+    with UNIQUE_SMILES_CSV.open("r", encoding="utf-8", newline="") as f:
+        r = csv.DictReader(f)
+        first = next(r)["smiles"]
+    ids = encode_smiles_to_atom_tokens(first)
+    ids_list = list(ids)
 
 # ============================================================
 # Main
@@ -1533,19 +1645,18 @@ def main():
     #
     # print("\n=== stage 1b: build pdb chain cache ===")
     # build_pdb_chain_cache(unique_pdbids)
+
+    # print("\n=== stage 2: clean + dedup bindingdb rows ===")
+    # pass1_clean_and_dedup()
+
+    # print("\n=== stage 3: tokenize unique smiles ===")
+    # pass2_make_smiles_token_map_parallel()
     #
-    print("\n=== stage 2: clean + dedup bindingdb rows ===")
-    pass1_clean_and_dedup()
+    # print("\n=== stage 4: join tokens ===")
+    # pass3_join_tokens()
 
-    print("\n=== stage 3: tokenize unique smiles ===")
-    pass2_make_smiles_token_map_parallel()
-
-    print("\n=== stage 4: join tokens ===")
-    pass3_join_tokens()
-
-    print("\n=== stage 5: balanced protein 40% cluster + Murcko scaffold double-cold split ===")
-    stage4_make_double_cold_splits_balanced()
-
+    print("\n=== stage 5: protein-cluster + scaffold double-cold split (no balance) ===")
+    stage4_double_cold_balanced_components()
 
 if __name__ == "__main__":
     main()

@@ -14,9 +14,6 @@ for p in [HERE, ROOT]:
     if s not in sys.path:
         sys.path.insert(0, s)
 
-print("[debug infer_one_smiles] HERE =", HERE)
-print("[debug infer_one_smiles] ROOT =", ROOT)
-print("[debug infer_one_smiles] sys.path[:5] =", sys.path[:5])
 # ---------------------------
 # Public API for CSV builders
 # ---------------------------
@@ -41,7 +38,7 @@ def infer_smiles(smiles: str):
     global _MODEL_READY
     if not _MODEL_READY:
         init_tokenizer(
-            ckpt_path="/Users/mac/Downloads/model_epoch_3.pt",
+            ckpt_path="/Users/taka/Documents/DTI/model_epoch_3.pt",
             device=-1,
             hidden_dim=16,
             codebook_size=10000,
