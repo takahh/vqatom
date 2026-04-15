@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
-import glob
-import math
-import random
-import argparse
-import json
-import time
-from typing import Optional, Tuple, List
+import os, glob, math, random, argparse, json, time
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -17,229 +9,157 @@ from torch.utils.data import Dataset, DataLoader
 
 
 # ============================================================
-# Tokenizer
-# ============================================================
-class SmilesCharTokenizer:
-    PAD = "[PAD]"
-    MASK = "[MASK]"
-    CLS = "[CLS]"
-    UNK = "[UNK]"
-
-    def __init__(self, stoi: dict):
-        self.stoi = dict(stoi)
-        self.itos = {int(v): k for k, v in self.stoi.items()}
-
-        for tok in [self.PAD, self.MASK, self.CLS, self.UNK]:
-            if tok not in self.stoi:
-                raise ValueError(f"Missing special token in vocab: {tok}")
-
-        self.pad_id = int(self.stoi[self.PAD])
-        self.mask_id = int(self.stoi[self.MASK])
-        self.cls_id = int(self.stoi[self.CLS])
-        self.unk_id = int(self.stoi[self.UNK])
-        self.vocab_size = int(len(self.stoi))
-
-    @classmethod
-    def from_json(cls, path: str) -> "SmilesCharTokenizer":
-        with open(path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        if "stoi" not in obj:
-            raise ValueError("vocab json must contain key 'stoi'")
-        return cls(obj["stoi"])
-
-    def encode(self, smiles: str, add_cls: bool = True) -> List[int]:
-        ids = [self.stoi.get(ch, self.unk_id) for ch in smiles]
-        if add_cls:
-            ids = [self.cls_id] + ids
-        return ids
-
-
-# ============================================================
 # MLM masking
 # ============================================================
 def mlm_mask_tokens(
     input_ids: torch.Tensor,
-    pad_id: int,
-    mask_id: int,
-    vocab_size: int,
-    mask_prob: float = 0.15,
+    base_vocab: int,
+    mask_prob: float = 0.30,
     generator: Optional[torch.Generator] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
     """
-    input_ids: (B, L) int64 with PAD included
+    input_ids: (B, L) int64 with PAD included (PAD_ID = base_vocab+0)
     returns:
       masked_input_ids: (B, L)
       labels: (B, L) where non-masked = -100
+      vocab_size: base_vocab + 2  (PAD + MASK)
+    Notes:
+      - Mask positions are sampled randomly each call.
+      - If `generator` is provided, sampling becomes deterministic w.r.t that generator.
     """
     assert input_ids.dtype == torch.int64
 
+    PAD_ID  = base_vocab + 0
+    MASK_ID = base_vocab + 1
+    vocab_size = base_vocab + 2
+
     labels = torch.full_like(input_ids, -100)
 
-    is_pad = (input_ids == pad_id)
-    is_cls = (input_ids == (mask_id - 1)) if False else torch.zeros_like(input_ids, dtype=torch.bool)
-    # CLSは pad_id/mask_id から自動推定しない。あとで明示処理する方が安全。
+    # don't mask PAD
+    is_pad = (input_ids == PAD_ID)
 
+    # choose positions to predict
     prob = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
     mask_sel = (prob < mask_prob) & (~is_pad)
 
     labels[mask_sel] = input_ids[mask_sel]
 
+    # among selected: 80% -> MASK, 10% -> random, 10% -> keep
     r = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
 
-    m_mask = mask_sel & (r < 0.80)
-    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)
-    # keep = remaining selected
+    m_mask = mask_sel & (r < 0.80)                          # MASK
+    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)            # RAND
+    # KEEP is remaining selected positions
 
     masked = input_ids.clone()
-    masked[m_mask] = mask_id
+    masked[m_mask] = MASK_ID
 
     if m_rand.any():
-        rand_ids = torch.randint(
+        masked[m_rand] = torch.randint(
             low=0,
-            high=vocab_size,
+            high=base_vocab,
             size=(int(m_rand.sum().item()),),
             device=input_ids.device,
             dtype=torch.int64,
             generator=generator,
         )
-        masked[m_rand] = rand_ids
 
-    return masked, labels
-
-
-def mlm_mask_tokens_with_special_control(
-    input_ids: torch.Tensor,
-    pad_id: int,
-    mask_id: int,
-    cls_id: int,
-    vocab_size: int,
-    mask_prob: float = 0.15,
-    generator: Optional[torch.Generator] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    labels = torch.full_like(input_ids, -100)
-
-    is_pad = (input_ids == pad_id)
-    is_cls = (input_ids == cls_id)
-
-    prob = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
-    mask_sel = (prob < mask_prob) & (~is_pad) & (~is_cls)
-
-    labels[mask_sel] = input_ids[mask_sel]
-
-    r = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
-    m_mask = mask_sel & (r < 0.80)
-    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)
-
-    masked = input_ids.clone()
-    masked[m_mask] = mask_id
-
-    if m_rand.any():
-        rand_ids = torch.randint(
-            low=0,
-            high=vocab_size,
-            size=(int(m_rand.sum().item()),),
-            device=input_ids.device,
-            dtype=torch.int64,
-            generator=generator,
-        )
-        masked[m_rand] = rand_ids
-
-    return masked, labels
-
-
+    return masked, labels, vocab_size
 # ============================================================
-# Dataset
+# Dataset: molecule-level sampling from many batch files
 # ============================================================
-class SmilesShardDataset(Dataset):
+class RaggedMolDataset(Dataset):
     """
-    Loads smiles_pretrain_batchXXX.pt files and exposes each SMILES as one item.
-
-    Each shard file is expected to contain either:
-      {"smiles": ["CCO", "c1ccccc1", ...]}
-    or
-      {"rows": [{"smiles": "CCO"}, {"smiles": "c1ccccc1"}, ...]}
+    Loads pretrain_ragged_batchXXX.pt files and exposes each molecule as one item.
+    Each item returns a 1D token sequence (len = num_atoms_in_mol).
     """
 
-    def __init__(self, root_dir: str, tokenizer: SmilesCharTokenizer, file_list: List[str]):
-        self.root_dir = root_dir
-        self.tokenizer = tokenizer
+    def __init__(self, root_dir,
+                 pattern="pretrain_ragged_batch*.pt",
+                 limit_files=None,
+                 file_list=None):
 
-        self.files = []
-        for p in file_list:
-            if os.path.isabs(p):
-                self.files.append(p)
-            else:
-                self.files.append(os.path.join(root_dir, p))
-        self.files = sorted(self.files)
+        if file_list is not None:
+            # file_list can contain relative paths
+            self.files = []
+            for p in file_list:
+                if os.path.isabs(p):
+                    self.files.append(p)
+                else:
+                    self.files.append(os.path.join(root_dir, p))
+            self.files = sorted(self.files)
+        else:
+            self.files = sorted(glob.glob(os.path.join(root_dir, pattern)))
 
         if not self.files:
-            raise FileNotFoundError("No shard files provided")
+            raise FileNotFoundError(f"No files found in {root_dir}")
+
+        if limit_files is not None:
+            self.files = self.files[:int(limit_files)]
 
         self.index = []
         self.file_meta = []
+        base_vocab_set = set()
 
         for fi, fp in enumerate(self.files):
-            d = torch.load(fp, map_location="cpu", weights_only=False)
+            d = torch.load(fp, map_location="cpu")
+            offsets = d["offsets"].to(torch.int64)
+            n_mols = offsets.numel() - 1
+            self.file_meta.append((fp, offsets))
 
-            smiles_list = self._extract_smiles_list(d)
-            self.file_meta.append((fp, len(smiles_list)))
-
-            for mi in range(len(smiles_list)):
+            for mi in range(n_mols):
                 self.index.append((fi, mi))
 
+            base_vocab_set.add(int(d["base_vocab"]))
+
+        if len(base_vocab_set) != 1:
+            raise RuntimeError(f"base_vocab differs across files: {sorted(base_vocab_set)}")
+
+        self.base_vocab = base_vocab_set.pop()
+
         self._cache_fi = None
-        self._cache_smiles = None
-
-    def _extract_smiles_list(self, d) -> List[str]:
-        if isinstance(d, dict):
-            if "smiles" in d:
-                smiles_list = [str(x).strip() for x in d["smiles"] if str(x).strip()]
-                return smiles_list
-            if "rows" in d:
-                smiles_list = []
-                for r in d["rows"]:
-                    smi = ""
-                    if isinstance(r, dict):
-                        smi = str(r.get("smiles", "")).strip()
-                    if smi:
-                        smiles_list.append(smi)
-                return smiles_list
-
-        raise ValueError("Each shard .pt must contain key 'smiles' or 'rows'")
+        self._cache_data = None
 
     def __len__(self):
         return len(self.index)
 
-    def _load_file(self, fi: int) -> List[str]:
-        if self._cache_fi == fi and self._cache_smiles is not None:
-            return self._cache_smiles
-
+    def _load_file(self, fi):
+        if self._cache_fi == fi and self._cache_data is not None:
+            return self._cache_data
         fp, _ = self.file_meta[fi]
-        d = torch.load(fp, map_location="cpu", weights_only=False)
-        smiles_list = self._extract_smiles_list(d)
-
+        d = torch.load(fp, map_location="cpu")
         self._cache_fi = fi
-        self._cache_smiles = smiles_list
-        return smiles_list
+        self._cache_data = d
+        return d
 
     def __getitem__(self, idx):
         fi, mi = self.index[idx]
-        smiles_list = self._load_file(fi)
-        smi = smiles_list[mi]
-        ids = self.tokenizer.encode(smi, add_cls=True)
-        return torch.tensor(ids, dtype=torch.int64)
+        d = self._load_file(fi)
 
+        tokens_flat = d["tokens_flat"].to(torch.int64)
+        offsets = d["offsets"].to(torch.int64)
 
-def collate_pad(batch: List[torch.Tensor], pad_id: int):
+        s = int(offsets[mi].item())
+        e = int(offsets[mi + 1].item())
+        seq = tokens_flat[s:e].clone()
+        return seq
+
+def collate_pad(batch, base_vocab: int):
+    """
+    batch: list of 1D LongTensor sequences (variable len)
+    returns:
+      input_ids (B,L) padded with PAD
+      attn_keep (B,L) bool where True=real token, False=pad
+      lens (B,)
+    """
+    PAD_ID = base_vocab + 0
     lens = torch.tensor([x.numel() for x in batch], dtype=torch.int64)
     B = len(batch)
     L = int(lens.max().item())
-
-    input_ids = torch.full((B, L), pad_id, dtype=torch.int64)
+    input_ids = torch.full((B, L), PAD_ID, dtype=torch.int64)
     for i, seq in enumerate(batch):
         input_ids[i, :seq.numel()] = seq
-
-    attn_keep = (torch.arange(L)[None, :] < lens[:, None])  # True for real token
+    attn_keep = (torch.arange(L)[None, :] < lens[:, None])  # True for real tokens
     return input_ids, attn_keep, lens
 
 
@@ -247,22 +167,10 @@ def collate_pad(batch: List[torch.Tensor], pad_id: int):
 # Simple Transformer MLM
 # ============================================================
 class TransformerMLM(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        max_len: int = 512,
-        d_model: int = 256,
-        nhead: int = 8,
-        num_layers: int = 6,
-        dim_ff: int = 1024,
-        dropout: float = 0.1,
-    ):
+    def __init__(self, vocab_size, d_model=256, nhead=8, num_layers=6, dim_ff=1024, dropout=0.1):
         super().__init__()
         self.vocab_size = vocab_size
-        self.max_len = max_len
-
         self.tok = nn.Embedding(vocab_size, d_model)
-        self.pos = nn.Embedding(max_len, d_model)
 
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -276,19 +184,18 @@ class TransformerMLM(nn.Module):
         self.lm_head = nn.Linear(d_model, vocab_size)
 
     def forward(self, input_ids, key_padding_mask):
-        B, L = input_ids.shape
-        if L > self.max_len:
-            raise ValueError(f"Sequence length {L} exceeds max_len={self.max_len}")
-
-        pos_ids = torch.arange(L, device=input_ids.device).unsqueeze(0).expand(B, L)
-        x = self.tok(input_ids) + self.pos(pos_ids)
+        """
+        input_ids: (B,L)
+        key_padding_mask: (B,L) bool, True for PAD positions (PyTorch convention)
+        """
+        x = self.tok(input_ids)  # (B,L,D)
         x = self.enc(x, src_key_padding_mask=key_padding_mask)
-        logits = self.lm_head(x)
+        logits = self.lm_head(x)  # (B,L,V)
         return logits
 
 
 # ============================================================
-# Utils
+# Utils: logging + seeding
 # ============================================================
 def set_all_seeds(seed: int):
     random.seed(seed)
@@ -297,26 +204,22 @@ def set_all_seeds(seed: int):
 
 
 def make_log_writer(log_file: Optional[str]):
+    """
+    Returns a function write(rec: dict) -> None
+    that appends JSONL to log_file, or a no-op if None.
+    """
     if not log_file:
-        def _noop(_rec):
+        def _noop(_rec):  # type: ignore
             return
         return _noop, None
 
     os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
-    f = open(log_file, "a", buffering=1)
+    f = open(log_file, "a", buffering=1)  # line-buffered
 
     def _write(rec: dict):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     return _write, f
-
-
-def make_batch_file_list(prefix: str, start: int, end: int) -> List[str]:
-    if start < 0 or end < 0:
-        raise ValueError("start/end must be non-negative")
-    if end < start:
-        raise ValueError(f"end must be >= start, got start={start}, end={end}")
-    return [f"{prefix}_batch{i:03d}.pt" for i in range(start, end + 1)]
 
 
 # ============================================================
@@ -327,38 +230,41 @@ def main():
 
     # data
     ap.add_argument("--data_dir", type=str, required=True)
-    ap.add_argument("--vocab_json", type=str, required=True)
-    ap.add_argument("--file_prefix", type=str, default="smiles_pretrain")
-    ap.add_argument("--train_start", type=int, required=True)
-    ap.add_argument("--train_end", type=int, required=True)
-    ap.add_argument("--valid_start", type=int, default=None)
-    ap.add_argument("--valid_end", type=int, default=None)
-
+    ap.add_argument("--limit_files", type=int, default=None)
+    ap.add_argument(
+        "--split_json",
+        type=str,
+        default=None,
+        help="Path to split.json (with train/valid file lists)"
+    )
     # training
     ap.add_argument("--batch_size", type=int, default=64)
-    ap.add_argument("--mask_prob", type=float, default=0.15)
-    ap.add_argument("--epochs", type=int, default=30)
+    ap.add_argument("--mask_prob", type=float, default=0.30)
+    ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--weight_decay", type=float, default=0.01)
     ap.add_argument("--num_workers", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--resume", type=str, default=None)
-    ap.add_argument("--reset_optim", action="store_true")
-    ap.add_argument("--reset_lr", action="store_true")
-
+    ap.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pt to resume from")
+    ap.add_argument("--reset_optim", action="store_true", help="When resuming, re-init optimizer state")
+    ap.add_argument("--reset_lr", action="store_true",
+                    help="When resuming, ignore ckpt lr state and use args.lr schedule from current global_step")
     # model
-    ap.add_argument("--d_model", type=int, default=512)
-    ap.add_argument("--nhead", type=int, default=16)
-    ap.add_argument("--layers", type=int, default=10)
-    ap.add_argument("--dim_ff", type=int, default=2048)
+    ap.add_argument("--d_model", type=int, default=256)
+    ap.add_argument("--nhead", type=int, default=8)
+    ap.add_argument("--layers", type=int, default=6)
+    ap.add_argument("--dim_ff", type=int, default=1024)
     ap.add_argument("--dropout", type=float, default=0.1)
-    ap.add_argument("--max_len", type=int, default=512)
 
     # io/log
-    ap.add_argument("--save_dir", type=str, default="./smiles_mlm_ckpt")
+    ap.add_argument("--save_dir", type=str, default="./mlm_ckpt")
     ap.add_argument("--log_every", type=int, default=50)
-    ap.add_argument("--log_file", type=str, default=None)
-    ap.add_argument("--deterministic_masking", action="store_true")
+    ap.add_argument("--log_file", type=str, default=None, help="JSONL file path to append training logs")
+    ap.add_argument(
+        "--deterministic_masking",
+        action="store_true",
+        help="Make MLM masking deterministic per (epoch, step) given --seed (useful for debugging).",
+    )
 
     args = ap.parse_args()
 
@@ -367,44 +273,51 @@ def main():
 
     write_log, log_fh = make_log_writer(args.log_file)
 
-    tokenizer = SmilesCharTokenizer.from_json(args.vocab_json)
-    PAD_ID = tokenizer.pad_id
-    MASK_ID = tokenizer.mask_id
-    CLS_ID = tokenizer.cls_id
-    vocab_size = tokenizer.vocab_size
-
-    train_files = make_batch_file_list(args.file_prefix, args.train_start, args.train_end)
-
+    # dataset / split
+    train_files = None
     valid_files = None
-    if (args.valid_start is not None) and (args.valid_end is not None):
-        valid_files = make_batch_file_list(args.file_prefix, args.valid_start, args.valid_end)
+    if args.split_json is not None:
+        print(f"[info] loading split from {args.split_json}")
+        with open(args.split_json, "r", encoding="utf-8") as f:
+            split = json.load(f)
+        train_files = split.get("train", [])
+        valid_files = split.get("valid", [])
+        print(f"[split] train_files={len(train_files)} valid_files={len(valid_files)}")
 
-    train_ds = SmilesShardDataset(
-        root_dir=args.data_dir,
-        tokenizer=tokenizer,
-        file_list=train_files,
+    train_ds = RaggedMolDataset(
+        args.data_dir,
+        limit_files=args.limit_files,
+        file_list=train_files
     )
 
     valid_ds = None
-    if valid_files is not None:
-        valid_ds = SmilesShardDataset(
-            root_dir=args.data_dir,
-            tokenizer=tokenizer,
-            file_list=valid_files,
+    if valid_files:
+        valid_ds = RaggedMolDataset(
+            args.data_dir,
+            file_list=valid_files
         )
 
-    print(f"Loaded {len(train_ds)} train sequences from {args.data_dir}")
-    if valid_ds is not None:
-        print(f"Loaded {len(valid_ds)} valid sequences")
-    print(f"vocab_size={vocab_size} PAD_ID={PAD_ID} MASK_ID={MASK_ID} CLS_ID={CLS_ID}")
+    # vocab info from train dataset
+    base_vocab = train_ds.base_vocab
+    PAD_ID = base_vocab + 0
+    MASK_ID = base_vocab + 1
+    vocab_size = base_vocab + 2
 
+    print(f"Loaded {len(train_ds)} train molecules from {args.data_dir}")
+    if valid_ds is not None:
+        print(f"Loaded {len(valid_ds)} valid molecules")
+    print(f"base_vocab={base_vocab} PAD_ID={PAD_ID} MASK_ID={MASK_ID} vocab_size={vocab_size}")
+    if args.log_file:
+        print(f"logging to: {args.log_file}")
+
+    # dataloaders
     train_loader = DataLoader(
         train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True,
-        collate_fn=lambda batch: collate_pad(batch, PAD_ID),
+        collate_fn=lambda batch: collate_pad(batch, base_vocab),
         drop_last=True,
     )
 
@@ -416,14 +329,17 @@ def main():
             shuffle=False,
             num_workers=args.num_workers,
             pin_memory=True,
-            collate_fn=lambda batch: collate_pad(batch, PAD_ID),
+            collate_fn=lambda batch: collate_pad(batch, base_vocab),
             drop_last=False,
         )
 
+    steps_per_epoch = len(train_loader)
+    total_steps = steps_per_epoch * args.epochs
+
+    # device/model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TransformerMLM(
         vocab_size=vocab_size,
-        max_len=args.max_len,
         d_model=args.d_model,
         nhead=args.nhead,
         num_layers=args.layers,
@@ -431,18 +347,25 @@ def main():
         dropout=args.dropout,
     ).to(device)
 
+    # ------------------------------------------------------------
+    # Optim / Resume
+    # ------------------------------------------------------------
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     start_epoch = 1
     global_step = 0
+
     resume_step0 = 0
     resume_lr0 = args.lr
     resume_last_epoch = 0
 
     if args.resume is not None:
         print(f"[resume] loading: {args.resume}")
-        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        ckpt = torch.load(args.resume, map_location="cpu")
 
+        # safety: vocab mismatch = disaster
+        if int(ckpt.get("base_vocab", -1)) != int(base_vocab):
+            raise RuntimeError(f"[resume] base_vocab mismatch: ckpt={ckpt.get('base_vocab')} current={base_vocab}")
         if int(ckpt.get("vocab_size", -1)) != int(vocab_size):
             raise RuntimeError(f"[resume] vocab_size mismatch: ckpt={ckpt.get('vocab_size')} current={vocab_size}")
 
@@ -453,8 +376,9 @@ def main():
                 optim.load_state_dict(ckpt["optim"])
                 print("[resume] optimizer state loaded")
             except Exception as e:
-                print(f"[resume] failed to load optimizer state: {e}")
+                print(f"[resume] failed to load optimizer state: {e} (continuing with fresh optim)")
 
+        # restore RNG for strict continuation (optional but nice)
         if "rng" in ckpt:
             try:
                 random.setstate(ckpt["rng"]["python"])
@@ -467,12 +391,21 @@ def main():
 
         global_step = int(ckpt.get("global_step", 0))
         resume_step0 = global_step
+
         resume_last_epoch = int(ckpt.get("epoch", 0))
         start_epoch = resume_last_epoch + 1
+
+        # lr0: if optimizer state was loaded, this is the true current lr
         resume_lr0 = float(optim.param_groups[0].get("lr", args.lr))
 
         print(f"[resume] resumed at epoch={resume_last_epoch}, global_step={global_step}, lr0={resume_lr0:.3e}")
 
+    # ------------------------------------------------------------
+    # LR schedule
+    #  - fresh: warmup + cosine to zero over ALL epochs
+    #  - resume: cosine decay from current lr0 to zero over REMAINING epochs
+    #    (never increases lr at resume)
+    # ------------------------------------------------------------
     steps_per_epoch = len(train_loader)
 
     if args.resume is None:
@@ -488,6 +421,7 @@ def main():
             return args.lr * fac
 
         total_steps_disp = total_steps
+
     else:
         remaining_epochs = args.epochs - resume_last_epoch
         if remaining_epochs <= 0:
@@ -499,18 +433,21 @@ def main():
         total_steps_disp = int(resume_step0 + remaining_steps)
 
         def lr_now(step: int) -> float:
+            # step == resume_step0 -> lr = resume_lr0
             prog = (step - resume_step0) / max(1, remaining_steps)
             prog = min(max(prog, 0.0), 1.0)
             fac = 0.5 * (1.0 + math.cos(math.pi * prog))
             return resume_lr0 * fac
 
+        # optional: override lr right now (useful when you loaded optim but want schedule-defined lr)
         if args.reset_lr:
             lr0 = lr_now(global_step)
             for pg in optim.param_groups:
                 pg["lr"] = lr0
             print(f"[resume] reset_lr: lr set to {lr0:.3e} at step={global_step}")
-
     model.train()
+
+    # helper for deterministic masking
     mask_gen = None
     if args.deterministic_masking:
         mask_gen = torch.Generator(device=device)
@@ -522,23 +459,25 @@ def main():
         for it, (input_ids, attn_keep, lens) in enumerate(train_loader, start=1):
             input_ids = input_ids.to(device, non_blocking=True)
             attn_keep = attn_keep.to(device, non_blocking=True)
+
+            # Transformer expects key_padding_mask True at PAD positions
             key_padding_mask = ~attn_keep
 
+            # deterministic masking option: reseed generator each step
             if mask_gen is not None:
+                # stable mix: seed + epoch*1e6 + global_step
                 step_seed = int(args.seed + ep * 1_000_000 + global_step)
                 mask_gen.manual_seed(step_seed)
 
-            masked_input, labels = mlm_mask_tokens_with_special_control(
-                input_ids=input_ids,
-                pad_id=PAD_ID,
-                mask_id=MASK_ID,
-                cls_id=CLS_ID,
-                vocab_size=vocab_size,
+            masked_input, labels, vocab_size2 = mlm_mask_tokens(
+                input_ids,
+                base_vocab=base_vocab,
                 mask_prob=args.mask_prob,
                 generator=mask_gen,
             )
+            assert vocab_size2 == vocab_size
 
-            logits = model(masked_input, key_padding_mask=key_padding_mask)
+            logits = model(masked_input, key_padding_mask=key_padding_mask)  # (B,L,V)
 
             loss = F.cross_entropy(
                 logits.reshape(-1, vocab_size),
@@ -551,12 +490,14 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optim.step()
 
-            global_step += 1
+            global_step += 1  # increment first
 
+            # lr schedule
             lr_now_val = lr_now(global_step)
             for pg in optim.param_groups:
                 pg["lr"] = lr_now_val
 
+            # stats
             with torch.no_grad():
                 masked_positions = int((labels != -100).sum().item())
 
@@ -567,11 +508,9 @@ def main():
                 avg_loss = running_loss / max(1, running_tok)
                 ppl = math.exp(min(20.0, avg_loss))
 
-                msg = (
-                    f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps_disp} "
-                    f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now_val:.2e} "
-                    f"masked_tokens={running_tok}"
-                )
+                msg = (f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps_disp} "
+                       f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now_val:.2e} "
+                       f"masked_tokens={running_tok}")
                 print(msg)
 
                 write_log({
@@ -589,7 +528,9 @@ def main():
                 })
 
                 running_loss, running_tok = 0.0, 0
-
+        # -------------------------
+        # VALID
+        # -------------------------
         if valid_loader is not None:
             model.eval()
             v_loss_sum = 0.0
@@ -601,16 +542,14 @@ def main():
                     v_attn_keep = v_attn_keep.to(device, non_blocking=True)
                     v_key_padding_mask = ~v_attn_keep
 
+                    # deterministic masking option (use different stream than train)
                     if mask_gen is not None:
                         step_seed = int(args.seed + 9_000_000 + v_it)
                         mask_gen.manual_seed(step_seed)
 
-                    v_masked, v_labels = mlm_mask_tokens_with_special_control(
-                        input_ids=v_input_ids,
-                        pad_id=PAD_ID,
-                        mask_id=MASK_ID,
-                        cls_id=CLS_ID,
-                        vocab_size=vocab_size,
+                    v_masked, v_labels, _ = mlm_mask_tokens(
+                        v_input_ids,
+                        base_vocab=base_vocab,
                         mask_prob=args.mask_prob,
                         generator=mask_gen,
                     )
@@ -642,30 +581,22 @@ def main():
 
             model.train()
 
-        ckpt_path = os.path.join(args.save_dir, f"smiles_mlm_ep{ep:02d}.pt")
+        # save checkpoint each epoch
+        ckpt_path = os.path.join(args.save_dir, f"mlm_ep{ep:02d}.pt")
         torch.save({
             "epoch": ep,
             "global_step": global_step,
             "model": model.state_dict(),
             "optim": optim.state_dict(),
+            # RNG（再現性を上げたいなら）
             "rng": {
                 "python": random.getstate(),
                 "torch": torch.get_rng_state(),
                 "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             },
+            "base_vocab": base_vocab,
             "vocab_size": vocab_size,
-            "pad_id": PAD_ID,
-            "mask_id": MASK_ID,
-            "cls_id": CLS_ID,
-            "config": {
-                "d_model": args.d_model,
-                "nhead": args.nhead,
-                "layers": args.layers,
-                "dim_ff": args.dim_ff,
-                "dropout": args.dropout,
-                "max_len": args.max_len,
-            },
-            "args": vars(args),
+            "config": vars(args),
         }, ckpt_path)
         print("saved", ckpt_path)
 
