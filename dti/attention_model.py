@@ -1218,6 +1218,7 @@ class DualStreamDTIClassifier(nn.Module):
         use_reg_head: bool = False,            # <- 追加
         pair_gate_threshold: float = 0.5,
         topk_frac: float = 0.1,
+        protein_only: bool = False,   # 追加
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1231,7 +1232,7 @@ class DualStreamDTIClassifier(nn.Module):
         self.lig_pad_id = int(self.lig.pad_id)
         self.use_cls_in_head = bool(use_cls_in_head)
         self.use_reg_head = bool(use_reg_head)
-
+        self.protein_only = bool(protein_only)
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
@@ -1307,7 +1308,8 @@ class DualStreamDTIClassifier(nn.Module):
         p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
-
+        if self.protein_only:
+            l_h = torch.zeros_like(l_h)
         # CLS 分離
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
@@ -1474,6 +1476,7 @@ def main():
     ap.add_argument("--sym_lambda", type=float, default=0.0)
     ap.add_argument("--lig_ckpt", type=str, required=True)
     ap.add_argument("--vq_ckpt", type=str, default=None)
+    ap.add_argument("--protein_only", action="store_true")
     ap.add_argument(
         "--attn_activation",
         type=str,
@@ -1562,6 +1565,8 @@ def main():
         use_reg_head=args.use_reg_head,
         pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
         topk_frac=args.topk_frac,  # ← 追加
+        protein_only=args.protein_only,   # 追加
+
     ).to(device)
 
     if args.dti_ckpt is not None:
