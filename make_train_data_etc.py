@@ -133,6 +133,10 @@ MMSEQS_CLUSTER_MODE = 2  # connected component style
 MMSEQS_THREADS = max(1, min(24, cpu_count()))
 USE_GENERIC_MURCKO = False
 
+# graph-pruning settings for breaking giant connected components
+MAX_SCAFFOLD_DEGREE = 8
+MAX_PROTEIN_CLUSTER_DEGREE = 20
+MIN_COMPONENT_ROWS = 20
 
 # ============================================================
 # RDKit / SMILES utils
@@ -981,6 +985,7 @@ def pass2_make_smiles_token_map_parallel():
     for reason, n in fail_counter.most_common(20):
         print(f"  {reason}: {n}")
 
+
 # ============================================================
 # Pass 3: join pass1 rows with token map
 # ============================================================
@@ -1386,6 +1391,50 @@ def print_entity_pair_stats(rows: List[Dict[str, str]], name: str):
             f"prot_pairs_mean={sum(prot_vals)/len(prot_vals):.2f} "
             f"prot_pairs_min={min(prot_vals)}"
         )
+def prune_high_degree_nodes(
+    rows: List[Dict[str, str]],
+    max_scaffold_degree: int,
+    max_protein_cluster_degree: int,
+):
+    """
+    Remove rows attached to very high-degree scaffold / protein-cluster nodes
+    before building connected components.
+    """
+    prot_to_scaf = defaultdict(set)
+    scaf_to_prot = defaultdict(set)
+
+    for row in rows:
+        p = row["protein_cluster"]
+        s = row["ligand_scaffold"]
+        prot_to_scaf[p].add(s)
+        scaf_to_prot[s].add(p)
+
+    good_scafs = {s for s, prots in scaf_to_prot.items() if len(prots) <= max_scaffold_degree}
+    good_prots = {p for p, scafs in prot_to_scaf.items() if len(scafs) <= max_protein_cluster_degree}
+
+    out = [
+        row for row in rows
+        if row["ligand_scaffold"] in good_scafs and row["protein_cluster"] in good_prots
+    ]
+
+    dropped = len(rows) - len(out)
+    print(
+        f"[split] prune_high_degree_nodes: kept={len(out):,} dropped={dropped:,} "
+        f"good_scafs={len(good_scafs):,} good_prots={len(good_prots):,}"
+    )
+    return out
+
+
+def drop_tiny_components(comp_rows, min_component_rows: int):
+    kept = [c for c in comp_rows if c["weight"] >= min_component_rows]
+    dropped = [c for c in comp_rows if c["weight"] < min_component_rows]
+
+    n_drop_rows = sum(c["weight"] for c in dropped)
+    print(
+        f"[split] drop_tiny_components: kept={len(kept):,} dropped={len(dropped):,} "
+        f"dropped_rows={n_drop_rows:,}"
+    )
+    return kept
 
 def stage4_double_cold_balanced_components():
     rows = read_final_rows(FINAL_CSV)
@@ -1444,6 +1493,50 @@ def stage4_double_cold_balanced_components():
     )
     if not kept_rows:
         raise RuntimeError("No usable rows after annotation")
+
+    # ============================================================
+    # ⭐ ここに追加！！（protein bias除去）
+    # ============================================================
+
+    print("\n[split] before protein-bias filtering:", len(kept_rows))
+
+    def filter_rows_by_protein_cluster_constraints(rows, min_pairs=8, low=0.1, high=0.9):
+        cluster_stats = compute_entity_stats(rows, "protein_cluster")
+        good_clusters = {
+            c for c, st in cluster_stats.items()
+            if st["n"] >= min_pairs and (low <= st["pos_rate"] <= high)
+        }
+        out = [row for row in rows if row.get("protein_cluster", "") in good_clusters]
+        return out, cluster_stats, good_clusters
+
+    print("\n[split] before protein-bias filtering:", len(kept_rows))
+
+    print("\n[split] before protein-bias filtering:", len(kept_rows))
+
+    filtered_rows, cluster_stats, good_clusters = filter_rows_by_protein_cluster_constraints(
+        kept_rows,
+        min_pairs=8,
+        low=0.1,
+        high=0.9,
+    )
+
+    print(f"[split] after protein-cluster filtering: {len(filtered_rows):,}")
+    print(f"[split] kept protein clusters: {len(good_clusters):,}")
+
+    if len(filtered_rows) == 0:
+        raise RuntimeError("All rows removed by protein-cluster filtering")
+
+    # break giant components by pruning high-degree nodes
+    pruned_rows = prune_high_degree_nodes(
+        filtered_rows,
+        max_scaffold_degree=MAX_SCAFFOLD_DEGREE,
+        max_protein_cluster_degree=MAX_PROTEIN_CLUSTER_DEGREE,
+    )
+
+    if len(pruned_rows) == 0:
+        raise RuntimeError("All rows removed by high-degree node pruning")
+
+    kept_rows = pruned_rows
 
     # ============================================================
     # 3) Build bipartite connected components:
@@ -1520,16 +1613,32 @@ def stage4_double_cold_balanced_components():
             if row["protein_cluster"] in comp_prots and row["ligand_scaffold"] in comp_scafs
         ]
 
+        n_pos_i = sum(int(r["y_bin"]) for r in rows_i)
+        pos_rate_i = n_pos_i / max(1, len(rows_i))
+
         comp_rows.append({
             "comp_id": i,
             "prots": comp_prots,
             "scafs": comp_scafs,
             "rows": rows_i,
             "weight": len(rows_i),
+            "n_pos": n_pos_i,
+            "pos_rate": pos_rate_i,
         })
+        # =========================================
+        # ⭐ 追加：component を並び替える
+        # =========================================
+
+    comp_rows.sort(
+        key=lambda x: abs(x["pos_rate"] - 0.5),
+        reverse=True
+    )
 
     comp_rows = [c for c in comp_rows if c["weight"] > 0]
+    comp_rows = drop_tiny_components(comp_rows, MIN_COMPONENT_ROWS)
     total_weight = sum(c["weight"] for c in comp_rows)
+    if not comp_rows:
+        raise RuntimeError("No non-empty connected components after pruning")
 
     print(f"[split] connected components={len(comp_rows):,} total_rows={total_weight:,}")
     if not comp_rows:
