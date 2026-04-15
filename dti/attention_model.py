@@ -155,11 +155,7 @@ class DTIDataset(Dataset):
         lig_cls_id: int = 0,
         y_reg_mean: Optional[float] = None,
         y_reg_std: Optional[float] = None,
-        lig_mode="vqatom",
-        smiles_tokenizer=None
     ):
-        self.lig_mode = lig_mode
-        self.smiles_tokenizer = smiles_tokenizer
         if rows is not None:
             raw_rows = rows
         elif csv_path is not None:
@@ -227,27 +223,15 @@ class DTIDataset(Dataset):
     def __getitem__(self, idx):
         row = self.rows[idx]
 
-        if self.lig_mode == "vqatom":
-            lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
+        lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
 
-        elif self.lig_mode == "smiles":
-            smiles = row["smiles"]
-            toks = self.smiles_tokenizer(
-                smiles,
-                add_special_tokens=True,
-                return_tensors=None
-            )["input_ids"]
-            lig_ids = toks  # CLS already included depending on tokenizer
-
-        else:
-            raise ValueError("unknown lig_mode")
-
-        return {
+        item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
             "y_bin": float(row["y_bin"]),
-            "y_reg": ...
+            "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
         }
+        return item
 
 
 def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
@@ -1468,20 +1452,7 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
-class SimpleSmilesEncoder(nn.Module):
-    def __init__(self, vocab_size, d_model):
-        super().__init__()
-        self.tok = nn.Embedding(vocab_size, d_model)
-        self.enc = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=d_model, nhead=4, batch_first=True),
-            num_layers=2
-        )
 
-    def forward(self, l_ids):
-        x = self.tok(l_ids)
-        pad_mask = (l_ids == 0)
-        return self.enc(x, src_key_padding_mask=pad_mask)
-    
 # =========================================================
 # Main
 # =========================================================
@@ -1563,18 +1534,15 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
-    if args.lig_mode == "vqatom":
-        lig_enc = lig_enc = PretrainedLigandEncoder(
+
+    lig_enc = PretrainedLigandEncoder(
         ckpt_path=args.lig_ckpt,
         device=device,
         finetune=args.finetune_lig,
         vq_ckpt_path=args.vq_ckpt,
         verbose_load=True,
         debug_index_check=bool(args.lig_debug_index),
-        )
-    elif args.lig_mode == "smiles":
-        lig_enc = SomeSmilesEncoder()
-
+    )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
