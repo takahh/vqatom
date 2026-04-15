@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-import glob
 import math
 import random
 import argparse
@@ -47,67 +46,173 @@ class SmilesCharTokenizer:
             raise ValueError("vocab json must contain key 'stoi'")
         return cls(obj["stoi"])
 
-    def encode(self, smiles: str, add_cls: bool = True) -> List[int]:
+    @classmethod
+    def build_from_smiles(cls, smiles_list: List[str]) -> "SmilesCharTokenizer":
+        chars = set()
+        for s in smiles_list:
+            if s:
+                chars.update(list(str(s)))
+        toks = [cls.PAD, cls.MASK, cls.CLS, cls.UNK] + sorted(chars)
+        stoi = {tok: i for i, tok in enumerate(toks)}
+        return cls(stoi)
+
+    def to_json(self, path: str) -> None:
+        obj = {
+            "stoi": self.stoi,
+            "tokens": [self.itos[i] for i in range(len(self.itos))],
+            "pad_id": self.pad_id,
+            "mask_id": self.mask_id,
+            "cls_id": self.cls_id,
+            "unk_id": self.unk_id,
+            "vocab_size": self.vocab_size,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+
+    def encode(self, smiles: str, add_cls: bool = True, max_len: Optional[int] = None) -> List[int]:
         ids = [self.stoi.get(ch, self.unk_id) for ch in smiles]
         if add_cls:
             ids = [self.cls_id] + ids
+        if max_len is not None:
+            ids = ids[:max_len]
         return ids
+
+
+# ============================================================
+# Utilities
+# ============================================================
+def set_all_seeds(seed: int):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def make_log_writer(log_file: Optional[str]):
+    if not log_file:
+        def _noop(_rec):
+            return
+        return _noop, None
+
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+    f = open(log_file, "a", buffering=1)
+
+    def _write(rec: dict):
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    return _write, f
+
+
+def make_batch_file_list(prefix: str, start: int, end: int) -> List[str]:
+    if start < 0 or end < 0:
+        raise ValueError("start/end must be non-negative")
+    if end < start:
+        raise ValueError(f"end must be >= start, got start={start}, end={end}")
+    return [f"{prefix}_batch{i:03d}.pt" for i in range(start, end + 1)]
+
+
+# ============================================================
+# Dataset
+# Actual shard format:
+# ['batch', 'tokens_flat', 'offsets', 'lengths', 'base_vocab',
+#  'pad_id', 'mask_id', 'smiles', 'neg_in_slice']
+# We only need d["smiles"] here.
+# ============================================================
+class SmilesShardDataset(Dataset):
+    def __init__(
+        self,
+        root_dir: str,
+        tokenizer: SmilesCharTokenizer,
+        file_list: List[str],
+        max_len: Optional[int] = None,
+    ):
+        self.root_dir = root_dir
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+        self.files = []
+        for p in file_list:
+            if os.path.isabs(p):
+                self.files.append(p)
+            else:
+                self.files.append(os.path.join(root_dir, p))
+        self.files = sorted(self.files)
+
+        if not self.files:
+            raise FileNotFoundError("No shard files provided")
+
+        self.index = []
+        self.file_meta = []
+
+        for fi, fp in enumerate(self.files):
+            d = torch.load(fp, map_location="cpu", weights_only=False)
+
+            if "smiles" not in d:
+                raise ValueError(f"{fp} does not contain key 'smiles'")
+
+            smiles_list = [str(x).strip() for x in d["smiles"] if str(x).strip()]
+            self.file_meta.append((fp, len(smiles_list)))
+
+            for mi in range(len(smiles_list)):
+                self.index.append((fi, mi))
+
+        self._cache_fi = None
+        self._cache_smiles = None
+
+    def __len__(self):
+        return len(self.index)
+
+    def _load_file(self, fi: int) -> List[str]:
+        if self._cache_fi == fi and self._cache_smiles is not None:
+            return self._cache_smiles
+
+        fp, _ = self.file_meta[fi]
+        d = torch.load(fp, map_location="cpu", weights_only=False)
+
+        smiles_list = [str(x).strip() for x in d["smiles"] if str(x).strip()]
+
+        self._cache_fi = fi
+        self._cache_smiles = smiles_list
+        return smiles_list
+
+    def __getitem__(self, idx):
+        fi, mi = self.index[idx]
+        smiles_list = self._load_file(fi)
+        smi = smiles_list[mi]
+        ids = self.tokenizer.encode(smi, add_cls=True, max_len=self.max_len)
+        return torch.tensor(ids, dtype=torch.int64)
+
+
+def collate_pad(batch: List[torch.Tensor], pad_id: int):
+    lens = torch.tensor([x.numel() for x in batch], dtype=torch.int64)
+    B = len(batch)
+    L = int(lens.max().item())
+
+    input_ids = torch.full((B, L), pad_id, dtype=torch.int64)
+    for i, seq in enumerate(batch):
+        input_ids[i, :seq.numel()] = seq
+
+    attn_keep = (torch.arange(L)[None, :] < lens[:, None])  # True for real token
+    return input_ids, attn_keep, lens
+
+
+# ============================================================
+# Build vocab from shards
+# ============================================================
+def collect_smiles_from_files(root_dir: str, file_list: List[str]) -> List[str]:
+    out = []
+    for p in file_list:
+        fp = p if os.path.isabs(p) else os.path.join(root_dir, p)
+        d = torch.load(fp, map_location="cpu", weights_only=False)
+        if "smiles" not in d:
+            raise ValueError(f"{fp} does not contain key 'smiles'")
+        out.extend([str(x).strip() for x in d["smiles"] if str(x).strip()])
+    return out
 
 
 # ============================================================
 # MLM masking
 # ============================================================
 def mlm_mask_tokens(
-    input_ids: torch.Tensor,
-    pad_id: int,
-    mask_id: int,
-    vocab_size: int,
-    mask_prob: float = 0.15,
-    generator: Optional[torch.Generator] = None,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    input_ids: (B, L) int64 with PAD included
-    returns:
-      masked_input_ids: (B, L)
-      labels: (B, L) where non-masked = -100
-    """
-    assert input_ids.dtype == torch.int64
-
-    labels = torch.full_like(input_ids, -100)
-
-    is_pad = (input_ids == pad_id)
-    is_cls = (input_ids == (mask_id - 1)) if False else torch.zeros_like(input_ids, dtype=torch.bool)
-    # CLSは pad_id/mask_id から自動推定しない。あとで明示処理する方が安全。
-
-    prob = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
-    mask_sel = (prob < mask_prob) & (~is_pad)
-
-    labels[mask_sel] = input_ids[mask_sel]
-
-    r = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
-
-    m_mask = mask_sel & (r < 0.80)
-    m_rand = mask_sel & (r >= 0.80) & (r < 0.90)
-    # keep = remaining selected
-
-    masked = input_ids.clone()
-    masked[m_mask] = mask_id
-
-    if m_rand.any():
-        rand_ids = torch.randint(
-            low=0,
-            high=vocab_size,
-            size=(int(m_rand.sum().item()),),
-            device=input_ids.device,
-            dtype=torch.int64,
-            generator=generator,
-        )
-        masked[m_rand] = rand_ids
-
-    return masked, labels
-
-
-def mlm_mask_tokens_with_special_control(
     input_ids: torch.Tensor,
     pad_id: int,
     mask_id: int,
@@ -129,6 +234,7 @@ def mlm_mask_tokens_with_special_control(
     r = torch.rand(input_ids.shape, device=input_ids.device, generator=generator)
     m_mask = mask_sel & (r < 0.80)
     m_rand = mask_sel & (r >= 0.80) & (r < 0.90)
+    # remaining 10%: keep original
 
     masked = input_ids.clone()
     masked[m_mask] = mask_id
@@ -148,113 +254,17 @@ def mlm_mask_tokens_with_special_control(
 
 
 # ============================================================
-# Dataset
-# ============================================================
-class SmilesShardDataset(Dataset):
-    """
-    Loads smiles_pretrain_batchXXX.pt files and exposes each SMILES as one item.
-
-    Each shard file is expected to contain either:
-      {"smiles": ["CCO", "c1ccccc1", ...]}
-    or
-      {"rows": [{"smiles": "CCO"}, {"smiles": "c1ccccc1"}, ...]}
-    """
-
-    def __init__(self, root_dir: str, tokenizer: SmilesCharTokenizer, file_list: List[str]):
-        self.root_dir = root_dir
-        self.tokenizer = tokenizer
-
-        self.files = []
-        for p in file_list:
-            if os.path.isabs(p):
-                self.files.append(p)
-            else:
-                self.files.append(os.path.join(root_dir, p))
-        self.files = sorted(self.files)
-
-        if not self.files:
-            raise FileNotFoundError("No shard files provided")
-
-        self.index = []
-        self.file_meta = []
-
-        for fi, fp in enumerate(self.files):
-            d = torch.load(fp, map_location="cpu", weights_only=False)
-
-            smiles_list = self._extract_smiles_list(d)
-            self.file_meta.append((fp, len(smiles_list)))
-
-            for mi in range(len(smiles_list)):
-                self.index.append((fi, mi))
-
-        self._cache_fi = None
-        self._cache_smiles = None
-
-    def _extract_smiles_list(self, d) -> List[str]:
-        if isinstance(d, dict):
-            if "smiles" in d:
-                smiles_list = [str(x).strip() for x in d["smiles"] if str(x).strip()]
-                return smiles_list
-            if "rows" in d:
-                smiles_list = []
-                for r in d["rows"]:
-                    smi = ""
-                    if isinstance(r, dict):
-                        smi = str(r.get("smiles", "")).strip()
-                    if smi:
-                        smiles_list.append(smi)
-                return smiles_list
-
-        raise ValueError("Each shard .pt must contain key 'smiles' or 'rows'")
-
-    def __len__(self):
-        return len(self.index)
-
-    def _load_file(self, fi: int) -> List[str]:
-        if self._cache_fi == fi and self._cache_smiles is not None:
-            return self._cache_smiles
-
-        fp, _ = self.file_meta[fi]
-        d = torch.load(fp, map_location="cpu", weights_only=False)
-        smiles_list = self._extract_smiles_list(d)
-
-        self._cache_fi = fi
-        self._cache_smiles = smiles_list
-        return smiles_list
-
-    def __getitem__(self, idx):
-        fi, mi = self.index[idx]
-        smiles_list = self._load_file(fi)
-        smi = smiles_list[mi]
-        ids = self.tokenizer.encode(smi, add_cls=True)
-        return torch.tensor(ids, dtype=torch.int64)
-
-
-def collate_pad(batch: List[torch.Tensor], pad_id: int):
-    lens = torch.tensor([x.numel() for x in batch], dtype=torch.int64)
-    B = len(batch)
-    L = int(lens.max().item())
-
-    input_ids = torch.full((B, L), pad_id, dtype=torch.int64)
-    for i, seq in enumerate(batch):
-        input_ids[i, :seq.numel()] = seq
-
-    attn_keep = (torch.arange(L)[None, :] < lens[:, None])  # True for real token
-    return input_ids, attn_keep, lens
-
-
-# ============================================================
-# Simple Transformer MLM
+# Model
 # ============================================================
 class TransformerMLM(nn.Module):
     def __init__(
         self,
         vocab_size: int,
         max_len: int = 512,
-        d_model: int = 256,
-        nhead: int = 8,
-        num_layers: int = 6,
-        dim_ff: int = 1024,
+        d_model: int = 512,
+        nhead: int = 16,
+        num_layers: int = 10,
+        dim_ff: int = 2048,
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -288,51 +298,20 @@ class TransformerMLM(nn.Module):
 
 
 # ============================================================
-# Utils
-# ============================================================
-def set_all_seeds(seed: int):
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-
-def make_log_writer(log_file: Optional[str]):
-    if not log_file:
-        def _noop(_rec):
-            return
-        return _noop, None
-
-    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
-    f = open(log_file, "a", buffering=1)
-
-    def _write(rec: dict):
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-    return _write, f
-
-
-def make_batch_file_list(prefix: str, start: int, end: int) -> List[str]:
-    if start < 0 or end < 0:
-        raise ValueError("start/end must be non-negative")
-    if end < start:
-        raise ValueError(f"end must be >= start, got start={start}, end={end}")
-    return [f"{prefix}_batch{i:03d}.pt" for i in range(start, end + 1)]
-
-
-# ============================================================
-# Train loop
+# Training
 # ============================================================
 def main():
     ap = argparse.ArgumentParser()
 
     # data
     ap.add_argument("--data_dir", type=str, required=True)
-    ap.add_argument("--vocab_json", type=str, required=True)
-    ap.add_argument("--file_prefix", type=str, default="smiles_pretrain")
+    ap.add_argument("--file_prefix", type=str, default="pretrain_ragged")
     ap.add_argument("--train_start", type=int, required=True)
     ap.add_argument("--train_end", type=int, required=True)
     ap.add_argument("--valid_start", type=int, default=None)
     ap.add_argument("--valid_end", type=int, default=None)
+    ap.add_argument("--vocab_json", type=str, default=None)
+    ap.add_argument("--rebuild_vocab", action="store_true")
 
     # training
     ap.add_argument("--batch_size", type=int, default=64)
@@ -365,13 +344,10 @@ def main():
     set_all_seeds(args.seed)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    write_log, log_fh = make_log_writer(args.log_file)
+    if args.log_file is None:
+        args.log_file = os.path.join(args.save_dir, "train_log.jsonl")
 
-    tokenizer = SmilesCharTokenizer.from_json(args.vocab_json)
-    PAD_ID = tokenizer.pad_id
-    MASK_ID = tokenizer.mask_id
-    CLS_ID = tokenizer.cls_id
-    vocab_size = tokenizer.vocab_size
+    write_log, log_fh = make_log_writer(args.log_file)
 
     train_files = make_batch_file_list(args.file_prefix, args.train_start, args.train_end)
 
@@ -379,10 +355,35 @@ def main():
     if (args.valid_start is not None) and (args.valid_end is not None):
         valid_files = make_batch_file_list(args.file_prefix, args.valid_start, args.valid_end)
 
+    # -------------------------
+    # tokenizer / vocab
+    # -------------------------
+    if args.vocab_json is None:
+        args.vocab_json = os.path.join(args.save_dir, "smiles_vocab.json")
+
+    if args.rebuild_vocab or (not os.path.exists(args.vocab_json)):
+        print("[vocab] building from training shard smiles ...")
+        train_smiles = collect_smiles_from_files(args.data_dir, train_files)
+        tokenizer = SmilesCharTokenizer.build_from_smiles(train_smiles)
+        tokenizer.to_json(args.vocab_json)
+        print(f"[vocab] saved to {args.vocab_json}")
+    else:
+        tokenizer = SmilesCharTokenizer.from_json(args.vocab_json)
+        print(f"[vocab] loaded from {args.vocab_json}")
+
+    PAD_ID = tokenizer.pad_id
+    MASK_ID = tokenizer.mask_id
+    CLS_ID = tokenizer.cls_id
+    vocab_size = tokenizer.vocab_size
+
+    # -------------------------
+    # datasets / loaders
+    # -------------------------
     train_ds = SmilesShardDataset(
         root_dir=args.data_dir,
         tokenizer=tokenizer,
         file_list=train_files,
+        max_len=args.max_len,
     )
 
     valid_ds = None
@@ -391,6 +392,7 @@ def main():
             root_dir=args.data_dir,
             tokenizer=tokenizer,
             file_list=valid_files,
+            max_len=args.max_len,
         )
 
     print(f"Loaded {len(train_ds)} train sequences from {args.data_dir}")
@@ -420,6 +422,9 @@ def main():
             drop_last=False,
         )
 
+    # -------------------------
+    # model / optimizer
+    # -------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = TransformerMLM(
         vocab_size=vocab_size,
@@ -470,9 +475,11 @@ def main():
         resume_last_epoch = int(ckpt.get("epoch", 0))
         start_epoch = resume_last_epoch + 1
         resume_lr0 = float(optim.param_groups[0].get("lr", args.lr))
-
         print(f"[resume] resumed at epoch={resume_last_epoch}, global_step={global_step}, lr0={resume_lr0:.3e}")
 
+    # -------------------------
+    # lr schedule
+    # -------------------------
     steps_per_epoch = len(train_loader)
 
     if args.resume is None:
@@ -515,6 +522,9 @@ def main():
     if args.deterministic_masking:
         mask_gen = torch.Generator(device=device)
 
+    # -------------------------
+    # train loop
+    # -------------------------
     for ep in range(start_epoch, args.epochs + 1):
         running_loss = 0.0
         running_tok = 0
@@ -522,13 +532,13 @@ def main():
         for it, (input_ids, attn_keep, lens) in enumerate(train_loader, start=1):
             input_ids = input_ids.to(device, non_blocking=True)
             attn_keep = attn_keep.to(device, non_blocking=True)
-            key_padding_mask = ~attn_keep
+            key_padding_mask = ~attn_keep  # True at PAD positions
 
             if mask_gen is not None:
                 step_seed = int(args.seed + ep * 1_000_000 + global_step)
                 mask_gen.manual_seed(step_seed)
 
-            masked_input, labels = mlm_mask_tokens_with_special_control(
+            masked_input, labels = mlm_mask_tokens(
                 input_ids=input_ids,
                 pad_id=PAD_ID,
                 mask_id=MASK_ID,
@@ -567,12 +577,11 @@ def main():
                 avg_loss = running_loss / max(1, running_tok)
                 ppl = math.exp(min(20.0, avg_loss))
 
-                msg = (
+                print(
                     f"[ep {ep}/{args.epochs}] step {global_step}/{total_steps_disp} "
                     f"mlm_loss={avg_loss:.4f} ppl~{ppl:.2f} lr={lr_now_val:.2e} "
                     f"masked_tokens={running_tok}"
                 )
-                print(msg)
 
                 write_log({
                     "time": time.time(),
@@ -590,6 +599,9 @@ def main():
 
                 running_loss, running_tok = 0.0, 0
 
+        # -------------------------
+        # valid
+        # -------------------------
         if valid_loader is not None:
             model.eval()
             v_loss_sum = 0.0
@@ -605,7 +617,7 @@ def main():
                         step_seed = int(args.seed + 9_000_000 + v_it)
                         mask_gen.manual_seed(step_seed)
 
-                    v_masked, v_labels = mlm_mask_tokens_with_special_control(
+                    v_masked, v_labels = mlm_mask_tokens(
                         input_ids=v_input_ids,
                         pad_id=PAD_ID,
                         mask_id=MASK_ID,
@@ -642,6 +654,9 @@ def main():
 
             model.train()
 
+        # -------------------------
+        # save
+        # -------------------------
         ckpt_path = os.path.join(args.save_dir, f"smiles_mlm_ep{ep:02d}.pt")
         torch.save({
             "epoch": ep,
