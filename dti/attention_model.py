@@ -654,8 +654,6 @@ def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]
         "spearman": spearman,
     }
 
-
-
 def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
