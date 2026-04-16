@@ -243,37 +243,21 @@ class PairwiseInteractionHead(nn.Module):
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
         q = self.q_l(l_tok)
         k = self.k_p(p_tok)
-        #
-        # q = torch.nn.functional.normalize(q, dim=-1)
-        # k = torch.nn.functional.normalize(k, dim=-1)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k) * self.scale
-        pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
+        pair_logit = torch.einsum("bid,bjd->bij", q, k)
+        pair_prob = torch.sigmoid(pair_logit)
+
+        B = pair_prob.size(0)
+        flat = pair_prob.view(B, -1)
 
         if (l_pad is not None) and (p_pad is not None):
             valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
-        else:
-            valid = None
+            flat = flat.masked_fill(~valid.view(B, -1), 0.0)
 
-        pair_prob = torch.sigmoid(pair_logit)
-        if torch.isnan(q).any() or torch.isinf(q).any():
-            raise RuntimeError("NaN/inf in q")
+        k_top = max(5, int(0.01 * flat.size(1)))
+        k_top = min(k_top, flat.size(1))
 
-        if torch.isnan(k).any() or torch.isinf(k).any():
-            raise RuntimeError("NaN/inf in k")
-
-        if torch.isnan(pair_logit).any() or torch.isinf(pair_logit).any():
-            raise RuntimeError("NaN/inf in pair_logit")
-
-        B = pair_prob.size(0)
-        flat_topk = pair_prob.view(B, -1)
-        if valid is not None:
-            flat_topk = flat_topk.masked_fill(~valid.view(B, -1), 0.0)
-
-        k_top = max(5, int(0.01 * flat_topk.size(1)))
-        k_top = min(k_top, flat_topk.size(1))
-
-        topv, _ = torch.topk(flat_topk, k=k_top, dim=-1)
+        topv, _ = torch.topk(flat, k=k_top, dim=-1)
         prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
         logit = torch.logit(prob)
 
