@@ -741,9 +741,14 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         hit_rate_topk = hits_topk / float(k)
         return float(hit_rate_topk)
 
+    score = np.asarray(y_pred, dtype=np.float64)
+    y01 = (np.asarray(y_bin) > 0.5).astype(np.int32)
+
+    # drop NaN / inf safely
     finite = np.isfinite(score)
     if not finite.all():
-        print(f"[warn] eval_metrics: dropping {np.size(score) - finite.sum()} non-finite scores")
+        n_drop = int(score.size - finite.sum())
+        print(f"[warn] eval_metrics: dropping {n_drop} non-finite scores")
         score = score[finite]
         y01 = y01[finite]
 
@@ -752,32 +757,25 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "auroc": 0.0,
             "ap": 0.0,
             "f1": 0.0,
-            "thr": CLS_THR,
+            "thr": float(CLS_THR),
             "pred_mean": 0.0,
             "pred_std": 0.0,
-            "ef1": 0.0,
-            "ef5": 0.0,
-            "ef10": 0.0,
-        }
-    if y_pred.size == 0:
-        return {
-            "auroc": 0.0,
-            "ap": 0.0,
-            "f1": 0.0,
-            "thr": CLS_THR,
-            "pred_mean": 0.0,
-            "pred_std": 0.0,
+            "pred_min": 0.0,
+            "pred_max": 0.0,
+            "pos_rate": 0.0,
+            "pred_pos_rate@thr": 0.0,
             "ef1": 0.0,
             "ef5": 0.0,
             "ef10": 0.0,
         }
 
-    score = y_pred
-    y01 = (y_bin > 0.5).astype(np.int32)
     ef1 = enrichment_factor(score, y01, 0.01)
     ef5 = enrichment_factor(score, y01, 0.05)
     ef10 = enrichment_factor(score, y01, 0.10)
 
+    pred01 = (score >= CLS_THR).astype(np.int32)
+
+    # only one class present
     if len(np.unique(y01)) <= 1:
         return {
             "auroc": 0.0,
@@ -789,7 +787,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "pred_min": float(score.min()),
             "pred_max": float(score.max()),
             "pos_rate": float(y01.mean()) if y01.size else 0.0,
-            "pred_pos_rate@thr": float((score >= CLS_THR).mean()) if score.size else 0.0,
+            "pred_pos_rate@thr": float(pred01.mean()) if pred01.size else 0.0,
             "ef1": float(ef1),
             "ef5": float(ef5),
             "ef10": float(ef10),
@@ -797,7 +795,6 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 
     auroc = roc_auc_score(y01, score)
     ap = average_precision_score(y01, score)
-    pred01 = (score >= CLS_THR).astype(np.int32)
     f1 = f1_score(y01, pred01)
 
     return {
@@ -815,7 +812,6 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef5": float(ef5),
         "ef10": float(ef10),
     }
-
 
 # =========================================================
 # Train
