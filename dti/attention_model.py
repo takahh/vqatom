@@ -233,6 +233,53 @@ class DTIDataset(Dataset):
         }
         return item
 
+class PairwiseInteractionHead(nn.Module):
+    def __init__(self, d_model: int, hidden: int = 128, dropout: float = 0.1):
+        super().__init__()
+        self.q_l = nn.Linear(d_model, d_model)
+        self.k_p = nn.Linear(d_model, d_model)
+        self.pair_mlp = nn.Sequential(
+            nn.Linear(d_model, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
+        """
+        l_tok: (B, Ll, D)
+        p_tok: (B, Lp, D)
+        """
+        q = self.q_l(l_tok)              # (B, Ll, D)
+        k = self.k_p(p_tok)              # (B, Lp, D)
+
+        # pair feature: elementwise product
+        pair_feat = q.unsqueeze(2) * k.unsqueeze(1)   # (B, Ll, Lp, D)
+        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)  # (B, Ll, Lp)
+
+        if (l_pad is not None) and (p_pad is not None):
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)  # (B, Ll, Lp)
+            pair_logit = pair_logit.masked_fill(~valid, -1e4)
+        else:
+            valid = None
+
+        # simple aggregation: top-k mean
+        B, Ll, Lp = pair_logit.shape
+        flat = pair_logit.view(B, -1)
+
+        if valid is not None:
+            valid_flat = valid.view(B, -1)
+            flat = flat.masked_fill(~valid_flat, -1e4)
+
+        k_top = max(1, int(0.02 * flat.size(1)))   # top 2% pairs
+        topv, _ = torch.topk(flat, k=k_top, dim=-1)
+        logit = topv.mean(dim=-1)                  # (B,)
+
+        aux = {"pair_logit": pair_logit}
+        if return_maps:
+            return logit, aux
+        return logit, aux
+
 class SmilesLigandEncoder(nn.Module):
     def __init__(
         self,
@@ -1309,7 +1356,7 @@ class DualStreamDTIClassifier(nn.Module):
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-
+        self.pair_head = PairwiseInteractionHead(d_model=self.d_model, hidden=128, dropout=dropout)
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
         self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
@@ -1325,7 +1372,11 @@ class DualStreamDTIClassifier(nn.Module):
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
         )
-
+        self.pair_head = PairwiseInteractionHead(
+            d_model=self.d_model,
+            hidden=128,
+            dropout=dropout,
+        )
         if self.use_cls_in_head:
             feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
         else:
@@ -1405,50 +1456,23 @@ class DualStreamDTIClassifier(nn.Module):
         eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
-
-        # ここが新block
-        if return_maps:
-            p_ctx, l_ctx, inter_aux = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=True,
-            )
-        else:
-            p_ctx, l_ctx = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=False,
-            )
-            inter_aux = {}
-
-        p_mean = self._masked_mean(p_ctx, p_pad)
-        p_max = self._masked_max(p_ctx, p_pad)
-        l_mean = self._masked_mean(l_ctx, l_pad)
-        l_max = self._masked_max(l_ctx, l_pad)
-
-        if self.use_cls_in_head:
-            feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
-        else:
-            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
-
-        h = self.shared_head(feat)
-        logit = self.cls_head(h).squeeze(-1)
+        logit, pair_aux = self.pair_head(
+            l_tok=l_tok,
+            p_tok=p_tok,
+            l_pad=l_pad,
+            p_pad=p_pad,
+            return_maps=return_maps,
+        )
 
         yhat_reg = None
-        if self.reg_head is not None:
-            yhat_reg = self.reg_head(h).squeeze(-1)
+        aux = {}
 
-        aux.update(inter_aux)
+        aux.update(pair_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
-        aux["p_ctx_tok"] = p_ctx
-        aux["l_ctx_tok"] = l_ctx
 
         return logit, yhat_reg, aux
+
 
 # =========================================================
 # Optimizer
