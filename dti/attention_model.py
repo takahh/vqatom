@@ -234,48 +234,88 @@ class DTIDataset(Dataset):
         return item
 
 class PairwiseInteractionHead(nn.Module):
-    def __init__(self, d_model: int, hidden: int = 128, dropout: float = 0.1):
+    def __init__(
+        self,
+        d_model: int,
+        hidden: int = 128,
+        dropout: float = 0.1,
+        use_topk: bool = True,
+        topk_frac: float = 0.01,
+    ):
         super().__init__()
-        self.q_l = nn.Linear(d_model, d_model)
-        self.k_p = nn.Linear(d_model, d_model)
-        self.scale = 1.0 / math.sqrt(d_model)
+        self.use_topk = bool(use_topk)
+        self.topk_frac = float(topk_frac)
+
+        # tokenごとの前処理
+        self.l_proj = nn.Linear(d_model, d_model)
+        self.p_proj = nn.Linear(d_model, d_model)
+
+        pair_dim = d_model * 4  # [l, p, l*p, |l-p|]
+
+        self.pair_mlp = nn.Sequential(
+            nn.Linear(pair_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
 
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        q = self.q_l(l_tok)
-        k = self.k_p(p_tok)
+        """
+        l_tok: (B, Ll, D)
+        p_tok: (B, Lp, D)
+        """
+        B, Ll, D = l_tok.shape
+        _, Lp, _ = p_tok.shape
 
-        q = torch.nn.functional.normalize(q, dim=-1)
-        k = torch.nn.functional.normalize(k, dim=-1)
+        l = self.l_proj(l_tok)   # (B, Ll, D)
+        p = self.p_proj(p_tok)   # (B, Lp, D)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k)
+        # expand to pair grid
+        l_exp = l.unsqueeze(2).expand(B, Ll, Lp, D)   # (B, Ll, Lp, D)
+        p_exp = p.unsqueeze(1).expand(B, Ll, Lp, D)   # (B, Ll, Lp, D)
+
+        pair_feat = torch.cat(
+            [
+                l_exp,
+                p_exp,
+                l_exp * p_exp,
+                torch.abs(l_exp - p_exp),
+            ],
+            dim=-1,
+        )  # (B, Ll, Lp, 4D)
+
+        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)  # (B, Ll, Lp)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
 
+        valid = None
+        valid_f = None
         if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
-        else:
-            valid = None
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)   # (B, Ll, Lp)
+            valid_f = valid.float()
+            pair_logit = pair_logit.masked_fill(~valid, -20.0)
 
         pair_prob = torch.sigmoid(pair_logit)
-        if torch.isnan(q).any() or torch.isinf(q).any():
-            raise RuntimeError("NaN/inf in q")
 
-        if torch.isnan(k).any() or torch.isinf(k).any():
-            raise RuntimeError("NaN/inf in k")
+        # ---- readout ----
+        if self.use_topk:
+            flat = pair_logit.view(B, -1)
 
-        if torch.isnan(pair_logit).any() or torch.isinf(pair_logit).any():
-            raise RuntimeError("NaN/inf in pair_logit")
+            if valid is not None:
+                flat = flat.masked_fill(~valid.view(B, -1), -20.0)
 
-        B = pair_prob.size(0)
-        flat_topk = pair_prob.view(B, -1)
-        if valid is not None:
-            flat_topk = flat_topk.masked_fill(~valid.view(B, -1), 0.0)
+            k_top = max(5, int(self.topk_frac * flat.size(1)))
+            k_top = min(k_top, flat.size(1))
 
-        k_top = max(5, int(0.01 * flat_topk.size(1)))
-        k_top = min(k_top, flat_topk.size(1))
-
-        topv, _ = torch.topk(flat_topk, k=k_top, dim=-1)
-        prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
-        logit = torch.logit(prob)
+            topv, _ = torch.topk(flat, k=k_top, dim=-1)
+            logit = topv.mean(dim=-1)   # raw logit平均
+        else:
+            if valid_f is not None:
+                logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
+            else:
+                logit = pair_logit.mean(dim=(1, 2))
 
         aux = {
             "pair_logit": pair_logit,
