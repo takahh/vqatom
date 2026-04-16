@@ -829,10 +829,10 @@ def train_one_epoch(
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
-    sym_lambda: float = 0.0,   # <- 追加
+    sym_lambda: float = 0.0,
     base_loss_alpha=0.3,
     epoch=1,
-) -> Dict[str, float]:
+    ) -> Dict[str, float]:
     model.train()
 
     losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
@@ -845,37 +845,10 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-    # train中は絶対に重いmapを返さない（OOM対策）
-    # train中は map を返さない
-    # need_maps = False
 
-    # sym loss か entropy loss を使うときだけ map を返す
-    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0)
-    # attn entropy を使う時だけ map を返す
-    # need_maps = (attn_entropy_lambda != 0.0)
-
-    def attention_symmetry_loss(attn_lp, attn_pl, p_pad=None, l_pad=None):
-        """
-        attn_lp: (B, H, Ll, Lp)   ligand <- protein
-        attn_pl: (B, H, Lp, Ll)   protein <- ligand
-
-        比較対象:
-          attn_lp  vs  transpose(attn_pl)
-        """
-
-        # (B,H,Ll,Lp)
-        attn_pl_t = attn_pl.transpose(-1, -2)
-
-        diff = (attn_lp - attn_pl_t) ** 2  # (B,H,Ll,Lp)
-
-        if (p_pad is not None) and (l_pad is not None):
-            # p_pad: (B, Lp), l_pad: (B, Ll), True=PAD
-            valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
-            diff = diff.masked_fill(~valid, 0.0)
-            denom = valid.float().sum().clamp_min(1.0)
-            return diff.sum() / denom
-
-        return diff.mean()
+    # pairwise版では、現状のauxに lp_attn / pl_attn / attn_entropy はない
+    # なので通常は False にしておく
+    need_maps = False
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -892,105 +865,79 @@ def train_one_epoch(
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
-
-                if need_maps:
-                    if not (isinstance(out, tuple) and len(out) == 3):
-                        raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
-                    logit, yhat_reg, aux = out
-                else:
-                    # return_maps=False でも現在の model は (logit, yhat_reg, aux) を返しているはず
-                    if isinstance(out, tuple) and len(out) == 3:
-                        logit, yhat_reg, aux = out
-                    elif isinstance(out, tuple) and len(out) == 2:
-                        logit, aux = out
-                        yhat_reg = None
-                    else:
-                        raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
-
-                loss_cls = bce(logit.float(), y_bin.float())
-
-                loss_reg = torch.tensor(0.0, device=device)
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
-
-                loss_entropy = torch.tensor(0.0, device=device)
-                if attn_entropy_lambda != 0.0:
-                    if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
-                        raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
-                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
-
-                loss_sym = torch.tensor(0.0, device=device)
-                if sym_lambda != 0.0:
-                    loss_sym = attention_symmetry_loss(
-                        aux["lp_attn"].float(),
-                        aux["pl_attn"].float(),
-                        p_pad=aux["p_pad"],
-                        l_pad=aux["l_pad"],
-                    )
-
-                loss_cls = bce(logit.float(), y_bin.float())
-
-                loss_reg = torch.tensor(0.0, device=device)
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
-
-                loss = loss_cls
-
-                if "pair_logit" in aux:
-                    loss_sparse = aux["pair_logit"].sigmoid().mean()
-                    loss = loss + 1e-5 * loss_sparse
-                else:
-                    loss_sparse = torch.tensor(0.0, device=device)
-
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss = loss + reg_lambda * loss_reg
-
-                # ===== ここ追加 =====
-                if "pair_logit" in aux:
-                    loss_sparse = aux["pair_logit"].sigmoid().mean()
-                    loss = loss + 1e-5 * loss_sparse
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss = loss + reg_lambda * loss_reg
-
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
 
-            if need_maps:
-                if not (isinstance(out, tuple) and len(out) == 3):
-                    raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
-                logit, yhat_reg, aux = out
-            else:
-                if isinstance(out, tuple) and len(out) == 3:
-                    logit, yhat_reg, aux = out
-                elif isinstance(out, tuple) and len(out) == 2:
-                    logit, aux = out
-                    yhat_reg = None
-                else:
-                    raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+        if isinstance(out, tuple) and len(out) == 3:
+            logit, yhat_reg, aux = out
+        elif isinstance(out, tuple) and len(out) == 2:
+            logit, aux = out
+            yhat_reg = None
+        else:
+            raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
 
-            loss_cls = bce(logit.float(), y_bin.float())
+        # -----------------------------
+        # classification loss
+        # -----------------------------
+        loss_cls = bce(logit.float(), y_bin.float())
 
-            loss_reg = torch.tensor(0.0, device=device)
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
+        # -----------------------------
+        # regression loss (optional)
+        # -----------------------------
+        loss_reg = torch.tensor(0.0, device=device)
+        if (y_reg is not None) and (yhat_reg is not None):
+            loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
-            loss = loss_cls
+        # -----------------------------
+        # entropy / symmetry
+        # pairwise版では今は未使用
+        # -----------------------------
+        loss_entropy = torch.tensor(0.0, device=device)
+        loss_sym = torch.tensor(0.0, device=device)
 
-            if "pair_logit" in aux:
-                loss_sparse = aux["pair_logit"].sigmoid().mean()
-                loss = loss + 1e-5 * loss_sparse
-            else:
-                loss_sparse = torch.tensor(0.0, device=device)
+        if attn_entropy_lambda != 0.0:
+            raise ValueError(
+                "attn_entropy_lambda != 0, but pairwise model does not provide aux['attn_entropy']"
+            )
 
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss = loss + reg_lambda * loss_reg
+        if sym_lambda != 0.0:
+            raise ValueError(
+                "sym_lambda != 0, but pairwise model does not provide aux['lp_attn'] / aux['pl_attn']"
+            )
 
-            # ===== ここ追加 =====
-            if "pair_logit" in aux:
-                loss_sparse = aux["pair_logit"].sigmoid().mean()
-                loss = loss + 1e-5 * loss_sparse
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss = loss + reg_lambda * loss_reg
+        # -----------------------------
+        # sparse loss (Option A)
+        # keep strong pairs, suppress weak pairs
+        # -----------------------------
+        loss_sparse = torch.tensor(0.0, device=device)
+
+        if "pair_logit" in aux:
+            pair_logit = aux["pair_logit"]              # (B, Ll, Lp)
+            pair_prob = torch.sigmoid(pair_logit)      # (B, Ll, Lp)
+
+            B = pair_prob.size(0)
+            flat = pair_prob.view(B, -1)
+
+            if ("p_pad" in aux) and ("l_pad" in aux):
+                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
+                flat = flat.masked_fill(~valid.view(B, -1), 0.0)
+
+            k_top = max(5, int(0.01 * flat.size(1)))
+            k_top = min(k_top, flat.size(1))
+
+            topk, _ = torch.topk(flat, k=k_top, dim=-1)
+
+            # weak pairs down, strong pairs preserved
+            loss_sparse = flat.mean(dim=-1) - topk.mean(dim=-1)
+            loss_sparse = loss_sparse.mean()
+
+        # -----------------------------
+        # total loss
+        # -----------------------------
+        loss = loss_cls + 1e-5 * loss_sparse
+
+        if (y_reg is not None) and (yhat_reg is not None):
+            loss = loss + reg_lambda * loss_reg
 
         loss.backward()
 
@@ -1011,8 +958,7 @@ def train_one_epoch(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
-            ent=f"{losses_entropy[-1]:.4f}",
-            sym=f"{losses_sym[-1]:.4f}",
+            sparse=f"{losses_sparse[-1]:.4f}",
         )
 
     pbar.close()
@@ -1025,7 +971,6 @@ def train_one_epoch(
         "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
         "loss_sparse": float(np.mean(losses_sparse)) if losses_sparse else 0.0,
     }
-
 
 # =========================================================
 # Save/load
