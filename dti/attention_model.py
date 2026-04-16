@@ -247,7 +247,7 @@ class PairwiseInteractionHead(nn.Module):
         q = torch.nn.functional.normalize(q, dim=-1)
         k = torch.nn.functional.normalize(k, dim=-1)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k) * self.scale
+        pair_logit = torch.einsum("bid,bjd->bij", q, k)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
 
         if (l_pad is not None) and (p_pad is not None):
@@ -1089,9 +1089,9 @@ class CrossAttention(nn.Module):
         k = self._split_heads(k)
         v = self._split_heads(v)
 
-        if self.qk_norm:
-            q = F.normalize(q, dim=-1)
-            k = F.normalize(k, dim=-1)
+        # if self.qk_norm:
+        #     q = F.normalize(q, dim=-1)
+        #     k = F.normalize(k, dim=-1)
 
         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
 
