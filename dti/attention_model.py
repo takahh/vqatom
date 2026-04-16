@@ -357,7 +357,7 @@ class SmilesLigandEncoder(nn.Module):
             "dim_ff": dim_ff,
             "dropout": dropout,
         }
-
+        self.pos = nn.Embedding(1024, d_model)
         self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -417,7 +417,9 @@ class SmilesLigandEncoder(nn.Module):
         return int(self.conf["d_model"])
 
     def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
-        x = self.tok(l_ids)
+        B, L = l_ids.shape
+        pos_ids = torch.arange(L, device=l_ids.device).unsqueeze(0).expand(B, L)
+        x = self.tok(l_ids) + self.pos(pos_ids)
         pad_mask = (l_ids == self.pad_id)
         return self.enc(x, src_key_padding_mask=pad_mask)
 
@@ -1596,7 +1598,7 @@ def main():
     ap.add_argument("--train_shard_size", type=int, default=1000)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
     ap.add_argument("--sym_lambda", type=float, default=0.0)
-    ap.add_argument("--lig_ckpt", type=str, required=True)
+    ap.add_argument("--lig_ckpt", type=str, default=None)
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument(
