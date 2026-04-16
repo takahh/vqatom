@@ -973,7 +973,6 @@ def train_one_epoch(
             reg=f"{losses_reg[-1]:.4f}",
             sparse=f"{losses_sparse[-1]:.4f}",
         )
-
     pbar.close()
 
     return {
