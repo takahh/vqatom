@@ -741,6 +741,24 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         hit_rate_topk = hits_topk / float(k)
         return float(hit_rate_topk)
 
+    finite = np.isfinite(score)
+    if not finite.all():
+        print(f"[warn] eval_metrics: dropping {np.size(score) - finite.sum()} non-finite scores")
+        score = score[finite]
+        y01 = y01[finite]
+
+    if score.size == 0:
+        return {
+            "auroc": 0.0,
+            "ap": 0.0,
+            "f1": 0.0,
+            "thr": CLS_THR,
+            "pred_mean": 0.0,
+            "pred_std": 0.0,
+            "ef1": 0.0,
+            "ef5": 0.0,
+            "ef10": 0.0,
+        }
     if y_pred.size == 0:
         return {
             "auroc": 0.0,
@@ -894,34 +912,29 @@ def train_one_epoch(
         loss_sparse = torch.tensor(0.0, device=device)
 
         if "pair_logit" in aux:
-            pair_logit = aux["pair_logit"]              # (B, Ll, Lp)
-            pair_prob = torch.sigmoid(pair_logit)      # (B, Ll, Lp)
+            pair_logit = aux["pair_logit"]
+            pair_prob = torch.sigmoid(pair_logit)
 
             B = pair_prob.size(0)
-            if "pair_logit" in aux:
-                pair_logit = aux["pair_logit"]
-                pair_prob = torch.sigmoid(pair_logit)
+            flat = pair_prob.view(B, -1)
 
-                B = pair_prob.size(0)
-                flat = pair_prob.view(B, -1)
+            if ("p_pad" in aux) and ("l_pad" in aux):
+                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
+                valid_flat = valid.view(B, -1).float()
 
-                if ("p_pad" in aux) and ("l_pad" in aux):
-                    valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
-                    valid_flat = valid.view(B, -1).float()
-
-                    flat_masked = flat * valid_flat
-                    denom = valid_flat.sum(dim=-1).clamp_min(1.0)
-                    mean_all = flat_masked.sum(dim=-1) / denom
-                else:
-                    mean_all = flat.mean(dim=-1)
-
-                k_top = max(5, int(0.01 * flat.size(1)))
-                k_top = min(k_top, flat.size(1))
-                topk, _ = torch.topk(flat, k=k_top, dim=-1)
-
-                loss_sparse = (mean_all - topk.mean(dim=-1)).mean()
+                flat_masked = flat * valid_flat
+                denom = valid_flat.sum(dim=-1).clamp_min(1.0)
+                mean_all = flat_masked.sum(dim=-1) / denom
             else:
-                loss_sparse = torch.tensor(0.0, device=device)
+                mean_all = flat.mean(dim=-1)
+
+            k_top = max(5, int(0.01 * flat.size(1)))
+            k_top = min(k_top, flat.size(1))
+            topk, _ = torch.topk(flat, k=k_top, dim=-1)
+
+            loss_sparse = (mean_all - topk.mean(dim=-1)).mean()
+        else:
+            loss_sparse = torch.tensor(0.0, device=device)
 
         # -----------------------------
         # total loss
@@ -1284,18 +1297,7 @@ class DualStreamDTIClassifier(nn.Module):
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
         self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
-        self.interaction = DualStreamBlock(
-            d_model=self.d_model,
-            n_heads=self.n_heads,
-            dropout=dropout,
-            attn_temp=attn_temp,
-            qk_norm=qk_norm,
-            detach_attn_for_value=detach_attn_for_value,
-            attn_smooth_eps=attn_smooth_eps,
-            attn_activation=attn_activation,
-            pair_gate_threshold=pair_gate_threshold,
-            topk_frac=topk_frac,
-        )
+
         self.pair_head = PairwiseInteractionHead(
             d_model=self.d_model,
             hidden=128,
@@ -1305,16 +1307,6 @@ class DualStreamDTIClassifier(nn.Module):
             feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
         else:
             feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
-
-        self.shared_head = nn.Sequential(
-            nn.LayerNorm(feat_dim),
-            nn.Linear(feat_dim, 256),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-
-        self.cls_head = nn.Linear(256, 1)
-        self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1952,13 +1944,11 @@ def main():
                 f"EF10={final_m['ef10']:.3f}",
             )
 
-        visualize_one_qk_map(
+        visualize_one_pair_map(
             model=model,
             loader=valid_loader,
             device=device,
-            esm_tokenizer=esm_tokenizer,
             sample_idx_in_batch=0,
-            show_token_labels=False,
             save_dir=qk_save_dir,
             prefix=f"epoch{ep:03d}_valid_sample0",
         )
