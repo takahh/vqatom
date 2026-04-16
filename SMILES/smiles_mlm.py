@@ -14,6 +14,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
+import re
+
+SMILES_REGEX = re.compile(
+    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
+)
+
+
+def regex_tokenize(smiles: str):
+    tokens = SMILES_REGEX.findall(smiles)
+    return tokens
 
 # ============================================================
 # Tokenizer
@@ -69,8 +79,10 @@ class SmilesCharTokenizer:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False, indent=2)
 
+
     def encode(self, smiles: str, add_cls: bool = True, max_len: Optional[int] = None) -> List[int]:
-        ids = [self.stoi.get(ch, self.unk_id) for ch in smiles]
+        tokens = regex_tokenize(smiles)
+        ids = [self.stoi.get(tok, self.unk_id) for tok in tokens]
         if add_cls:
             ids = [self.cls_id] + ids
         if max_len is not None:
