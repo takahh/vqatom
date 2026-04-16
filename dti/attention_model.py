@@ -256,6 +256,14 @@ class PairwiseInteractionHead(nn.Module):
             valid = None
 
         pair_prob = torch.sigmoid(pair_logit)
+        if torch.isnan(q).any() or torch.isinf(q).any():
+            raise RuntimeError("NaN/inf in q")
+
+        if torch.isnan(k).any() or torch.isinf(k).any():
+            raise RuntimeError("NaN/inf in k")
+
+        if torch.isnan(pair_logit).any() or torch.isinf(pair_logit).any():
+            raise RuntimeError("NaN/inf in pair_logit")
 
         B = pair_prob.size(0)
         flat_topk = pair_prob.view(B, -1)
@@ -1386,6 +1394,12 @@ class DualStreamDTIClassifier(nn.Module):
         aux.update(pair_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
+
+        if torch.isnan(p_h).any() or torch.isinf(p_h).any():
+            raise RuntimeError("NaN/inf in p_h")
+
+        if torch.isnan(l_h).any() or torch.isinf(l_h).any():
+            raise RuntimeError("NaN/inf in l_h")
 
         return logit, yhat_reg, aux
 
