@@ -240,13 +240,12 @@ class PairwiseInteractionHead(nn.Module):
         hidden: int = 128,
         dropout: float = 0.1,
         use_topk: bool = True,
-        topk_frac: float = 0.01,
+        topk_k: int = 20,
     ):
         super().__init__()
         self.use_topk = bool(use_topk)
-        self.topk_frac = float(topk_frac)
+        self.topk_k = int(topk_k)
 
-        # tokenごとの前処理
         self.l_proj = nn.Linear(d_model, d_model)
         self.p_proj = nn.Linear(d_model, d_model)
 
@@ -262,55 +261,55 @@ class PairwiseInteractionHead(nn.Module):
             nn.Linear(hidden, 1),
         )
 
+        self.readout = nn.Sequential(
+            nn.LayerNorm(self.topk_k),
+            nn.Linear(self.topk_k, 64),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1),
+        )
+
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        """
-        l_tok: (B, Ll, D)
-        p_tok: (B, Lp, D)
-        """
         B, Ll, D = l_tok.shape
         _, Lp, _ = p_tok.shape
 
-        l = self.l_proj(l_tok)   # (B, Ll, D)
-        p = self.p_proj(p_tok)   # (B, Lp, D)
+        l = self.l_proj(l_tok)
+        p = self.p_proj(p_tok)
 
-        # expand to pair grid
-        l_exp = l.unsqueeze(2).expand(B, Ll, Lp, D)   # (B, Ll, Lp, D)
-        p_exp = p.unsqueeze(1).expand(B, Ll, Lp, D)   # (B, Ll, Lp, D)
+        l_exp = l.unsqueeze(2).expand(B, Ll, Lp, D)
+        p_exp = p.unsqueeze(1).expand(B, Ll, Lp, D)
 
         pair_feat = torch.cat(
-            [
-                l_exp,
-                p_exp,
-                l_exp * p_exp,
-                torch.abs(l_exp - p_exp),
-            ],
+            [l_exp, p_exp, l_exp * p_exp, torch.abs(l_exp - p_exp)],
             dim=-1,
-        )  # (B, Ll, Lp, 4D)
+        )
 
-        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)  # (B, Ll, Lp)
+        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
 
         valid = None
         valid_f = None
         if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)   # (B, Ll, Lp)
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
             valid_f = valid.float()
             pair_logit = pair_logit.masked_fill(~valid, -20.0)
 
         pair_prob = torch.sigmoid(pair_logit)
 
-        # ---- readout ----
         if self.use_topk:
             flat = pair_logit.view(B, -1)
 
             if valid is not None:
                 flat = flat.masked_fill(~valid.view(B, -1), -20.0)
 
-            k_top = max(5, int(self.topk_frac * flat.size(1)))
-            k_top = min(k_top, flat.size(1))
-
+            k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
-            logit = topv.mean(dim=-1)   # raw logit平均
+
+            if k_top < self.topk_k:
+                pad = topv.new_full((B, self.topk_k - k_top), -20.0)
+                topv = torch.cat([topv, pad], dim=-1)
+
+            logit = self.readout(topv).squeeze(-1)
         else:
             if valid_f is not None:
                 logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
