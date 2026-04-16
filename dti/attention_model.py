@@ -282,7 +282,6 @@ class PairwiseInteractionHead(nn.Module):
         super().__init__()
         self.q_l = nn.Linear(d_model, d_model)
         self.k_p = nn.Linear(d_model, d_model)
-        self.scale = 1.0 / math.sqrt(d_model)
 
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
         q = self.q_l(l_tok)
@@ -291,7 +290,7 @@ class PairwiseInteractionHead(nn.Module):
         q = torch.nn.functional.normalize(q, dim=-1)
         k = torch.nn.functional.normalize(k, dim=-1)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k) * self.scale
+        pair_logit = torch.einsum("bid,bjd->bij", q, k)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
 
         if (l_pad is not None) and (p_pad is not None):
