@@ -238,30 +238,43 @@ class PairwiseInteractionHead(nn.Module):
         super().__init__()
         self.q_l = nn.Linear(d_model, d_model)
         self.k_p = nn.Linear(d_model, d_model)
+        self.scale = 1.0 / math.sqrt(d_model)
 
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        q = self.q_l(l_tok)   # (B, Ll, D)
-        k = self.k_p(p_tok)   # (B, Lp, D)
+        q = self.q_l(l_tok)
+        k = self.k_p(p_tok)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k)  # (B, Ll, Lp)
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        pair_logit = torch.einsum("bid,bjd->bij", q, k) * self.scale
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
 
         if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)   # (B, Ll, Lp)
-            valid_f = valid.float()
-            pair_logit = pair_logit.masked_fill(~valid, -20.0)
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
         else:
             valid = None
-            valid_f = None
 
         pair_prob = torch.sigmoid(pair_logit)
+        if torch.isnan(q).any() or torch.isinf(q).any():
+            raise RuntimeError("NaN/inf in q")
 
-        if valid_f is not None:
-            prob = (pair_prob * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
-        else:
-            prob = pair_prob.mean(dim=(1, 2))
+        if torch.isnan(k).any() or torch.isinf(k).any():
+            raise RuntimeError("NaN/inf in k")
 
-        prob = prob.clamp(1e-4, 1 - 1e-4)
+        if torch.isnan(pair_logit).any() or torch.isinf(pair_logit).any():
+            raise RuntimeError("NaN/inf in pair_logit")
+
+        B = pair_prob.size(0)
+        flat_topk = pair_prob.view(B, -1)
+        if valid is not None:
+            flat_topk = flat_topk.masked_fill(~valid.view(B, -1), 0.0)
+
+        k_top = max(5, int(0.01 * flat_topk.size(1)))
+        k_top = min(k_top, flat_topk.size(1))
+
+        topv, _ = torch.topk(flat_topk, k=k_top, dim=-1)
+        prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
         logit = torch.logit(prob)
 
         aux = {
@@ -671,7 +684,6 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     prob_list, ybin_list = [], []
     yreg_pred_list, yreg_true_list = [], []
     use_amp = (device.type == "cuda")
-    # use_amp = False
 
     with torch.inference_mode():
         for batch in loader:
@@ -834,7 +846,6 @@ def train_one_epoch(
     losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
     losses_sparse = []
     use_amp = (device.type == "cuda")
-    # use_amp = False
 
     bce = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
@@ -1010,133 +1021,133 @@ def load_dti_checkpoint(path: str, model: nn.Module, device: torch.device):
 
 import torch.nn as nn
 
-# class CrossAttention(nn.Module):
-#     def __init__(
-#         self,
-#         d_model,
-#         n_heads,
-#         dropout=0.1,
-#         attn_temp=1.0,
-#         qk_norm=True,
-#         attn_smooth_eps=0.0,
-#         attn_activation="softmax",
-#         detach_attn_for_value=False,
-#         pair_gate_threshold=0.0,
-#         topk_frac=0.0,
-#     ):
-#         super().__init__()
-#         assert d_model % n_heads == 0
-#
-#         self.d_model = d_model
-#         self.n_heads = n_heads
-#         self.d_head = d_model // n_heads
-#
-#         self.q_proj = nn.Linear(d_model, d_model)
-#         self.k_proj = nn.Linear(d_model, d_model)
-#         self.v_proj = nn.Linear(d_model, d_model)
-#         self.out_proj = nn.Linear(d_model, d_model)
-#
-#         self.dropout = nn.Dropout(dropout)
-#         self.attn_temp = attn_temp
-#         self.qk_norm = qk_norm
-#         self.attn_smooth_eps = attn_smooth_eps
-#         self.attn_activation = attn_activation
-#         self.detach_attn_for_value = detach_attn_for_value
-#         self.pair_gate_threshold = float(pair_gate_threshold)
-#         self.topk_frac = float(topk_frac)
-#
-#         self.scale = 1.0 / math.sqrt(self.d_head)
-#
-#     def _split_heads(self, x):
-#         B, L, _ = x.shape
-#         return x.view(B, L, self.n_heads, self.d_head).transpose(1, 2)
-#
-#     def _merge_heads(self, x):
-#         B, H, L, Dh = x.shape
-#         return x.transpose(1, 2).contiguous().view(B, L, H * Dh)
-#
-#     def _apply_topk_mask(self, attn):
-#         if self.topk_frac <= 0.0 or self.topk_frac >= 1.0:
-#             return attn
-#         B, H, Lq, Lk = attn.shape
-#         k = max(1, int(math.ceil(Lk * self.topk_frac)))
-#         _, topk_idx = torch.topk(attn, k=k, dim=-1)
-#         keep = torch.zeros_like(attn, dtype=torch.bool)
-#         keep.scatter_(-1, topk_idx, True)
-#         return attn * keep.to(attn.dtype)
-#
-#     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
-#         import torch.nn.functional as F
-#         if v_in is None:
-#             v_in = k_in
-#
-#         q = self.q_proj(q_in)
-#         k = self.k_proj(k_in)
-#         v = self.v_proj(v_in)
-#         v = torch.tanh(v)
-#
-#         q = self._split_heads(q)
-#         k = self._split_heads(k)
-#         v = self._split_heads(v)
-#
-#         if self.qk_norm:
-#             q = F.normalize(q, dim=-1)
-#             k = F.normalize(k, dim=-1)
-#
-#         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
-#
-#         if kv_pad_mask is not None:
-#             mask = kv_pad_mask[:, None, None, :]
-#             logits = logits.masked_fill(mask, -1e4)
-#
-#         if self.attn_activation == "softmax":
-#             attn = torch.softmax(logits / 0.5, dim=-1)
-#         elif self.attn_activation == "sigmoid":
-#             attn = torch.sigmoid(logits)
-#         else:
-#             raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
-#
-#         if self.attn_smooth_eps > 0 and self.attn_activation == "softmax":
-#             Lk = attn.size(-1)
-#             attn = (1.0 - self.attn_smooth_eps) * attn + self.attn_smooth_eps / Lk
-#
-#         if self.pair_gate_threshold > 0.0:
-#             attn = attn * (attn >= self.pair_gate_threshold).to(attn.dtype)
-#
-#         attn = self._apply_topk_mask(attn)
-#         attn = self.dropout(attn)
-#
-#         attn_for_v = attn.detach() if self.detach_attn_for_value else attn
-#
-#         pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)
-#         ctx = pair_ctx.sum(dim=-2)
-#
-#         ctx = ctx * q
-#         out = self._merge_heads(ctx)
-#         out = self.out_proj(out)
-#
-#         if return_maps:
-#             return out, {
-#                 "qk_logits": logits,
-#                 "attn_map": attn,
-#                 "v_proj": v,
-#                 "pair_ctx": pair_ctx,
-#                 "ctx": ctx,
-#             }
-#         return out
+class CrossAttention(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        n_heads,
+        dropout=0.1,
+        attn_temp=1.0,
+        qk_norm=True,
+        attn_smooth_eps=0.0,
+        attn_activation="softmax",
+        detach_attn_for_value=False,
+        pair_gate_threshold=0.0,
+        topk_frac=0.0,
+    ):
+        super().__init__()
+        assert d_model % n_heads == 0
 
-# class FFN(nn.Module):
-#     def __init__(self, d_model, dropout=0.1, mult=4):
-#         super().__init__()
-#         self.net = nn.Sequential(
-#             nn.Linear(d_model, d_model * mult),
-#             nn.GELU(),
-#             nn.Dropout(dropout),
-#             nn.Linear(d_model * mult, d_model),
-#         )
-#
-#     def forward(self, x):
-#         return self.net(x)
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+
+        self.q_proj = nn.Linear(d_model, d_model)
+        self.k_proj = nn.Linear(d_model, d_model)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+
+        self.dropout = nn.Dropout(dropout)
+        self.attn_temp = attn_temp
+        self.qk_norm = qk_norm
+        self.attn_smooth_eps = attn_smooth_eps
+        self.attn_activation = attn_activation
+        self.detach_attn_for_value = detach_attn_for_value
+        self.pair_gate_threshold = float(pair_gate_threshold)
+        self.topk_frac = float(topk_frac)
+
+        self.scale = 1.0 / math.sqrt(self.d_head)
+
+    def _split_heads(self, x):
+        B, L, _ = x.shape
+        return x.view(B, L, self.n_heads, self.d_head).transpose(1, 2)
+
+    def _merge_heads(self, x):
+        B, H, L, Dh = x.shape
+        return x.transpose(1, 2).contiguous().view(B, L, H * Dh)
+
+    def _apply_topk_mask(self, attn):
+        if self.topk_frac <= 0.0 or self.topk_frac >= 1.0:
+            return attn
+        B, H, Lq, Lk = attn.shape
+        k = max(1, int(math.ceil(Lk * self.topk_frac)))
+        _, topk_idx = torch.topk(attn, k=k, dim=-1)
+        keep = torch.zeros_like(attn, dtype=torch.bool)
+        keep.scatter_(-1, topk_idx, True)
+        return attn * keep.to(attn.dtype)
+
+    def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
+        import torch.nn.functional as F
+        if v_in is None:
+            v_in = k_in
+
+        q = self.q_proj(q_in)
+        k = self.k_proj(k_in)
+        v = self.v_proj(v_in)
+        v = torch.tanh(v)
+
+        q = self._split_heads(q)
+        k = self._split_heads(k)
+        v = self._split_heads(v)
+
+        if self.qk_norm:
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
+
+        logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
+
+        if kv_pad_mask is not None:
+            mask = kv_pad_mask[:, None, None, :]
+            logits = logits.masked_fill(mask, -1e4)
+
+        if self.attn_activation == "softmax":
+            attn = torch.softmax(logits / 0.5, dim=-1)
+        elif self.attn_activation == "sigmoid":
+            attn = torch.sigmoid(logits)
+        else:
+            raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
+
+        if self.attn_smooth_eps > 0 and self.attn_activation == "softmax":
+            Lk = attn.size(-1)
+            attn = (1.0 - self.attn_smooth_eps) * attn + self.attn_smooth_eps / Lk
+
+        if self.pair_gate_threshold > 0.0:
+            attn = attn * (attn >= self.pair_gate_threshold).to(attn.dtype)
+
+        attn = self._apply_topk_mask(attn)
+        attn = self.dropout(attn)
+
+        attn_for_v = attn.detach() if self.detach_attn_for_value else attn
+
+        pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)
+        ctx = pair_ctx.sum(dim=-2)
+
+        ctx = ctx * q
+        out = self._merge_heads(ctx)
+        out = self.out_proj(out)
+
+        if return_maps:
+            return out, {
+                "qk_logits": logits,
+                "attn_map": attn,
+                "v_proj": v,
+                "pair_ctx": pair_ctx,
+                "ctx": ctx,
+            }
+        return out
+
+class FFN(nn.Module):
+    def __init__(self, d_model, dropout=0.1, mult=4):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, d_model * mult),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model * mult, d_model),
+        )
+
+    def forward(self, x):
+        return self.net(x)
 
 
 import math
@@ -1145,114 +1156,114 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# class DualStreamBlock(nn.Module):
-#     def __init__(
-#         self,
-#         d_model,
-#         n_heads,
-#         dropout=0.1,
-#         attn_temp=1.0,
-#         qk_norm=True,
-#         detach_attn_for_value=False,
-#         attn_smooth_eps=0.0,
-#         attn_activation="softmax",
-#         pair_gate_threshold=0.0,   # 追加
-#         topk_frac=0.0,             # 追加
-#     ):
-#         super().__init__()
-#
-#         self.ln_l_q = nn.LayerNorm(d_model)
-#         self.ln_l_kv = nn.LayerNorm(d_model)
-#         self.ln_p_q = nn.LayerNorm(d_model)
-#         self.ln_p_kv = nn.LayerNorm(d_model)
-#
-#         self.lig_from_prot = CrossAttention(
-#             d_model=d_model,
-#             n_heads=n_heads,
-#             dropout=dropout,
-#             attn_temp=attn_temp,
-#             qk_norm=qk_norm,
-#             detach_attn_for_value=detach_attn_for_value,
-#             attn_smooth_eps=attn_smooth_eps,
-#             attn_activation=attn_activation,
-#             pair_gate_threshold=pair_gate_threshold,
-#             topk_frac=topk_frac,
-#         )
-#
-#         self.prot_from_lig = CrossAttention(
-#             d_model=d_model,
-#             n_heads=n_heads,
-#             dropout=dropout,
-#             attn_temp=attn_temp,
-#             qk_norm=qk_norm,
-#             detach_attn_for_value=detach_attn_for_value,
-#             attn_smooth_eps=attn_smooth_eps,
-#             attn_activation=attn_activation,
-#             pair_gate_threshold=pair_gate_threshold,
-#             topk_frac=topk_frac,
-#         )
-#
-#         self.drop = nn.Dropout(dropout)
-#
-#         self.ffn_l = nn.Sequential(
-#             nn.LayerNorm(d_model),
-#             nn.Linear(d_model, 4 * d_model),
-#             nn.GELU(),
-#             nn.Dropout(dropout),
-#             nn.Linear(4 * d_model, d_model),
-#         )
-#         self.ffn_p = nn.Sequential(
-#             nn.LayerNorm(d_model),
-#             nn.Linear(d_model, 4 * d_model),
-#             nn.GELU(),
-#             nn.Dropout(dropout),
-#             nn.Linear(4 * d_model, d_model),
-#         )
-#
-#     def forward(self, p_h, l_h, p_pad=None, l_pad=None, return_maps=False):
-#         # query側と key/value側を別LN
-#         l_q = self.ln_l_q(l_h)
-#         p_kv = self.ln_p_kv(p_h)
-#
-#         p_q = self.ln_p_q(p_h)
-#         l_kv = self.ln_l_kv(l_h)
-#
-#         l_ctx, aux_lp = self.lig_from_prot(
-#             q_in=l_q,
-#             k_in=p_kv,
-#             v_in=p_kv,
-#             kv_pad_mask=p_pad,
-#             return_maps=True,
-#         )
-#
-#         p_ctx, aux_pl = self.prot_from_lig(
-#             q_in=p_q,
-#             k_in=l_kv,
-#             v_in=l_kv,
-#             kv_pad_mask=l_pad,
-#             return_maps=True,
-#         )
-#
-#         l_h = l_h + self.drop(l_ctx)
-#         p_h = p_h + self.drop(p_ctx)
-#
-#         l_h = l_h + self.drop(self.ffn_l(l_h))
-#         p_h = p_h + self.drop(self.ffn_p(p_h))
-#
-#         if return_maps:
-#             return p_h, l_h, {
-#                 "lp_qk_logits": aux_lp["qk_logits"],
-#                 "lp_attn": aux_lp["attn_map"],
-#                 "lp_ctx": aux_lp["ctx"],
-#                 "lp_v": aux_lp["v_proj"],
-#
-#                 "pl_qk_logits": aux_pl["qk_logits"],
-#                 "pl_attn": aux_pl["attn_map"],
-#                 "pl_ctx": aux_pl["ctx"],
-#                 "pl_v": aux_pl["v_proj"],
-#             }
-#
-#         return p_h, l_h
+class DualStreamBlock(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        n_heads,
+        dropout=0.1,
+        attn_temp=1.0,
+        qk_norm=True,
+        detach_attn_for_value=False,
+        attn_smooth_eps=0.0,
+        attn_activation="softmax",
+        pair_gate_threshold=0.0,   # 追加
+        topk_frac=0.0,             # 追加
+    ):
+        super().__init__()
+
+        self.ln_l_q = nn.LayerNorm(d_model)
+        self.ln_l_kv = nn.LayerNorm(d_model)
+        self.ln_p_q = nn.LayerNorm(d_model)
+        self.ln_p_kv = nn.LayerNorm(d_model)
+
+        self.lig_from_prot = CrossAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            dropout=dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            detach_attn_for_value=detach_attn_for_value,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+            pair_gate_threshold=pair_gate_threshold,
+            topk_frac=topk_frac,
+        )
+
+        self.prot_from_lig = CrossAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            dropout=dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            detach_attn_for_value=detach_attn_for_value,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+            pair_gate_threshold=pair_gate_threshold,
+            topk_frac=topk_frac,
+        )
+
+        self.drop = nn.Dropout(dropout)
+
+        self.ffn_l = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+        self.ffn_p = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, 4 * d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * d_model, d_model),
+        )
+
+    def forward(self, p_h, l_h, p_pad=None, l_pad=None, return_maps=False):
+        # query側と key/value側を別LN
+        l_q = self.ln_l_q(l_h)
+        p_kv = self.ln_p_kv(p_h)
+
+        p_q = self.ln_p_q(p_h)
+        l_kv = self.ln_l_kv(l_h)
+
+        l_ctx, aux_lp = self.lig_from_prot(
+            q_in=l_q,
+            k_in=p_kv,
+            v_in=p_kv,
+            kv_pad_mask=p_pad,
+            return_maps=True,
+        )
+
+        p_ctx, aux_pl = self.prot_from_lig(
+            q_in=p_q,
+            k_in=l_kv,
+            v_in=l_kv,
+            kv_pad_mask=l_pad,
+            return_maps=True,
+        )
+
+        l_h = l_h + self.drop(l_ctx)
+        p_h = p_h + self.drop(p_ctx)
+
+        l_h = l_h + self.drop(self.ffn_l(l_h))
+        p_h = p_h + self.drop(self.ffn_p(p_h))
+
+        if return_maps:
+            return p_h, l_h, {
+                "lp_qk_logits": aux_lp["qk_logits"],
+                "lp_attn": aux_lp["attn_map"],
+                "lp_ctx": aux_lp["ctx"],
+                "lp_v": aux_lp["v_proj"],
+
+                "pl_qk_logits": aux_pl["qk_logits"],
+                "pl_attn": aux_pl["attn_map"],
+                "pl_ctx": aux_pl["ctx"],
+                "pl_v": aux_pl["v_proj"],
+            }
+
+        return p_h, l_h
 
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
@@ -1919,7 +1930,7 @@ def main():
             },
         )
 
-        print(f"\n===== Epoch {ep} vqatom =====")
+        print(f"\n===== Epoch {ep} {args.ligand_input_type} =====")
         print(
             "[train]",
             f"AUC={tr_m['auroc']:.4f}",
