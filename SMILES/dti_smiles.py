@@ -1453,6 +1453,10 @@ def main():
             "best": dict(best),
         }
 
+        print(f"\n===== Epoch {ep} SMILES =====")
+        print(f"[train] AUC={tr_m['auroc']:.4f} AP={tr_m['ap']:.4f} F1={tr_m['f1']:.4f}")
+        print(f"[valid] AUC={v_m['auroc']:.4f} AP={v_m['ap']:.4f} F1={v_m['f1']:.4f}")
+
         if final_eval_loader is not None:
             yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
             f_m = eval_metrics(yhat_f, yb_f)
@@ -1461,8 +1465,6 @@ def main():
             rec["final_eval_reg"] = f_r
             print(f"[final] AUC={f_m['auroc']:.4f} AP={f_m['ap']:.4f} F1={f_m['f1']:.4f} EF1={f_m['ef1']:.3f} EF5={f_m['ef5']:.3f} EF10={f_m['ef10']:.3f}")
 
-        print(f"[train] AUC={tr_m['auroc']:.4f} AP={tr_m['ap']:.4f} F1={tr_m['f1']:.4f}")
-        print(f"[valid] AUC={v_m['auroc']:.4f} AP={v_m['ap']:.4f} F1={v_m['f1']:.4f}")
 
         save_json(os.path.join(args.out_dir, f"epoch_{ep:03d}.json"), rec)
         save_dti_checkpoint(

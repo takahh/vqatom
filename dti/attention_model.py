@@ -155,6 +155,8 @@ class DTIDataset(Dataset):
         lig_cls_id: int = 0,
         y_reg_mean: Optional[float] = None,
         y_reg_std: Optional[float] = None,
+        ligand_input_type: str = "vqatom",
+        smiles_col: str = "smiles",
     ):
         if rows is not None:
             raw_rows = rows
@@ -164,14 +166,22 @@ class DTIDataset(Dataset):
             raise ValueError("Either csv_path or rows must be provided")
 
         self.lig_cls_id = lig_cls_id
+        self.ligand_input_type = ligand_input_type
+        self.smiles_col = smiles_col
         self.rows: List[Dict[str, object]] = []
 
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
-            lig_tok = (r.get("lig_tok") or "").strip()
             y_raw = r.get("y", "")
 
-            if not seq or not lig_tok:
+            if ligand_input_type == "vqatom":
+                lig_raw = (r.get("lig_tok") or "").strip()
+            elif ligand_input_type == "smiles":
+                lig_raw = (r.get(smiles_col) or "").strip()
+            else:
+                raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
+
+            if not seq or not lig_raw:
                 continue
 
             if y_raw in ("", None):
@@ -183,7 +193,7 @@ class DTIDataset(Dataset):
 
             rr = dict(r)
             rr["seq"] = seq
-            rr["lig_tok"] = lig_tok
+            rr["lig_raw"] = lig_raw
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
             self.rows.append(rr)
@@ -192,14 +202,9 @@ class DTIDataset(Dataset):
             raise ValueError("No usable rows in dataset")
 
         ys = [float(r["y"]) for r in self.rows if not np.isnan(float(r["y"]))]
-
         if y_reg_mean is None or y_reg_std is None:
-            if len(ys) == 0:
-                mean = 0.0
-                std = 1.0
-            else:
-                mean = float(np.mean(ys))
-                std = float(np.std(ys)) + 1e-6
+            mean = float(np.mean(ys)) if ys else 0.0
+            std = float(np.std(ys)) + 1e-6 if ys else 1.0
         else:
             mean = float(y_reg_mean)
             std = float(y_reg_std)
@@ -209,41 +214,93 @@ class DTIDataset(Dataset):
 
         for r in self.rows:
             y = float(r["y"])
-            if np.isnan(y):
-                r["y_reg"] = None
-            else:
-                r["y_reg"] = (y - mean) / std
+            r["y_reg"] = None if np.isnan(y) else (y - mean) / std
 
     def __len__(self) -> int:
         return len(self.rows)
 
-    def _parse_lig_tok(self, lig_tok: str) -> List[int]:
-        return [int(x) for x in lig_tok.split() if x.strip()]
+    def _parse_vqatom_tok(self, s: str) -> List[int]:
+        return [int(x) for x in s.split() if x.strip()]
 
     def __getitem__(self, idx):
         row = self.rows[idx]
 
-        lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
-
         item = {
             "protein_seq": row["seq"],
-            "lig_ids": lig_ids,
+            "lig_raw": row["lig_raw"],
             "y_bin": float(row["y_bin"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
         }
         return item
 
+class SmilesLigandEncoder(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        pad_id: int,
+        cls_id: Optional[int],
+        d_model: int,
+        nhead: int = 8,
+        layers: int = 4,
+        dim_ff: int = 1024,
+        dropout: float = 0.1,
+        device: Optional[torch.device] = None,
+        finetune: bool = True,
+    ):
+        super().__init__()
+        self.vocab_size = int(vocab_size)
+        self.pad_id = int(pad_id)
+        self.cls_id = int(cls_id) if cls_id is not None else None
+        self.mask_id = None
+        self.base_vocab = int(vocab_size)
+        self.vocab_source = "smiles_tokenizer"
+        self.conf = {
+            "d_model": d_model,
+            "nhead": nhead,
+            "layers": layers,
+            "dim_ff": dim_ff,
+            "dropout": dropout,
+        }
 
-def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
-    ds_list = [DTIDataset(csv_path=p, y_thr=float(y_thr), drop_missing_y=True, lig_cls_id=lig_enc.cls_id ) for p in shard_paths]
-    if not ds_list:
-        raise ValueError("No train shards were loaded")
-    return ConcatDataset(ds_list)
+        self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_ff,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
+
+        if device is not None:
+            self.to(device)
+
+        if not finetune:
+            for p in self.parameters():
+                p.requires_grad = False
+            self.eval()
+
+    @property
+    def d_model(self) -> int:
+        return int(self.conf["d_model"])
+
+    def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
+        x = self.tok(l_ids)
+        pad_mask = (l_ids == self.pad_id)
+        return self.enc(x, src_key_padding_mask=pad_mask)
 
 
-def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
+def collate_fn(
+    samples,
+    esm_tokenizer,
+    ligand_input_type,
+    lig_pad,
+    lig_cls,
+    smiles_tokenizer=None,
+    smiles_max_len=256,
+):
     p_seqs = [s["protein_seq"] for s in samples]
-    l_ids_list = [s["lig_ids"] for s in samples]
+    lig_raw_list = [s["lig_raw"] for s in samples]
 
     tok = esm_tokenizer(
         p_seqs,
@@ -255,18 +312,36 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
     p_input_ids = tok["input_ids"]
     p_attn_mask = tok["attention_mask"]
 
-    max_l = max(len(x) for x in l_ids_list)
-    l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
-    for i, ids in enumerate(l_ids_list):
-        l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
+    if ligand_input_type == "vqatom":
+        l_ids_list = []
+        for s in lig_raw_list:
+            ids = [int(x) for x in s.split() if x.strip()]
+            l_ids_list.append([lig_cls] + ids)
+
+        max_l = max(len(x) for x in l_ids_list)
+        l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
+        for i, ids in enumerate(l_ids_list):
+            l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
+
+    elif ligand_input_type == "smiles":
+        if smiles_tokenizer is None:
+            raise ValueError("smiles_tokenizer must be provided for smiles mode")
+
+        smiles_tok = smiles_tokenizer(
+            lig_raw_list,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=smiles_max_len,
+        )
+        l_ids = smiles_tok["input_ids"].long()
+
+    else:
+        raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
 
     y_bin = torch.tensor([float(s["y_bin"]) for s in samples], dtype=torch.float32)
-
     has_y_reg = all(("y_reg" in s) and (s["y_reg"] is not None) for s in samples)
-    if has_y_reg:
-        y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
-    else:
-        y_reg = None
+    y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32) if has_y_reg else None
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -1237,7 +1312,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
-
+        self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
         self.interaction = DualStreamBlock(
             d_model=self.d_model,
             n_heads=self.n_heads,
@@ -1310,13 +1385,19 @@ class DualStreamDTIClassifier(nn.Module):
             l_h = torch.zeros_like(l_h)
         # CLS 分離
         p_tok = p_h[:, 1:, :]
-        l_tok = l_h[:, 1:, :]
         p_cls = p_h[:, 0, :]
-        l_cls = l_h[:, 0, :]
 
         # PAD
         p_pad = (p_attn_mask == 0)[:, 1:]
-        l_pad = (l_ids == self.lig_pad_id)[:, 1:]
+
+        if self.has_lig_cls:
+            l_tok = l_h[:, 1:, :]
+            l_cls = l_h[:, 0, :]
+            l_pad = (l_ids == self.lig_pad_id)[:, 1:]
+        else:
+            l_tok = l_h
+            l_cls = torch.zeros_like(p_h[:, 0, :])
+            l_pad = (l_ids == self.lig_pad_id)
 
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
@@ -1521,7 +1602,18 @@ def main():
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
     ap.add_argument("--qk_norm", action="store_true")
-
+    ap.add_argument("--ligand_input_type", type=str, default="vqatom",
+                    choices=["vqatom", "smiles"])
+    ap.add_argument("--smiles_col", type=str, default="smiles")
+    ap.add_argument("--smiles_tokenizer_name", type=str, default=None)
+    ap.add_argument("--smiles_vocab_mode", type=str, default="char",
+                    choices=["char", "hf"])
+    ap.add_argument("--smiles_max_len", type=int, default=256)
+    ap.add_argument("--smiles_d_model", type=int, default=None)
+    ap.add_argument("--smiles_nhead", type=int, default=8)
+    ap.add_argument("--smiles_layers", type=int, default=4)
+    ap.add_argument("--smiles_dim_ff", type=int, default=1024)
+    ap.add_argument("--smiles_dropout", type=float, default=0.1)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -1536,14 +1628,46 @@ def main():
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
-    lig_enc = PretrainedLigandEncoder(
-        ckpt_path=args.lig_ckpt,
-        device=device,
-        finetune=args.finetune_lig,
-        vq_ckpt_path=args.vq_ckpt,
-        verbose_load=True,
-        debug_index_check=bool(args.lig_debug_index),
-    )
+    smiles_tokenizer = None
+
+    if args.ligand_input_type == "vqatom":
+        lig_enc = PretrainedLigandEncoder(
+            ckpt_path=args.lig_ckpt,
+            device=device,
+            finetune=args.finetune_lig,
+            vq_ckpt_path=args.vq_ckpt,
+            verbose_load=True,
+            debug_index_check=bool(args.lig_debug_index),
+        )
+
+    elif args.ligand_input_type == "smiles":
+        if args.smiles_tokenizer_name is None:
+            raise ValueError("--smiles_tokenizer_name is required in smiles mode")
+
+        smiles_tokenizer = AutoTokenizer.from_pretrained(args.smiles_tokenizer_name)
+
+        smiles_pad_id = smiles_tokenizer.pad_token_id
+        if smiles_pad_id is None:
+            smiles_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+            smiles_pad_id = smiles_tokenizer.pad_token_id
+
+        d_model = args.smiles_d_model if args.smiles_d_model is not None else prot_enc.hidden_size
+
+        lig_enc = SmilesLigandEncoder(
+            vocab_size=len(smiles_tokenizer),
+            pad_id=smiles_pad_id,
+            cls_id=getattr(smiles_tokenizer, "cls_token_id", None),
+            d_model=d_model,
+            nhead=args.smiles_nhead,
+            layers=args.smiles_layers,
+            dim_ff=args.smiles_dim_ff,
+            dropout=args.smiles_dropout,
+            device=device,
+            finetune=True,
+        )
+    else:
+        raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
+
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
@@ -1585,8 +1709,11 @@ def main():
             collate_fn=lambda xs: collate_fn(
                 xs,
                 esm_tokenizer=esm_tokenizer,
+                ligand_input_type=args.ligand_input_type,
                 lig_pad=lig_enc.pad_id,
-                lig_cls=lig_enc.cls_id,
+                lig_cls=(lig_enc.cls_id if getattr(lig_enc, "cls_id", None) is not None else -1),
+                smiles_tokenizer=smiles_tokenizer,
+                smiles_max_len=args.smiles_max_len,
             ),
         )
 
@@ -1609,7 +1736,8 @@ def main():
                 csv_path=args.train_csv,
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
-                lig_cls_id=lig_enc.cls_id,
+                ligand_input_type=args.ligand_input_type,
+                smiles_col=args.smiles_col
             )
         else:
             all_rows = read_csv_rows(args.train_csv)
@@ -1618,7 +1746,8 @@ def main():
                 rows=train_rows,
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
-                lig_cls_id=lig_enc.cls_id,
+                ligand_input_type=args.ligand_input_type,
+                smiles_col=args.smiles_col,
             )
 
         fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
@@ -1635,7 +1764,8 @@ def main():
                     csv_path=args.train_csv,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    lig_cls_id=lig_enc.cls_id,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_col=args.smiles_col,
                 )
             else:
                 all_rows = read_csv_rows(args.train_csv)
@@ -1644,7 +1774,8 @@ def main():
                     rows=train_rows,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    lig_cls_id=lig_enc.cls_id,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_col=args.smiles_col,
                 )
             train_y_mean = float(tmp_train_ds.y_reg_mean)
             train_y_std = float(tmp_train_ds.y_reg_std)
@@ -1658,9 +1789,10 @@ def main():
         csv_path=args.valid_csv,
         y_thr=float(args.y_thr),
         drop_missing_y=True,
-        lig_cls_id=lig_enc.cls_id,
         y_reg_mean=train_y_mean,
         y_reg_std=train_y_std,
+        ligand_input_type=args.ligand_input_type,
+        smiles_col=args.smiles_col,
     )
     valid_loader = make_loader(valid_ds, shuffle=False)
 
@@ -1670,9 +1802,10 @@ def main():
             csv_path=args.final_eval_csv,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
-            lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
+            ligand_input_type=args.ligand_input_type,
+            smiles_col=args.smiles_col,
         )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
@@ -1682,9 +1815,10 @@ def main():
             csv_path=args.test_csv,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
-            lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
+            ligand_input_type=args.ligand_input_type,
+            smiles_col=args.smiles_col,
         )
         test_loader = make_loader(test_ds, shuffle=False)
 
@@ -1752,9 +1886,8 @@ def main():
                     csv_path=p,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    lig_cls_id=lig_enc.cls_id,
-                    y_reg_mean=train_y_mean,
-                    y_reg_std=train_y_std,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_col=args.smiles_col,
                 )
                 for p in epoch_shards
             ]
@@ -1843,7 +1976,7 @@ def main():
             },
         )
 
-        print(f"\n===== Epoch {ep} =====")
+        print(f"\n===== Epoch {ep} vqatom =====")
         print(
             "[train]",
             f"AUC={tr_m['auroc']:.4f}",
