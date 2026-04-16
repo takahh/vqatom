@@ -238,40 +238,31 @@ class PairwiseInteractionHead(nn.Module):
         super().__init__()
         self.q_l = nn.Linear(d_model, d_model)
         self.k_p = nn.Linear(d_model, d_model)
-        self.scale = 1.0 / math.sqrt(d_model)
 
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        q = self.q_l(l_tok)
-        k = self.k_p(p_tok)
+        q = self.q_l(l_tok)   # (B, Ll, D)
+        k = self.k_p(p_tok)   # (B, Lp, D)
 
-        pair_logit = torch.einsum("bid,bjd->bij", q, k)
+        pair_logit = torch.einsum("bid,bjd->bij", q, k)  # (B, Ll, Lp)
+        pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
+
+        if (l_pad is not None) and (p_pad is not None):
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)   # (B, Ll, Lp)
+            valid_f = valid.float()
+            pair_logit = pair_logit.masked_fill(~valid, -20.0)
+        else:
+            valid = None
+            valid_f = None
 
         pair_prob = torch.sigmoid(pair_logit)
 
-        if valid is not None:
-            valid_f = valid.float()
+        if valid_f is not None:
             prob = (pair_prob * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
         else:
             prob = pair_prob.mean(dim=(1, 2))
 
         prob = prob.clamp(1e-4, 1 - 1e-4)
         logit = torch.logit(prob)
-
-        # pair_prob = torch.sigmoid(pair_logit)
-        #
-        # B = pair_prob.size(0)
-        # flat = pair_prob.view(B, -1)
-        #
-        # if (l_pad is not None) and (p_pad is not None):
-        #     valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
-        #     flat = flat.masked_fill(~valid.view(B, -1), 0.0)
-        #
-        # k_top = max(5, int(0.01 * flat.size(1)))
-        # k_top = min(k_top, flat.size(1))
-        #
-        # topv, _ = torch.topk(flat, k=k_top, dim=-1)
-        # prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
-        # logit = torch.logit(prob)
 
         aux = {
             "pair_logit": pair_logit,
