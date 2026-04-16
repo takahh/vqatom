@@ -1350,6 +1350,7 @@ class DualStreamDTIClassifier(nn.Module):
             hidden=128,
             dropout=dropout,
         )
+        self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
         if self.use_cls_in_head:
             feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
         else:
@@ -1419,6 +1420,7 @@ class DualStreamDTIClassifier(nn.Module):
         eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
+
         logit, pair_aux = self.pair_head(
             l_tok=l_tok,
             p_tok=p_tok,
@@ -1427,7 +1429,19 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=return_maps,
         )
 
-        yhat_reg = None
+        # 🔥 regression追加（ここ！）
+        if self.use_reg_head:
+            pair_logit = pair_aux["pair_logit"]  # (B, Ll, Lp)
+            B = pair_logit.size(0)
+
+            flat = pair_logit.view(B, -1)
+
+            k_top = min(20, flat.size(1))  # 安全
+            topv, _ = torch.topk(flat, k=k_top, dim=-1)
+
+            yhat_reg = topv.mean(dim=-1)  # (B,)
+        else:
+            yhat_reg = None
         aux = {}
 
         aux.update(pair_aux)
