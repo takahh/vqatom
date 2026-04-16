@@ -667,7 +667,8 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     model.eval()
     prob_list, ybin_list = [], []
     yreg_pred_list, yreg_true_list = [], []
-    use_amp = (device.type == "cuda")
+    # use_amp = (device.type == "cuda")
+    use_amp = False
 
     with torch.inference_mode():
         for batch in loader:
@@ -829,7 +830,8 @@ def train_one_epoch(
 
     losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
     losses_sparse = []
-    use_amp = (device.type == "cuda")
+    # use_amp = (device.type == "cuda")
+    use_amp = False
 
     bce = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
