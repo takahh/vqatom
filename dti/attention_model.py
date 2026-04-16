@@ -238,55 +238,37 @@ class PairwiseInteractionHead(nn.Module):
         super().__init__()
         self.q_l = nn.Linear(d_model, d_model)
         self.k_p = nn.Linear(d_model, d_model)
-        self.pair_mlp = nn.Sequential(
-            nn.Linear(d_model, hidden),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden, 1),
-        )
 
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        """
-        l_tok: (B, Ll, D)
-        p_tok: (B, Lp, D)
-        """
-        q = self.q_l(l_tok)              # (B, Ll, D)
-        k = self.k_p(p_tok)              # (B, Lp, D)
-
-        # pair feature: elementwise product
-        q = self.q_l(l_tok)  # (B, Ll, D)
-        k = self.k_p(p_tok)  # (B, Lp, D)
+        q = self.q_l(l_tok)
+        k = self.k_p(p_tok)
 
         pair_logit = torch.einsum("bid,bjd->bij", q, k)  # (B, Ll, Lp)
 
         if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)  # (B, Ll, Lp)
+            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
             pair_logit = pair_logit.masked_fill(~valid, -1e4)
         else:
             valid = None
 
-        # simple aggregation: top-k mean
-        B, Ll, Lp = pair_logit.shape
-        flat = pair_logit.view(B, -1)
-
-        if valid is not None:
-            valid_flat = valid.view(B, -1)
-            flat = flat.masked_fill(~valid_flat, -1e4)
-
-        k_top = max(5, int(0.01 * flat.size(1)))
         pair_prob = torch.sigmoid(pair_logit)
 
-        flat = pair_prob.view(B, -1)
+        B = pair_prob.size(0)
+        flat_topk = pair_prob.view(B, -1)
         if valid is not None:
-            flat = flat.masked_fill(~valid.view(B, -1), 0.0)
+            flat_topk = flat_topk.masked_fill(~valid.view(B, -1), 0.0)
 
-        topv, _ = torch.topk(flat, k=k_top, dim=-1)
-        prob = topv.mean(dim=-1).clamp(1e-6, 1 - 1e-6)
+        k_top = max(5, int(0.01 * flat_topk.size(1)))
+        k_top = min(k_top, flat_topk.size(1))
+
+        topv, _ = torch.topk(flat_topk, k=k_top, dim=-1)
+        prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
         logit = torch.logit(prob)
 
-        aux = {"pair_logit": pair_logit}
-        if return_maps:
-            return logit, aux
+        aux = {
+            "pair_logit": pair_logit,
+            "pair_prob": pair_prob,
+        }
         return logit, aux
 
 class SmilesLigandEncoder(nn.Module):
@@ -916,20 +898,30 @@ def train_one_epoch(
             pair_prob = torch.sigmoid(pair_logit)      # (B, Ll, Lp)
 
             B = pair_prob.size(0)
-            flat = pair_prob.view(B, -1)
+            if "pair_logit" in aux:
+                pair_logit = aux["pair_logit"]
+                pair_prob = torch.sigmoid(pair_logit)
 
-            if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
-                flat = flat.masked_fill(~valid.view(B, -1), -1e4)
+                B = pair_prob.size(0)
+                flat = pair_prob.view(B, -1)
 
-            k_top = max(5, int(0.01 * flat.size(1)))
-            k_top = min(k_top, flat.size(1))
+                if ("p_pad" in aux) and ("l_pad" in aux):
+                    valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
+                    valid_flat = valid.view(B, -1).float()
 
-            topk, _ = torch.topk(flat, k=k_top, dim=-1)
+                    flat_masked = flat * valid_flat
+                    denom = valid_flat.sum(dim=-1).clamp_min(1.0)
+                    mean_all = flat_masked.sum(dim=-1) / denom
+                else:
+                    mean_all = flat.mean(dim=-1)
 
-            # weak pairs down, strong pairs preserved
-            loss_sparse = flat.mean(dim=-1) - topk.mean(dim=-1)
-            loss_sparse = loss_sparse.mean()
+                k_top = max(5, int(0.01 * flat.size(1)))
+                k_top = min(k_top, flat.size(1))
+                topk, _ = torch.topk(flat, k=k_top, dim=-1)
+
+                loss_sparse = (mean_all - topk.mean(dim=-1)).mean()
+            else:
+                loss_sparse = torch.tensor(0.0, device=device)
 
         # -----------------------------
         # total loss
