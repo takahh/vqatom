@@ -121,6 +121,50 @@ def parse_lig_tokens(s: str) -> List[int]:
     return [int(x) for x in s.split()]
 
 
+import re
+import json
+from typing import Optional, List
+
+SMILES_REGEX = re.compile(
+    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
+)
+
+def regex_tokenize(smiles: str) -> List[str]:
+    return SMILES_REGEX.findall(smiles)
+
+
+class SimpleSmilesTokenizer:
+    PAD = "[PAD]"
+    MASK = "[MASK]"
+    CLS = "[CLS]"
+    UNK = "[UNK]"
+
+    def __init__(self, vocab_path: str):
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+
+        stoi = obj["stoi"] if "stoi" in obj else obj
+        self.stoi = dict(stoi)
+        self.itos = {int(v): k for k, v in self.stoi.items()}
+
+        self.pad_id = int(self.stoi[self.PAD])
+        self.mask_id = int(self.stoi[self.MASK])
+        self.cls_id = int(self.stoi[self.CLS])
+        self.unk_id = int(self.stoi[self.UNK])
+        self.vocab_size = int(len(self.stoi))
+
+    def encode(self, smiles: str, add_cls: bool = True, max_len: Optional[int] = None) -> List[int]:
+        toks = regex_tokenize(smiles)
+        ids = [self.stoi.get(tok, self.unk_id) for tok in toks]
+        if add_cls:
+            ids = [self.cls_id] + ids
+        if max_len is not None:
+            ids = ids[:max_len]
+        return ids
+
+    def __len__(self):
+        return self.vocab_size
+
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
         return torch.empty((0, 0), dtype=torch.long)
@@ -296,6 +340,8 @@ class SmilesLigandEncoder(nn.Module):
         dropout: float = 0.1,
         device: Optional[torch.device] = None,
         finetune: bool = True,
+        ckpt_path: Optional[str] = None,
+        verbose_load: bool = True,
     ):
         super().__init__()
         self.vocab_size = int(vocab_size)
@@ -303,7 +349,7 @@ class SmilesLigandEncoder(nn.Module):
         self.cls_id = int(cls_id) if cls_id is not None else None
         self.mask_id = None
         self.base_vocab = int(vocab_size)
-        self.vocab_source = "smiles_tokenizer"
+        self.vocab_source = "smiles_vocab_json"
         self.conf = {
             "d_model": d_model,
             "nhead": nhead,
@@ -322,6 +368,42 @@ class SmilesLigandEncoder(nn.Module):
         )
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
 
+        if ckpt_path is not None:
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+
+            if int(ckpt.get("vocab_size", -1)) != int(vocab_size):
+                raise RuntimeError(
+                    f"SMILES vocab_size mismatch: ckpt={ckpt.get('vocab_size')} current={vocab_size}"
+                )
+
+            state = ckpt["model"]
+            cur = self.state_dict()
+            loadable = {}
+            skipped = []
+
+            for k, v in state.items():
+                if k == "lm_head.weight" or k == "lm_head.bias" or k == "pos.weight":
+                    continue
+                if k not in cur:
+                    skipped.append((k, "missing_in_model"))
+                    continue
+                if cur[k].shape != v.shape:
+                    skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
+                    continue
+                loadable[k] = v
+
+            missing, unexpected = self.load_state_dict(loadable, strict=False)
+            if verbose_load:
+                print(f"[smiles load] ckpt={ckpt_path}")
+                if skipped:
+                    print("[smiles load] skipped (up to 20):", skipped[:20])
+                if unexpected:
+                    print("[smiles load] unexpected (up to 20):", unexpected[:20])
+                if missing:
+                    print("[smiles load] missing (up to 20):", missing[:20])
+
+            self.vocab_source = f"smiles_mlm_ckpt:{ckpt_path}"
+
         if device is not None:
             self.to(device)
 
@@ -338,7 +420,6 @@ class SmilesLigandEncoder(nn.Module):
         x = self.tok(l_ids)
         pad_mask = (l_ids == self.pad_id)
         return self.enc(x, src_key_padding_mask=pad_mask)
-
 
 def collate_fn(
     samples,
@@ -373,18 +454,26 @@ def collate_fn(
         for i, ids in enumerate(l_ids_list):
             l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
+
     elif ligand_input_type == "smiles":
+
         if smiles_tokenizer is None:
             raise ValueError("smiles_tokenizer must be provided for smiles mode")
 
-        smiles_tok = smiles_tokenizer(
-            lig_raw_list,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=smiles_max_len,
-        )
-        l_ids = smiles_tok["input_ids"].long()
+        l_ids_list = [
+
+            smiles_tokenizer.encode(s, add_cls=True, max_len=smiles_max_len)
+
+            for s in lig_raw_list
+
+        ]
+
+        max_l = max(len(x) for x in l_ids_list)
+
+        l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
+
+        for i, ids in enumerate(l_ids_list):
+            l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
     else:
         raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
@@ -1568,6 +1657,8 @@ def main():
     ap.add_argument("--smiles_layers", type=int, default=4)
     ap.add_argument("--smiles_dim_ff", type=int, default=1024)
     ap.add_argument("--smiles_dropout", type=float, default=0.1)
+    ap.add_argument("--smiles_vocab_path", type=str, default=None)
+    ap.add_argument("--smiles_mlm_ckpt", type=str, default=None)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -1596,29 +1687,40 @@ def main():
         )
 
     elif args.ligand_input_type == "smiles":
-        if args.smiles_tokenizer_name is None:
-            raise ValueError("--smiles_tokenizer_name is required in smiles mode")
+        if args.smiles_vocab_path is None:
+            raise ValueError("--smiles_vocab_path is required in smiles mode")
 
-        smiles_tokenizer = AutoTokenizer.from_pretrained(args.smiles_tokenizer_name)
+        smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
 
-        smiles_pad_id = smiles_tokenizer.pad_token_id
-        if smiles_pad_id is None:
-            smiles_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-            smiles_pad_id = smiles_tokenizer.pad_token_id
+        if args.smiles_mlm_ckpt is not None:
+            ckpt = torch.load(args.smiles_mlm_ckpt, map_location="cpu", weights_only=False)
+            conf = ckpt["config"]
 
-        d_model = args.smiles_d_model if args.smiles_d_model is not None else prot_enc.hidden_size
+            d_model = int(conf["d_model"])
+            nhead = int(conf["nhead"])
+            layers = int(conf["layers"])
+            dim_ff = int(conf["dim_ff"])
+            dropout = float(conf["dropout"])
+        else:
+            d_model = args.smiles_d_model if args.smiles_d_model is not None else prot_enc.hidden_size
+            nhead = args.smiles_nhead
+            layers = args.smiles_layers
+            dim_ff = args.smiles_dim_ff
+            dropout = args.smiles_dropout
 
         lig_enc = SmilesLigandEncoder(
             vocab_size=len(smiles_tokenizer),
-            pad_id=smiles_pad_id,
-            cls_id=getattr(smiles_tokenizer, "cls_token_id", None),
+            pad_id=smiles_tokenizer.pad_id,
+            cls_id=smiles_tokenizer.cls_id,
             d_model=d_model,
-            nhead=args.smiles_nhead,
-            layers=args.smiles_layers,
-            dim_ff=args.smiles_dim_ff,
-            dropout=args.smiles_dropout,
+            nhead=nhead,
+            layers=layers,
+            dim_ff=dim_ff,
+            dropout=dropout,
             device=device,
-            finetune=True,
+            finetune=args.finetune_lig,
+            ckpt_path=args.smiles_mlm_ckpt,
+            verbose_load=True,
         )
     else:
         raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
