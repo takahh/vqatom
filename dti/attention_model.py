@@ -990,6 +990,7 @@ def train_one_epoch(
         loss = loss_cls + 1e-5 * loss_sparse
 
         if (y_reg is not None) and (yhat_reg is not None):
+            print("reg loss added")
             loss = loss + reg_lambda * loss_reg
 
         loss.backward()
