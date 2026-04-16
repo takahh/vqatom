@@ -382,7 +382,7 @@ class SmilesLigandEncoder(nn.Module):
             skipped = []
 
             for k, v in state.items():
-                if k == "lm_head.weight" or k == "lm_head.bias" or k == "pos.weight":
+                if k == "lm_head.weight" or k == "lm_head.bias":
                     continue
                 if k not in cur:
                     skipped.append((k, "missing_in_model"))
