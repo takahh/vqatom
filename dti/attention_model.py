@@ -245,21 +245,33 @@ class PairwiseInteractionHead(nn.Module):
         k = self.k_p(p_tok)
 
         pair_logit = torch.einsum("bid,bjd->bij", q, k)
+
         pair_prob = torch.sigmoid(pair_logit)
 
-        B = pair_prob.size(0)
-        flat = pair_prob.view(B, -1)
+        if valid is not None:
+            valid_f = valid.float()
+            prob = (pair_prob * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
+        else:
+            prob = pair_prob.mean(dim=(1, 2))
 
-        if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
-            flat = flat.masked_fill(~valid.view(B, -1), 0.0)
-
-        k_top = max(5, int(0.01 * flat.size(1)))
-        k_top = min(k_top, flat.size(1))
-
-        topv, _ = torch.topk(flat, k=k_top, dim=-1)
-        prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
+        prob = prob.clamp(1e-4, 1 - 1e-4)
         logit = torch.logit(prob)
+
+        # pair_prob = torch.sigmoid(pair_logit)
+        #
+        # B = pair_prob.size(0)
+        # flat = pair_prob.view(B, -1)
+        #
+        # if (l_pad is not None) and (p_pad is not None):
+        #     valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
+        #     flat = flat.masked_fill(~valid.view(B, -1), 0.0)
+        #
+        # k_top = max(5, int(0.01 * flat.size(1)))
+        # k_top = min(k_top, flat.size(1))
+        #
+        # topv, _ = torch.topk(flat, k=k_top, dim=-1)
+        # prob = topv.mean(dim=-1).clamp(1e-4, 1 - 1e-4)
+        # logit = torch.logit(prob)
 
         aux = {
             "pair_logit": pair_logit,
