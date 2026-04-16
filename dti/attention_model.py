@@ -243,9 +243,9 @@ class PairwiseInteractionHead(nn.Module):
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
         q = self.q_l(l_tok)
         k = self.k_p(p_tok)
-
-        q = torch.nn.functional.normalize(q, dim=-1)
-        k = torch.nn.functional.normalize(k, dim=-1)
+        #
+        # q = torch.nn.functional.normalize(q, dim=-1)
+        # k = torch.nn.functional.normalize(k, dim=-1)
 
         pair_logit = torch.einsum("bid,bjd->bij", q, k) * self.scale
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
