@@ -254,8 +254,10 @@ class PairwiseInteractionHead(nn.Module):
         k = self.k_p(p_tok)              # (B, Lp, D)
 
         # pair feature: elementwise product
-        pair_feat = q.unsqueeze(2) * k.unsqueeze(1)   # (B, Ll, Lp, D)
-        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)  # (B, Ll, Lp)
+        q = self.q_l(l_tok)  # (B, Ll, D)
+        k = self.k_p(p_tok)  # (B, Lp, D)
+
+        pair_logit = torch.einsum("bid,bjd->bij", q, k)  # (B, Ll, Lp)
 
         if (l_pad is not None) and (p_pad is not None):
             valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)  # (B, Ll, Lp)
@@ -271,9 +273,16 @@ class PairwiseInteractionHead(nn.Module):
             valid_flat = valid.view(B, -1)
             flat = flat.masked_fill(~valid_flat, -1e4)
 
-        k_top = max(1, int(0.02 * flat.size(1)))   # top 2% pairs
+        k_top = max(5, int(0.01 * flat.size(1)))
+        pair_prob = torch.sigmoid(pair_logit)
+
+        flat = pair_prob.view(B, -1)
+        if valid is not None:
+            flat = flat.masked_fill(~valid.view(B, -1), 0.0)
+
         topv, _ = torch.topk(flat, k=k_top, dim=-1)
-        logit = topv.mean(dim=-1)                  # (B,)
+        prob = topv.mean(dim=-1).clamp(1e-6, 1 - 1e-6)
+        logit = torch.logit(prob)
 
         aux = {"pair_logit": pair_logit}
         if return_maps:
@@ -563,123 +572,80 @@ def plot_one(mat, title, save_path=None):
     else:
         plt.show()
 
-def visualize_one_qk_map(
+def visualize_one_pair_map(
     model,
     loader,
     device,
-    esm_tokenizer,
     sample_idx_in_batch: int = 0,
-    show_token_labels: bool = False,
     save_dir: str | None = None,
     prefix: str = "sample",
 ):
+    import os
+    import numpy as np
+
     model.eval()
     batch = next(iter(loader))
 
-    p_ids = batch.p_input_ids.to(device, non_blocking=True)
-    p_msk = batch.p_attn_mask.to(device, non_blocking=True)
-    l_ids = batch.l_ids.to(device, non_blocking=True)
+    p_ids = batch.p_input_ids.to(device)
+    p_msk = batch.p_attn_mask.to(device)
+    l_ids = batch.l_ids.to(device)
 
     with torch.inference_mode():
-        logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
 
-    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
-    y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
 
-    p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
-    l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
+    # ===== core =====
+    pair = aux["pair_logit"][sample_idx_in_batch].detach().cpu().numpy()
 
-    # ---------------------------
-    # 基本マップ
-    # ---------------------------
-    # (B,H,Ll,Lp) -> (Ll,Lp)
-    S_lp = (
-        aux["lp_qk_logits"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    A_lp = (
-        aux["lp_attn"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    X_lp = (
-        aux["lp_ctx"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
 
-    S_pl = (
-        aux["pl_qk_logits"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    A_pl = (
-        aux["pl_attn"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    X_pl = (
-        aux["pl_ctx"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
+    # ===== pad除去 =====
+    pair = pair[~l_pad][:, ~p_pad]
 
-    # ---------------------------
-    # pad trim
-    # ---------------------------
-    S_lp = S_lp[~l_pad][:, ~p_pad]
-    A_lp = A_lp[~l_pad][:, ~p_pad]
-    X_lp = X_lp[~l_pad]
-
-    S_pl = S_pl[~p_pad][:, ~l_pad]
-    A_pl = A_pl[~p_pad][:, ~l_pad]
-    X_pl = X_pl[~p_pad]
+    # ===== sigmoidで見やすく =====
+    pair_prob = 1 / (1 + np.exp(-pair))
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
-    # ligand <- protein
+    # ===== raw logit =====
     plot_one(
-        S_lp,
-        f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_logits.png") if save_dir else None,
-    )
-    plot_one(
-        A_lp,
-        f"lig <- prot attn | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
-    )
-    plot_one(
-        X_lp,
-        f"lig <- prot attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_attn_v_summary.png") if save_dir else None,
+        pair,
+        f"pair_logit | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pair_logit.png") if save_dir else None,
     )
 
-    # protein <- ligand
+    # ===== prob =====
     plot_one(
-        S_pl,
-        f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
+        pair_prob,
+        f"pair_prob | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pair_prob.png") if save_dir else None,
     )
-    plot_one(
-        A_pl,
-        f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
-    )
-    plot_one(
-        X_pl,
-        f"prot <- lig attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_attn_v_summary.png") if save_dir else None,
-    )
+
+    # ===== top interactions =====
+    flat = pair.reshape(-1)
+    topk = min(10, flat.size)
+    idx = np.argpartition(-flat, topk)[:topk]
+
+    Ll, Lp = pair.shape
+    coords = [(i // Lp, i % Lp) for i in idx]
+
+    print("\nTop interactions:")
+    for (i, j) in coords:
+        print(f"lig {i} - prot {j} : {pair[i, j]:.3f}")
 
     return {
-        "attn_lp_logits": S_lp,
-        "attn_lp": A_lp,
-        "attn_lp_x_v": X_lp,
-        "attn_pl_logits": S_pl,
-        "attn_pl": A_pl,
-        "attn_pl_x_v": X_pl,
+        "pair_logit": pair,
+        "pair_prob": pair_prob,
         "prob": prob,
         "y_bin": y_bin,
+        "top_pairs": coords,
     }
-
 
 class ESMProteinEncoder(nn.Module):
     def __init__(self, model_name: str, device: torch.device, finetune: bool = False):
@@ -870,6 +836,7 @@ def train_one_epoch(
     model.train()
 
     losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
+    losses_sparse = []
     use_amp = (device.type == "cuda")
 
     bce = nn.BCEWithLogitsLoss(
@@ -961,7 +928,27 @@ def train_one_epoch(
                         l_pad=aux["l_pad"],
                     )
 
-                loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+                loss_cls = bce(logit.float(), y_bin.float())
+
+                loss_reg = torch.tensor(0.0, device=device)
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
+
+                loss = loss_cls
+
+                if "pair_logit" in aux:
+                    loss_sparse = aux["pair_logit"].sigmoid().mean()
+                    loss = loss + 1e-5 * loss_sparse
+                else:
+                    loss_sparse = torch.tensor(0.0, device=device)
+
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss = loss + reg_lambda * loss_reg
+
+                # ===== ここ追加 =====
+                if "pair_logit" in aux:
+                    loss_sparse = aux["pair_logit"].sigmoid().mean()
+                    loss = loss + 1e-5 * loss_sparse
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
 
@@ -987,22 +974,21 @@ def train_one_epoch(
             if (y_reg is not None) and (yhat_reg is not None):
                 loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
-            loss_entropy = torch.tensor(0.0, device=device)
-            if attn_entropy_lambda != 0.0:
-                if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
-                    raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
-                loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
+            loss = loss_cls
 
-            loss_sym = torch.tensor(0.0, device=device)
-            if sym_lambda != 0.0:
-                loss_sym = attention_symmetry_loss(
-                    aux["lp_attn"].float(),
-                    aux["pl_attn"].float(),
-                    p_pad=aux["p_pad"],
-                    l_pad=aux["l_pad"],
-                )
+            if "pair_logit" in aux:
+                loss_sparse = aux["pair_logit"].sigmoid().mean()
+                loss = loss + 1e-5 * loss_sparse
+            else:
+                loss_sparse = torch.tensor(0.0, device=device)
 
-            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss = loss + reg_lambda * loss_reg
+
+            # ===== ここ追加 =====
+            if "pair_logit" in aux:
+                loss_sparse = aux["pair_logit"].sigmoid().mean()
+                loss = loss + 1e-5 * loss_sparse
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
 
@@ -1018,6 +1004,7 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
         losses_sym.append(float(loss_sym.detach().cpu().item()))
+        losses_sparse.append(float(loss_sparse.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
@@ -1036,6 +1023,7 @@ def train_one_epoch(
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
         "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
+        "loss_sparse": float(np.mean(losses_sparse)) if losses_sparse else 0.0,
     }
 
 
@@ -1356,7 +1344,6 @@ class DualStreamDTIClassifier(nn.Module):
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-        self.pair_head = PairwiseInteractionHead(d_model=self.d_model, hidden=128, dropout=dropout)
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
         self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
@@ -1653,6 +1640,7 @@ def main():
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
     smiles_tokenizer = None
+    prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     if args.ligand_input_type == "vqatom":
         lig_enc = PretrainedLigandEncoder(
@@ -1692,7 +1680,6 @@ def main():
     else:
         raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
 
-    prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
