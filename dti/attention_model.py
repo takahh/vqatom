@@ -261,14 +261,6 @@ class PairwiseInteractionHead(nn.Module):
             nn.Linear(hidden, 1),
         )
 
-        self.readout = nn.Sequential(
-            nn.LayerNorm(self.topk_k),
-            nn.Linear(self.topk_k, 64),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1),
-        )
-
     def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
         B, Ll, D = l_tok.shape
         _, Lp, _ = p_tok.shape
@@ -305,11 +297,8 @@ class PairwiseInteractionHead(nn.Module):
             k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
 
-            if k_top < self.topk_k:
-                pad = topv.new_full((B, self.topk_k - k_top), -20.0)
-                topv = torch.cat([topv, pad], dim=-1)
-
-            logit = self.readout(topv).squeeze(-1)
+            # ここを mean ベースにする
+            logit = topv.mean(dim=-1)
         else:
             if valid_f is not None:
                 logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
