@@ -920,7 +920,7 @@ def train_one_epoch(
 
             if ("p_pad" in aux) and ("l_pad" in aux):
                 valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
-                flat = flat.masked_fill(~valid.view(B, -1), 0.0)
+                flat = flat.masked_fill(~valid.view(B, -1), -1e4)
 
             k_top = max(5, int(0.01 * flat.size(1)))
             k_top = min(k_top, flat.size(1))
