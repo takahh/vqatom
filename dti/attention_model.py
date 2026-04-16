@@ -1930,7 +1930,7 @@ def main():
             },
         )
 
-        print(f"\n===== Epoch {ep} vqatom =====")
+        print(f"\n===== Epoch {ep} {args.ligand_input_type} =====")
         print(
             "[train]",
             f"AUC={tr_m['auroc']:.4f}",
