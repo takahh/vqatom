@@ -240,7 +240,7 @@ class PairwiseInteractionHead(nn.Module):
         hidden: int = 128,
         dropout: float = 0.1,
         use_topk: bool = True,
-        topk_k: int = 50,
+        topk_k: int = 20,
     ):
         super().__init__()
         self.use_topk = bool(use_topk)
