@@ -297,7 +297,7 @@ class PairwiseInteractionHead(nn.Module):
                 flat = flat.masked_fill(~valid.view(B, -1), -20.0)
             k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
-            w = torch.softmax(topv / 0.7, dim=-1)
+            w = torch.softmax(topv / 1.0, dim=-1)
             logit = (w * topv).sum(dim=-1)
         else:
             if valid_f is not None:
@@ -1068,14 +1068,44 @@ def train_one_epoch(
             loss_sparse = torch.tensor(0.0, device=device)
 
         # -----------------------------
-        # total loss
+        # variance loss
         # -----------------------------
         loss_var = torch.tensor(0.0, device=device)
+        loss_rc = torch.tensor(0.0, device=device)
+
         if "pair_logit" in aux:
-            pair_logit = aux["pair_logit"]
+            pair_logit = aux["pair_logit"]  # (B, Ll, Lp)
+            pair_prob = torch.sigmoid(pair_logit)  # (B, Ll, Lp)
+
+            # 分散を上げて、全部同じ値に潰れるのを防ぐ
             loss_var = -pair_logit.std(dim=(1, 2)).mean()
 
-        loss = loss_cls + 1e-5 * loss_sparse + attn_entropy_lambda * loss_entropy + 0.01 * loss_var
+            # valid mask
+            if ("p_pad" in aux) and ("l_pad" in aux):
+                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)  # (B, Ll, Lp)
+                p = pair_prob.masked_fill(~valid, 0.0)
+            else:
+                p = pair_prob
+
+            # row / column concentration penalty
+            # row_mass: 各 ligand token が protein 側にどれだけ広がっているか
+            # col_mass: 各 protein token が ligand 側からどれだけ集めているか
+            row_mass = p.sum(dim=2)  # (B, Ll)
+            col_mass = p.sum(dim=1)  # (B, Lp)
+
+            # 同じ行・列に mass が集まりすぎると大きくなる
+            loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
+
+        # -----------------------------
+        # total loss
+        # -----------------------------
+        loss = (
+                loss_cls
+                + 1e-5 * loss_sparse
+                + attn_entropy_lambda * loss_entropy
+                + 0.01 * loss_var
+                + 1e-3 * loss_rc
+        )
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
