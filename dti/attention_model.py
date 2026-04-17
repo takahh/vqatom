@@ -1420,68 +1420,96 @@ class DualStreamBlock(nn.Module):
 
         return p_h, l_h
 
-class DualStreamDTIClassifier(nn.Module):
-    def __init__(
-        self,
-        protein_encoder: ESMProteinEncoder,
-        ligand_encoder: PretrainedLigandEncoder,
-        dropout: float,
-        n_heads: int = 4,
-        n_layers: int = 2,
-        protein_token_dropout: float = 0.0,
-        ligand_token_dropout: float = 0.0,
-        attn_temp: float = 2.0,
-        qk_norm: bool = True,
-        attn_smooth_eps: float = 0.02,
-        attn_activation: str = "softmax",
-        detach_attn_for_value: bool = False,   # <- 追加
-        use_cls_in_head: bool = False,         # <- 追加
-        use_reg_head: bool = False,            # <- 追加
-        pair_gate_threshold: float = 0.5,
-        topk_frac: float = 0.1,
-        protein_only: bool = False,   # 追加
-        topk_k: int = 100,
-    ):
-        super().__init__()
-        self.prot = protein_encoder
-        self.lig = ligand_encoder
+    class DualStreamDTIClassifier(nn.Module):
+        def __init__(
+                self,
+                protein_encoder: nn.Module,
+                ligand_encoder: nn.Module,
+                dropout: float = 0.1,
+                fusion_mode: str = "pairwise",  # "pairwise" or "cat"
+                protein_token_dropout: float = 0.0,
+                ligand_token_dropout: float = 0.0,
+                use_cls_in_head: bool = False,
+                use_reg_head: bool = False,
+                protein_only: bool = False,
+                pair_hidden: int = 128,
+                pair_topk_k: int = 100,
+                cat_hidden: int = 256,
+        ):
+            super().__init__()
 
-        d_model = self.lig.d_model
-        self.d_model = d_model
-        self.n_heads = int(n_heads)
-        self.protein_token_dropout = float(protein_token_dropout)
-        self.ligand_token_dropout = float(ligand_token_dropout)
-        self.lig_pad_id = int(self.lig.pad_id)
-        self.use_cls_in_head = bool(use_cls_in_head)
-        self.use_reg_head = bool(use_reg_head)
-        self.protein_only = bool(protein_only)
-        self.p_proj = None
-        if self.prot.hidden_size != d_model:
-            self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
-        self.p_ln = nn.LayerNorm(d_model)
-        self.l_ln = nn.LayerNorm(d_model)
-        self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
+            if fusion_mode not in {"pairwise", "cat"}:
+                raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
 
-        self.pair_head = PairwiseInteractionHead(
-            d_model=self.d_model,
-            hidden=128,
-            dropout=dropout,
-            use_topk=True,
-            topk_k=topk_k,
-        )
-        #
-        # self,
-        # d_model: int,
-        # hidden: int = 128,
-        # dropout: float = 0.1,
-        # use_topk: bool = True,
-        # topk_k: int = 100,
-        self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
-        if self.use_cls_in_head:
-            feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
-        else:
-            feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
+            self.prot = protein_encoder
+            self.lig = ligand_encoder
+            self.fusion_mode = str(fusion_mode)
 
+            self.d_model = int(self.lig.d_model)
+            self.protein_token_dropout = float(protein_token_dropout)
+            self.ligand_token_dropout = float(ligand_token_dropout)
+            self.lig_pad_id = int(self.lig.pad_id)
+
+            self.use_cls_in_head = bool(use_cls_in_head)
+            self.use_reg_head = bool(use_reg_head)
+            self.protein_only = bool(protein_only)
+
+            self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
+
+            # protein -> ligand dim合わせ
+            self.p_proj = None
+            if int(self.prot.hidden_size) != self.d_model:
+                self.p_proj = nn.Linear(int(self.prot.hidden_size), self.d_model)
+
+            self.p_ln = nn.LayerNorm(self.d_model)
+            self.l_ln = nn.LayerNorm(self.d_model)
+
+            # -------------------------
+            # pairwise head
+            # -------------------------
+            self.pair_head = None
+            if self.fusion_mode == "pairwise":
+                self.pair_head = PairwiseInteractionHead(
+                    d_model=self.d_model,
+                    hidden=int(pair_hidden),
+                    dropout=float(dropout),
+                    use_topk=True,
+                    topk_k=int(pair_topk_k),
+                )
+
+            # -------------------------
+            # cat head
+            # -------------------------
+            if self.use_cls_in_head:
+                feat_dim = self.d_model * 6  # p_cls, l_cls, p_mean, p_max, l_mean, l_max
+            else:
+                feat_dim = self.d_model * 4  # p_mean, p_max, l_mean, l_max
+
+            self.cat_head = None
+            if self.fusion_mode == "cat":
+                self.cat_head = nn.Sequential(
+                    nn.Linear(feat_dim, int(cat_hidden)),
+                    nn.GELU(),
+                    nn.Dropout(float(dropout)),
+                    nn.Linear(int(cat_hidden), 128),
+                    nn.GELU(),
+                    nn.Dropout(float(dropout)),
+                    nn.Linear(128, 1),
+                )
+
+            # -------------------------
+            # optional regression head
+            # -------------------------
+            if self.use_reg_head and self.fusion_mode == "cat":
+                self.reg_head = nn.Sequential(
+                    nn.Linear(feat_dim, int(cat_hidden)),
+                    nn.GELU(),
+                    nn.Dropout(float(dropout)),
+                    nn.Linear(int(cat_hidden), 1),
+                )
+            else:
+                self.reg_head = None
+                
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
         denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
@@ -1522,8 +1550,10 @@ class DualStreamDTIClassifier(nn.Module):
         p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
+
         if self.protein_only:
             l_h = torch.zeros_like(l_h)
+
         # CLS 分離
         p_tok = p_h[:, 1:, :]
         p_cls = p_h[:, 0, :]
@@ -1547,32 +1577,58 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        logit, pair_aux = self.pair_head(
-            l_tok=l_tok,
-            p_tok=p_tok,
-            l_pad=l_pad,
-            p_pad=p_pad,
-            return_maps=return_maps,
-        )
+        # =========================================
+        # fusion branch
+        # =========================================
+        if self.fusion_mode == "pairwise":
+            logit, pair_aux = self.pair_head(
+                l_tok=l_tok,
+                p_tok=p_tok,
+                l_pad=l_pad,
+                p_pad=p_pad,
+                return_maps=return_maps,
+            )
 
-        # 🔥 regression追加（ここ！）
-        if self.use_reg_head:
-            pair_logit = pair_aux["pair_logit"]  # (B, Ll, Lp)
-            B = pair_logit.size(0)
+            if self.use_reg_head:
+                pair_logit = pair_aux["pair_logit"]  # (B, Ll, Lp)
+                B = pair_logit.size(0)
+                flat = pair_logit.view(B, -1)
+                k_top = min(20, flat.size(1))
+                topv, _ = torch.topk(flat, k=k_top, dim=-1)
+                yhat_reg = topv.mean(dim=-1)
+            else:
+                yhat_reg = None
 
-            flat = pair_logit.view(B, -1)
+            aux = {}
+            aux.update(pair_aux)
+            aux["p_pad"] = p_pad
+            aux["l_pad"] = l_pad
 
-            k_top = min(20, flat.size(1))  # 安全
-            topv, _ = torch.topk(flat, k=k_top, dim=-1)
+        elif self.fusion_mode == "cat":
+            p_mean = self._masked_mean(p_tok, p_pad)
+            p_max = self._masked_max(p_tok, p_pad)
+            l_mean = self._masked_mean(l_tok, l_pad)
+            l_max = self._masked_max(l_tok, l_pad)
 
-            yhat_reg = topv.mean(dim=-1)  # (B,)
+            if self.use_cls_in_head:
+                feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+            else:
+                feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+
+            logit = self.cat_head(feat).squeeze(-1)
+
+            if self.use_reg_head:
+                yhat_reg = self.reg_head(feat).squeeze(-1)
+            else:
+                yhat_reg = None
+
+            aux = {
+                "p_pad": p_pad,
+                "l_pad": l_pad,
+            }
+
         else:
-            yhat_reg = None
-        aux = {}
-
-        aux.update(pair_aux)
-        aux["p_pad"] = p_pad
-        aux["l_pad"] = l_pad
+            raise ValueError(f"Unsupported fusion_mode: {self.fusion_mode}")
 
         if torch.isnan(p_h).any() or torch.isinf(p_h).any():
             raise RuntimeError("NaN/inf in p_h")
@@ -1581,7 +1637,6 @@ class DualStreamDTIClassifier(nn.Module):
             raise RuntimeError("NaN/inf in l_h")
 
         return logit, yhat_reg, aux
-
 
 # =========================================================
 # Optimizer
@@ -1748,6 +1803,12 @@ def main():
     ap.add_argument("--smiles_layers", type=int, default=4)
     ap.add_argument("--smiles_dim_ff", type=int, default=1024)
     ap.add_argument("--smiles_dropout", type=float, default=0.1)
+    ap.add_argument(
+        "--fusion_mode",
+        type=str,
+        default="pairwise",
+        choices=["pairwise", "cat"],
+    )
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
