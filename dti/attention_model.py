@@ -596,7 +596,7 @@ class PretrainedLigandEncoder(nn.Module):
 
         load_shape_safe(self, self.state, verbose=verbose_load)
 
-        tok_w = model.lig.tok.weight.data
+        tok_w = self.tok.weight.data
         print("tok.weight shape:", tuple(tok_w.shape))
         print("tok.weight mean/std:", tok_w.mean().item(), tok_w.std().item())
 
