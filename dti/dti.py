@@ -931,16 +931,19 @@ def train_one_epoch(
     device: torch.device,
     pos_weight: float,
     grad_clip: float = 1.0,
-    attn_entropy_lambda: float = 0.0,
+    attn_entropy_lambda: float = 0.0,  # 互換のため残すが未使用
     reg_lambda: float = 0.1,
-    sym_lambda: float = 0.0,
-    base_loss_alpha=0.3,
+    sym_lambda: float = 0.0,           # 互換のため残すが未使用
+    base_loss_alpha=0.3,               # 互換のため残すが未使用
     epoch=1,
-    ) -> Dict[str, float]:
+) -> Dict[str, float]:
     model.train()
 
-    losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
-    losses_sparse = []
+    losses = []
+    losses_cls = []
+    losses_reg = []
+    losses_rc = []
+
     use_amp = (device.type == "cuda")
 
     bce = nn.BCEWithLogitsLoss(
@@ -949,9 +952,6 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-
-    # pairwise版では、現状のauxに lp_attn / pl_attn / attn_entropy はない
-    # なので通常は False にしておく
     need_maps = False
 
     for batch in loader:
@@ -981,129 +981,41 @@ def train_one_epoch(
             raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
 
         # -----------------------------
-        # classification loss
+        # main classification loss
         # -----------------------------
         loss_cls = bce(logit.float(), y_bin.float())
 
         # -----------------------------
-        # regression loss (optional)
+        # optional regression loss
         # -----------------------------
         loss_reg = torch.tensor(0.0, device=device)
         if (y_reg is not None) and (yhat_reg is not None):
             loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
         # -----------------------------
-        # entropy / symmetry
-        # pairwise版では今は未使用
+        # row / column concentration penalty
         # -----------------------------
-        loss_entropy = torch.tensor(0.0, device=device)
-        loss_sym = torch.tensor(0.0, device=device)
-
-        # -----------------------------
-        # entropy regularization for pairwise map
-        # -----------------------------
-        if attn_entropy_lambda != 0.0:
-            if "pair_prob" not in aux:
-                raise ValueError(
-                    "attn_entropy_lambda != 0, but pairwise model does not provide aux['pair_prob']"
-                )
-
-            pair_prob = aux["pair_prob"]  # (B, Ll, Lp)
-
-            if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)  # (B, Ll, Lp)
-                p = pair_prob.masked_fill(~valid, 0.0)
-            else:
-                valid = None
-                p = pair_prob
-
-            # sigmoid 出力を分布として正規化
-            p_sum = p.sum(dim=(1, 2), keepdim=True).clamp_min(1e-8)
-            p_norm = p / p_sum
-
-            # entropy を大きくしたい → loss ではマイナス
-            entropy = -(p_norm * torch.log(p_norm.clamp_min(1e-8))).sum(dim=(1, 2))  # (B,)
-            loss_entropy = -entropy.mean()
-
-        # -----------------------------
-        # symmetry loss
-        # pairwise model では未使用
-        # -----------------------------
-        if sym_lambda != 0.0:
-            raise ValueError(
-                "sym_lambda != 0, but pairwise model does not provide symmetric attention maps"
-            )
-
-        # -----------------------------
-        # sparse loss (Option A)
-        # keep strong pairs, suppress weak pairs
-        # -----------------------------
-        loss_sparse = torch.tensor(0.0, device=device)
-
-        if "pair_logit" in aux:
-            pair_logit = aux["pair_logit"]
-            pair_prob = torch.sigmoid(pair_logit)
-
-            B = pair_prob.size(0)
-            flat = pair_prob.view(B, -1)
-
-            if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
-                valid_flat = valid.view(B, -1).float()
-
-                flat_masked = flat * valid_flat
-                denom = valid_flat.sum(dim=-1).clamp_min(1.0)
-                mean_all = flat_masked.sum(dim=-1) / denom
-            else:
-                mean_all = flat.mean(dim=-1)
-
-            k_top = max(5, int(0.01 * flat.size(1)))
-            k_top = min(k_top, flat.size(1))
-            topk, _ = torch.topk(flat, k=k_top, dim=-1)
-
-            loss_sparse = (mean_all - topk.mean(dim=-1)).mean()
-        else:
-            loss_sparse = torch.tensor(0.0, device=device)
-
-        # -----------------------------
-        # variance loss
-        # -----------------------------
-        loss_var = torch.tensor(0.0, device=device)
         loss_rc = torch.tensor(0.0, device=device)
 
         if "pair_logit" in aux:
-            pair_logit = aux["pair_logit"]  # (B, Ll, Lp)
-            pair_prob = torch.sigmoid(pair_logit)  # (B, Ll, Lp)
+            pair_logit = aux["pair_logit"]          # (B, Ll, Lp)
+            pair_prob = torch.sigmoid(pair_logit)   # (B, Ll, Lp)
 
-            # 分散を上げて、全部同じ値に潰れるのを防ぐ
-            loss_var = -pair_logit.std(dim=(1, 2)).mean()
-
-            # valid mask
             if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)  # (B, Ll, Lp)
+                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
                 p = pair_prob.masked_fill(~valid, 0.0)
             else:
                 p = pair_prob
 
-            # row / column concentration penalty
-            # row_mass: 各 ligand token が protein 側にどれだけ広がっているか
-            # col_mass: 各 protein token が ligand 側からどれだけ集めているか
-            row_mass = p.sum(dim=2)  # (B, Ll)
-            col_mass = p.sum(dim=1)  # (B, Lp)
+            row_mass = p.sum(dim=2)   # (B, Ll)
+            col_mass = p.sum(dim=1)   # (B, Lp)
 
-            # 同じ行・列に mass が集まりすぎると大きくなる
             loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
 
         # -----------------------------
         # total loss
         # -----------------------------
-        loss = (
-                loss_cls
-                + 1e-5 * loss_sparse
-                + attn_entropy_lambda * loss_entropy
-                + 0.01 * loss_var
-                + 1e-3 * loss_rc
-        )
+        loss = loss_cls + 1e-3 * loss_rc
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
@@ -1118,26 +1030,23 @@ def train_one_epoch(
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
-        losses_entropy.append(float(loss_entropy.detach().cpu().item()))
-        losses_sym.append(float(loss_sym.detach().cpu().item()))
-        losses_sparse.append(float(loss_sparse.detach().cpu().item()))
+        losses_rc.append(float(loss_rc.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
-            sparse=f"{losses_sparse[-1]:.4f}",
+            rc=f"{losses_rc[-1]:.4f}",
         )
+
     pbar.close()
 
     return {
         "loss": float(np.mean(losses)) if losses else 0.0,
         "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
-        "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
-        "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
-        "loss_sparse": float(np.mean(losses_sparse)) if losses_sparse else 0.0,
+        "loss_rc": float(np.mean(losses_rc)) if losses_rc else 0.0,
     }
 
 # =========================================================
