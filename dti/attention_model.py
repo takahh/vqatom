@@ -1420,96 +1420,82 @@ class DualStreamBlock(nn.Module):
 
         return p_h, l_h
 
-    class DualStreamDTIClassifier(nn.Module):
-        def __init__(
-                self,
-                protein_encoder: nn.Module,
-                ligand_encoder: nn.Module,
-                dropout: float = 0.1,
-                fusion_mode: str = "pairwise",  # "pairwise" or "cat"
-                protein_token_dropout: float = 0.0,
-                ligand_token_dropout: float = 0.0,
-                use_cls_in_head: bool = False,
-                use_reg_head: bool = False,
-                protein_only: bool = False,
-                pair_hidden: int = 128,
-                pair_topk_k: int = 100,
-                cat_hidden: int = 256,
-        ):
-            super().__init__()
+class DualStreamDTIClassifier(nn.Module):
+    def __init__(
+        self,
+        protein_encoder: nn.Module,
+        ligand_encoder: nn.Module,
+        dropout: float = 0.1,
+        fusion_mode: str = "pairwise",
+        protein_token_dropout: float = 0.0,
+        ligand_token_dropout: float = 0.0,
+        use_cls_in_head: bool = False,
+        use_reg_head: bool = False,
+        protein_only: bool = False,
+        pair_hidden: int = 128,
+        pair_topk_k: int = 100,
+        cat_hidden: int = 256,
+    ):
+        super().__init__()
 
-            if fusion_mode not in {"pairwise", "cat"}:
-                raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
+        if fusion_mode not in {"pairwise", "cat"}:
+            raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
 
-            self.prot = protein_encoder
-            self.lig = ligand_encoder
-            self.fusion_mode = str(fusion_mode)
+        self.prot = protein_encoder
+        self.lig = ligand_encoder
+        self.fusion_mode = str(fusion_mode)
 
-            self.d_model = int(self.lig.d_model)
-            self.protein_token_dropout = float(protein_token_dropout)
-            self.ligand_token_dropout = float(ligand_token_dropout)
-            self.lig_pad_id = int(self.lig.pad_id)
+        self.d_model = int(self.lig.d_model)
+        self.protein_token_dropout = float(protein_token_dropout)
+        self.ligand_token_dropout = float(ligand_token_dropout)
+        self.lig_pad_id = int(self.lig.pad_id)
 
-            self.use_cls_in_head = bool(use_cls_in_head)
-            self.use_reg_head = bool(use_reg_head)
-            self.protein_only = bool(protein_only)
+        self.use_cls_in_head = bool(use_cls_in_head)
+        self.use_reg_head = bool(use_reg_head)
+        self.protein_only = bool(protein_only)
 
-            self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
+        self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
 
-            # protein -> ligand dim合わせ
-            self.p_proj = None
-            if int(self.prot.hidden_size) != self.d_model:
-                self.p_proj = nn.Linear(int(self.prot.hidden_size), self.d_model)
+        self.p_proj = None
+        if int(self.prot.hidden_size) != self.d_model:
+            self.p_proj = nn.Linear(int(self.prot.hidden_size), self.d_model)
 
-            self.p_ln = nn.LayerNorm(self.d_model)
-            self.l_ln = nn.LayerNorm(self.d_model)
+        self.p_ln = nn.LayerNorm(self.d_model)
+        self.l_ln = nn.LayerNorm(self.d_model)
 
-            # -------------------------
-            # pairwise head
-            # -------------------------
-            self.pair_head = None
-            if self.fusion_mode == "pairwise":
-                self.pair_head = PairwiseInteractionHead(
-                    d_model=self.d_model,
-                    hidden=int(pair_hidden),
-                    dropout=float(dropout),
-                    use_topk=True,
-                    topk_k=int(pair_topk_k),
-                )
+        self.pair_head = PairwiseInteractionHead(
+            d_model=self.d_model,
+            hidden=int(pair_hidden),
+            dropout=float(dropout),
+            use_topk=True,
+            topk_k=int(pair_topk_k),
+        )
 
-            # -------------------------
-            # cat head
-            # -------------------------
-            if self.use_cls_in_head:
-                feat_dim = self.d_model * 6  # p_cls, l_cls, p_mean, p_max, l_mean, l_max
-            else:
-                feat_dim = self.d_model * 4  # p_mean, p_max, l_mean, l_max
+        if self.use_cls_in_head:
+            feat_dim = self.d_model * 6
+        else:
+            feat_dim = self.d_model * 4
 
-            self.cat_head = None
-            if self.fusion_mode == "cat":
-                self.cat_head = nn.Sequential(
-                    nn.Linear(feat_dim, int(cat_hidden)),
-                    nn.GELU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(int(cat_hidden), 128),
-                    nn.GELU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(128, 1),
-                )
+        self.cat_head = nn.Sequential(
+            nn.Linear(feat_dim, int(cat_hidden)),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(int(cat_hidden), 128),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(128, 1),
+        )
 
-            # -------------------------
-            # optional regression head
-            # -------------------------
-            if self.use_reg_head and self.fusion_mode == "cat":
-                self.reg_head = nn.Sequential(
-                    nn.Linear(feat_dim, int(cat_hidden)),
-                    nn.GELU(),
-                    nn.Dropout(float(dropout)),
-                    nn.Linear(int(cat_hidden), 1),
-                )
-            else:
-                self.reg_head = None
-                
+        if self.use_reg_head and self.fusion_mode == "cat":
+            self.reg_head = nn.Sequential(
+                nn.Linear(feat_dim, int(cat_hidden)),
+                nn.GELU(),
+                nn.Dropout(float(dropout)),
+                nn.Linear(int(cat_hidden), 1),
+            )
+        else:
+            self.reg_head = None
+
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
         denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
@@ -1728,87 +1714,103 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 def main():
     ap = argparse.ArgumentParser()
 
+    # -------------------------
+    # data
+    # -------------------------
     ap.add_argument("--use_train_valid_csv", action="store_true")
     ap.add_argument("--train_csv", type=str, default=None)
     ap.add_argument("--valid_csv", type=str, required=True)
     ap.add_argument("--final_eval_csv", type=str, default=None)
     ap.add_argument("--test_csv", type=str, default=None)
     ap.add_argument("--train_size", type=int, default=None)
-    ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
-    ap.add_argument("--attn_smooth_eps", type=float, default=0.0)
+
     ap.add_argument("--train_shard_dir", type=str, default=None)
     ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
     ap.add_argument("--train_shard_size", type=int, default=1000)
-    ap.add_argument("--topk_k", type=int, default=100)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
-    ap.add_argument("--sym_lambda", type=float, default=0.0)
-    ap.add_argument("--lig_ckpt", type=str, required=True)
-    ap.add_argument("--vq_ckpt", type=str, default=None)
-    ap.add_argument("--protein_only", action="store_true")
-    ap.add_argument(
-        "--attn_activation",
-        type=str,
-        default="softmax",
-        choices=["softmax", "entmax15", "sigmoid"],
-    )
+
+    ap.add_argument("--y_thr", type=float, default=Y_THR)
+
+    # -------------------------
+    # io / runtime
+    # -------------------------
+    ap.add_argument("--out_dir", type=str, default="./dti_out")
+    ap.add_argument("--dti_ckpt", type=str, default=None)
+    ap.add_argument("--eval_only", action="store_true")
+    ap.add_argument("--seed", type=int, default=0)
+
+    # -------------------------
+    # encoders
+    # -------------------------
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
-    ap.add_argument("--lig_debug_index", action="store_true")
-    ap.add_argument("--pair_gate_threshold", type=float, default=0.0)
-    ap.add_argument("--topk_frac", type=float, default=0.0)
-    ap.add_argument("--dti_ckpt", type=str, default=None)
-    ap.add_argument("--out_dir", type=str, default="./dti_out")
-    ap.add_argument("--eval_only", action="store_true")
 
+    ap.add_argument("--lig_ckpt", type=str, required=True)
+    ap.add_argument("--vq_ckpt", type=str, default=None)
+    ap.add_argument("--lig_debug_index", action="store_true")
+
+    ap.add_argument("--ligand_input_type", type=str, default="vqatom",
+                    choices=["vqatom", "smiles"])
+    ap.add_argument("--smiles_col", type=str, default="smiles")
+
+    # -------------------------
+    # fusion model
+    # -------------------------
+    ap.add_argument("--fusion_mode", type=str, default="pairwise",
+                    choices=["pairwise", "cat"])
+    ap.add_argument("--dropout", type=float, default=0.1)
+    ap.add_argument("--protein_token_dropout", type=float, default=0.10)
+    ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
+    ap.add_argument("--use_cls_in_head", action="store_true")
+    ap.add_argument("--use_reg_head", action="store_true")
+    ap.add_argument("--protein_only", action="store_true")
+
+    # pairwise head
+    ap.add_argument("--pair_hidden", type=int, default=128)
+    ap.add_argument("--topk_k", type=int, default=100)
+
+    # cat head
+    ap.add_argument("--cat_hidden", type=int, default=256)
+
+    # -------------------------
+    # training
+    # -------------------------
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lig_lr_mult", type=float, default=0.1)
     ap.add_argument("--weight_decay", type=float, default=1e-2)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--detach_attn_for_value", action="store_true")
-    ap.add_argument("--use_cls_in_head", action="store_true")
-    ap.add_argument("--use_reg_head", action="store_true")
-    ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--grad_clip", type=float, default=1.0)
-    ap.add_argument("--plateau", action="store_true")
-    ap.add_argument("--plateau_factor", type=float, default=0.5)
-    ap.add_argument("--plateau_patience", type=int, default=2)
-    ap.add_argument("--min_lr", type=float, default=1e-6)
-    ap.add_argument("--dual_stream_layers", type=int, default=2)
-    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
-    ap.add_argument("--protein_token_dropout", type=float, default=0.10)
+    ap.add_argument("--reg_lambda", type=float, default=0.1)
+
+    # -------------------------
+    # optimizer / scheduler
+    # -------------------------
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
     ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-    ap.add_argument("--attn_temp", type=float, default=2.0)
-    ap.add_argument("--attn_entropy_lambda", type=float, default=0.0)
-    ap.add_argument("--split_seed", type=int, default=0)
-    ap.add_argument("--y_thr", type=float, default=Y_THR)
-    ap.add_argument("--n_heads", type=int, default=4)
-    ap.add_argument("--reg_lambda", type=float, default=0.1)
-    ap.add_argument("--qk_norm", action="store_true")
-    ap.add_argument("--ligand_input_type", type=str, default="vqatom",
-                    choices=["vqatom", "smiles"])
-    ap.add_argument("--smiles_col", type=str, default="smiles")
+
+    ap.add_argument("--plateau", action="store_true")
+    ap.add_argument("--plateau_factor", type=float, default=0.5)
+    ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--min_lr", type=float, default=1e-6)
+    ap.add_argument("--select_on", type=str, default="ap",
+                    choices=["ap", "auroc", "f1"])
+
+    # -------------------------
+    # smiles encoder
+    # -------------------------
     ap.add_argument("--smiles_tokenizer_name", type=str, default=None)
-    ap.add_argument("--smiles_vocab_mode", type=str, default="char",
-                    choices=["char", "hf"])
     ap.add_argument("--smiles_max_len", type=int, default=256)
     ap.add_argument("--smiles_d_model", type=int, default=None)
     ap.add_argument("--smiles_nhead", type=int, default=8)
     ap.add_argument("--smiles_layers", type=int, default=4)
     ap.add_argument("--smiles_dim_ff", type=int, default=1024)
     ap.add_argument("--smiles_dropout", type=float, default=0.1)
-    ap.add_argument(
-        "--fusion_mode",
-        type=str,
-        default="pairwise",
-        choices=["pairwise", "cat"],
-    )
+
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
