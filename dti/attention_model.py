@@ -278,6 +278,8 @@ class PairwiseInteractionHead(nn.Module):
 
         pair_logit = self.pair_mlp(pair_feat).squeeze(-1)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
+        pair_logit = pair_logit - pair_logit.mean(dim=1, keepdim=True)  # ligand方向平均との差
+        pair_logit = pair_logit - pair_logit.mean(dim=2, keepdim=True)  # protein方向平均との差
 
         valid = None
         valid_f = None
@@ -295,9 +297,8 @@ class PairwiseInteractionHead(nn.Module):
                 flat = flat.masked_fill(~valid.view(B, -1), -20.0)
             k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
-
-            # ここを mean ベースにする
-            logit = topv.max(dim=-1).values
+            w = torch.softmax(topv / 0.2, dim=-1)
+            logit = (w * topv).sum(dim=-1)
         else:
             if valid_f is not None:
                 logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
@@ -599,7 +600,7 @@ class PretrainedLigandEncoder(nn.Module):
         print("tok.weight shape:", tuple(tok_w.shape))
         print("tok.weight mean/std:", tok_w.mean().item(), tok_w.std().item())
 
-        old_vocab = 180680
+        old_vocab = self.state["tok.weight"].shape[0]
         print("old part mean/std:",
               tok_w[:old_vocab].mean().item(),
               tok_w[:old_vocab].std().item())
@@ -607,15 +608,6 @@ class PretrainedLigandEncoder(nn.Module):
         print("new tail mean/std:",
               tok_w[old_vocab:].mean().item(),
               tok_w[old_vocab:].std().item())
-
-        mlm_tok_key = "tok.weight"
-        if mlm_tok_key in self.state:
-            w = self.state[mlm_tok_key]
-            if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
-                overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
-                if overlap > 0:
-                    with torch.no_grad():
-                        self.tok.weight[:overlap].copy_(w[:overlap])
 
         self.to(device)
         if not finetune:
@@ -1078,7 +1070,12 @@ def train_one_epoch(
         # -----------------------------
         # total loss
         # -----------------------------
-        loss = loss_cls + 1e-5 * loss_sparse + attn_entropy_lambda * loss_entropy
+        loss_var = torch.tensor(0.0, device=device)
+        if "pair_logit" in aux:
+            pair_logit = aux["pair_logit"]
+            loss_var = -pair_logit.std(dim=(1, 2)).mean()
+
+        loss = loss_cls + 1e-5 * loss_sparse + attn_entropy_lambda * loss_entropy + 0.01 * loss_var
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
