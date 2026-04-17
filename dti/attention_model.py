@@ -297,7 +297,7 @@ class PairwiseInteractionHead(nn.Module):
                 flat = flat.masked_fill(~valid.view(B, -1), -20.0)
             k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
-            w = torch.softmax(topv / 0.2, dim=-1)
+            w = torch.softmax(topv / 0.7, dim=-1)
             logit = (w * topv).sum(dim=-1)
         else:
             if valid_f is not None:
