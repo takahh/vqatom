@@ -1505,10 +1505,14 @@ class DualStreamDTIClassifier(nn.Module):
             l_mean = self._masked_mean(l_tok, l_pad)
             l_max = self._masked_max(l_tok, l_pad)
 
-            if self.use_cls_in_head:
-                feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
-            else:
-                feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+            # if self.use_cls_in_head:
+            #     feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+            # else:
+            #     feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+            feat = torch.cat([
+                p_mean * l_mean,
+                torch.abs(p_mean - l_mean),
+            ], dim=-1)
 
             logit = self.cat_head(feat).squeeze(-1)
 
