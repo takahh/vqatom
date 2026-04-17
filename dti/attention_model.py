@@ -278,8 +278,6 @@ class PairwiseInteractionHead(nn.Module):
 
         pair_logit = self.pair_mlp(pair_feat).squeeze(-1)
         pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
-        pair_logit = pair_logit - pair_logit.mean(dim=1, keepdim=True)  # ligand方向平均との差
-        pair_logit = pair_logit - pair_logit.mean(dim=2, keepdim=True)  # protein方向平均との差
 
         valid = None
         valid_f = None
