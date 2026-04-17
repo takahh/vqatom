@@ -932,14 +932,39 @@ def train_one_epoch(
         loss_entropy = torch.tensor(0.0, device=device)
         loss_sym = torch.tensor(0.0, device=device)
 
+        # -----------------------------
+        # entropy regularization for pairwise map
+        # -----------------------------
         if attn_entropy_lambda != 0.0:
-            raise ValueError(
-                "attn_entropy_lambda != 0, but pairwise model does not provide aux['attn_entropy']"
-            )
+            if "pair_prob" not in aux:
+                raise ValueError(
+                    "attn_entropy_lambda != 0, but pairwise model does not provide aux['pair_prob']"
+                )
 
+            pair_prob = aux["pair_prob"]  # (B, Ll, Lp)
+
+            if ("p_pad" in aux) and ("l_pad" in aux):
+                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)  # (B, Ll, Lp)
+                p = pair_prob.masked_fill(~valid, 0.0)
+            else:
+                valid = None
+                p = pair_prob
+
+            # sigmoid 出力を分布として正規化
+            p_sum = p.sum(dim=(1, 2), keepdim=True).clamp_min(1e-8)
+            p_norm = p / p_sum
+
+            # entropy を大きくしたい → loss ではマイナス
+            entropy = -(p_norm * torch.log(p_norm.clamp_min(1e-8))).sum(dim=(1, 2))  # (B,)
+            loss_entropy = -entropy.mean()
+
+        # -----------------------------
+        # symmetry loss
+        # pairwise model では未使用
+        # -----------------------------
         if sym_lambda != 0.0:
             raise ValueError(
-                "sym_lambda != 0, but pairwise model does not provide aux['lp_attn'] / aux['pl_attn']"
+                "sym_lambda != 0, but pairwise model does not provide symmetric attention maps"
             )
 
         # -----------------------------
@@ -976,7 +1001,7 @@ def train_one_epoch(
         # -----------------------------
         # total loss
         # -----------------------------
-        loss = loss_cls + 1e-5 * loss_sparse
+        loss = loss_cls + 1e-5 * loss_sparse + attn_entropy_lambda * loss_entropy
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
