@@ -1338,6 +1338,7 @@ class DualStreamDTIClassifier(nn.Module):
         pair_gate_threshold: float = 0.5,
         topk_frac: float = 0.1,
         protein_only: bool = False,   # 追加
+        topk_k: int = 100,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1363,7 +1364,16 @@ class DualStreamDTIClassifier(nn.Module):
             d_model=self.d_model,
             hidden=128,
             dropout=dropout,
+            use_topk=True,
+            topk_k=topk_k,
         )
+        #
+        # self,
+        # d_model: int,
+        # hidden: int = 128,
+        # dropout: float = 0.1,
+        # use_topk: bool = True,
+        # topk_k: int = 100,
         self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
         if self.use_cls_in_head:
             feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
@@ -1572,6 +1582,7 @@ def main():
     ap.add_argument("--train_shard_dir", type=str, default=None)
     ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
     ap.add_argument("--train_shard_size", type=int, default=1000)
+    ap.add_argument("--topk_k", type=int, default=100)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
     ap.add_argument("--sym_lambda", type=float, default=0.0)
     ap.add_argument("--lig_ckpt", type=str, required=True)
@@ -1709,7 +1720,7 @@ def main():
         pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
         topk_frac=args.topk_frac,  # ← 追加
         protein_only=args.protein_only,   # 追加
-
+        topk_k=args.topk_k,
     ).to(device)
 
     if args.dti_ckpt is not None:
