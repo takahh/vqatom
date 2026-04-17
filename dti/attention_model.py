@@ -1093,15 +1093,8 @@ def train_one_epoch(
             row_mass = p.sum(dim=2)  # (B, Ll)
             col_mass = p.sum(dim=1)  # (B, Lp)
 
-            col_max = col_mass.max(dim=1).values
-            row_max = row_mass.max(dim=1).values
-
-            loss_rc = (
-                    row_mass.pow(2).mean()
-                    + col_mass.pow(2).mean()
-                    + 0.5 * col_max.mean()
-                    + 0.5 * row_max.mean()
-            )
+            # 同じ行・列に mass が集まりすぎると大きくなる
+            loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
 
         # -----------------------------
         # total loss
