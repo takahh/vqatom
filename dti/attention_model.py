@@ -293,7 +293,6 @@ class PairwiseInteractionHead(nn.Module):
 
             if valid is not None:
                 flat = flat.masked_fill(~valid.view(B, -1), -20.0)
-            print(f"topk_k {self.topk_k}")
             k_top = min(self.topk_k, flat.size(1))
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
 
