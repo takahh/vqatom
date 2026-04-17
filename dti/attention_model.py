@@ -651,7 +651,8 @@ def visualize_one_pair_map(
 
     # ===== top interactions =====
     flat = pair.reshape(-1)
-    topk = min(10, flat.size)
+    # topk = min(10, flat.size)
+    topk = 50
     idx = np.argpartition(-flat, topk)[:topk]
 
     Ll, Lp = pair.shape
