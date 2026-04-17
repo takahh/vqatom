@@ -1476,13 +1476,10 @@ def main():
             loader=train_loader,
             optimizer=optimizer,
             device=device,
-            pos_weight=pos_weight,
+            args=args,
             grad_clip=float(args.grad_clip),
-            attn_entropy_lambda=0.0,
-            reg_lambda=float(args.reg_lambda),
-            sym_lambda=0.0,
-            base_loss_alpha=0.3,
-            epoch=ep,
+            attn_lambda=float(args.attn_lambda),
+            pos_weight=float(args.pos_weight),
         )
         print(f"res_kl={tr_stat['res_kl']:.6f} attn_lambda={args.attn_lambda}")
 

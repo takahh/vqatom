@@ -2095,9 +2095,9 @@ def main():
             device=device,
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
-            attn_entropy_lambda=float(args.attn_entropy_lambda),
+            attn_entropy_lambda=0.0,
             reg_lambda=float(args.reg_lambda),
-            sym_lambda=float(args.sym_lambda),  # <- 追加
+            sym_lambda=0.0,
             base_loss_alpha=0.3,
             epoch=ep,
         )
@@ -2194,14 +2194,15 @@ def main():
                 f"EF10={final_m['ef10']:.3f}",
             )
 
-        visualize_one_pair_map(
-            model=model,
-            loader=valid_loader,
-            device=device,
-            sample_idx_in_batch=0,
-            save_dir=qk_save_dir,
-            prefix=f"epoch{ep:03d}_valid_sample0",
-        )
+        if args.fusion_mode == "pairwise":
+            visualize_one_pair_map(
+                model=model,
+                loader=valid_loader,
+                device=device,
+                sample_idx_in_batch=0,
+                save_dir=qk_save_dir,
+                prefix=f"epoch{ep:03d}_valid_sample0",
+            )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
