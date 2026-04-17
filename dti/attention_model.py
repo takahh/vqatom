@@ -297,7 +297,7 @@ class PairwiseInteractionHead(nn.Module):
             topv, _ = torch.topk(flat, k=k_top, dim=-1)
 
             # ここを mean ベースにする
-            logit = topv.mean(dim=-1)
+            logit = topv.max(dim=-1)
         else:
             if valid_f is not None:
                 logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
