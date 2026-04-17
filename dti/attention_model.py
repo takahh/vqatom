@@ -1866,26 +1866,19 @@ def main():
     else:
         raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
 
-
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
         dropout=args.dropout,
-        n_heads=args.n_heads,
-        n_layers=args.dual_stream_layers,
+        fusion_mode=args.fusion_mode,
         protein_token_dropout=args.protein_token_dropout,
         ligand_token_dropout=args.ligand_token_dropout,
-        attn_temp=args.attn_temp,
-        qk_norm=args.qk_norm,
-        attn_smooth_eps=args.attn_smooth_eps,
-        attn_activation=args.attn_activation,
-        detach_attn_for_value=args.detach_attn_for_value,
         use_cls_in_head=args.use_cls_in_head,
         use_reg_head=args.use_reg_head,
-        pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
-        topk_frac=args.topk_frac,  # ← 追加
-        protein_only=args.protein_only,   # 追加
-        topk_k=args.topk_k,
+        protein_only=args.protein_only,
+        pair_hidden=args.pair_hidden,
+        pair_topk_k=args.topk_k,
+        cat_hidden=args.cat_hidden,
     ).to(device)
 
     if args.dti_ckpt is not None:
