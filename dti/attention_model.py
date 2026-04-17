@@ -448,28 +448,93 @@ def load_vocab_meta_from_vq_ckpt(vq_ckpt_path: str) -> dict:
     }
 
 
-def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = True):
-    cur = module.state_dict()
-    loadable = {}
-    skipped = []
-    for k, v in state.items():
-        if k not in cur:
-            skipped.append((k, "missing_in_model"))
-            continue
-        if cur[k].shape != v.shape:
-            skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
-            continue
-        loadable[k] = v
+import torch
+import torch.nn as nn
 
-    missing, unexpected = module.load_state_dict(loadable, strict=False)
+def load_shape_safe(model, ckpt_state, verbose=True, max_report=20):
+    """
+    checkpoint の state_dict を、shape が合うものはそのままロード、
+    embedding など shape が少し違うものは「重なる部分だけ」コピーする。
+
+    例:
+      old tok.weight : (180680, 512)
+      new tok.weight : (180681, 512)
+    -> 先頭 180680 行だけコピーし、最後の 1 行は新規初期化のまま残す
+    """
+    model_state = model.state_dict()
+
+    loaded = []
+    skipped = []
+    missing_in_ckpt = []
+    unexpected_in_ckpt = []
+
+    # まずコピー用に現在の state を作る
+    new_state = {}
+    for k, v in model_state.items():
+        new_state[k] = v.clone()
+
+    # ckpt にあるキーを順に処理
+    for k, v_ckpt in ckpt_state.items():
+        if k not in model_state:
+            unexpected_in_ckpt.append((k, "missing_in_model"))
+            continue
+
+        v_model = model_state[k]
+
+        # 完全一致ならそのまま採用
+        if v_model.shape == v_ckpt.shape:
+            new_state[k] = v_ckpt
+            loaded.append((k, "exact"))
+            continue
+
+        # 特別対応: 2次元 weight (embedding / linear) で後ろ1個追加など
+        if v_model.ndim == 2 and v_ckpt.ndim == 2 and v_model.shape[1] == v_ckpt.shape[1]:
+            rows = min(v_model.shape[0], v_ckpt.shape[0])
+            new_tensor = v_model.clone()
+            new_tensor[:rows] = v_ckpt[:rows]
+            new_state[k] = new_tensor
+            loaded.append((k, f"partial_rows:{rows}/{v_model.shape[0]}"))
+            continue
+
+        # 特別対応: 1次元 bias / embedding norm 等
+        if v_model.ndim == 1 and v_ckpt.ndim == 1:
+            n = min(v_model.shape[0], v_ckpt.shape[0])
+            new_tensor = v_model.clone()
+            new_tensor[:n] = v_ckpt[:n]
+            new_state[k] = new_tensor
+            loaded.append((k, f"partial_1d:{n}/{v_model.shape[0]}"))
+            continue
+
+        # それ以外はスキップ
+        skipped.append((k, f"shape {tuple(v_ckpt.shape)} != {tuple(v_model.shape)}"))
+
+    # model 側にあるが ckpt に無いもの
+    for k in model_state.keys():
+        if k not in ckpt_state:
+            missing_in_ckpt.append(k)
+
+    # 実ロード
+    model.load_state_dict(new_state, strict=False)
+
     if verbose:
-        if skipped:
-            print("[load_shape_safe] skipped (up to 20):", skipped[:20])
-        if unexpected:
-            print("[load_shape_safe] unexpected (up to 20):", unexpected[:20])
-        if missing:
-            print("[load_shape_safe] missing (up to 20):", missing[:20])
-    return missing, unexpected, skipped
+        print("\n[load_shape_safe] loaded (up to %d):" % max_report)
+        print(loaded[:max_report])
+
+        print("\n[load_shape_safe] skipped (up to %d):" % max_report)
+        print(skipped[:max_report])
+
+        print("\n[load_shape_safe] missing (up to %d):" % max_report)
+        print(missing_in_ckpt[:max_report])
+
+        print("\n[load_shape_safe] unexpected (up to %d):" % max_report)
+        print(unexpected_in_ckpt[:max_report])
+
+    return {
+        "loaded": loaded,
+        "skipped": skipped,
+        "missing": missing_in_ckpt,
+        "unexpected": unexpected_in_ckpt,
+    }
 
 
 # =========================================================
@@ -529,7 +594,20 @@ class PretrainedLigandEncoder(nn.Module):
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
         self.debug_index_check = bool(debug_index_check)
 
-        load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
+        load_shape_safe(self, self.state, verbose=verbose_load)
+
+        tok_w = model.lig.tok.weight.data
+        print("tok.weight shape:", tuple(tok_w.shape))
+        print("tok.weight mean/std:", tok_w.mean().item(), tok_w.std().item())
+
+        old_vocab = 180680
+        print("old part mean/std:",
+              tok_w[:old_vocab].mean().item(),
+              tok_w[:old_vocab].std().item())
+
+        print("new tail mean/std:",
+              tok_w[old_vocab:].mean().item(),
+              tok_w[old_vocab:].std().item())
 
         mlm_tok_key = "tok.weight"
         if mlm_tok_key in self.state:
