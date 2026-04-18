@@ -1095,7 +1095,6 @@ def train_one_epoch(
             col_mass = qk_prob.sum(dim=1)  # ligand tokenごとに proteinからどれだけ集まるか
 
             loss_qk_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
-
             q_std = aux["q_std"]
             k_std = aux["k_std"]
             loss_qk_bal = (q_std - k_std).pow(2)
