@@ -921,6 +921,72 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
+def visualize_one_qk_map(
+    model,
+    loader,
+    device,
+    sample_idx_in_batch: int = 0,
+    save_dir: str | None = None,
+    prefix: str = "sample",
+):
+    import os
+    import numpy as np
+
+    model.eval()
+    batch = next(iter(loader))
+
+    p_ids = batch.p_input_ids.to(device)
+    p_msk = batch.p_attn_mask.to(device)
+    l_ids = batch.l_ids.to(device)
+
+    with torch.inference_mode():
+        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
+
+    if "qk_aux" not in aux:
+        print("No qk_aux found. This is not cat mode.")
+        return None
+
+    qk = aux["qk_aux"][sample_idx_in_batch].detach().cpu().numpy()
+    # shape: (Lp, Ll) = protein x ligand
+
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+
+    # pad除去
+    qk = qk[~p_pad][:, ~l_pad]
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+
+    base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
+
+    plot_one(
+        qk,
+        f"qk_aux | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_qk_aux.png") if save_dir else None,
+    )
+
+    flat = qk.reshape(-1)
+    topk = min(50, flat.size)
+    idx = np.argpartition(-flat, topk)[:topk]
+
+    Lp, Ll = qk.shape
+    coords = [(i // Ll, i % Ll) for i in idx]
+
+    print("\nTop QK interactions:")
+    for (i, j) in coords:
+        print(f"prot {i} - lig {j} : {qk[i, j]:.3f}")
+
+    return {
+        "qk_aux": qk,
+        "prob": prob,
+        "y_bin": y_bin,
+        "top_pairs": coords,
+    }
+
 # =========================================================
 # Train
 # =========================================================
@@ -2153,6 +2219,16 @@ def main():
 
         if args.fusion_mode == "pairwise":
             visualize_one_pair_map(
+                model=model,
+                loader=valid_loader,
+                device=device,
+                sample_idx_in_batch=0,
+                save_dir=qk_save_dir,
+                prefix=f"epoch{ep:03d}_valid_sample0",
+            )
+
+        elif args.fusion_mode == "cat":
+            visualize_one_qk_map(
                 model=model,
                 loader=valid_loader,
                 device=device,
