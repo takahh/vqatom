@@ -1100,7 +1100,7 @@ def train_one_epoch(
             k_std = aux["k_std"]
             loss_qk_bal = (q_std - k_std).pow(2)
 
-            loss_qk = 1e-3 * loss_qk_rc + 1e-3 * loss_qk_bal
+            loss_qk = 1e-4 * loss_qk_rc + 1e-4 * loss_qk_bal
 
         # -----------------------------
         # total loss
