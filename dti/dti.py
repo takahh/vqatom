@@ -1070,6 +1070,39 @@ def visualize_one_qk_map(
         "top_pairs": coords,
     }
 
+def stripe_loss_from_qk(
+    qk: torch.Tensor,
+    row_pad: torch.Tensor | None = None,
+    col_pad: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """
+    qk: (B, R, C)
+    row_pad: (B, R) True=pad
+    col_pad: (B, C) True=pad
+    """
+    p = torch.sigmoid(qk)
+
+    if (row_pad is not None) and (col_pad is not None):
+        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)   # (B, R, C)
+        p = p.masked_fill(~valid, 0.0)
+
+        row_den = (~row_pad).sum(dim=1).clamp_min(1).to(p.dtype)     # (B,)
+        col_den = (~col_pad).sum(dim=1).clamp_min(1).to(p.dtype)     # (B,)
+    else:
+        row_den = torch.full((p.size(0),), p.size(1), device=p.device, dtype=p.dtype)
+        col_den = torch.full((p.size(0),), p.size(2), device=p.device, dtype=p.dtype)
+
+    # 列方向に残る平均パターン = 縦縞
+    col_profile = p.mean(dim=1)   # (B, C)
+
+    # 行方向に残る平均パターン = 横縞
+    row_profile = p.mean(dim=2)   # (B, R)
+
+    loss_colstripe = col_profile.var(dim=1, unbiased=False).mean()
+    loss_rowstripe = row_profile.var(dim=1, unbiased=False).mean()
+
+    return loss_colstripe + loss_rowstripe
+
 # =========================================================
 # Train
 # =========================================================
@@ -1080,10 +1113,10 @@ def train_one_epoch(
     device: torch.device,
     pos_weight: float,
     grad_clip: float = 1.0,
-    attn_entropy_lambda: float = 0.0,  # 互換のため残すが未使用
+    attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
-    sym_lambda: float = 0.0,           # 互換のため残すが未使用
-    base_loss_alpha=0.3,               # 互換のため残すが未使用
+    sym_lambda: float = 0.0,
+    base_loss_alpha=0.3,
     epoch=1,
 ) -> Dict[str, float]:
     model.train()
@@ -1092,7 +1125,7 @@ def train_one_epoch(
     losses_cls = []
     losses_reg = []
     losses_rc = []
-    losses_qk = []
+    losses_stripe = []
 
     use_amp = (device.type == "cuda")
 
@@ -1130,26 +1163,19 @@ def train_one_epoch(
         else:
             raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
 
-        # -----------------------------
-        # main classification loss
-        # -----------------------------
+        # main classification
         loss_cls = bce(logit.float(), y_bin.float())
 
-        # -----------------------------
-        # optional regression loss
-        # -----------------------------
+        # optional regression
         loss_reg = torch.tensor(0.0, device=device)
         if (y_reg is not None) and (yhat_reg is not None):
             loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
-        # -----------------------------
-        # row / column concentration penalty
-        # -----------------------------
+        # pairwise 専用 concentration penalty
         loss_rc = torch.tensor(0.0, device=device)
-
         if "pair_logit" in aux:
             pair_logit = aux["pair_logit"]          # (B, Ll, Lp)
-            pair_prob = torch.sigmoid(pair_logit)   # (B, Ll, Lp)
+            pair_prob = torch.sigmoid(pair_logit)
 
             if ("p_pad" in aux) and ("l_pad" in aux):
                 valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
@@ -1157,37 +1183,36 @@ def train_one_epoch(
             else:
                 p = pair_prob
 
-            row_mass = p.sum(dim=2)   # (B, Ll)
-            col_mass = p.sum(dim=1)   # (B, Lp)
-
+            row_mass = p.sum(dim=2)
+            col_mass = p.sum(dim=1)
             loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
-        # -----------------------------
-        # auxiliary QK regularization for cat mode
-        # -----------------------------
-        loss_qk = torch.tensor(0.0, device=device)
 
-        if "qk_aux" in aux:
-            qk = aux["qk_aux"]  # (B, Lp, Ll)
-            qk_prob = torch.sigmoid(qk)
+        # dualstream 用 stripe loss
+        loss_stripe = torch.tensor(0.0, device=device)
 
-            if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["p_pad"]).unsqueeze(-1) & (~aux["l_pad"]).unsqueeze(1)  # (B, Lp, Ll)
-                qk_prob = qk_prob.masked_fill(~valid, 0.0)
+        if ("lp_qk_logits" in aux) and ("pl_qk_logits" in aux):
+            # head平均
+            lp_qk = aux["lp_qk_logits"].mean(dim=1)   # (B, Ll, Lp)
+            pl_qk = aux["pl_qk_logits"].mean(dim=1)   # (B, Lp, Ll)
 
-            row_mass = qk_prob.sum(dim=2)  # protein tokenごとに ligandへどれだけ広がるか
-            col_mass = qk_prob.sum(dim=1)  # ligand tokenごとに proteinからどれだけ集まるか
+            p_pad = aux.get("p_pad", None)
+            l_pad = aux.get("l_pad", None)
 
-            loss_qk_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
-            q_std = aux["q_std"]
-            k_std = aux["k_std"]
-            loss_qk_bal = (q_std - k_std).pow(2)
+            loss_lp = stripe_loss_from_qk(
+                qk=lp_qk,
+                row_pad=l_pad,   # lp: rows=ligand, cols=protein
+                col_pad=p_pad,
+            )
+            loss_pl = stripe_loss_from_qk(
+                qk=pl_qk,
+                row_pad=p_pad,   # pl: rows=protein, cols=ligand
+                col_pad=l_pad,
+            )
 
-            loss_qk = 1e-3 * loss_qk_rc + 1e-2 * loss_qk_bal
+            loss_stripe = 1e-3 * (loss_lp + loss_pl)
 
-        # -----------------------------
         # total loss
-        # -----------------------------
-        loss = loss_cls + 1e-3 * loss_rc + loss_qk
+        loss = loss_cls + 1e-3 * loss_rc + loss_stripe
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
@@ -1203,7 +1228,7 @@ def train_one_epoch(
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_rc.append(float(loss_rc.detach().cpu().item()))
-        losses_qk.append(float(loss_qk.detach().cpu().item()))
+        losses_stripe.append(float(loss_stripe.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
@@ -1211,7 +1236,7 @@ def train_one_epoch(
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
             rc=f"{losses_rc[-1]:.4f}",
-            qk=f"{losses_qk[-1]:.4f}",
+            stripe=f"{losses_stripe[-1]:.4f}",
         )
 
     pbar.close()
@@ -1221,7 +1246,7 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_rc": float(np.mean(losses_rc)) if losses_rc else 0.0,
-        "loss_qk": float(np.mean(losses_qk)) if losses_qk else 0.0,
+        "loss_stripe": float(np.mean(losses_stripe)) if losses_stripe else 0.0,
     }
 
 # =========================================================
