@@ -1343,11 +1343,11 @@ class CrossAttention(nn.Module):
         raw_logits = logits
 
         # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits)
+        gate = torch.sigmoid(raw_logits.detach()) - 0.5
 
         # relative competition
         if self.attn_activation == "softmax":
-            attn = torch.softmax(raw_logits / 0.5, dim=-1)
+            attn = torch.softmax(raw_logits / 1.5, dim=-1)
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(raw_logits)
         else:
