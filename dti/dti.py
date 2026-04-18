@@ -943,6 +943,7 @@ def train_one_epoch(
     losses_cls = []
     losses_reg = []
     losses_rc = []
+    losses_qk = []
 
     use_amp = (device.type == "cuda")
 
@@ -1054,6 +1055,7 @@ def train_one_epoch(
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_rc.append(float(loss_rc.detach().cpu().item()))
+        losses_qk.append(float(loss_qk.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
@@ -1061,6 +1063,7 @@ def train_one_epoch(
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
             rc=f"{losses_rc[-1]:.4f}",
+            qk=f"{losses_qk[-1]:.4f}",
         )
 
     pbar.close()
@@ -1070,6 +1073,7 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_rc": float(np.mean(losses_rc)) if losses_rc else 0.0,
+        "loss_qk": float(np.mean(losses_qk)) if losses_qk else 0.0,
     }
 
 # =========================================================
