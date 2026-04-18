@@ -1465,6 +1465,13 @@ class DualStreamDTIClassifier(nn.Module):
             l_cls = torch.zeros_like(p_h[:, 0, :])
             l_pad = (l_ids == self.lig_pad_id)
 
+        if self.training and torch.rand(()) < 0.01:
+            print(
+                "[tok std]",
+                "p_tok:", float(p_tok.std(dim=1).mean().detach().cpu()),
+                "l_tok:", float(l_tok.std(dim=1).mean().detach().cpu()),
+            )
+
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
 
