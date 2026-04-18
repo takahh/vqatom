@@ -1070,33 +1070,20 @@ def visualize_one_qk_map(
         "top_pairs": coords,
     }
 
-def stripe_loss_from_qk(
-    qk: torch.Tensor,
+def stripe_loss_from_map(
+    p: torch.Tensor,
     row_pad: torch.Tensor | None = None,
     col_pad: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
-    qk: (B, R, C)
-    row_pad: (B, R) True=pad
-    col_pad: (B, C) True=pad
+    p: (B, R, C)  already nonnegative map, e.g. attention map
     """
-    p = torch.sigmoid(qk)
-
     if (row_pad is not None) and (col_pad is not None):
-        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)   # (B, R, C)
+        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)
         p = p.masked_fill(~valid, 0.0)
 
-        row_den = (~row_pad).sum(dim=1).clamp_min(1).to(p.dtype)     # (B,)
-        col_den = (~col_pad).sum(dim=1).clamp_min(1).to(p.dtype)     # (B,)
-    else:
-        row_den = torch.full((p.size(0),), p.size(1), device=p.device, dtype=p.dtype)
-        col_den = torch.full((p.size(0),), p.size(2), device=p.device, dtype=p.dtype)
-
-    # 列方向に残る平均パターン = 縦縞
-    col_profile = p.mean(dim=1)   # (B, C)
-
-    # 行方向に残る平均パターン = 横縞
-    row_profile = p.mean(dim=2)   # (B, R)
+    col_profile = p.mean(dim=1)   # (B, C)  縦縞
+    row_profile = p.mean(dim=2)   # (B, R)  横縞
 
     loss_colstripe = col_profile.var(dim=1, unbiased=False).mean()
     loss_rowstripe = row_profile.var(dim=1, unbiased=False).mean()
@@ -1190,26 +1177,25 @@ def train_one_epoch(
         # dualstream 用 stripe loss
         loss_stripe = torch.tensor(0.0, device=device)
 
-        if ("lp_qk_logits" in aux) and ("pl_qk_logits" in aux):
-            # head平均
-            lp_qk = aux["lp_qk_logits"].mean(dim=1)   # (B, Ll, Lp)
-            pl_qk = aux["pl_qk_logits"].mean(dim=1)   # (B, Lp, Ll)
+        if ("lp_attn" in aux) and ("pl_attn" in aux):
+            lp_attn = aux["lp_attn"].mean(dim=1)  # (B, Ll, Lp)
+            pl_attn = aux["pl_attn"].mean(dim=1)  # (B, Lp, Ll)
 
             p_pad = aux.get("p_pad", None)
             l_pad = aux.get("l_pad", None)
 
-            loss_lp = stripe_loss_from_qk(
-                qk=lp_qk,
-                row_pad=l_pad,   # lp: rows=ligand, cols=protein
+            loss_lp = stripe_loss_from_map(
+                p=lp_attn,
+                row_pad=l_pad,  # lp: rows=ligand, cols=protein
                 col_pad=p_pad,
             )
-            loss_pl = stripe_loss_from_qk(
-                qk=pl_qk,
-                row_pad=p_pad,   # pl: rows=protein, cols=ligand
+            loss_pl = stripe_loss_from_map(
+                p=pl_attn,
+                row_pad=p_pad,  # pl: rows=protein, cols=ligand
                 col_pad=l_pad,
             )
 
-            loss_stripe = 1e-3 * (loss_lp + loss_pl)
+            loss_stripe = 1e-1 * (loss_lp + loss_pl)
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
