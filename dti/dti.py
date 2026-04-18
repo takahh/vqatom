@@ -661,6 +661,89 @@ def plot_one(mat, title, save_path=None):
     else:
         plt.show()
 
+def visualize_one_dualstream_map(
+    model,
+    loader,
+    device,
+    sample_idx_in_batch: int = 0,
+    save_dir: str | None = None,
+    prefix: str = "sample",
+):
+    import os
+    import numpy as np
+
+    model.eval()
+    batch = next(iter(loader))
+
+    p_ids = batch.p_input_ids.to(device)
+    p_msk = batch.p_attn_mask.to(device)
+    l_ids = batch.l_ids.to(device)
+
+    with torch.inference_mode():
+        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
+
+    need_keys = ["lp_qk_logits", "lp_attn", "pl_qk_logits", "pl_attn", "p_pad", "l_pad"]
+    if not all(k in aux for k in need_keys):
+        print("No dualstream maps found. This is not dualstream mode.")
+        return None
+
+    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+
+    # head平均
+    lp_qk = aux["lp_qk_logits"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()  # (Ll, Lp)
+    lp_attn = aux["lp_attn"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()      # (Ll, Lp)
+
+    pl_qk = aux["pl_qk_logits"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()  # (Lp, Ll)
+    pl_attn = aux["pl_attn"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()      # (Lp, Ll)
+
+    # pad除去
+    # lp: ligand query x protein key
+    lp_qk = lp_qk[~l_pad][:, ~p_pad]
+    lp_attn = lp_attn[~l_pad][:, ~p_pad]
+
+    # pl: protein query x ligand key
+    pl_qk = pl_qk[~p_pad][:, ~l_pad]
+    pl_attn = pl_attn[~p_pad][:, ~l_pad]
+
+    if save_dir is not None:
+        os.makedirs(save_dir, exist_ok=True)
+
+    base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
+
+    plot_one(
+        lp_qk,
+        f"lp_qk_logits | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_qk_logits.png") if save_dir else None,
+    )
+    plot_one(
+        lp_attn,
+        f"lp_attn | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
+    )
+    plot_one(
+        pl_qk,
+        f"pl_qk_logits | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_qk_logits.png") if save_dir else None,
+    )
+    plot_one(
+        pl_attn,
+        f"pl_attn | prob={prob:.4f} y={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
+    )
+
+    return {
+        "lp_qk_logits": lp_qk,
+        "lp_attn": lp_attn,
+        "pl_qk_logits": pl_qk,
+        "pl_attn": pl_attn,
+        "prob": prob,
+        "y_bin": y_bin,
+    }
+
 def visualize_one_pair_map(
     model,
     loader,
@@ -1256,12 +1339,22 @@ class CrossAttention(nn.Module):
             mask = kv_pad_mask[:, None, None, :]
             logits = logits.masked_fill(mask, -1e4)
 
+        # raw logits
+        raw_logits = logits
+
+        # absolute gate (independent)
+        gate = torch.sigmoid(raw_logits)
+
+        # relative competition
         if self.attn_activation == "softmax":
-            attn = torch.softmax(logits / 0.5, dim=-1)
+            attn = torch.softmax(raw_logits / 0.5, dim=-1)
         elif self.attn_activation == "sigmoid":
-            attn = torch.sigmoid(logits)
+            attn = torch.sigmoid(raw_logits)
         else:
             raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
+
+        # combine
+        attn = attn * gate
 
         if self.attn_smooth_eps > 0 and self.attn_activation == "softmax":
             Lk = attn.size(-1)
@@ -1439,7 +1532,7 @@ class DualStreamDTIClassifier(nn.Module):
     ):
         super().__init__()
 
-        if fusion_mode not in {"pairwise", "cat"}:
+        if fusion_mode not in {"pairwise", "cat", "dualstream"}:
             raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
 
         self.prot = protein_encoder
@@ -1487,8 +1580,19 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Dropout(float(dropout)),
             nn.Linear(128, 1),
         )
-
-        if self.use_reg_head and self.fusion_mode == "cat":
+        self.ds_block = DualStreamBlock(
+            d_model=self.d_model,
+            n_heads=8,
+            dropout=float(dropout),
+            attn_temp=1.0,
+            qk_norm=True,
+            detach_attn_for_value=False,
+            attn_smooth_eps=0.0,
+            attn_activation="softmax",
+            pair_gate_threshold=0.0,
+            topk_frac=0.0,
+        )
+        if self.use_reg_head and self.fusion_mode in {"cat", "dualstream"}:
             self.reg_head = nn.Sequential(
                 nn.Linear(feat_dim, int(cat_hidden)),
                 nn.GELU(),
@@ -1573,6 +1677,27 @@ class DualStreamDTIClassifier(nn.Module):
         p_pad = p_pad | (p_tok_ids == eos_id)
 
         # =========================================
+        # dual branch
+        # =========================================
+        ds_maps = None
+        if self.fusion_mode == "dualstream":
+            if return_maps:
+                p_tok, l_tok, ds_maps = self.ds_block(
+                    p_h=p_tok,
+                    l_h=l_tok,
+                    p_pad=p_pad,
+                    l_pad=l_pad,
+                    return_maps=True,
+                )
+            else:
+                p_tok, l_tok = self.ds_block(
+                    p_h=p_tok,
+                    l_h=l_tok,
+                    p_pad=p_pad,
+                    l_pad=l_pad,
+                    return_maps=False,
+                )
+        # =========================================
         # fusion branch
         # =========================================
         if self.fusion_mode == "pairwise":
@@ -1598,6 +1723,32 @@ class DualStreamDTIClassifier(nn.Module):
             aux.update(pair_aux)
             aux["p_pad"] = p_pad
             aux["l_pad"] = l_pad
+
+        elif self.fusion_mode == "dualstream":
+            p_mean = self._masked_mean(p_tok, p_pad)
+            p_max = self._masked_max(p_tok, p_pad)
+            l_mean = self._masked_mean(l_tok, l_pad)
+            l_max = self._masked_max(l_tok, l_pad)
+
+            feat = torch.cat([
+                p_mean * l_mean,
+                torch.abs(p_mean - l_mean),
+            ], dim=-1)
+
+            logit = self.cat_head(feat).squeeze(-1)
+
+            if self.use_reg_head:
+                yhat_reg = self.reg_head(feat).squeeze(-1)
+            else:
+                yhat_reg = None
+
+            aux = {
+                "p_pad": p_pad,
+                "l_pad": l_pad,
+            }
+
+            if ds_maps is not None:
+                aux.update(ds_maps)
 
         elif self.fusion_mode == "cat":
             p_mean = self._masked_mean(p_tok, p_pad)
@@ -1752,6 +1903,8 @@ def main():
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
 
     ap.add_argument("--y_thr", type=float, default=Y_THR)
+    ap.add_argument("--fusion_mode", type=str, default="pairwise",
+                    choices=["pairwise", "cat", "dualstream"])
 
     # -------------------------
     # io / runtime
@@ -1779,8 +1932,6 @@ def main():
     # -------------------------
     # fusion model
     # -------------------------
-    ap.add_argument("--fusion_mode", type=str, default="pairwise",
-                    choices=["pairwise", "cat"])
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
@@ -2236,6 +2387,15 @@ def main():
                 prefix=f"epoch{ep:03d}_valid_sample0",
             )
 
+        elif args.fusion_mode == "dualstream":
+            visualize_one_dualstream_map(
+                model=model,
+                loader=valid_loader,
+                device=device,
+                sample_idx_in_batch=0,
+                save_dir=qk_save_dir,
+                prefix=f"epoch{ep:03d}_valid_sample0",
+            )
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
 
