@@ -1011,11 +1011,34 @@ def train_one_epoch(
             col_mass = p.sum(dim=1)   # (B, Lp)
 
             loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
+        # -----------------------------
+        # auxiliary QK regularization for cat mode
+        # -----------------------------
+        loss_qk = torch.tensor(0.0, device=device)
+
+        if "qk_aux" in aux:
+            qk = aux["qk_aux"]  # (B, Lp, Ll)
+            qk_prob = torch.sigmoid(qk)
+
+            if ("p_pad" in aux) and ("l_pad" in aux):
+                valid = (~aux["p_pad"]).unsqueeze(-1) & (~aux["l_pad"]).unsqueeze(1)  # (B, Lp, Ll)
+                qk_prob = qk_prob.masked_fill(~valid, 0.0)
+
+            row_mass = qk_prob.sum(dim=2)  # protein tokenごとに ligandへどれだけ広がるか
+            col_mass = qk_prob.sum(dim=1)  # ligand tokenごとに proteinからどれだけ集まるか
+
+            loss_qk_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
+
+            q_std = aux["q_std"]
+            k_std = aux["k_std"]
+            loss_qk_bal = (q_std - k_std).pow(2)
+
+            loss_qk = 1e-3 * loss_qk_rc + 1e-3 * loss_qk_bal
 
         # -----------------------------
         # total loss
         # -----------------------------
-        loss = loss_cls + 1e-3 * loss_rc
+        loss = loss_cls + 1e-3 * loss_rc + loss_qk
 
         if (y_reg is not None) and (yhat_reg is not None):
             loss = loss + reg_lambda * loss_reg
@@ -1384,7 +1407,8 @@ class DualStreamDTIClassifier(nn.Module):
         #     feat_dim = self.d_model * 6
         # else:
         feat_dim = self.d_model * 2
-
+        self.q_aux = nn.Linear(self.d_model, self.d_model)
+        self.k_aux = nn.Linear(self.d_model, self.d_model)
         self.cat_head = nn.Sequential(
             nn.Linear(feat_dim, int(cat_hidden)),
             nn.GELU(),
@@ -1520,7 +1544,13 @@ class DualStreamDTIClassifier(nn.Module):
                 p_mean * l_mean,
                 torch.abs(p_mean - l_mean),
             ], dim=-1)
+            q = self.q_aux(p_tok)  # (B, Lp, D)
+            k = self.k_aux(l_tok)  # (B, Ll, D)
 
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
+
+            qk_aux = torch.matmul(q, k.transpose(-2, -1))  # (B, Lp, Ll)
             logit = self.cat_head(feat).squeeze(-1)
 
             if self.use_reg_head:
@@ -1531,6 +1561,9 @@ class DualStreamDTIClassifier(nn.Module):
             aux = {
                 "p_pad": p_pad,
                 "l_pad": l_pad,
+                "qk_aux": qk_aux,
+                "q_std": q.std(dim=1).mean(),
+                "k_std": k.std(dim=1).mean(),
             }
 
         else:
