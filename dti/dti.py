@@ -1085,8 +1085,7 @@ def train_one_epoch(
 
         if "qk_aux" in aux:
             qk = aux["qk_aux"]  # (B, Lp, Ll)
-            temp = 0.1
-            qk_prob = torch.softmax(qk / temp, dim=-1)
+            qk_prob = torch.sigmoid(qk)
 
             if ("p_pad" in aux) and ("l_pad" in aux):
                 valid = (~aux["p_pad"]).unsqueeze(-1) & (~aux["l_pad"]).unsqueeze(1)  # (B, Lp, Ll)
