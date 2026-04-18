@@ -1380,10 +1380,10 @@ class DualStreamDTIClassifier(nn.Module):
             topk_k=int(pair_topk_k),
         )
 
-        if self.use_cls_in_head:
-            feat_dim = self.d_model * 6
-        else:
-            feat_dim = self.d_model * 4
+        # if self.use_cls_in_head:
+        #     feat_dim = self.d_model * 6
+        # else:
+        feat_dim = self.d_model * 2
 
         self.cat_head = nn.Sequential(
             nn.Linear(feat_dim, int(cat_hidden)),
