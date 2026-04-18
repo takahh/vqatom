@@ -1135,7 +1135,7 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-    need_maps = False
+    need_maps = (getattr(model, "fusion_mode", "") == "dualstream")
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
