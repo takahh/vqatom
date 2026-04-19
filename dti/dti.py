@@ -1516,6 +1516,7 @@ class DualStreamBlock(nn.Module):
         attn_activation="softmax",
         pair_gate_threshold=0.0,   # 追加
         topk_frac=0.0,             # 追加
+        global_topk=20
     ):
         super().__init__()
 
@@ -1535,7 +1536,7 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
-            global_topk=50,
+            global_topk=global_topk,
             global_topk_tau=0.1,
         )
 
@@ -1550,7 +1551,7 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
-            global_topk=50,
+            global_topk=global_topk,
             global_topk_tau=0.1,
         )
 
@@ -1631,6 +1632,7 @@ class DualStreamDTIClassifier(nn.Module):
         pair_hidden: int = 128,
         pair_topk_k: int = 100,
         cat_hidden: int = 256,
+        global_topk_k: int = 20,
     ):
         super().__init__()
 
@@ -1693,6 +1695,7 @@ class DualStreamDTIClassifier(nn.Module):
             attn_activation="softmax",
             pair_gate_threshold=0.0,
             topk_frac=0.0,
+            global_topk=global_topk
         )
         if self.use_reg_head and self.fusion_mode in {"cat", "dualstream"}:
             self.reg_head = nn.Sequential(
@@ -2007,6 +2010,7 @@ def main():
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--fusion_mode", type=str, default="pairwise",
                     choices=["pairwise", "cat", "dualstream"])
+    ap.add_argument("--global_topk", type=int, default=10)
 
     # -------------------------
     # io / runtime
@@ -2154,6 +2158,7 @@ def main():
         pair_hidden=args.pair_hidden,
         pair_topk_k=args.topk_k,
         cat_hidden=args.cat_hidden,
+        global_topk_k=args.global_topk
     ).to(device)
 
     if args.dti_ckpt is not None:
