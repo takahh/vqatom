@@ -1273,10 +1273,12 @@ def train_one_epoch(
         losses_stripe.append(float(loss_stripe.detach().cpu().item()))
 
         pbar.update(1)
+        weighted_reg = float(reg_lambda) * float(loss_reg.detach().cpu().item())
         pbar.set_postfix(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
+            wreg=f"{weighted_reg:.4f}",
             rc=f"{losses_rc[-1]:.4f}",
             stripe=f"{losses_stripe[-1]:.4f}",
         )
