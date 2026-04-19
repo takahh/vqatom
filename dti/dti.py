@@ -1510,7 +1510,7 @@ class DualStreamBlock(nn.Module):
         n_heads,
         dropout=0.1,
         attn_temp=1.0,
-        qk_norm=qk_norm,
+        qk_norm=False,
         detach_attn_for_value=False,
         attn_smooth_eps=0.0,
         attn_activation="softmax",
