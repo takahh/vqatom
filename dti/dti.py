@@ -1070,6 +1070,38 @@ def visualize_one_qk_map(
         "top_pairs": coords,
     }
 
+def global_topk_softmax_map(
+    qk: torch.Tensor,
+    row_pad: torch.Tensor | None = None,
+    col_pad: torch.Tensor | None = None,
+    topk: int = 50,
+    tau: float = 0.1,
+) -> torch.Tensor:
+    """
+    qk: (B, R, C)
+    return: (B, R, C)  面全体の上位Kセルだけでsoftmaxした疎なmap
+    """
+    B, R, C = qk.shape
+    flat = qk.view(B, -1)
+
+    if (row_pad is not None) and (col_pad is not None):
+        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)   # (B,R,C)
+        flat_valid = valid.view(B, -1)
+        flat = flat.masked_fill(~flat_valid, -1e9)
+    else:
+        flat_valid = torch.ones_like(flat, dtype=torch.bool)
+
+    k = min(int(topk), flat.size(1))
+    topv, topi = torch.topk(flat, k=k, dim=-1)
+
+    w = torch.softmax(topv / max(tau, 1e-6), dim=-1)
+
+    out = torch.zeros_like(flat)
+    out.scatter_(1, topi, w)
+
+    out = out.view(B, R, C)
+    return out
+
 def stripe_loss_from_map(
     p: torch.Tensor,
     row_pad: torch.Tensor | None = None,
@@ -1182,24 +1214,44 @@ def train_one_epoch(
         loss_stripe = torch.tensor(0.0, device=device)
 
         if ("lp_attn" in aux) and ("pl_attn" in aux):
-            lp_attn = aux["lp_attn"].mean(dim=1)  # (B, Ll, Lp)
-            pl_attn = aux["pl_attn"].mean(dim=1)  # (B, Lp, Ll)
+            lp_qk = aux["lp_qk_logits"].mean(dim=1)  # (B, Ll, Lp)
+            pl_qk = aux["pl_qk_logits"].mean(dim=1)  # (B, Lp, Ll)
+
+            p_pad = aux.get("p_pad", None)
+            l_pad = aux.get("l_pad", None)
+
+            lp_map = global_topk_softmax_map(
+                qk=lp_qk,
+                row_pad=l_pad,
+                col_pad=p_pad,
+                topk=50,
+                tau=0.1,
+            )
+
+            pl_map = global_topk_softmax_map(
+                qk=pl_qk,
+                row_pad=p_pad,
+                col_pad=l_pad,
+                topk=50,
+                tau=0.1,
+            )
 
             p_pad = aux.get("p_pad", None)
             l_pad = aux.get("l_pad", None)
 
             loss_lp = stripe_loss_from_map(
-                p=lp_attn,
-                row_pad=l_pad,  # lp: rows=ligand, cols=protein
+                p=lp_map,
+                row_pad=l_pad,
                 col_pad=p_pad,
             )
+
             loss_pl = stripe_loss_from_map(
-                p=pl_attn,
-                row_pad=p_pad,  # pl: rows=protein, cols=ligand
+                p=pl_map,
+                row_pad=p_pad,
                 col_pad=l_pad,
             )
 
-            loss_stripe = 0.05 * (loss_lp + loss_pl)
+            loss_stripe = 0.01 * (loss_lp + loss_pl)
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
