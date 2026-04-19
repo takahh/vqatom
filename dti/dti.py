@@ -1410,7 +1410,7 @@ class CrossAttention(nn.Module):
         raw_logits = logits
 
         # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits.detach()) - 0.5
+        gate = torch.sigmoid(raw_logits.detach())
 
         # relative competition
         if self.attn_activation == "softmax":
@@ -1438,7 +1438,7 @@ class CrossAttention(nn.Module):
         pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)
         ctx = pair_ctx.sum(dim=-2)
 
-        ctx = ctx * q
+        ctx = ctx + q
         out = self._merge_heads(ctx)
         out = self.out_proj(out)
 
