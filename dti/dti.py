@@ -1407,6 +1407,7 @@ class CrossAttention(nn.Module):
         w = torch.softmax(topv / max(self.global_topk_tau, 1e-6), dim=-1)
 
         out = torch.zeros_like(flat)
+        w = w.to(out.dtype)
         out.scatter_(-1, topi, w)
 
         return out.view(B, H, Lq, Lk)
