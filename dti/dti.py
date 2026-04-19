@@ -2048,6 +2048,8 @@ def main():
     ap.add_argument("--n_heads", type=int, default=8)
     ap.add_argument("--protein_only", action="store_true")
 
+    ap.add_argument("--qk_norm", action="store_true")
+
     # pairwise head
     ap.add_argument("--pair_hidden", type=int, default=128)
     ap.add_argument("--topk_k", type=int, default=100)
