@@ -1074,20 +1074,16 @@ def stripe_loss_from_map(
     p: torch.Tensor,
     row_pad: torch.Tensor | None = None,
     col_pad: torch.Tensor | None = None,
-    eps: float = 1e-8,
 ) -> torch.Tensor:
-    p = p.abs()
-
+    """
+    p: (B, R, C)  already nonnegative map, e.g. attention map
+    """
     if (row_pad is not None) and (col_pad is not None):
         valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)
         p = p.masked_fill(~valid, 0.0)
 
-    col_profile = p.mean(dim=1)   # (B, C)
-    row_profile = p.mean(dim=2)   # (B, R)
-
-    # scale を消す
-    col_profile = col_profile / col_profile.mean(dim=1, keepdim=True).clamp_min(eps)
-    row_profile = row_profile / row_profile.mean(dim=1, keepdim=True).clamp_min(eps)
+    col_profile = p.mean(dim=1)   # (B, C)  縦縞
+    row_profile = p.mean(dim=2)   # (B, R)  横縞
 
     loss_colstripe = col_profile.var(dim=1, unbiased=False).mean()
     loss_rowstripe = row_profile.var(dim=1, unbiased=False).mean()
@@ -1358,7 +1354,8 @@ class CrossAttention(nn.Module):
         raw_logits = logits
 
         # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits * 0.5).detach()
+        gate = torch.sigmoid(raw_logits.detach()) - 0.5
+
         # relative competition
         if self.attn_activation == "softmax":
             attn = torch.softmax(raw_logits / 0.7, dim=-1)
