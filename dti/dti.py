@@ -1070,56 +1070,20 @@ def visualize_one_qk_map(
         "top_pairs": coords,
     }
 
-def global_topk_softmax_map(
-    qk: torch.Tensor,
-    row_pad: torch.Tensor | None = None,
-    col_pad: torch.Tensor | None = None,
-    topk: int = 50,
-    tau: float = 0.1,
-) -> torch.Tensor:
-    """
-    qk: (B, R, C)
-    return: (B, R, C)  面全体の上位Kセルだけでsoftmaxした疎なmap
-    """
-    B, R, C = qk.shape
-    flat = qk.view(B, -1)
-
-    if (row_pad is not None) and (col_pad is not None):
-        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)   # (B,R,C)
-        flat_valid = valid.view(B, -1)
-        flat = flat.masked_fill(~flat_valid, -1e9)
-    else:
-        flat_valid = torch.ones_like(flat, dtype=torch.bool)
-
-    k = min(int(topk), flat.size(1))
-    topv, topi = torch.topk(flat, k=k, dim=-1)
-
-    w = torch.softmax(topv / max(tau, 1e-6), dim=-1)
-
-    out = torch.zeros_like(flat)
-    out.scatter_(1, topi, w)
-
-    out = out.view(B, R, C)
-    return out
-
 def stripe_loss_from_map(
     p: torch.Tensor,
     row_pad: torch.Tensor | None = None,
     col_pad: torch.Tensor | None = None,
-    eps: float = 1e-8,
 ) -> torch.Tensor:
-    p = p.abs()
-
+    """
+    p: (B, R, C)  already nonnegative map, e.g. attention map
+    """
     if (row_pad is not None) and (col_pad is not None):
         valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)
         p = p.masked_fill(~valid, 0.0)
 
-    col_profile = p.mean(dim=1)   # (B, C)
-    row_profile = p.mean(dim=2)   # (B, R)
-
-    # scale を消す
-    col_profile = col_profile / col_profile.mean(dim=1, keepdim=True).clamp_min(eps)
-    row_profile = row_profile / row_profile.mean(dim=1, keepdim=True).clamp_min(eps)
+    col_profile = p.mean(dim=1)   # (B, C)  縦縞
+    row_profile = p.mean(dim=2)   # (B, R)  横縞
 
     loss_colstripe = col_profile.var(dim=1, unbiased=False).mean()
     loss_rowstripe = row_profile.var(dim=1, unbiased=False).mean()
@@ -1214,44 +1178,24 @@ def train_one_epoch(
         loss_stripe = torch.tensor(0.0, device=device)
 
         if ("lp_attn" in aux) and ("pl_attn" in aux):
-            lp_qk = aux["lp_qk_logits"].mean(dim=1)  # (B, Ll, Lp)
-            pl_qk = aux["pl_qk_logits"].mean(dim=1)  # (B, Lp, Ll)
-
-            p_pad = aux.get("p_pad", None)
-            l_pad = aux.get("l_pad", None)
-
-            lp_map = global_topk_softmax_map(
-                qk=lp_qk,
-                row_pad=l_pad,
-                col_pad=p_pad,
-                topk=50,
-                tau=0.1,
-            )
-
-            pl_map = global_topk_softmax_map(
-                qk=pl_qk,
-                row_pad=p_pad,
-                col_pad=l_pad,
-                topk=50,
-                tau=0.1,
-            )
+            lp_attn = aux["lp_attn"].mean(dim=1)  # (B, Ll, Lp)
+            pl_attn = aux["pl_attn"].mean(dim=1)  # (B, Lp, Ll)
 
             p_pad = aux.get("p_pad", None)
             l_pad = aux.get("l_pad", None)
 
             loss_lp = stripe_loss_from_map(
-                p=lp_map,
-                row_pad=l_pad,
+                p=lp_attn,
+                row_pad=l_pad,  # lp: rows=ligand, cols=protein
                 col_pad=p_pad,
             )
-
             loss_pl = stripe_loss_from_map(
-                p=pl_map,
-                row_pad=p_pad,
+                p=pl_attn,
+                row_pad=p_pad,  # pl: rows=protein, cols=ligand
                 col_pad=l_pad,
             )
 
-            loss_stripe = 0.01 * (loss_lp + loss_pl)
+            loss_stripe = 1e-1 * (loss_lp + loss_pl)
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
@@ -1273,12 +1217,10 @@ def train_one_epoch(
         losses_stripe.append(float(loss_stripe.detach().cpu().item()))
 
         pbar.update(1)
-        weighted_reg = float(reg_lambda) * float(loss_reg.detach().cpu().item())
         pbar.set_postfix(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
-            wreg=f"{weighted_reg:.4f}",
             rc=f"{losses_rc[-1]:.4f}",
             stripe=f"{losses_stripe[-1]:.4f}",
         )
@@ -1342,13 +1284,10 @@ class CrossAttention(nn.Module):
         detach_attn_for_value=False,
         pair_gate_threshold=0.0,
         topk_frac=0.0,
-        global_topk=50,
-        global_topk_tau=0.1,
     ):
         super().__init__()
         assert d_model % n_heads == 0
-        self.global_topk = int(global_topk)
-        self.global_topk_tau = float(global_topk_tau)
+
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
@@ -1387,33 +1326,6 @@ class CrossAttention(nn.Module):
         keep.scatter_(-1, topk_idx, True)
         return attn * keep.to(attn.dtype)
 
-    def _global_topk_softmax(self, logits, kv_pad_mask=None):
-        """
-        logits: (B, H, Lq, Lk)
-        return: (B, H, Lq, Lk)
-          面全体で上位Kセルだけ nonzero、他は0
-        """
-        B, H, Lq, Lk = logits.shape
-        flat = logits.view(B, H, -1)  # (B, H, Lq*Lk)
-
-        if kv_pad_mask is not None:
-            # kv_pad_mask: (B, Lk)
-            # query方向へ broadcast して valid cell を作る
-            valid = (~kv_pad_mask)[:, None, None, :].expand(B, H, Lq, Lk)
-            flat_valid = valid.reshape(B, H, -1)
-            flat = flat.masked_fill(~flat_valid, -1e9)
-
-        k_top = min(max(1, self.global_topk), flat.size(-1))
-        topv, topi = torch.topk(flat, k=k_top, dim=-1)  # (B, H, K)
-
-        w = torch.softmax(topv / max(self.global_topk_tau, 1e-6), dim=-1)
-
-        out = torch.zeros_like(flat)
-        w = w.to(out.dtype)
-        out.scatter_(-1, topi, w)
-
-        return out.view(B, H, Lq, Lk)
-
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
         import torch.nn.functional as F
         if v_in is None:
@@ -1428,9 +1340,9 @@ class CrossAttention(nn.Module):
         k = self._split_heads(k)
         v = self._split_heads(v)
 
-        if self.qk_norm:
-            q = F.normalize(q, dim=-1)
-            k = F.normalize(k, dim=-1)
+        # if self.qk_norm:
+        #     q = F.normalize(q, dim=-1)
+        #     k = F.normalize(k, dim=-1)
 
         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
 
@@ -1442,12 +1354,11 @@ class CrossAttention(nn.Module):
         raw_logits = logits
 
         # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits.detach())
+        gate = torch.sigmoid(raw_logits.detach()) - 0.5
 
         # relative competition
         if self.attn_activation == "softmax":
-            # 面全体で上位Kセルだけ残す
-            attn = self._global_topk_softmax(raw_logits, kv_pad_mask=kv_pad_mask)
+            attn = torch.softmax(raw_logits / 1.5, dim=-1)
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(raw_logits)
         else:
@@ -1471,7 +1382,7 @@ class CrossAttention(nn.Module):
         pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)
         ctx = pair_ctx.sum(dim=-2)
 
-        ctx = ctx + q
+        ctx = ctx * q
         out = self._merge_heads(ctx)
         out = self.out_proj(out)
 
@@ -1512,13 +1423,12 @@ class DualStreamBlock(nn.Module):
         n_heads,
         dropout=0.1,
         attn_temp=1.0,
-        qk_norm=False,
+        qk_norm=True,
         detach_attn_for_value=False,
         attn_smooth_eps=0.0,
         attn_activation="softmax",
         pair_gate_threshold=0.0,   # 追加
         topk_frac=0.0,             # 追加
-        global_topk=20
     ):
         super().__init__()
 
@@ -1538,8 +1448,6 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
-            global_topk=global_topk,
-            global_topk_tau=0.1,
         )
 
         self.prot_from_lig = CrossAttention(
@@ -1553,8 +1461,6 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
-            global_topk=global_topk,
-            global_topk_tau=0.1,
         )
 
         self.drop = nn.Dropout(dropout)
@@ -1634,9 +1540,6 @@ class DualStreamDTIClassifier(nn.Module):
         pair_hidden: int = 128,
         pair_topk_k: int = 100,
         cat_hidden: int = 256,
-        global_topk: int = 20,
-        n_heads: int = 4,
-        qk_norm: bool = False,
     ):
         super().__init__()
 
@@ -1690,16 +1593,15 @@ class DualStreamDTIClassifier(nn.Module):
         )
         self.ds_block = DualStreamBlock(
             d_model=self.d_model,
-            n_heads=n_heads,
+            n_heads=8,
             dropout=float(dropout),
             attn_temp=1.0,
-            qk_norm=qk_norm,
+            qk_norm=True,
             detach_attn_for_value=False,
             attn_smooth_eps=0.0,
             attn_activation="softmax",
             pair_gate_threshold=0.0,
             topk_frac=0.0,
-            global_topk=global_topk
         )
         if self.use_reg_head and self.fusion_mode in {"cat", "dualstream"}:
             self.reg_head = nn.Sequential(
@@ -2014,7 +1916,6 @@ def main():
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--fusion_mode", type=str, default="pairwise",
                     choices=["pairwise", "cat", "dualstream"])
-    ap.add_argument("--global_topk", type=int, default=10)
 
     # -------------------------
     # io / runtime
@@ -2047,10 +1948,7 @@ def main():
     ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
     ap.add_argument("--use_cls_in_head", action="store_true")
     ap.add_argument("--use_reg_head", action="store_true")
-    ap.add_argument("--n_heads", type=int, default=8)
     ap.add_argument("--protein_only", action="store_true")
-
-    ap.add_argument("--qk_norm", action="store_true")
 
     # pairwise head
     ap.add_argument("--pair_hidden", type=int, default=128)
@@ -2165,9 +2063,6 @@ def main():
         pair_hidden=args.pair_hidden,
         pair_topk_k=args.topk_k,
         cat_hidden=args.cat_hidden,
-        global_topk=args.global_topk,
-        n_heads=args.n_heads,
-        qk_norm=args.qk_norm,
     ).to(device)
 
     if args.dti_ckpt is not None:
