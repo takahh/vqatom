@@ -1510,7 +1510,7 @@ class DualStreamBlock(nn.Module):
         n_heads,
         dropout=0.1,
         attn_temp=1.0,
-        qk_norm=True,
+        qk_norm=qk_norm,
         detach_attn_for_value=False,
         attn_smooth_eps=0.0,
         attn_activation="softmax",
@@ -1634,6 +1634,7 @@ class DualStreamDTIClassifier(nn.Module):
         cat_hidden: int = 256,
         global_topk: int = 20,
         n_heads: int = 4,
+        qk_norm: bool = False,
     ):
         super().__init__()
 
@@ -1690,7 +1691,7 @@ class DualStreamDTIClassifier(nn.Module):
             n_heads=n_heads,
             dropout=float(dropout),
             attn_temp=1.0,
-            qk_norm=True,
+            qk_norm=qk_norm,
             detach_attn_for_value=False,
             attn_smooth_eps=0.0,
             attn_activation="softmax",
@@ -2162,6 +2163,7 @@ def main():
         cat_hidden=args.cat_hidden,
         global_topk=args.global_topk,
         n_heads=args.n_heads,
+        qk_norm=args.qk_norm,
     ).to(device)
 
     if args.dti_ckpt is not None:
