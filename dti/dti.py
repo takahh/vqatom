@@ -1632,7 +1632,8 @@ class DualStreamDTIClassifier(nn.Module):
         pair_hidden: int = 128,
         pair_topk_k: int = 100,
         cat_hidden: int = 256,
-        global_topk_k: int = 20,
+        global_topk: int = 20,
+        n_heads: int = 4,
     ):
         super().__init__()
 
@@ -1686,7 +1687,7 @@ class DualStreamDTIClassifier(nn.Module):
         )
         self.ds_block = DualStreamBlock(
             d_model=self.d_model,
-            n_heads=8,
+            n_heads=n_heads,
             dropout=float(dropout),
             attn_temp=1.0,
             qk_norm=True,
@@ -2043,6 +2044,7 @@ def main():
     ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
     ap.add_argument("--use_cls_in_head", action="store_true")
     ap.add_argument("--use_reg_head", action="store_true")
+    ap.add_argument("--n_heads", type=int, default=8)
     ap.add_argument("--protein_only", action="store_true")
 
     # pairwise head
@@ -2158,7 +2160,8 @@ def main():
         pair_hidden=args.pair_hidden,
         pair_topk_k=args.topk_k,
         cat_hidden=args.cat_hidden,
-        global_topk_k=args.global_topk
+        global_topk=args.global_topk,
+        n_heads=args.n_heads,
     ).to(device)
 
     if args.dti_ckpt is not None:
