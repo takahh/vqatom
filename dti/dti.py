@@ -1344,9 +1344,9 @@ class CrossAttention(nn.Module):
         k = self._split_heads(k)
         v = self._split_heads(v)
 
-        if self.qk_norm:
-            q = F.normalize(q, dim=-1)
-            k = F.normalize(k, dim=-1)
+        # if self.qk_norm:
+        #     q = F.normalize(q, dim=-1)
+        #     k = F.normalize(k, dim=-1)
 
         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
 
