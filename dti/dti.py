@@ -1195,7 +1195,7 @@ def train_one_epoch(
                 col_pad=l_pad,
             )
 
-            loss_stripe = 1e-1 * (loss_lp + loss_pl)
+            loss_stripe = 0.5 * (loss_lp + loss_pl)
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
@@ -1340,9 +1340,9 @@ class CrossAttention(nn.Module):
         k = self._split_heads(k)
         v = self._split_heads(v)
 
-        # if self.qk_norm:
-        #     q = F.normalize(q, dim=-1)
-        #     k = F.normalize(k, dim=-1)
+        if self.qk_norm:
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
 
         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
 
@@ -1354,11 +1354,11 @@ class CrossAttention(nn.Module):
         raw_logits = logits
 
         # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits.detach()) - 0.5
+        gate = torch.sigmoid(raw_logits)
 
         # relative competition
         if self.attn_activation == "softmax":
-            attn = torch.softmax(raw_logits / 1.5, dim=-1)
+            attn = torch.softmax(raw_logits / 0.7, dim=-1)
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(raw_logits)
         else:
