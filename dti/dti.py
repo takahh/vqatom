@@ -1199,7 +1199,7 @@ def train_one_epoch(
                 col_pad=l_pad,
             )
 
-            loss_stripe = 0.5 * (loss_lp + loss_pl)
+            loss_stripe = 0.05 * (loss_lp + loss_pl)
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
