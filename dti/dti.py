@@ -1340,10 +1340,13 @@ class CrossAttention(nn.Module):
         detach_attn_for_value=False,
         pair_gate_threshold=0.0,
         topk_frac=0.0,
+        global_topk=50,
+        global_topk_tau=0.1,
     ):
         super().__init__()
         assert d_model % n_heads == 0
-
+        self.global_topk = int(global_topk)
+        self.global_topk_tau = float(global_topk_tau)
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
@@ -1382,6 +1385,32 @@ class CrossAttention(nn.Module):
         keep.scatter_(-1, topk_idx, True)
         return attn * keep.to(attn.dtype)
 
+    def _global_topk_softmax(self, logits, kv_pad_mask=None):
+        """
+        logits: (B, H, Lq, Lk)
+        return: (B, H, Lq, Lk)
+          面全体で上位Kセルだけ nonzero、他は0
+        """
+        B, H, Lq, Lk = logits.shape
+        flat = logits.view(B, H, -1)  # (B, H, Lq*Lk)
+
+        if kv_pad_mask is not None:
+            # kv_pad_mask: (B, Lk)
+            # query方向へ broadcast して valid cell を作る
+            valid = (~kv_pad_mask)[:, None, None, :].expand(B, H, Lq, Lk)
+            flat_valid = valid.reshape(B, H, -1)
+            flat = flat.masked_fill(~flat_valid, -1e9)
+
+        k_top = min(max(1, self.global_topk), flat.size(-1))
+        topv, topi = torch.topk(flat, k=k_top, dim=-1)  # (B, H, K)
+
+        w = torch.softmax(topv / max(self.global_topk_tau, 1e-6), dim=-1)
+
+        out = torch.zeros_like(flat)
+        out.scatter_(-1, topi, w)
+
+        return out.view(B, H, Lq, Lk)
+
     def forward(self, q_in, k_in, v_in=None, kv_pad_mask=None, return_maps=False):
         import torch.nn.functional as F
         if v_in is None:
@@ -1414,7 +1443,8 @@ class CrossAttention(nn.Module):
 
         # relative competition
         if self.attn_activation == "softmax":
-            attn = torch.softmax(raw_logits / 0.7, dim=-1)
+            # 面全体で上位Kセルだけ残す
+            attn = self._global_topk_softmax(raw_logits, kv_pad_mask=kv_pad_mask)
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(raw_logits)
         else:
@@ -1504,6 +1534,8 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
+            global_topk=50,
+            global_topk_tau=0.1,
         )
 
         self.prot_from_lig = CrossAttention(
@@ -1517,6 +1549,8 @@ class DualStreamBlock(nn.Module):
             attn_activation=attn_activation,
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
+            global_topk=50,
+            global_topk_tau=0.1,
         )
 
         self.drop = nn.Dropout(dropout)
