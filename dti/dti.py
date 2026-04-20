@@ -110,6 +110,53 @@ def pick_epoch_shards_random(
         return rng.sample(shard_paths, num_shards)
     return [rng.choice(shard_paths) for _ in range(num_shards)]
 
+import re
+import json
+from typing import Optional, List
+
+SMILES_REGEX = re.compile(
+    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
+)
+
+def regex_tokenize(smiles: str):
+    return SMILES_REGEX.findall(smiles)
+
+class SmilesCharTokenizer:
+    PAD = "[PAD]"
+    MASK = "[MASK]"
+    CLS = "[CLS]"
+    UNK = "[UNK]"
+
+    def __init__(self, stoi: dict):
+        self.stoi = dict(stoi)
+        self.itos = {int(v): k for k, v in self.stoi.items()}
+
+        for tok in [self.PAD, self.MASK, self.CLS, self.UNK]:
+            if tok not in self.stoi:
+                raise ValueError(f"Missing special token in vocab: {tok}")
+
+        self.pad_id = int(self.stoi[self.PAD])
+        self.mask_id = int(self.stoi[self.MASK])
+        self.cls_id = int(self.stoi[self.CLS])
+        self.unk_id = int(self.stoi[self.UNK])
+        self.vocab_size = int(len(self.stoi))
+
+    @classmethod
+    def from_json(cls, path: str) -> "SmilesCharTokenizer":
+        with open(path, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if "stoi" not in obj:
+            raise ValueError("vocab json must contain key 'stoi'")
+        return cls(obj["stoi"])
+
+    def encode(self, smiles: str, add_cls: bool = True, max_len: Optional[int] = None) -> List[int]:
+        toks = regex_tokenize(smiles)
+        ids = [self.stoi.get(tok, self.unk_id) for tok in toks]
+        if add_cls:
+            ids = [self.cls_id] + ids
+        if max_len is not None:
+            ids = ids[:max_len]
+        return ids
 
 # =========================================================
 # Token utils
@@ -403,14 +450,19 @@ def collate_fn(
         if smiles_tokenizer is None:
             raise ValueError("smiles_tokenizer must be provided for smiles mode")
 
-        smiles_tok = smiles_tokenizer(
-            lig_raw_list,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=smiles_max_len,
-        )
-        l_ids = smiles_tok["input_ids"].long()
+        l_ids_list = []
+        for s in lig_raw_list:
+            ids = smiles_tokenizer.encode(
+                s,
+                add_cls=(smiles_tokenizer.cls_id is not None),
+                max_len=smiles_max_len,
+            )
+            l_ids_list.append(ids)
+
+        max_l = max(len(x) for x in l_ids_list)
+        l_ids = torch.full((len(samples), max_l), smiles_tokenizer.pad_id, dtype=torch.long)
+        for i, ids in enumerate(l_ids_list):
+            l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
     else:
         raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
@@ -1987,6 +2039,7 @@ def main():
     # -------------------------
     # smiles encoder
     # -------------------------
+    ap.add_argument("--smiles_vocab_path", type=str, default=None)
     ap.add_argument("--smiles_tokenizer_name", type=str, default=None)
     ap.add_argument("--smiles_max_len", type=int, default=256)
     ap.add_argument("--smiles_d_model", type=int, default=None)
@@ -2023,30 +2076,39 @@ def main():
         )
 
     elif args.ligand_input_type == "smiles":
-        if args.smiles_tokenizer_name is None:
-            raise ValueError("--smiles_tokenizer_name is required in smiles mode")
+        if args.smiles_vocab_path is None:
+            raise ValueError("--smiles_vocab_path is required in smiles mode")
 
-        smiles_tokenizer = AutoTokenizer.from_pretrained(args.smiles_tokenizer_name)
-
-        smiles_pad_id = smiles_tokenizer.pad_token_id
-        if smiles_pad_id is None:
-            smiles_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-            smiles_pad_id = smiles_tokenizer.pad_token_id
+        smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
 
         d_model = args.smiles_d_model if args.smiles_d_model is not None else prot_enc.hidden_size
 
         lig_enc = SmilesLigandEncoder(
-            vocab_size=len(smiles_tokenizer),
-            pad_id=smiles_pad_id,
-            cls_id=getattr(smiles_tokenizer, "cls_token_id", None),
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            cls_id=smiles_tokenizer.cls_id,
             d_model=d_model,
             nhead=args.smiles_nhead,
             layers=args.smiles_layers,
             dim_ff=args.smiles_dim_ff,
             dropout=args.smiles_dropout,
             device=device,
-            finetune=True,
+            finetune=args.finetune_lig,
         )
+
+        ckpt = torch.load(args.lig_ckpt, map_location="cpu", weights_only=False)
+
+        ckpt_vocab = ckpt.get("vocab_size", None)
+        if ckpt_vocab is not None and int(ckpt_vocab) != int(smiles_tokenizer.vocab_size):
+            raise RuntimeError(
+                f"SMILES vocab mismatch: ckpt vocab_size={ckpt_vocab}, "
+                f"tokenizer vocab_size={smiles_tokenizer.vocab_size}"
+            )
+
+        state = ckpt["model"]
+        state = {k: v for k, v in state.items() if not k.startswith("lm_head.")}
+        load_shape_safe(lig_enc, state, verbose=True)
+        
     else:
         raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
 
