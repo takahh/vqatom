@@ -121,6 +121,15 @@ SMILES_REGEX = re.compile(
 def regex_tokenize(smiles: str):
     return SMILES_REGEX.findall(smiles)
 
+import re
+
+SMILES_REGEX = re.compile(
+    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
+)
+
+def regex_tokenize(smiles: str):
+    return SMILES_REGEX.findall(smiles)
+
 class SmilesCharTokenizer:
     PAD = "[PAD]"
     MASK = "[MASK]"
@@ -454,7 +463,7 @@ def collate_fn(
         for s in lig_raw_list:
             ids = smiles_tokenizer.encode(
                 s,
-                add_cls=(smiles_tokenizer.cls_id is not None),
+                add_cls=True,
                 max_len=smiles_max_len,
             )
             l_ids_list.append(ids)
@@ -1725,12 +1734,12 @@ class DualStreamDTIClassifier(nn.Module):
             l_cls = torch.zeros_like(p_h[:, 0, :])
             l_pad = (l_ids == self.lig_pad_id)
 
-        if self.training and torch.rand(()) < 0.01:
-            print(
-                "[tok std]",
-                "p_tok:", float(p_tok.std(dim=1).mean().detach().cpu()),
-                "l_tok:", float(l_tok.std(dim=1).mean().detach().cpu()),
-            )
+        # if self.training and torch.rand(()) < 0.01:
+        #     print(
+        #         "[tok std]",
+        #         "p_tok:", float(p_tok.std(dim=1).mean().detach().cpu()),
+        #         "l_tok:", float(l_tok.std(dim=1).mean().detach().cpu()),
+        #     )
 
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
@@ -2097,7 +2106,6 @@ def main():
         )
 
         ckpt = torch.load(args.lig_ckpt, map_location="cpu", weights_only=False)
-
         ckpt_vocab = ckpt.get("vocab_size", None)
         if ckpt_vocab is not None and int(ckpt_vocab) != int(smiles_tokenizer.vocab_size):
             raise RuntimeError(
@@ -2108,7 +2116,6 @@ def main():
         state = ckpt["model"]
         state = {k: v for k, v in state.items() if not k.startswith("lm_head.")}
         load_shape_safe(lig_enc, state, verbose=True)
-        
     else:
         raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
 
