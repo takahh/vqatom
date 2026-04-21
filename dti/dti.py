@@ -1492,7 +1492,6 @@ class DualStreamBlock(nn.Module):
         topk_frac=0.0,             # 追加
     ):
         super().__init__()
-
         self.ln_l_q = nn.LayerNorm(d_model)
         self.ln_l_kv = nn.LayerNorm(d_model)
         self.ln_p_q = nn.LayerNorm(d_model)
