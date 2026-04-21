@@ -2013,7 +2013,7 @@ def main():
 
     # pairwise head
     ap.add_argument("--pair_hidden", type=int, default=128)
-    ap.add_argument("--topk_k", type=int, default=100)
+    ap.add_argument("--topk_k", type=int, default=20)
 
     # cat head
     ap.add_argument("--cat_hidden", type=int, default=256)
