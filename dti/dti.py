@@ -110,62 +110,6 @@ def pick_epoch_shards_random(
         return rng.sample(shard_paths, num_shards)
     return [rng.choice(shard_paths) for _ in range(num_shards)]
 
-import re
-import json
-from typing import Optional, List
-
-SMILES_REGEX = re.compile(
-    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
-)
-
-def regex_tokenize(smiles: str):
-    return SMILES_REGEX.findall(smiles)
-
-import re
-
-SMILES_REGEX = re.compile(
-    r"Cl|Br|Si|Se|Na|Li|Mg|Ca|Al|@@?|=|#|\(|\)|\[|\]|\.|\/|\\|[A-Z][a-z]?"
-)
-
-def regex_tokenize(smiles: str):
-    return SMILES_REGEX.findall(smiles)
-
-class SmilesCharTokenizer:
-    PAD = "[PAD]"
-    MASK = "[MASK]"
-    CLS = "[CLS]"
-    UNK = "[UNK]"
-
-    def __init__(self, stoi: dict):
-        self.stoi = dict(stoi)
-        self.itos = {int(v): k for k, v in self.stoi.items()}
-
-        for tok in [self.PAD, self.MASK, self.CLS, self.UNK]:
-            if tok not in self.stoi:
-                raise ValueError(f"Missing special token in vocab: {tok}")
-
-        self.pad_id = int(self.stoi[self.PAD])
-        self.mask_id = int(self.stoi[self.MASK])
-        self.cls_id = int(self.stoi[self.CLS])
-        self.unk_id = int(self.stoi[self.UNK])
-        self.vocab_size = int(len(self.stoi))
-
-    @classmethod
-    def from_json(cls, path: str) -> "SmilesCharTokenizer":
-        with open(path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        if "stoi" not in obj:
-            raise ValueError("vocab json must contain key 'stoi'")
-        return cls(obj["stoi"])
-
-    def encode(self, smiles: str, add_cls: bool = True, max_len: Optional[int] = None) -> List[int]:
-        toks = regex_tokenize(smiles)
-        ids = [self.stoi.get(tok, self.unk_id) for tok in toks]
-        if add_cls:
-            ids = [self.cls_id] + ids
-        if max_len is not None:
-            ids = ids[:max_len]
-        return ids
 
 # =========================================================
 # Token utils
@@ -211,8 +155,6 @@ class DTIDataset(Dataset):
         lig_cls_id: int = 0,
         y_reg_mean: Optional[float] = None,
         y_reg_std: Optional[float] = None,
-        ligand_input_type: str = "vqatom",
-        smiles_col: str = "smiles",
     ):
         if rows is not None:
             raw_rows = rows
@@ -222,22 +164,14 @@ class DTIDataset(Dataset):
             raise ValueError("Either csv_path or rows must be provided")
 
         self.lig_cls_id = lig_cls_id
-        self.ligand_input_type = ligand_input_type
-        self.smiles_col = smiles_col
         self.rows: List[Dict[str, object]] = []
 
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
+            lig_tok = (r.get("lig_tok") or "").strip()
             y_raw = r.get("y", "")
 
-            if ligand_input_type == "vqatom":
-                lig_raw = (r.get("lig_tok") or "").strip()
-            elif ligand_input_type == "smiles":
-                lig_raw = (r.get(smiles_col) or "").strip()
-            else:
-                raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
-
-            if not seq or not lig_raw:
+            if not seq or not lig_tok:
                 continue
 
             if y_raw in ("", None):
@@ -249,7 +183,7 @@ class DTIDataset(Dataset):
 
             rr = dict(r)
             rr["seq"] = seq
-            rr["lig_raw"] = lig_raw
+            rr["lig_tok"] = lig_tok
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
             self.rows.append(rr)
@@ -258,9 +192,14 @@ class DTIDataset(Dataset):
             raise ValueError("No usable rows in dataset")
 
         ys = [float(r["y"]) for r in self.rows if not np.isnan(float(r["y"]))]
+
         if y_reg_mean is None or y_reg_std is None:
-            mean = float(np.mean(ys)) if ys else 0.0
-            std = float(np.std(ys)) + 1e-6 if ys else 1.0
+            if len(ys) == 0:
+                mean = 0.0
+                std = 1.0
+            else:
+                mean = float(np.mean(ys))
+                std = float(np.std(ys)) + 1e-6
         else:
             mean = float(y_reg_mean)
             std = float(y_reg_std)
@@ -270,169 +209,41 @@ class DTIDataset(Dataset):
 
         for r in self.rows:
             y = float(r["y"])
-            r["y_reg"] = None if np.isnan(y) else (y - mean) / std
+            if np.isnan(y):
+                r["y_reg"] = None
+            else:
+                r["y_reg"] = (y - mean) / std
 
     def __len__(self) -> int:
         return len(self.rows)
 
-    def _parse_vqatom_tok(self, s: str) -> List[int]:
-        return [int(x) for x in s.split() if x.strip()]
+    def _parse_lig_tok(self, lig_tok: str) -> List[int]:
+        return [int(x) for x in lig_tok.split() if x.strip()]
 
     def __getitem__(self, idx):
         row = self.rows[idx]
 
+        lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
+
         item = {
             "protein_seq": row["seq"],
-            "lig_raw": row["lig_raw"],
+            "lig_ids": lig_ids,
             "y_bin": float(row["y_bin"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
         }
         return item
 
-class PairwiseInteractionHead(nn.Module):
-    def __init__(
-        self,
-        d_model: int,
-        hidden: int = 128,
-        dropout: float = 0.1,
-        use_topk: bool = True,
-        topk_k: int = 100,
-    ):
-        super().__init__()
-        self.use_topk = bool(use_topk)
-        self.topk_k = int(topk_k)
 
-        self.l_proj = nn.Linear(d_model, d_model)
-        self.p_proj = nn.Linear(d_model, d_model)
-
-        pair_dim = d_model * 4  # [l, p, l*p, |l-p|]
-
-        self.pair_mlp = nn.Sequential(
-            nn.Linear(pair_dim, hidden),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden, hidden),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden, 1),
-        )
-
-    def forward(self, l_tok, p_tok, l_pad=None, p_pad=None, return_maps=False):
-        B, Ll, D = l_tok.shape
-        _, Lp, _ = p_tok.shape
-
-        l = self.l_proj(l_tok)
-        p = self.p_proj(p_tok)
-
-        l_exp = l.unsqueeze(2).expand(B, Ll, Lp, D)
-        p_exp = p.unsqueeze(1).expand(B, Ll, Lp, D)
-
-        pair_feat = torch.cat(
-            [l_exp, p_exp, l_exp * p_exp, torch.abs(l_exp - p_exp)],
-            dim=-1,
-        )
-
-        pair_logit = self.pair_mlp(pair_feat).squeeze(-1)
-        pair_logit = torch.nan_to_num(pair_logit, nan=0.0, posinf=20.0, neginf=-20.0)
-
-        valid = None
-        valid_f = None
-        if (l_pad is not None) and (p_pad is not None):
-            valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(1)
-            valid_f = valid.float()
-            pair_logit = pair_logit.masked_fill(~valid, -20.0)
-
-        pair_prob = torch.sigmoid(pair_logit)
-
-        if self.use_topk:
-            flat = pair_logit.view(B, -1)
-
-            if valid is not None:
-                flat = flat.masked_fill(~valid.view(B, -1), -20.0)
-            k_top = min(self.topk_k, flat.size(1))
-            topv, _ = torch.topk(flat, k=k_top, dim=-1)
-            w = torch.softmax(topv / 1.0, dim=-1)
-            logit = (w * topv).sum(dim=-1)
-        else:
-            if valid_f is not None:
-                logit = (pair_logit * valid_f).sum(dim=(1, 2)) / valid_f.sum(dim=(1, 2)).clamp_min(1.0)
-            else:
-                logit = pair_logit.mean(dim=(1, 2))
-
-        aux = {
-            "pair_logit": pair_logit,
-            "pair_prob": pair_prob,
-        }
-        return logit, aux
-
-class SmilesLigandEncoder(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        pad_id: int,
-        cls_id: Optional[int],
-        d_model: int,
-        nhead: int = 8,
-        layers: int = 4,
-        dim_ff: int = 1024,
-        dropout: float = 0.1,
-        device: Optional[torch.device] = None,
-        finetune: bool = True,
-    ):
-        super().__init__()
-        self.vocab_size = int(vocab_size)
-        self.pad_id = int(pad_id)
-        self.cls_id = int(cls_id) if cls_id is not None else None
-        self.mask_id = None
-        self.base_vocab = int(vocab_size)
-        self.vocab_source = "smiles_tokenizer"
-        self.conf = {
-            "d_model": d_model,
-            "nhead": nhead,
-            "layers": layers,
-            "dim_ff": dim_ff,
-            "dropout": dropout,
-        }
-
-        self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_ff,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
-
-        if device is not None:
-            self.to(device)
-
-        if not finetune:
-            for p in self.parameters():
-                p.requires_grad = False
-            self.eval()
-
-    @property
-    def d_model(self) -> int:
-        return int(self.conf["d_model"])
-
-    def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
-        x = self.tok(l_ids)
-        pad_mask = (l_ids == self.pad_id)
-        return self.enc(x, src_key_padding_mask=pad_mask)
+def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
+    ds_list = [DTIDataset(csv_path=p, y_thr=float(y_thr), drop_missing_y=True, lig_cls_id=lig_enc.cls_id ) for p in shard_paths]
+    if not ds_list:
+        raise ValueError("No train shards were loaded")
+    return ConcatDataset(ds_list)
 
 
-def collate_fn(
-    samples,
-    esm_tokenizer,
-    ligand_input_type,
-    lig_pad,
-    lig_cls,
-    smiles_tokenizer=None,
-    smiles_max_len=256,
-):
+def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
     p_seqs = [s["protein_seq"] for s in samples]
-    lig_raw_list = [s["lig_raw"] for s in samples]
+    l_ids_list = [s["lig_ids"] for s in samples]
 
     tok = esm_tokenizer(
         p_seqs,
@@ -444,41 +255,18 @@ def collate_fn(
     p_input_ids = tok["input_ids"]
     p_attn_mask = tok["attention_mask"]
 
-    if ligand_input_type == "vqatom":
-        l_ids_list = []
-        for s in lig_raw_list:
-            ids = [int(x) for x in s.split() if x.strip()]
-            l_ids_list.append([lig_cls] + ids)
-
-        max_l = max(len(x) for x in l_ids_list)
-        l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
-        for i, ids in enumerate(l_ids_list):
-            l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
-
-    elif ligand_input_type == "smiles":
-        if smiles_tokenizer is None:
-            raise ValueError("smiles_tokenizer must be provided for smiles mode")
-
-        l_ids_list = []
-        for s in lig_raw_list:
-            ids = smiles_tokenizer.encode(
-                s,
-                add_cls=True,
-                max_len=smiles_max_len,
-            )
-            l_ids_list.append(ids)
-
-        max_l = max(len(x) for x in l_ids_list)
-        l_ids = torch.full((len(samples), max_l), smiles_tokenizer.pad_id, dtype=torch.long)
-        for i, ids in enumerate(l_ids_list):
-            l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
-
-    else:
-        raise ValueError(f"Unsupported ligand_input_type: {ligand_input_type}")
+    max_l = max(len(x) for x in l_ids_list)
+    l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
+    for i, ids in enumerate(l_ids_list):
+        l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
     y_bin = torch.tensor([float(s["y_bin"]) for s in samples], dtype=torch.float32)
+
     has_y_reg = all(("y_reg" in s) and (s["y_reg"] is not None) for s in samples)
-    y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32) if has_y_reg else None
+    if has_y_reg:
+        y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
+    else:
+        y_reg = None
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -507,93 +295,28 @@ def load_vocab_meta_from_vq_ckpt(vq_ckpt_path: str) -> dict:
     }
 
 
-import torch
-import torch.nn as nn
-
-def load_shape_safe(model, ckpt_state, verbose=True, max_report=20):
-    """
-    checkpoint の state_dict を、shape が合うものはそのままロード、
-    embedding など shape が少し違うものは「重なる部分だけ」コピーする。
-
-    例:
-      old tok.weight : (180680, 512)
-      new tok.weight : (180681, 512)
-    -> 先頭 180680 行だけコピーし、最後の 1 行は新規初期化のまま残す
-    """
-    model_state = model.state_dict()
-
-    loaded = []
+def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = True):
+    cur = module.state_dict()
+    loadable = {}
     skipped = []
-    missing_in_ckpt = []
-    unexpected_in_ckpt = []
-
-    # まずコピー用に現在の state を作る
-    new_state = {}
-    for k, v in model_state.items():
-        new_state[k] = v.clone()
-
-    # ckpt にあるキーを順に処理
-    for k, v_ckpt in ckpt_state.items():
-        if k not in model_state:
-            unexpected_in_ckpt.append((k, "missing_in_model"))
+    for k, v in state.items():
+        if k not in cur:
+            skipped.append((k, "missing_in_model"))
             continue
-
-        v_model = model_state[k]
-
-        # 完全一致ならそのまま採用
-        if v_model.shape == v_ckpt.shape:
-            new_state[k] = v_ckpt
-            loaded.append((k, "exact"))
+        if cur[k].shape != v.shape:
+            skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
             continue
+        loadable[k] = v
 
-        # 特別対応: 2次元 weight (embedding / linear) で後ろ1個追加など
-        if v_model.ndim == 2 and v_ckpt.ndim == 2 and v_model.shape[1] == v_ckpt.shape[1]:
-            rows = min(v_model.shape[0], v_ckpt.shape[0])
-            new_tensor = v_model.clone()
-            new_tensor[:rows] = v_ckpt[:rows]
-            new_state[k] = new_tensor
-            loaded.append((k, f"partial_rows:{rows}/{v_model.shape[0]}"))
-            continue
-
-        # 特別対応: 1次元 bias / embedding norm 等
-        if v_model.ndim == 1 and v_ckpt.ndim == 1:
-            n = min(v_model.shape[0], v_ckpt.shape[0])
-            new_tensor = v_model.clone()
-            new_tensor[:n] = v_ckpt[:n]
-            new_state[k] = new_tensor
-            loaded.append((k, f"partial_1d:{n}/{v_model.shape[0]}"))
-            continue
-
-        # それ以外はスキップ
-        skipped.append((k, f"shape {tuple(v_ckpt.shape)} != {tuple(v_model.shape)}"))
-
-    # model 側にあるが ckpt に無いもの
-    for k in model_state.keys():
-        if k not in ckpt_state:
-            missing_in_ckpt.append(k)
-
-    # 実ロード
-    model.load_state_dict(new_state, strict=False)
-
+    missing, unexpected = module.load_state_dict(loadable, strict=False)
     if verbose:
-        print("\n[load_shape_safe] loaded (up to %d):" % max_report)
-        print(loaded[:max_report])
-
-        print("\n[load_shape_safe] skipped (up to %d):" % max_report)
-        print(skipped[:max_report])
-
-        print("\n[load_shape_safe] missing (up to %d):" % max_report)
-        print(missing_in_ckpt[:max_report])
-
-        print("\n[load_shape_safe] unexpected (up to %d):" % max_report)
-        print(unexpected_in_ckpt[:max_report])
-
-    return {
-        "loaded": loaded,
-        "skipped": skipped,
-        "missing": missing_in_ckpt,
-        "unexpected": unexpected_in_ckpt,
-    }
+        if skipped:
+            print("[load_shape_safe] skipped (up to 20):", skipped[:20])
+        if unexpected:
+            print("[load_shape_safe] unexpected (up to 20):", unexpected[:20])
+        if missing:
+            print("[load_shape_safe] missing (up to 20):", missing[:20])
+    return missing, unexpected, skipped
 
 
 # =========================================================
@@ -653,20 +376,16 @@ class PretrainedLigandEncoder(nn.Module):
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
         self.debug_index_check = bool(debug_index_check)
 
-        load_shape_safe(self, self.state, verbose=verbose_load)
+        load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
 
-        tok_w = self.tok.weight.data
-        print("tok.weight shape:", tuple(tok_w.shape))
-        print("tok.weight mean/std:", tok_w.mean().item(), tok_w.std().item())
-
-        old_vocab = self.state["tok.weight"].shape[0]
-        print("old part mean/std:",
-              tok_w[:old_vocab].mean().item(),
-              tok_w[:old_vocab].std().item())
-
-        print("new tail mean/std:",
-              tok_w[old_vocab:].mean().item(),
-              tok_w[old_vocab:].std().item())
+        mlm_tok_key = "tok.weight"
+        if mlm_tok_key in self.state:
+            w = self.state[mlm_tok_key]
+            if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
+                overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
+                if overlap > 0:
+                    with torch.no_grad():
+                        self.tok.weight[:overlap].copy_(w[:overlap])
 
         self.to(device)
         if not finetune:
@@ -722,164 +441,123 @@ def plot_one(mat, title, save_path=None):
     else:
         plt.show()
 
-def visualize_one_dualstream_map(
+def visualize_one_qk_map(
     model,
     loader,
     device,
+    esm_tokenizer,
     sample_idx_in_batch: int = 0,
+    show_token_labels: bool = False,
     save_dir: str | None = None,
     prefix: str = "sample",
 ):
-    import os
-    import numpy as np
-
     model.eval()
     batch = next(iter(loader))
 
-    p_ids = batch.p_input_ids.to(device)
-    p_msk = batch.p_attn_mask.to(device)
-    l_ids = batch.l_ids.to(device)
+    p_ids = batch.p_input_ids.to(device, non_blocking=True)
+    p_msk = batch.p_attn_mask.to(device, non_blocking=True)
+    l_ids = batch.l_ids.to(device, non_blocking=True)
 
     with torch.inference_mode():
-        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+        logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
 
-    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
-    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
+    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
+    y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
 
-    need_keys = ["lp_qk_logits", "lp_attn", "pl_qk_logits", "pl_attn", "p_pad", "l_pad"]
-    if not all(k in aux for k in need_keys):
-        print("No dualstream maps found. This is not dualstream mode.")
-        return None
+    p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
+    l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
-    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
+    # ---------------------------
+    # 基本マップ
+    # ---------------------------
+    # (B,H,Ll,Lp) -> (Ll,Lp)
+    S_lp = (
+        aux["lp_qk_logits"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    A_lp = (
+        aux["lp_attn"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    X_lp = (
+        aux["lp_ctx"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
 
-    # head平均
-    lp_qk = aux["lp_qk_logits"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()  # (Ll, Lp)
-    lp_attn = aux["lp_attn"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()      # (Ll, Lp)
+    S_pl = (
+        aux["pl_qk_logits"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    A_pl = (
+        aux["pl_attn"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
+    X_pl = (
+        aux["pl_ctx"][sample_idx_in_batch]
+        .detach().float().cpu().numpy().mean(axis=0)
+    )
 
-    pl_qk = aux["pl_qk_logits"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()  # (Lp, Ll)
-    pl_attn = aux["pl_attn"][sample_idx_in_batch].mean(dim=0).detach().cpu().numpy()      # (Lp, Ll)
+    # ---------------------------
+    # pad trim
+    # ---------------------------
+    S_lp = S_lp[~l_pad][:, ~p_pad]
+    A_lp = A_lp[~l_pad][:, ~p_pad]
+    X_lp = X_lp[~l_pad]
 
-    # pad除去
-    # lp: ligand query x protein key
-    lp_qk = lp_qk[~l_pad][:, ~p_pad]
-    lp_attn = lp_attn[~l_pad][:, ~p_pad]
-
-    # pl: protein query x ligand key
-    pl_qk = pl_qk[~p_pad][:, ~l_pad]
-    pl_attn = pl_attn[~p_pad][:, ~l_pad]
+    S_pl = S_pl[~p_pad][:, ~l_pad]
+    A_pl = A_pl[~p_pad][:, ~l_pad]
+    X_pl = X_pl[~p_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
+    # ligand <- protein
     plot_one(
-        lp_qk,
-        f"lp_qk_logits | prob={prob:.4f} y={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_qk_logits.png") if save_dir else None,
+        S_lp,
+        f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_logits.png") if save_dir else None,
     )
     plot_one(
-        lp_attn,
-        f"lp_attn | prob={prob:.4f} y={y_bin:.0f}",
+        A_lp,
+        f"lig <- prot attn | prob={prob:.4f} y_bin={y_bin:.0f}",
         os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
     )
     plot_one(
-        pl_qk,
-        f"pl_qk_logits | prob={prob:.4f} y={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_qk_logits.png") if save_dir else None,
+        X_lp,
+        f"lig <- prot attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_lp_attn_v_summary.png") if save_dir else None,
+    )
+
+    # protein <- ligand
+    plot_one(
+        S_pl,
+        f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
     )
     plot_one(
-        pl_attn,
-        f"pl_attn | prob={prob:.4f} y={y_bin:.0f}",
+        A_pl,
+        f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
         os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
     )
+    plot_one(
+        X_pl,
+        f"prot <- lig attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+        os.path.join(save_dir, f"{base}_pl_attn_v_summary.png") if save_dir else None,
+    )
 
     return {
-        "lp_qk_logits": lp_qk,
-        "lp_attn": lp_attn,
-        "pl_qk_logits": pl_qk,
-        "pl_attn": pl_attn,
+        "attn_lp_logits": S_lp,
+        "attn_lp": A_lp,
+        "attn_lp_x_v": X_lp,
+        "attn_pl_logits": S_pl,
+        "attn_pl": A_pl,
+        "attn_pl_x_v": X_pl,
         "prob": prob,
         "y_bin": y_bin,
     }
 
-def visualize_one_pair_map(
-    model,
-    loader,
-    device,
-    sample_idx_in_batch: int = 0,
-    save_dir: str | None = None,
-    prefix: str = "sample",
-):
-    import os
-    import numpy as np
-
-    model.eval()
-    batch = next(iter(loader))
-
-    p_ids = batch.p_input_ids.to(device)
-    p_msk = batch.p_attn_mask.to(device)
-    l_ids = batch.l_ids.to(device)
-
-    with torch.inference_mode():
-        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
-
-    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
-    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
-
-    # ===== core =====
-    pair = aux["pair_logit"][sample_idx_in_batch].detach().cpu().numpy()
-
-    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-
-    # ===== pad除去 =====
-    pair = pair[~l_pad][:, ~p_pad]
-
-    # ===== sigmoidで見やすく =====
-    pair_prob = 1 / (1 + np.exp(-pair))
-
-    if save_dir is not None:
-        os.makedirs(save_dir, exist_ok=True)
-
-    base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
-
-    # ===== raw logit =====
-    plot_one(
-        pair,
-        f"pair_logit | prob={prob:.4f} y={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pair_logit.png") if save_dir else None,
-    )
-
-    # ===== prob =====
-    plot_one(
-        pair_prob,
-        f"pair_prob | prob={prob:.4f} y={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pair_prob.png") if save_dir else None,
-    )
-
-    # ===== top interactions =====
-    flat = pair.reshape(-1)
-    # topk = min(10, flat.size)
-    topk = 50
-    idx = np.argpartition(-flat, topk)[:topk]
-
-    Ll, Lp = pair.shape
-    coords = [(i // Lp, i % Lp) for i in idx]
-
-    print("\nTop interactions:")
-    for (i, j) in coords:
-        print(f"lig {i} - prot {j} : {pair[i, j]:.3f}")
-
-    return {
-        "pair_logit": pair,
-        "pair_prob": pair_prob,
-        "prob": prob,
-        "y_bin": y_bin,
-        "top_pairs": coords,
-    }
 
 class ESMProteinEncoder(nn.Module):
     def __init__(self, model_name: str, device: torch.device, finetune: bool = False):
@@ -993,41 +671,25 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         hit_rate_topk = hits_topk / float(k)
         return float(hit_rate_topk)
 
-    score = np.asarray(y_pred, dtype=np.float64)
-    y01 = (np.asarray(y_bin) > 0.5).astype(np.int32)
-
-    # drop NaN / inf safely
-    finite = np.isfinite(score)
-    if not finite.all():
-        n_drop = int(score.size - finite.sum())
-        print(f"[warn] eval_metrics: dropping {n_drop} non-finite scores")
-        score = score[finite]
-        y01 = y01[finite]
-
-    if score.size == 0:
+    if y_pred.size == 0:
         return {
             "auroc": 0.0,
             "ap": 0.0,
             "f1": 0.0,
-            "thr": float(CLS_THR),
+            "thr": CLS_THR,
             "pred_mean": 0.0,
             "pred_std": 0.0,
-            "pred_min": 0.0,
-            "pred_max": 0.0,
-            "pos_rate": 0.0,
-            "pred_pos_rate@thr": 0.0,
             "ef1": 0.0,
             "ef5": 0.0,
             "ef10": 0.0,
         }
 
+    score = y_pred
+    y01 = (y_bin > 0.5).astype(np.int32)
     ef1 = enrichment_factor(score, y01, 0.01)
     ef5 = enrichment_factor(score, y01, 0.05)
     ef10 = enrichment_factor(score, y01, 0.10)
 
-    pred01 = (score >= CLS_THR).astype(np.int32)
-
-    # only one class present
     if len(np.unique(y01)) <= 1:
         return {
             "auroc": 0.0,
@@ -1039,7 +701,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "pred_min": float(score.min()),
             "pred_max": float(score.max()),
             "pos_rate": float(y01.mean()) if y01.size else 0.0,
-            "pred_pos_rate@thr": float(pred01.mean()) if pred01.size else 0.0,
+            "pred_pos_rate@thr": float((score >= CLS_THR).mean()) if score.size else 0.0,
             "ef1": float(ef1),
             "ef5": float(ef5),
             "ef10": float(ef10),
@@ -1047,6 +709,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 
     auroc = roc_auc_score(y01, score)
     ap = average_precision_score(y01, score)
+    pred01 = (score >= CLS_THR).astype(np.int32)
     f1 = f1_score(y01, pred01)
 
     return {
@@ -1065,91 +728,6 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
-def visualize_one_qk_map(
-    model,
-    loader,
-    device,
-    sample_idx_in_batch: int = 0,
-    save_dir: str | None = None,
-    prefix: str = "sample",
-):
-    import os
-    import numpy as np
-
-    model.eval()
-    batch = next(iter(loader))
-
-    p_ids = batch.p_input_ids.to(device)
-    p_msk = batch.p_attn_mask.to(device)
-    l_ids = batch.l_ids.to(device)
-
-    with torch.inference_mode():
-        logit, _, aux = model(p_ids, p_msk, l_ids, return_maps=True)
-
-    prob = float(torch.sigmoid(logit[sample_idx_in_batch]).cpu())
-    y_bin = float(batch.y_bin[sample_idx_in_batch].cpu())
-
-    if "qk_aux" not in aux:
-        print("No qk_aux found. This is not cat mode.")
-        return None
-
-    qk = aux["qk_aux"][sample_idx_in_batch].detach().cpu().numpy()
-    # shape: (Lp, Ll) = protein x ligand
-
-    p_pad = aux["p_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-    l_pad = aux["l_pad"][sample_idx_in_batch].cpu().numpy().astype(bool)
-
-    # pad除去
-    qk = qk[~p_pad][:, ~l_pad]
-
-    if save_dir is not None:
-        os.makedirs(save_dir, exist_ok=True)
-
-    base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
-
-    plot_one(
-        qk,
-        f"qk_aux | prob={prob:.4f} y={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_qk_aux.png") if save_dir else None,
-    )
-
-    flat = qk.reshape(-1)
-    topk = min(50, flat.size)
-    idx = np.argpartition(-flat, topk)[:topk]
-
-    Lp, Ll = qk.shape
-    coords = [(i // Ll, i % Ll) for i in idx]
-
-    print("\nTop QK interactions:")
-    for (i, j) in coords:
-        print(f"prot {i} - lig {j} : {qk[i, j]:.3f}")
-
-    return {
-        "qk_aux": qk,
-        "prob": prob,
-        "y_bin": y_bin,
-        "top_pairs": coords,
-    }
-
-def stripe_loss_from_map(
-    p: torch.Tensor,
-    row_pad: torch.Tensor | None = None,
-    col_pad: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """
-    p: (B, R, C)  already nonnegative map, e.g. attention map
-    """
-    if (row_pad is not None) and (col_pad is not None):
-        valid = (~row_pad).unsqueeze(-1) & (~col_pad).unsqueeze(1)
-        p = p.masked_fill(~valid, 0.0)
-
-    col_profile = p.mean(dim=1)   # (B, C)  縦縞
-    row_profile = p.mean(dim=2)   # (B, R)  横縞
-
-    loss_colstripe = col_profile.var(dim=1, unbiased=False).mean()
-    loss_rowstripe = row_profile.var(dim=1, unbiased=False).mean()
-
-    return loss_colstripe + loss_rowstripe
 
 # =========================================================
 # Train
@@ -1163,18 +741,13 @@ def train_one_epoch(
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
-    sym_lambda: float = 0.0,
+    sym_lambda: float = 0.0,   # <- 追加
     base_loss_alpha=0.3,
     epoch=1,
 ) -> Dict[str, float]:
     model.train()
 
-    losses = []
-    losses_cls = []
-    losses_reg = []
-    losses_rc = []
-    losses_stripe = []
-
+    losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
     use_amp = (device.type == "cuda")
 
     bce = nn.BCEWithLogitsLoss(
@@ -1183,7 +756,37 @@ def train_one_epoch(
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
     pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-    need_maps = (getattr(model, "fusion_mode", "") == "dualstream")
+    # train中は絶対に重いmapを返さない（OOM対策）
+    # train中は map を返さない
+    # need_maps = False
+
+    # sym loss か entropy loss を使うときだけ map を返す
+    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0)
+    # attn entropy を使う時だけ map を返す
+    # need_maps = (attn_entropy_lambda != 0.0)
+
+    def attention_symmetry_loss(attn_lp, attn_pl, p_pad=None, l_pad=None):
+        """
+        attn_lp: (B, H, Ll, Lp)   ligand <- protein
+        attn_pl: (B, H, Lp, Ll)   protein <- ligand
+
+        比較対象:
+          attn_lp  vs  transpose(attn_pl)
+        """
+
+        # (B,H,Ll,Lp)
+        attn_pl_t = attn_pl.transpose(-1, -2)
+
+        diff = (attn_lp - attn_pl_t) ** 2  # (B,H,Ll,Lp)
+
+        if (p_pad is not None) and (l_pad is not None):
+            # p_pad: (B, Lp), l_pad: (B, Ll), True=PAD
+            valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+            diff = diff.masked_fill(~valid, 0.0)
+            denom = valid.float().sum().clamp_min(1.0)
+            return diff.sum() / denom
+
+        return diff.mean()
 
     for batch in loader:
         p_ids = batch.p_input_ids.to(device, non_blocking=True)
@@ -1200,75 +803,86 @@ def train_one_epoch(
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
+
+                if need_maps:
+                    if not (isinstance(out, tuple) and len(out) == 3):
+                        raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
+                    logit, yhat_reg, aux = out
+                else:
+                    # return_maps=False でも現在の model は (logit, yhat_reg, aux) を返しているはず
+                    if isinstance(out, tuple) and len(out) == 3:
+                        logit, yhat_reg, aux = out
+                    elif isinstance(out, tuple) and len(out) == 2:
+                        logit, aux = out
+                        yhat_reg = None
+                    else:
+                        raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+
+                loss_cls = bce(logit.float(), y_bin.float())
+
+                loss_reg = torch.tensor(0.0, device=device)
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
+
+                loss_entropy = torch.tensor(0.0, device=device)
+                if attn_entropy_lambda != 0.0:
+                    if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
+                        raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
+                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
+
+                loss_sym = torch.tensor(0.0, device=device)
+                if sym_lambda != 0.0:
+                    loss_sym = attention_symmetry_loss(
+                        aux["lp_attn"].float(),
+                        aux["pl_attn"].float(),
+                        p_pad=aux["p_pad"],
+                        l_pad=aux["l_pad"],
+                    )
+
+                loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+                if (y_reg is not None) and (yhat_reg is not None):
+                    loss = loss + reg_lambda * loss_reg
+
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
 
-        if isinstance(out, tuple) and len(out) == 3:
-            logit, yhat_reg, aux = out
-        elif isinstance(out, tuple) and len(out) == 2:
-            logit, aux = out
-            yhat_reg = None
-        else:
-            raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
-
-        # main classification
-        loss_cls = bce(logit.float(), y_bin.float())
-
-        # optional regression
-        loss_reg = torch.tensor(0.0, device=device)
-        if (y_reg is not None) and (yhat_reg is not None):
-            loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
-
-        # pairwise 専用 concentration penalty
-        loss_rc = torch.tensor(0.0, device=device)
-        if "pair_logit" in aux:
-            pair_logit = aux["pair_logit"]          # (B, Ll, Lp)
-            pair_prob = torch.sigmoid(pair_logit)
-
-            if ("p_pad" in aux) and ("l_pad" in aux):
-                valid = (~aux["l_pad"]).unsqueeze(-1) & (~aux["p_pad"]).unsqueeze(1)
-                p = pair_prob.masked_fill(~valid, 0.0)
+            if need_maps:
+                if not (isinstance(out, tuple) and len(out) == 3):
+                    raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
+                logit, yhat_reg, aux = out
             else:
-                p = pair_prob
+                if isinstance(out, tuple) and len(out) == 3:
+                    logit, yhat_reg, aux = out
+                elif isinstance(out, tuple) and len(out) == 2:
+                    logit, aux = out
+                    yhat_reg = None
+                else:
+                    raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
 
-            row_mass = p.sum(dim=2)
-            col_mass = p.sum(dim=1)
-            loss_rc = row_mass.pow(2).mean() + col_mass.pow(2).mean()
+            loss_cls = bce(logit.float(), y_bin.float())
 
-        # dualstream 用 stripe loss
-        loss_stripe = torch.tensor(0.0, device=device)
+            loss_reg = torch.tensor(0.0, device=device)
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
 
-        loss_stripe = torch.tensor(0.0, device=device)
+            loss_entropy = torch.tensor(0.0, device=device)
+            if attn_entropy_lambda != 0.0:
+                if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
+                    raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
+                loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
 
-        lp_attn_map = aux.get("lp_attn", None)
-        pl_attn_map = aux.get("pl_attn", None)
+            loss_sym = torch.tensor(0.0, device=device)
+            if sym_lambda != 0.0:
+                loss_sym = attention_symmetry_loss(
+                    aux["lp_attn"].float(),
+                    aux["pl_attn"].float(),
+                    p_pad=aux["p_pad"],
+                    l_pad=aux["l_pad"],
+                )
 
-        p_pad = aux.get("p_pad", None)
-        l_pad = aux.get("l_pad", None)
-
-        if lp_attn_map is not None:
-            lp_attn = lp_attn_map.mean(dim=1)  # (B, Ll, Lp)
-            loss_lp = stripe_loss_from_map(
-                p=lp_attn,
-                row_pad=l_pad,
-                col_pad=p_pad,
-            )
-            loss_stripe = loss_stripe + 1e-1 * loss_lp
-
-        if pl_attn_map is not None:
-            pl_attn = pl_attn_map.mean(dim=1)  # (B, Lp, Ll)
-            loss_pl = stripe_loss_from_map(
-                p=pl_attn,
-                row_pad=p_pad,
-                col_pad=l_pad,
-            )
-            loss_stripe = loss_stripe + 1e-1 * loss_pl
-
-        # total loss
-        loss = loss_cls + 1e-3 * loss_rc + loss_stripe
-
-        if (y_reg is not None) and (yhat_reg is not None):
-            loss = loss + reg_lambda * loss_reg
+            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss = loss + reg_lambda * loss_reg
 
         loss.backward()
 
@@ -1280,16 +894,16 @@ def train_one_epoch(
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
-        losses_rc.append(float(loss_rc.detach().cpu().item()))
-        losses_stripe.append(float(loss_stripe.detach().cpu().item()))
+        losses_entropy.append(float(loss_entropy.detach().cpu().item()))
+        losses_sym.append(float(loss_sym.detach().cpu().item()))
 
         pbar.update(1)
         pbar.set_postfix(
             loss=f"{losses[-1]:.4f}",
             cls=f"{losses_cls[-1]:.4f}",
             reg=f"{losses_reg[-1]:.4f}",
-            rc=f"{losses_rc[-1]:.4f}",
-            stripe=f"{losses_stripe[-1]:.4f}",
+            ent=f"{losses_entropy[-1]:.4f}",
+            sym=f"{losses_sym[-1]:.4f}",
         )
 
     pbar.close()
@@ -1298,9 +912,10 @@ def train_one_epoch(
         "loss": float(np.mean(losses)) if losses else 0.0,
         "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
-        "loss_rc": float(np.mean(losses_rc)) if losses_rc else 0.0,
-        "loss_stripe": float(np.mean(losses_stripe)) if losses_stripe else 0.0,
+        "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
+        "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
     }
+
 
 # =========================================================
 # Save/load
@@ -1407,9 +1022,9 @@ class CrossAttention(nn.Module):
         k = self._split_heads(k)
         v = self._split_heads(v)
 
-        # if self.qk_norm:
-        #     q = F.normalize(q, dim=-1)
-        #     k = F.normalize(k, dim=-1)
+        if self.qk_norm:
+            q = F.normalize(q, dim=-1)
+            k = F.normalize(k, dim=-1)
 
         logits = torch.matmul(q, k.transpose(-2, -1)) * (self.scale / max(self.attn_temp, 1e-6))
 
@@ -1417,22 +1032,12 @@ class CrossAttention(nn.Module):
             mask = kv_pad_mask[:, None, None, :]
             logits = logits.masked_fill(mask, -1e4)
 
-        # raw logits
-        raw_logits = logits
-
-        # absolute gate (independent)
-        gate = torch.sigmoid(raw_logits)
-
-        # relative competition
         if self.attn_activation == "softmax":
-            attn = torch.softmax(raw_logits / 1.5, dim=-1)
+            attn = torch.softmax(logits / 0.5, dim=-1)
         elif self.attn_activation == "sigmoid":
-            attn = torch.sigmoid(raw_logits)
+            attn = torch.sigmoid(logits)
         else:
             raise ValueError(f"Unsupported attn_activation: {self.attn_activation}")
-
-        # combine
-        attn = attn * gate
 
         if self.attn_smooth_eps > 0 and self.attn_activation == "softmax":
             Lk = attn.size(-1)
@@ -1498,6 +1103,7 @@ class DualStreamBlock(nn.Module):
         topk_frac=0.0,             # 追加
     ):
         super().__init__()
+
         self.ln_l_q = nn.LayerNorm(d_model)
         self.ln_l_kv = nn.LayerNorm(d_model)
         self.ln_p_q = nn.LayerNorm(d_model)
@@ -1562,22 +1168,13 @@ class DualStreamBlock(nn.Module):
             return_maps=True,
         )
 
-        # pl is killed temporally
-        p_ctx = torch.zeros_like(p_h)
-        aux_pl = {
-            "qk_logits": None,
-            "attn_map": None,
-            "ctx": None,
-            "v_proj": None,
-        }
-
-        # p_ctx, aux_pl = self.prot_from_lig(
-        #     q_in=p_q,
-        #     k_in=l_kv,
-        #     v_in=l_kv,
-        #     kv_pad_mask=l_pad,
-        #     return_maps=True,
-        # )
+        p_ctx, aux_pl = self.prot_from_lig(
+            q_in=p_q,
+            k_in=l_kv,
+            v_in=l_kv,
+            kv_pad_mask=l_pad,
+            return_maps=True,
+        )
 
         l_h = l_h + self.drop(l_ctx)
         p_h = p_h + self.drop(p_ctx)
@@ -1603,90 +1200,71 @@ class DualStreamBlock(nn.Module):
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
         self,
-        protein_encoder: nn.Module,
-        ligand_encoder: nn.Module,
-        dropout: float = 0.1,
-        fusion_mode: str = "pairwise",
+        protein_encoder: ESMProteinEncoder,
+        ligand_encoder: PretrainedLigandEncoder,
+        dropout: float,
+        n_heads: int = 4,
+        n_layers: int = 2,
         protein_token_dropout: float = 0.0,
         ligand_token_dropout: float = 0.0,
-        use_cls_in_head: bool = False,
-        use_reg_head: bool = False,
-        protein_only: bool = False,
-        pair_hidden: int = 128,
-        pair_topk_k: int = 100,
-        cat_hidden: int = 256,
+        attn_temp: float = 2.0,
+        qk_norm: bool = True,
+        attn_smooth_eps: float = 0.02,
+        attn_activation: str = "softmax",
+        detach_attn_for_value: bool = False,   # <- 追加
+        use_cls_in_head: bool = False,         # <- 追加
+        use_reg_head: bool = False,            # <- 追加
+        pair_gate_threshold: float = 0.5,
+        topk_frac: float = 0.1,
+        protein_only: bool = False,   # 追加
     ):
         super().__init__()
-
-        if fusion_mode not in {"pairwise", "cat", "dualstream"}:
-            raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
-
         self.prot = protein_encoder
         self.lig = ligand_encoder
-        self.fusion_mode = str(fusion_mode)
 
-        self.d_model = int(self.lig.d_model)
+        d_model = self.lig.d_model
+        self.d_model = d_model
+        self.n_heads = int(n_heads)
         self.protein_token_dropout = float(protein_token_dropout)
         self.ligand_token_dropout = float(ligand_token_dropout)
         self.lig_pad_id = int(self.lig.pad_id)
-
         self.use_cls_in_head = bool(use_cls_in_head)
         self.use_reg_head = bool(use_reg_head)
         self.protein_only = bool(protein_only)
-
-        self.has_lig_cls = getattr(self.lig, "cls_id", None) is not None
-
         self.p_proj = None
-        if int(self.prot.hidden_size) != self.d_model:
-            self.p_proj = nn.Linear(int(self.prot.hidden_size), self.d_model)
+        if self.prot.hidden_size != d_model:
+            self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
-        self.p_ln = nn.LayerNorm(self.d_model)
-        self.l_ln = nn.LayerNorm(self.d_model)
+        self.p_ln = nn.LayerNorm(d_model)
+        self.l_ln = nn.LayerNorm(d_model)
 
-        self.pair_head = PairwiseInteractionHead(
+        self.interaction = DualStreamBlock(
             d_model=self.d_model,
-            hidden=int(pair_hidden),
-            dropout=float(dropout),
-            use_topk=True,
-            topk_k=int(pair_topk_k),
+            n_heads=self.n_heads,
+            dropout=dropout,
+            attn_temp=attn_temp,
+            qk_norm=qk_norm,
+            detach_attn_for_value=detach_attn_for_value,
+            attn_smooth_eps=attn_smooth_eps,
+            attn_activation=attn_activation,
+            pair_gate_threshold=pair_gate_threshold,
+            topk_frac=topk_frac,
         )
 
-        # if self.use_cls_in_head:
-        #     feat_dim = self.d_model * 6
-        # else:
-        feat_dim = self.d_model * 2
-        self.q_aux = nn.Linear(self.d_model, self.d_model)
-        self.k_aux = nn.Linear(self.d_model, self.d_model)
-        self.cat_head = nn.Sequential(
-            nn.Linear(feat_dim, int(cat_hidden)),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(int(cat_hidden), 128),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(128, 1),
-        )
-        self.ds_block = DualStreamBlock(
-            d_model=self.d_model,
-            n_heads=8,
-            dropout=float(dropout),
-            attn_temp=1.0,
-            qk_norm=True,
-            detach_attn_for_value=False,
-            attn_smooth_eps=0.0,
-            attn_activation="softmax",
-            pair_gate_threshold=0.0,
-            topk_frac=0.0,
-        )
-        if self.use_reg_head and self.fusion_mode in {"cat", "dualstream"}:
-            self.reg_head = nn.Sequential(
-                nn.Linear(feat_dim, int(cat_hidden)),
-                nn.GELU(),
-                nn.Dropout(float(dropout)),
-                nn.Linear(int(cat_hidden), 1),
-            )
+        if self.use_cls_in_head:
+            feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
         else:
-            self.reg_head = None
+            feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
+
+        self.shared_head = nn.Sequential(
+            nn.LayerNorm(feat_dim),
+            nn.Linear(feat_dim, 256),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        self.cls_head = nn.Linear(256, 1)
+        self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1728,32 +1306,17 @@ class DualStreamDTIClassifier(nn.Module):
         p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
-
         if self.protein_only:
             l_h = torch.zeros_like(l_h)
-
         # CLS 分離
         p_tok = p_h[:, 1:, :]
+        l_tok = l_h[:, 1:, :]
         p_cls = p_h[:, 0, :]
+        l_cls = l_h[:, 0, :]
 
         # PAD
         p_pad = (p_attn_mask == 0)[:, 1:]
-
-        if self.has_lig_cls:
-            l_tok = l_h[:, 1:, :]
-            l_cls = l_h[:, 0, :]
-            l_pad = (l_ids == self.lig_pad_id)[:, 1:]
-        else:
-            l_tok = l_h
-            l_cls = torch.zeros_like(p_h[:, 0, :])
-            l_pad = (l_ids == self.lig_pad_id)
-
-        # if self.training and torch.rand(()) < 0.01:
-        #     print(
-        #         "[tok std]",
-        #         "p_tok:", float(p_tok.std(dim=1).mean().detach().cpu()),
-        #         "l_tok:", float(l_tok.std(dim=1).mean().detach().cpu()),
-        #     )
+        l_pad = (l_ids == self.lig_pad_id)[:, 1:]
 
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
@@ -1762,124 +1325,47 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # =========================================
-        # dual branch
-        # =========================================
-        ds_maps = None
-        if self.fusion_mode == "dualstream":
-            if return_maps:
-                p_tok, l_tok, ds_maps = self.ds_block(
-                    p_h=p_tok,
-                    l_h=l_tok,
-                    p_pad=p_pad,
-                    l_pad=l_pad,
-                    return_maps=True,
-                )
-            else:
-                p_tok, l_tok = self.ds_block(
-                    p_h=p_tok,
-                    l_h=l_tok,
-                    p_pad=p_pad,
-                    l_pad=l_pad,
-                    return_maps=False,
-                )
-        # =========================================
-        # fusion branch
-        # =========================================
-        if self.fusion_mode == "pairwise":
-            logit, pair_aux = self.pair_head(
-                l_tok=l_tok,
-                p_tok=p_tok,
-                l_pad=l_pad,
+        # ここが新block
+        if return_maps:
+            p_ctx, l_ctx, inter_aux = self.interaction(
+                p_h=p_tok,
+                l_h=l_tok,
                 p_pad=p_pad,
-                return_maps=return_maps,
+                l_pad=l_pad,
+                return_maps=True,
             )
-
-            if self.use_reg_head:
-                pair_logit = pair_aux["pair_logit"]  # (B, Ll, Lp)
-                B = pair_logit.size(0)
-                flat = pair_logit.view(B, -1)
-                k_top = min(20, flat.size(1))
-                topv, _ = torch.topk(flat, k=k_top, dim=-1)
-                yhat_reg = topv.mean(dim=-1)
-            else:
-                yhat_reg = None
-
-            aux = {}
-            aux.update(pair_aux)
-            aux["p_pad"] = p_pad
-            aux["l_pad"] = l_pad
-
-        elif self.fusion_mode == "dualstream":
-            p_mean = self._masked_mean(p_tok, p_pad)
-            p_max = self._masked_max(p_tok, p_pad)
-            l_mean = self._masked_mean(l_tok, l_pad)
-            l_max = self._masked_max(l_tok, l_pad)
-
-            feat = torch.cat([
-                p_mean * l_mean,
-                torch.abs(p_mean - l_mean),
-            ], dim=-1)
-
-            logit = self.cat_head(feat).squeeze(-1)
-
-            if self.use_reg_head:
-                yhat_reg = self.reg_head(feat).squeeze(-1)
-            else:
-                yhat_reg = None
-
-            aux = {
-                "p_pad": p_pad,
-                "l_pad": l_pad,
-            }
-
-            if ds_maps is not None:
-                aux.update(ds_maps)
-
-        elif self.fusion_mode == "cat":
-            p_mean = self._masked_mean(p_tok, p_pad)
-            p_max = self._masked_max(p_tok, p_pad)
-            l_mean = self._masked_mean(l_tok, l_pad)
-            l_max = self._masked_max(l_tok, l_pad)
-
-            # if self.use_cls_in_head:
-            #     feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
-            # else:
-            #     feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
-            feat = torch.cat([
-                p_mean * l_mean,
-                torch.abs(p_mean - l_mean),
-            ], dim=-1)
-            q = self.q_aux(p_tok)  # (B, Lp, D)
-            k = self.k_aux(l_tok)  # (B, Ll, D)
-
-            q = F.normalize(q, dim=-1)
-            k = F.normalize(k, dim=-1)
-
-            qk_aux = torch.matmul(q, k.transpose(-2, -1))  # (B, Lp, Ll)
-            logit = self.cat_head(feat).squeeze(-1)
-
-            if self.use_reg_head:
-                yhat_reg = self.reg_head(feat).squeeze(-1)
-            else:
-                yhat_reg = None
-
-            aux = {
-                "p_pad": p_pad,
-                "l_pad": l_pad,
-                "qk_aux": qk_aux,
-                "q_std": q.std(dim=1).mean(),
-                "k_std": k.std(dim=1).mean(),
-            }
-
         else:
-            raise ValueError(f"Unsupported fusion_mode: {self.fusion_mode}")
+            p_ctx, l_ctx = self.interaction(
+                p_h=p_tok,
+                l_h=l_tok,
+                p_pad=p_pad,
+                l_pad=l_pad,
+                return_maps=False,
+            )
+            inter_aux = {}
 
-        if torch.isnan(p_h).any() or torch.isinf(p_h).any():
-            raise RuntimeError("NaN/inf in p_h")
+        p_mean = self._masked_mean(p_ctx, p_pad)
+        p_max = self._masked_max(p_ctx, p_pad)
+        l_mean = self._masked_mean(l_ctx, l_pad)
+        l_max = self._masked_max(l_ctx, l_pad)
 
-        if torch.isnan(l_h).any() or torch.isinf(l_h).any():
-            raise RuntimeError("NaN/inf in l_h")
+        if self.use_cls_in_head:
+            feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+        else:
+            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+
+        h = self.shared_head(feat)
+        logit = self.cls_head(h).squeeze(-1)
+
+        yhat_reg = None
+        if self.reg_head is not None:
+            yhat_reg = self.reg_head(h).squeeze(-1)
+
+        aux.update(inter_aux)
+        aux["p_pad"] = p_pad
+        aux["l_pad"] = l_pad
+        aux["p_ctx_tok"] = p_ctx
+        aux["l_ctx_tok"] = l_ctx
 
         return logit, yhat_reg, aux
 
@@ -1973,103 +1459,68 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 def main():
     ap = argparse.ArgumentParser()
 
-    # -------------------------
-    # data
-    # -------------------------
     ap.add_argument("--use_train_valid_csv", action="store_true")
     ap.add_argument("--train_csv", type=str, default=None)
     ap.add_argument("--valid_csv", type=str, required=True)
     ap.add_argument("--final_eval_csv", type=str, default=None)
     ap.add_argument("--test_csv", type=str, default=None)
     ap.add_argument("--train_size", type=int, default=None)
-
+    ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
+    ap.add_argument("--attn_smooth_eps", type=float, default=0.0)
     ap.add_argument("--train_shard_dir", type=str, default=None)
     ap.add_argument("--train_shard_glob", type=str, default="train_part_*.csv")
     ap.add_argument("--train_shard_size", type=int, default=1000)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
-
-    ap.add_argument("--y_thr", type=float, default=Y_THR)
-    ap.add_argument("--fusion_mode", type=str, default="pairwise",
-                    choices=["pairwise", "cat", "dualstream"])
-
-    # -------------------------
-    # io / runtime
-    # -------------------------
-    ap.add_argument("--out_dir", type=str, default="./dti_out")
-    ap.add_argument("--dti_ckpt", type=str, default=None)
-    ap.add_argument("--eval_only", action="store_true")
-    ap.add_argument("--seed", type=int, default=0)
-
-    # -------------------------
-    # encoders
-    # -------------------------
+    ap.add_argument("--sym_lambda", type=float, default=0.0)
+    ap.add_argument("--lig_ckpt", type=str, required=True)
+    ap.add_argument("--vq_ckpt", type=str, default=None)
+    ap.add_argument("--protein_only", action="store_true")
+    ap.add_argument(
+        "--attn_activation",
+        type=str,
+        default="softmax",
+        choices=["softmax", "entmax15", "sigmoid"],
+    )
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
-
-    ap.add_argument("--lig_ckpt", type=str, required=True)
-    ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--lig_debug_index", action="store_true")
+    ap.add_argument("--pair_gate_threshold", type=float, default=0.0)
+    ap.add_argument("--topk_frac", type=float, default=0.0)
+    ap.add_argument("--dti_ckpt", type=str, default=None)
+    ap.add_argument("--out_dir", type=str, default="./dti_out")
+    ap.add_argument("--eval_only", action="store_true")
 
-    ap.add_argument("--ligand_input_type", type=str, default="vqatom",
-                    choices=["vqatom", "smiles"])
-    ap.add_argument("--smiles_col", type=str, default="smiles")
-
-    # -------------------------
-    # fusion model
-    # -------------------------
-    ap.add_argument("--dropout", type=float, default=0.1)
-    ap.add_argument("--protein_token_dropout", type=float, default=0.10)
-    ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
-    ap.add_argument("--use_cls_in_head", action="store_true")
-    ap.add_argument("--use_reg_head", action="store_true")
-    ap.add_argument("--protein_only", action="store_true")
-
-    # pairwise head
-    ap.add_argument("--pair_hidden", type=int, default=128)
-    ap.add_argument("--topk_k", type=int, default=20)
-
-    # cat head
-    ap.add_argument("--cat_hidden", type=int, default=256)
-
-    # -------------------------
-    # training
-    # -------------------------
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--lig_lr_mult", type=float, default=0.1)
     ap.add_argument("--weight_decay", type=float, default=1e-2)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--detach_attn_for_value", action="store_true")
+    ap.add_argument("--use_cls_in_head", action="store_true")
+    ap.add_argument("--use_reg_head", action="store_true")
+    ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--grad_clip", type=float, default=1.0)
-    ap.add_argument("--reg_lambda", type=float, default=0.1)
-
-    # -------------------------
-    # optimizer / scheduler
-    # -------------------------
+    ap.add_argument("--plateau", action="store_true")
+    ap.add_argument("--plateau_factor", type=float, default=0.5)
+    ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--min_lr", type=float, default=1e-6)
+    ap.add_argument("--dual_stream_layers", type=int, default=2)
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
+    ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
     ap.add_argument("--esm_lr_mult", type=float, default=1.0)
     ap.add_argument("--esm_min_lr_mult", type=float, default=0.05)
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
-
-    ap.add_argument("--plateau", action="store_true")
-    ap.add_argument("--plateau_factor", type=float, default=0.5)
-    ap.add_argument("--plateau_patience", type=int, default=2)
-    ap.add_argument("--min_lr", type=float, default=1e-6)
-    ap.add_argument("--select_on", type=str, default="ap",
-                    choices=["ap", "auroc", "f1"])
-
-    # -------------------------
-    # smiles encoder
-    # -------------------------
-    ap.add_argument("--smiles_vocab_path", type=str, default=None)
-    ap.add_argument("--smiles_tokenizer_name", type=str, default=None)
-    ap.add_argument("--smiles_max_len", type=int, default=256)
-    ap.add_argument("--smiles_d_model", type=int, default=None)
-    ap.add_argument("--smiles_nhead", type=int, default=8)
-    ap.add_argument("--smiles_layers", type=int, default=4)
-    ap.add_argument("--smiles_dim_ff", type=int, default=1024)
-    ap.add_argument("--smiles_dropout", type=float, default=0.1)
+    ap.add_argument("--attn_temp", type=float, default=2.0)
+    ap.add_argument("--attn_entropy_lambda", type=float, default=0.0)
+    ap.add_argument("--split_seed", type=int, default=0)
+    ap.add_argument("--y_thr", type=float, default=Y_THR)
+    ap.add_argument("--n_heads", type=int, default=4)
+    ap.add_argument("--reg_lambda", type=float, default=0.1)
+    ap.add_argument("--qk_norm", action="store_true")
 
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
@@ -2085,67 +1536,35 @@ def main():
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
 
-    smiles_tokenizer = None
+    lig_enc = PretrainedLigandEncoder(
+        ckpt_path=args.lig_ckpt,
+        device=device,
+        finetune=args.finetune_lig,
+        vq_ckpt_path=args.vq_ckpt,
+        verbose_load=True,
+        debug_index_check=bool(args.lig_debug_index),
+    )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
-
-    if args.ligand_input_type == "vqatom":
-        lig_enc = PretrainedLigandEncoder(
-            ckpt_path=args.lig_ckpt,
-            device=device,
-            finetune=args.finetune_lig,
-            vq_ckpt_path=args.vq_ckpt,
-            verbose_load=True,
-            debug_index_check=bool(args.lig_debug_index),
-        )
-
-    elif args.ligand_input_type == "smiles":
-        if args.smiles_vocab_path is None:
-            raise ValueError("--smiles_vocab_path is required in smiles mode")
-
-        smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
-
-        d_model = args.smiles_d_model if args.smiles_d_model is not None else prot_enc.hidden_size
-
-        lig_enc = SmilesLigandEncoder(
-            vocab_size=smiles_tokenizer.vocab_size,
-            pad_id=smiles_tokenizer.pad_id,
-            cls_id=smiles_tokenizer.cls_id,
-            d_model=d_model,
-            nhead=args.smiles_nhead,
-            layers=args.smiles_layers,
-            dim_ff=args.smiles_dim_ff,
-            dropout=args.smiles_dropout,
-            device=device,
-            finetune=args.finetune_lig,
-        )
-
-        ckpt = torch.load(args.lig_ckpt, map_location="cpu", weights_only=False)
-        ckpt_vocab = ckpt.get("vocab_size", None)
-        if ckpt_vocab is not None and int(ckpt_vocab) != int(smiles_tokenizer.vocab_size):
-            raise RuntimeError(
-                f"SMILES vocab mismatch: ckpt vocab_size={ckpt_vocab}, "
-                f"tokenizer vocab_size={smiles_tokenizer.vocab_size}"
-            )
-
-        state = ckpt["model"]
-        state = {k: v for k, v in state.items() if not k.startswith("lm_head.")}
-        load_shape_safe(lig_enc, state, verbose=True)
-    else:
-        raise ValueError(f"Unsupported ligand_input_type: {args.ligand_input_type}")
 
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
         dropout=args.dropout,
-        fusion_mode=args.fusion_mode,
+        n_heads=args.n_heads,
+        n_layers=args.dual_stream_layers,
         protein_token_dropout=args.protein_token_dropout,
         ligand_token_dropout=args.ligand_token_dropout,
+        attn_temp=args.attn_temp,
+        qk_norm=args.qk_norm,
+        attn_smooth_eps=args.attn_smooth_eps,
+        attn_activation=args.attn_activation,
+        detach_attn_for_value=args.detach_attn_for_value,
         use_cls_in_head=args.use_cls_in_head,
         use_reg_head=args.use_reg_head,
-        protein_only=args.protein_only,
-        pair_hidden=args.pair_hidden,
-        pair_topk_k=args.topk_k,
-        cat_hidden=args.cat_hidden,
+        pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
+        topk_frac=args.topk_frac,  # ← 追加
+        protein_only=args.protein_only,   # 追加
+
     ).to(device)
 
     if args.dti_ckpt is not None:
@@ -2166,11 +1585,8 @@ def main():
             collate_fn=lambda xs: collate_fn(
                 xs,
                 esm_tokenizer=esm_tokenizer,
-                ligand_input_type=args.ligand_input_type,
                 lig_pad=lig_enc.pad_id,
-                lig_cls=(lig_enc.cls_id if getattr(lig_enc, "cls_id", None) is not None else -1),
-                smiles_tokenizer=smiles_tokenizer,
-                smiles_max_len=args.smiles_max_len,
+                lig_cls=lig_enc.cls_id,
             ),
         )
 
@@ -2193,8 +1609,7 @@ def main():
                 csv_path=args.train_csv,
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
-                ligand_input_type=args.ligand_input_type,
-                smiles_col=args.smiles_col
+                lig_cls_id=lig_enc.cls_id,
             )
         else:
             all_rows = read_csv_rows(args.train_csv)
@@ -2203,8 +1618,7 @@ def main():
                 rows=train_rows,
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
-                ligand_input_type=args.ligand_input_type,
-                smiles_col=args.smiles_col,
+                lig_cls_id=lig_enc.cls_id,
             )
 
         fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
@@ -2221,8 +1635,7 @@ def main():
                     csv_path=args.train_csv,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    ligand_input_type=args.ligand_input_type,
-                    smiles_col=args.smiles_col,
+                    lig_cls_id=lig_enc.cls_id,
                 )
             else:
                 all_rows = read_csv_rows(args.train_csv)
@@ -2231,8 +1644,7 @@ def main():
                     rows=train_rows,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    ligand_input_type=args.ligand_input_type,
-                    smiles_col=args.smiles_col,
+                    lig_cls_id=lig_enc.cls_id,
                 )
             train_y_mean = float(tmp_train_ds.y_reg_mean)
             train_y_std = float(tmp_train_ds.y_reg_std)
@@ -2246,10 +1658,9 @@ def main():
         csv_path=args.valid_csv,
         y_thr=float(args.y_thr),
         drop_missing_y=True,
+        lig_cls_id=lig_enc.cls_id,
         y_reg_mean=train_y_mean,
         y_reg_std=train_y_std,
-        ligand_input_type=args.ligand_input_type,
-        smiles_col=args.smiles_col,
     )
     valid_loader = make_loader(valid_ds, shuffle=False)
 
@@ -2259,10 +1670,9 @@ def main():
             csv_path=args.final_eval_csv,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
+            lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
-            ligand_input_type=args.ligand_input_type,
-            smiles_col=args.smiles_col,
         )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
@@ -2272,10 +1682,9 @@ def main():
             csv_path=args.test_csv,
             y_thr=float(args.y_thr),
             drop_missing_y=True,
+            lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
-            ligand_input_type=args.ligand_input_type,
-            smiles_col=args.smiles_col,
         )
         test_loader = make_loader(test_ds, shuffle=False)
 
@@ -2343,8 +1752,9 @@ def main():
                     csv_path=p,
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
-                    ligand_input_type=args.ligand_input_type,
-                    smiles_col=args.smiles_col,
+                    lig_cls_id=lig_enc.cls_id,
+                    y_reg_mean=train_y_mean,
+                    y_reg_std=train_y_std,
                 )
                 for p in epoch_shards
             ]
@@ -2362,9 +1772,9 @@ def main():
             device=device,
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
-            attn_entropy_lambda=0.0,
+            attn_entropy_lambda=float(args.attn_entropy_lambda),
             reg_lambda=float(args.reg_lambda),
-            sym_lambda=0.0,
+            sym_lambda=float(args.sym_lambda),  # <- 追加
             base_loss_alpha=0.3,
             epoch=ep,
         )
@@ -2433,7 +1843,7 @@ def main():
             },
         )
 
-        print(f"\n===== Epoch {ep} {args.ligand_input_type} =====")
+        print(f"\n===== Epoch {ep} =====")
         print(
             "[train]",
             f"AUC={tr_m['auroc']:.4f}",
@@ -2461,35 +1871,17 @@ def main():
                 f"EF10={final_m['ef10']:.3f}",
             )
 
-        if args.fusion_mode == "pairwise":
-            visualize_one_pair_map(
-                model=model,
-                loader=valid_loader,
-                device=device,
-                sample_idx_in_batch=0,
-                save_dir=qk_save_dir,
-                prefix=f"epoch{ep:03d}_valid_sample0",
-            )
+        visualize_one_qk_map(
+            model=model,
+            loader=valid_loader,
+            device=device,
+            esm_tokenizer=esm_tokenizer,
+            sample_idx_in_batch=0,
+            show_token_labels=False,
+            save_dir=qk_save_dir,
+            prefix=f"epoch{ep:03d}_valid_sample0",
+        )
 
-        elif args.fusion_mode == "cat":
-            visualize_one_qk_map(
-                model=model,
-                loader=valid_loader,
-                device=device,
-                sample_idx_in_batch=0,
-                save_dir=qk_save_dir,
-                prefix=f"epoch{ep:03d}_valid_sample0",
-            )
-
-        # elif args.fusion_mode == "dualstream":
-        #     visualize_one_dualstream_map(
-        #         model=model,
-        #         loader=valid_loader,
-        #         device=device,
-        #         sample_idx_in_batch=0,
-        #         save_dir=qk_save_dir,
-        #         prefix=f"epoch{ep:03d}_valid_sample0",
-        #     )
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
 
