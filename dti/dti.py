@@ -1590,7 +1590,7 @@ def main():
     ap.add_argument("--freeze_esm_bottom", type=int, default=0)
     ap.add_argument("--attn_temp", type=float, default=2.0)
     ap.add_argument("--attn_entropy_lambda", type=float, default=0.0)
-    ap.add_argument("--split_seed", type=int, defaultå=0)
+    ap.add_argument("--split_seed", type=int, default=0)
     ap.add_argument("--y_thr", type=float, default=Y_THR)
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
