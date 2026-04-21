@@ -440,7 +440,6 @@ def plot_one(mat, title, save_path=None):
         plt.close()
     else:
         plt.show()
-
 def visualize_one_qk_map(
     model,
     loader,
@@ -451,6 +450,10 @@ def visualize_one_qk_map(
     save_dir: str | None = None,
     prefix: str = "sample",
 ):
+    import os
+    import torch
+    import numpy as np
+
     model.eval()
     batch = next(iter(loader))
 
@@ -467,46 +470,38 @@ def visualize_one_qk_map(
     p_pad = aux["p_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
     l_pad = aux["l_pad"][sample_idx_in_batch].detach().cpu().numpy().astype(bool)
 
-    # ---------------------------
-    # 基本マップ
-    # ---------------------------
-    # (B,H,Ll,Lp) -> (Ll,Lp)
-    S_lp = (
-        aux["lp_qk_logits"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    A_lp = (
-        aux["lp_attn"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    X_lp = (
-        aux["lp_ctx"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-
-    S_pl = (
-        aux["pl_qk_logits"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    A_pl = (
-        aux["pl_attn"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
-    X_pl = (
-        aux["pl_ctx"][sample_idx_in_batch]
-        .detach().float().cpu().numpy().mean(axis=0)
-    )
+    def headmean(x):
+        if x is None:
+            return None
+        return x[sample_idx_in_batch].detach().float().cpu().numpy().mean(axis=0)
 
     # ---------------------------
-    # pad trim
+    # LP maps
     # ---------------------------
-    S_lp = S_lp[~l_pad][:, ~p_pad]
-    A_lp = A_lp[~l_pad][:, ~p_pad]
-    X_lp = X_lp[~l_pad]
+    S_lp = headmean(aux.get("lp_qk_logits"))
+    A_lp = headmean(aux.get("lp_attn"))
+    X_lp = headmean(aux.get("lp_ctx"))
 
-    S_pl = S_pl[~p_pad][:, ~l_pad]
-    A_pl = A_pl[~p_pad][:, ~l_pad]
-    X_pl = X_pl[~p_pad]
+    if S_lp is not None:
+        S_lp = S_lp[~l_pad][:, ~p_pad]
+    if A_lp is not None:
+        A_lp = A_lp[~l_pad][:, ~p_pad]
+    if X_lp is not None:
+        X_lp = X_lp[~l_pad]
+
+    # ---------------------------
+    # PL maps (optional)
+    # ---------------------------
+    S_pl = headmean(aux.get("pl_qk_logits"))
+    A_pl = headmean(aux.get("pl_attn"))
+    X_pl = headmean(aux.get("pl_ctx"))
+
+    if S_pl is not None:
+        S_pl = S_pl[~p_pad][:, ~l_pad]
+    if A_pl is not None:
+        A_pl = A_pl[~p_pad][:, ~l_pad]
+    if X_pl is not None:
+        X_pl = X_pl[~p_pad]
 
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
@@ -514,38 +509,44 @@ def visualize_one_qk_map(
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
     # ligand <- protein
-    plot_one(
-        S_lp,
-        f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_logits.png") if save_dir else None,
-    )
-    plot_one(
-        A_lp,
-        f"lig <- prot attn | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
-    )
-    plot_one(
-        X_lp,
-        f"lig <- prot attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_lp_attn_v_summary.png") if save_dir else None,
-    )
+    if S_lp is not None:
+        plot_one(
+            S_lp,
+            f"lig <- prot logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_lp_logits.png") if save_dir else None,
+        )
+    if A_lp is not None:
+        plot_one(
+            A_lp,
+            f"lig <- prot attn | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_lp_attn.png") if save_dir else None,
+        )
+    if X_lp is not None:
+        plot_one(
+            X_lp,
+            f"lig <- prot attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_lp_attn_v_summary.png") if save_dir else None,
+        )
 
     # protein <- ligand
-    plot_one(
-        S_pl,
-        f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
-    )
-    plot_one(
-        A_pl,
-        f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
-    )
-    plot_one(
-        X_pl,
-        f"prot <- lig attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
-        os.path.join(save_dir, f"{base}_pl_attn_v_summary.png") if save_dir else None,
-    )
+    if S_pl is not None:
+        plot_one(
+            S_pl,
+            f"prot <- lig logits | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pl_logits.png") if save_dir else None,
+        )
+    if A_pl is not None:
+        plot_one(
+            A_pl,
+            f"prot <- lig attn | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pl_attn.png") if save_dir else None,
+        )
+    if X_pl is not None:
+        plot_one(
+            X_pl,
+            f"prot <- lig attn×V summary | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pl_attn_v_summary.png") if save_dir else None,
+        )
 
     return {
         "attn_lp_logits": S_lp,
@@ -557,6 +558,7 @@ def visualize_one_qk_map(
         "prob": prob,
         "y_bin": y_bin,
     }
+
 
 
 class ESMProteinEncoder(nn.Module):
@@ -1153,12 +1155,8 @@ class DualStreamBlock(nn.Module):
         )
 
     def forward(self, p_h, l_h, p_pad=None, l_pad=None, return_maps=False):
-        # query側と key/value側を別LN
         l_q = self.ln_l_q(l_h)
         p_kv = self.ln_p_kv(p_h)
-
-        p_q = self.ln_p_q(p_h)
-        l_kv = self.ln_l_kv(l_h)
 
         l_ctx, aux_lp = self.lig_from_prot(
             q_in=l_q,
@@ -1168,19 +1166,11 @@ class DualStreamBlock(nn.Module):
             return_maps=True,
         )
 
-        p_ctx, aux_pl = self.prot_from_lig(
-            q_in=p_q,
-            k_in=l_kv,
-            v_in=l_kv,
-            kv_pad_mask=l_pad,
-            return_maps=True,
-        )
-
         l_h = l_h + self.drop(l_ctx)
-        p_h = p_h + self.drop(p_ctx)
-
         l_h = l_h + self.drop(self.ffn_l(l_h))
-        p_h = p_h + self.drop(self.ffn_p(p_h))
+
+        # protein side は更新しない
+        p_h = p_h
 
         if return_maps:
             return p_h, l_h, {
@@ -1188,11 +1178,10 @@ class DualStreamBlock(nn.Module):
                 "lp_attn": aux_lp["attn_map"],
                 "lp_ctx": aux_lp["ctx"],
                 "lp_v": aux_lp["v_proj"],
-
-                "pl_qk_logits": aux_pl["qk_logits"],
-                "pl_attn": aux_pl["attn_map"],
-                "pl_ctx": aux_pl["ctx"],
-                "pl_v": aux_pl["v_proj"],
+                "pl_qk_logits": None,
+                "pl_attn": None,
+                "pl_ctx": None,
+                "pl_v": None,
             }
 
         return p_h, l_h
@@ -1252,9 +1241,9 @@ class DualStreamDTIClassifier(nn.Module):
         )
 
         if self.use_cls_in_head:
-            feat_dim = self.d_model * 6   # p_cls, l_cls, p_mean, p_max, l_mean, l_max
+            feat_dim = self.d_model * 3  # l_cls, l_mean, l_max
         else:
-            feat_dim = self.d_model * 4   # p_mean, p_max, l_mean, l_max
+            feat_dim = self.d_model * 2  # l_mean, l_max
 
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
@@ -1350,9 +1339,9 @@ class DualStreamDTIClassifier(nn.Module):
         l_max = self._masked_max(l_ctx, l_pad)
 
         if self.use_cls_in_head:
-            feat = torch.cat([p_cls, l_cls, p_mean, p_max, l_mean, l_max], dim=-1)
+            feat = torch.cat([l_cls, l_mean, l_max], dim=-1)
         else:
-            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+            feat = torch.cat([l_mean, l_max], dim=-1)
 
         h = self.shared_head(feat)
         logit = self.cls_head(h).squeeze(-1)
