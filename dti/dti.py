@@ -1323,9 +1323,9 @@ class DualStreamDTIClassifier(nn.Module):
         )
 
         if self.use_cls_in_head:
-            feat_dim = self.d_model * 3  # l_cls, l_mean, l_max
+            feat_dim = self.d_model * 5  # p_mean, p_max, l_cls, l_mean, l_max
         else:
-            feat_dim = self.d_model * 2  # l_mean, l_max
+            feat_dim = self.d_model * 4  # p_mean, p_max, l_mean, l_max
 
         self.shared_head = nn.Sequential(
             nn.LayerNorm(feat_dim),
