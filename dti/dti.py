@@ -450,7 +450,7 @@ def visualize_one_qk_map(
     show_token_labels: bool = False,
     save_dir: str | None = None,
     prefix: str = "sample",
-    save_headwise: bool = True,   # 追加
+    save_headwise: bool = True,
 ):
     import os
     import torch
@@ -480,13 +480,11 @@ def visualize_one_qk_map(
     def get_heads(x):
         if x is None:
             return None
-        # (H, ...)
         return x[sample_idx_in_batch].detach().float().cpu().numpy()
 
     def trim_lp(mat):
         if mat is None:
             return None
-        # mat: (Ll, Lp) or (Ll, D)
         if mat.ndim == 2:
             if mat.shape[0] == len(l_pad) and mat.shape[1] == len(p_pad):
                 return mat[~l_pad][:, ~p_pad]
@@ -497,7 +495,6 @@ def visualize_one_qk_map(
     def trim_pl(mat):
         if mat is None:
             return None
-        # mat: (Lp, Ll) or (Lp, D)
         if mat.ndim == 2:
             if mat.shape[0] == len(p_pad) and mat.shape[1] == len(l_pad):
                 return mat[~p_pad][:, ~l_pad]
@@ -505,21 +502,31 @@ def visualize_one_qk_map(
                 return mat[~p_pad]
         return mat
 
+    def pairctx_to_map(pair_ctx_3d):
+        # pair_ctx_3d: (Ll, Lp, Dh) or (Lp, Ll, Dh)
+        if pair_ctx_3d is None:
+            return None
+        return np.linalg.norm(pair_ctx_3d, axis=-1)
+
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     base = f"{prefix}_prob{prob:.3f}_y{int(y_bin)}"
 
-    # =========================
-    # Mean maps
-    # =========================
+    # ===== mean maps =====
     S_lp = trim_lp(headmean(aux.get("lp_qk_logits")))
     A_lp = trim_lp(headmean(aux.get("lp_attn")))
     X_lp = trim_lp(headmean(aux.get("lp_ctx")))
 
+    P_lp_raw = headmean(aux.get("lp_pair_ctx"))   # (Ll, Lp, Dh)
+    P_lp = trim_lp(pairctx_to_map(P_lp_raw))      # (Ll, Lp)
+
     S_pl = trim_pl(headmean(aux.get("pl_qk_logits")))
     A_pl = trim_pl(headmean(aux.get("pl_attn")))
     X_pl = trim_pl(headmean(aux.get("pl_ctx")))
+
+    P_pl_raw = headmean(aux.get("pl_pair_ctx"))
+    P_pl = trim_pl(pairctx_to_map(P_pl_raw)) if P_pl_raw is not None else None
 
     if S_lp is not None:
         plot_one(
@@ -536,8 +543,14 @@ def visualize_one_qk_map(
     if X_lp is not None:
         plot_one(
             X_lp,
-            f"lig <- prot attn×V summary(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
-            os.path.join(save_dir, f"{base}_lp_attn_v_summary_mean.png") if save_dir else None,
+            f"lig <- prot ctx(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_lp_ctx_mean.png") if save_dir else None,
+        )
+    if P_lp is not None:
+        plot_one(
+            P_lp,
+            f"lig <- prot pair_ctx_norm(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_lp_pairctx_norm_mean.png") if save_dir else None,
         )
 
     if S_pl is not None:
@@ -555,29 +568,35 @@ def visualize_one_qk_map(
     if X_pl is not None:
         plot_one(
             X_pl,
-            f"prot <- lig attn×V summary(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
-            os.path.join(save_dir, f"{base}_pl_attn_v_summary_mean.png") if save_dir else None,
+            f"prot <- lig ctx(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pl_ctx_mean.png") if save_dir else None,
+        )
+    if P_pl is not None:
+        plot_one(
+            P_pl,
+            f"prot <- lig pair_ctx_norm(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pl_pairctx_norm_mean.png") if save_dir else None,
         )
 
-    # =========================
-    # Headwise maps
-    # =========================
+    # ===== headwise maps =====
     if save_headwise:
-        lp_logits_heads = get_heads(aux.get("lp_qk_logits"))   # (H, Ll, Lp)
-        lp_attn_heads   = get_heads(aux.get("lp_attn"))        # (H, Ll, Lp)
-        lp_ctx_heads    = get_heads(aux.get("lp_ctx"))         # (H, Ll, Dh)
+        lp_logits_heads = get_heads(aux.get("lp_qk_logits"))     # (H, Ll, Lp)
+        lp_attn_heads   = get_heads(aux.get("lp_attn"))          # (H, Ll, Lp)
+        lp_ctx_heads    = get_heads(aux.get("lp_ctx"))           # (H, Ll, Dh)
+        lp_pair_heads   = get_heads(aux.get("lp_pair_ctx"))      # (H, Ll, Lp, Dh)
 
-        pl_logits_heads = get_heads(aux.get("pl_qk_logits"))   # None in current code
-        pl_attn_heads   = get_heads(aux.get("pl_attn"))        # None in current code
-        pl_ctx_heads    = get_heads(aux.get("pl_ctx"))         # None in current code
+        pl_logits_heads = get_heads(aux.get("pl_qk_logits"))
+        pl_attn_heads   = get_heads(aux.get("pl_attn"))
+        pl_ctx_heads    = get_heads(aux.get("pl_ctx"))
+        pl_pair_heads   = get_heads(aux.get("pl_pair_ctx"))
 
         if lp_attn_heads is not None:
             n_heads = lp_attn_heads.shape[0]
-
             for h in range(n_heads):
                 S = trim_lp(lp_logits_heads[h]) if lp_logits_heads is not None else None
                 A = trim_lp(lp_attn_heads[h]) if lp_attn_heads is not None else None
                 X = trim_lp(lp_ctx_heads[h]) if lp_ctx_heads is not None else None
+                P = trim_lp(pairctx_to_map(lp_pair_heads[h])) if lp_pair_heads is not None else None
 
                 head_dir = os.path.join(save_dir, f"{base}_head{h:02d}") if save_dir else None
                 if head_dir is not None:
@@ -587,63 +606,39 @@ def visualize_one_qk_map(
                     plot_one(
                         S,
                         f"lig <- prot logits | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"lp_logits_h{h:02d}.png") if head_dir else None,
+                        os.path.join(head_dir, f"lp_logits_h{h:02d}.png")
                     )
                 if A is not None:
                     plot_one(
                         A,
                         f"lig <- prot attn | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"lp_attn_h{h:02d}.png") if head_dir else None,
+                        os.path.join(head_dir, f"lp_attn_h{h:02d}.png")
                     )
                 if X is not None:
                     plot_one(
                         X,
-                        f"lig <- prot attn×V summary | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"lp_attn_v_summary_h{h:02d}.png") if head_dir else None,
+                        f"lig <- prot ctx | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
+                        os.path.join(head_dir, f"lp_ctx_h{h:02d}.png")
                     )
-
-        if pl_attn_heads is not None:
-            n_heads = pl_attn_heads.shape[0]
-
-            for h in range(n_heads):
-                S = trim_pl(pl_logits_heads[h]) if pl_logits_heads is not None else None
-                A = trim_pl(pl_attn_heads[h]) if pl_attn_heads is not None else None
-                X = trim_pl(pl_ctx_heads[h]) if pl_ctx_heads is not None else None
-
-                head_dir = os.path.join(save_dir, f"{base}_head{h:02d}") if save_dir else None
-                if head_dir is not None:
-                    os.makedirs(head_dir, exist_ok=True)
-
-                if S is not None:
+                if P is not None:
                     plot_one(
-                        S,
-                        f"prot <- lig logits | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"pl_logits_h{h:02d}.png") if head_dir else None,
-                    )
-                if A is not None:
-                    plot_one(
-                        A,
-                        f"prot <- lig attn | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"pl_attn_h{h:02d}.png") if head_dir else None,
-                    )
-                if X is not None:
-                    plot_one(
-                        X,
-                        f"prot <- lig attn×V summary | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
-                        os.path.join(head_dir, f"pl_attn_v_summary_h{h:02d}.png") if head_dir else None,
+                        P,
+                        f"lig <- prot pair_ctx_norm | head={h} prob={prob:.4f} y_bin={y_bin:.0f}",
+                        os.path.join(head_dir, f"lp_pairctx_norm_h{h:02d}.png")
                     )
 
     return {
         "attn_lp_logits": S_lp,
         "attn_lp": A_lp,
         "attn_lp_x_v": X_lp,
+        "attn_lp_pairctx": P_lp,
         "attn_pl_logits": S_pl,
         "attn_pl": A_pl,
         "attn_pl_x_v": X_pl,
+        "attn_pl_pairctx": P_pl,
         "prob": prob,
         "y_bin": y_bin,
     }
-
 
 
 class ESMProteinEncoder(nn.Module):
@@ -1262,10 +1257,12 @@ class DualStreamBlock(nn.Module):
                 "lp_qk_logits": aux_lp["qk_logits"],
                 "lp_attn": aux_lp["attn_map"],
                 "lp_ctx": aux_lp["ctx"],
+                "lp_pair_ctx": aux_lp["pair_ctx"],  # 追加
                 "lp_v": aux_lp["v_proj"],
                 "pl_qk_logits": None,
                 "pl_attn": None,
                 "pl_ctx": None,
+                "pl_pair_ctx": None,  # 追加
                 "pl_v": None,
             }
 
