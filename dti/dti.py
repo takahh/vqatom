@@ -1556,13 +1556,22 @@ class DualStreamBlock(nn.Module):
             return_maps=True,
         )
 
-        p_ctx, aux_pl = self.prot_from_lig(
-            q_in=p_q,
-            k_in=l_kv,
-            v_in=l_kv,
-            kv_pad_mask=l_pad,
-            return_maps=True,
-        )
+        # pl is killed temporally
+        p_ctx = torch.zeros_like(p_h)
+        aux_pl = {
+            "qk_logits": None,
+            "attn_map": None,
+            "ctx": None,
+            "v_proj": None,
+        }
+
+        # p_ctx, aux_pl = self.prot_from_lig(
+        #     q_in=p_q,
+        #     k_in=l_kv,
+        #     v_in=l_kv,
+        #     kv_pad_mask=l_pad,
+        #     return_maps=True,
+        # )
 
         l_h = l_h + self.drop(l_ctx)
         p_h = p_h + self.drop(p_ctx)
