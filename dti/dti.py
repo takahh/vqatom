@@ -1238,25 +1238,31 @@ def train_one_epoch(
         # dualstream 用 stripe loss
         loss_stripe = torch.tensor(0.0, device=device)
 
-        if ("lp_attn" in aux) and ("pl_attn" in aux):
-            lp_attn = aux["lp_attn"].mean(dim=1)  # (B, Ll, Lp)
-            pl_attn = aux["pl_attn"].mean(dim=1)  # (B, Lp, Ll)
+        loss_stripe = torch.tensor(0.0, device=device)
 
-            p_pad = aux.get("p_pad", None)
-            l_pad = aux.get("l_pad", None)
+        lp_attn_map = aux.get("lp_attn", None)
+        pl_attn_map = aux.get("pl_attn", None)
 
+        p_pad = aux.get("p_pad", None)
+        l_pad = aux.get("l_pad", None)
+
+        if lp_attn_map is not None:
+            lp_attn = lp_attn_map.mean(dim=1)  # (B, Ll, Lp)
             loss_lp = stripe_loss_from_map(
                 p=lp_attn,
-                row_pad=l_pad,  # lp: rows=ligand, cols=protein
+                row_pad=l_pad,
                 col_pad=p_pad,
             )
+            loss_stripe = loss_stripe + 1e-1 * loss_lp
+
+        if pl_attn_map is not None:
+            pl_attn = pl_attn_map.mean(dim=1)  # (B, Lp, Ll)
             loss_pl = stripe_loss_from_map(
                 p=pl_attn,
-                row_pad=p_pad,  # pl: rows=protein, cols=ligand
+                row_pad=p_pad,
                 col_pad=l_pad,
             )
-
-            loss_stripe = 1e-1 * (loss_lp + loss_pl)
+            loss_stripe = loss_stripe + 1e-1 * loss_pl
 
         # total loss
         loss = loss_cls + 1e-3 * loss_rc + loss_stripe
@@ -2475,15 +2481,15 @@ def main():
                 prefix=f"epoch{ep:03d}_valid_sample0",
             )
 
-        elif args.fusion_mode == "dualstream":
-            visualize_one_dualstream_map(
-                model=model,
-                loader=valid_loader,
-                device=device,
-                sample_idx_in_batch=0,
-                save_dir=qk_save_dir,
-                prefix=f"epoch{ep:03d}_valid_sample0",
-            )
+        # elif args.fusion_mode == "dualstream":
+        #     visualize_one_dualstream_map(
+        #         model=model,
+        #         loader=valid_loader,
+        #         device=device,
+        #         sample_idx_in_batch=0,
+        #         save_dir=qk_save_dir,
+        #         prefix=f"epoch{ep:03d}_valid_sample0",
+        #     )
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
 
