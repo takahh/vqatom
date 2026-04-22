@@ -1440,15 +1440,13 @@ class DualStreamDTIClassifier(nn.Module):
         p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
+
         if self.protein_only:
             l_h = torch.zeros_like(l_h)
-        # CLS 分離
+
         p_tok = p_h[:, 1:, :]
         l_tok = l_h[:, 1:, :]
-        p_cls = p_h[:, 0, :]
-        l_cls = l_h[:, 0, :]
 
-        # PAD
         p_pad = (p_attn_mask == 0)[:, 1:]
         l_pad = (l_ids == self.lig_pad_id)[:, 1:]
 
@@ -1459,53 +1457,35 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
-        # ここが新block
-        if return_maps:
-            p_ctx, l_ctx, inter_aux = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=True,
-            )
-        else:
-            p_ctx, l_ctx = self.interaction(
-                p_h=p_tok,
-                l_h=l_tok,
-                p_pad=p_pad,
-                l_pad=l_pad,
-                return_maps=False,
-            )
-            inter_aux = {}
+        # Option Cでは pair_ctx が必要
+        p_ctx, l_ctx, inter_aux = self.interaction(
+            p_h=p_tok,
+            l_h=l_tok,
+            p_pad=p_pad,
+            l_pad=l_pad,
+            return_maps=True,
+        )
 
-        # interaction 前の ligand token から prior を作る
+        # ligand prior
         l_prior_mean = self._masked_mean(l_tok, l_pad)
         l_prior_max = self._masked_max(l_tok, l_pad)
-
         base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
         baseline = self.base_head(base_feat).squeeze(-1)
 
-        # delta 用は interaction 後
-        # -------------------------------
-        # delta branch: interaction only
-        # -------------------------------
-        if "lp_pair_ctx" not in inter_aux or inter_aux["lp_pair_ctx"] is None:
-            raise ValueError("Option C requires return_maps=True and inter_aux['lp_pair_ctx']")
-
+        # interaction-only delta
         delta_feat = self._interaction_only_feat(
-            lp_pair_ctx=inter_aux["lp_pair_ctx"],  # (B,H,Ll,Lp,Dh)
+            lp_pair_ctx=inter_aux["lp_pair_ctx"],
             p_pad=p_pad,
             l_pad=l_pad,
             topk_frac=0.05,
         )
-
         h_delta = self.delta_head(delta_feat)
         delta = self.delta_cls(h_delta).squeeze(-1)
 
-        # final score
         logit = baseline.detach() + delta
+        # あるいは純粋に試すなら:
+        # logit = delta
 
-        # optional regression: delta branch only
         yhat_reg = None
         if self.reg_head is not None:
             yhat_reg = self.reg_head(h_delta).squeeze(-1)
@@ -1517,6 +1497,15 @@ class DualStreamDTIClassifier(nn.Module):
         aux["l_ctx_tok"] = l_ctx
         aux["baseline_logit"] = baseline
         aux["delta_logit"] = delta
+
+        if not return_maps:
+            # 重い tensor を返したくないなら削る
+            aux = {
+                "p_pad": p_pad,
+                "l_pad": l_pad,
+                "baseline_logit": baseline,
+                "delta_logit": delta,
+            }
 
         return logit, yhat_reg, aux
 
