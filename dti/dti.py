@@ -1325,20 +1325,33 @@ class DualStreamDTIClassifier(nn.Module):
             topk_frac=topk_frac,
         )
 
+        # ----- delta branch (protein + ligand) -----
         if self.use_cls_in_head:
-            feat_dim = self.d_model * 5  # p_mean, p_max, l_cls, l_mean, l_max
+            delta_feat_dim = self.d_model * 5  # p_mean, p_max, l_cls, l_mean, l_max
         else:
-            feat_dim = self.d_model * 4  # p_mean, p_max, l_mean, l_max
+            delta_feat_dim = self.d_model * 4  # p_mean, p_max, l_mean, l_max
 
-        self.shared_head = nn.Sequential(
-            nn.LayerNorm(feat_dim),
-            nn.Linear(feat_dim, 256),
+        self.delta_head = nn.Sequential(
+            nn.LayerNorm(delta_feat_dim),
+            nn.Linear(delta_feat_dim, 256),
             nn.GELU(),
             nn.Dropout(dropout),
         )
 
-        self.cls_head = nn.Linear(256, 1)
+        self.delta_cls = nn.Linear(256, 1)
+
+        # optional regression head for delta branch only
         self.reg_head = nn.Linear(256, 1) if self.use_reg_head else None
+
+        # ----- baseline branch (ligand only) -----
+        # ligand shortcut branchを「学習用」ではなく prior 用として使う
+        self.base_head = nn.Sequential(
+            nn.LayerNorm(self.d_model * 2),  # l_mean, l_max
+            nn.Linear(self.d_model * 2, 128),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, 1),
+        )
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1423,23 +1436,38 @@ class DualStreamDTIClassifier(nn.Module):
         l_mean = self._masked_mean(l_ctx, l_pad)
         l_max = self._masked_max(l_ctx, l_pad)
 
+        # -------------------------------
+        # baseline branch: ligand only
+        # -------------------------------
+        base_feat = torch.cat([l_mean, l_max], dim=-1)
+        baseline = self.base_head(base_feat).squeeze(-1)
+
+        # -------------------------------
+        # delta branch: protein + ligand
+        # -------------------------------
         if self.use_cls_in_head:
-            feat = torch.cat([l_cls, l_mean, l_max], dim=-1)
+            delta_feat = torch.cat([p_mean, p_max, l_cls, l_mean, l_max], dim=-1)
         else:
-            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+            delta_feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
 
-        h = self.shared_head(feat)
-        logit = self.cls_head(h).squeeze(-1)
+        h_delta = self.delta_head(delta_feat)
+        delta = self.delta_cls(h_delta).squeeze(-1)
 
+        # final score
+        logit = 0.1 * baseline.detach() + delta
+
+        # optional regression: delta branch only
         yhat_reg = None
         if self.reg_head is not None:
-            yhat_reg = self.reg_head(h).squeeze(-1)
+            yhat_reg = self.reg_head(h_delta).squeeze(-1)
 
         aux.update(inter_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
         aux["p_ctx_tok"] = p_ctx
         aux["l_ctx_tok"] = l_ctx
+        aux["baseline_logit"] = baseline
+        aux["delta_logit"] = delta
 
         return logit, yhat_reg, aux
 
