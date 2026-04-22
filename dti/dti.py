@@ -1431,16 +1431,18 @@ class DualStreamDTIClassifier(nn.Module):
             )
             inter_aux = {}
 
+        # interaction 前の ligand token から prior を作る
+        l_prior_mean = self._masked_mean(l_tok, l_pad)
+        l_prior_max = self._masked_max(l_tok, l_pad)
+
+        base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
+        baseline = self.base_head(base_feat).squeeze(-1)
+
+        # delta 用は interaction 後
         p_mean = self._masked_mean(p_ctx, p_pad)
         p_max = self._masked_max(p_ctx, p_pad)
         l_mean = self._masked_mean(l_ctx, l_pad)
         l_max = self._masked_max(l_ctx, l_pad)
-
-        # -------------------------------
-        # baseline branch: ligand only
-        # -------------------------------
-        base_feat = torch.cat([l_mean, l_max], dim=-1)
-        baseline = self.base_head(base_feat).squeeze(-1)
 
         # -------------------------------
         # delta branch: protein + ligand
