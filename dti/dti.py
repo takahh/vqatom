@@ -1138,7 +1138,6 @@ class CrossAttention(nn.Module):
 
         pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)  # (B,H,Lq,Lk,Dh)
         ctx = pair_ctx.sum(dim=-2)  # (B,H,Lq,Dh)
-
         # ctx = ctx * q
         out = self._merge_heads(ctx)  # (B,Lq,D)
         out = self.out_proj(out)
