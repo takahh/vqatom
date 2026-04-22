@@ -1501,6 +1501,9 @@ class DualStreamDTIClassifier(nn.Module):
         aux["l_ctx_tok"] = l_ctx
         aux["baseline_logit"] = baseline
         aux["delta_logit"] = delta
+        aux["baseline_logit"] = baseline
+        aux["mix"] = mix.detach()
+        aux["total_scale"] = total_scale.detach()
 
         if not return_maps:
             # 重い tensor を返したくないなら削る
