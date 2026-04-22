@@ -1456,8 +1456,7 @@ class DualStreamDTIClassifier(nn.Module):
         delta = self.delta_cls(h_delta).squeeze(-1)
 
         # final score
-        logit = baseline + 0.3 * delta
-        # logit = baseline.detach() + 0.3 * delta
+        logit = baseline.detach() + delta
 
         # optional regression: delta branch only
         yhat_reg = None
