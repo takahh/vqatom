@@ -1284,13 +1284,12 @@ class DualStreamDTIClassifier(nn.Module):
         qk_norm: bool = True,
         attn_smooth_eps: float = 0.02,
         attn_activation: str = "softmax",
-        detach_attn_for_value: bool = False,
-        use_cls_in_head: bool = False,
-        use_reg_head: bool = False,
+        detach_attn_for_value: bool = False,   # <- 追加
+        use_cls_in_head: bool = False,         # <- 追加
+        use_reg_head: bool = False,            # <- 追加
         pair_gate_threshold: float = 0.5,
         topk_frac: float = 0.1,
-        protein_only: bool = False,
-        use_protein_prior: bool = True,   # 追加
+        protein_only: bool = False,   # 追加
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1305,8 +1304,6 @@ class DualStreamDTIClassifier(nn.Module):
         self.use_cls_in_head = bool(use_cls_in_head)
         self.use_reg_head = bool(use_reg_head)
         self.protein_only = bool(protein_only)
-        self.use_protein_prior = bool(use_protein_prior)
-
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
@@ -1326,49 +1323,32 @@ class DualStreamDTIClassifier(nn.Module):
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
         )
-
         self.delta_feat_dim = 2 * self.n_heads + 3
+
         self.delta_head = nn.Sequential(
             nn.LayerNorm(self.delta_feat_dim),
             nn.Linear(self.delta_feat_dim, 128),
             nn.GELU(),
             nn.Dropout(dropout),
         )
+
         self.delta_cls = nn.Linear(128, 1)
         self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
-        # ligand prior
-        self.base_lig_head = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),
+        # ----- baseline branch (ligand only) -----
+        # ligand shortcut branchを「学習用」ではなく prior 用として使う
+        self.base_head = nn.Sequential(
+            nn.LayerNorm(self.d_model * 2),  # l_mean, l_max
             nn.Linear(self.d_model * 2, 128),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1),
         )
-
-        # protein prior
-        self.base_prot_head = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),
-            nn.Linear(self.d_model * 2, 128),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, 1),
-        )
-
-        # optional scalar to weaken protein prior
-        self.protein_prior_scale = 0.3
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
         denom = (~pad).sum(dim=1, keepdim=True).clamp(min=1)
         return x.sum(dim=1) / denom
-
-    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
-        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
-        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
-        out = x_masked.max(dim=1).values
-        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
-        return out
 
     def _apply_token_dropout(self, pad_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
         if (not self.training) or drop_prob <= 0.0:
@@ -1385,22 +1365,44 @@ class DualStreamDTIClassifier(nn.Module):
                     out[b, keep_idx[0, 0]] = False
         return out
 
+    def _masked_max(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
+        neg_inf = torch.tensor(float("-inf"), device=x.device, dtype=x.dtype)
+        x_masked = x.masked_fill(pad.unsqueeze(-1), neg_inf)
+        out = x_masked.max(dim=1).values
+        out = torch.where(torch.isinf(out), torch.zeros_like(out), out)
+        return out
+
     def _interaction_only_feat(self, lp_pair_ctx, p_pad, l_pad, topk_frac: float = 0.05):
-        pair_strength = torch.norm(lp_pair_ctx, dim=-1)  # (B,H,Ll,Lp)
-        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+        """
+        lp_pair_ctx: (B, H, Ll, Lp, Dh)
+        p_pad:       (B, Lp)  True=PAD
+        l_pad:       (B, Ll)  True=PAD
+        return:      (B, 2H+2)
+        """
+        # pairwise strength
+        pair_strength = torch.norm(lp_pair_ctx, dim=-1)  # (B, H, Ll, Lp)
 
+        # valid mask
+        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)  # (B,1,Ll,Lp)
+
+        # invalid を 0 に
         pair_strength_masked = pair_strength.masked_fill(~valid, 0.0)
-        denom = valid.float().sum(dim=(-2, -1)).clamp_min(1.0)
-        head_mean = pair_strength_masked.sum(dim=(-2, -1)) / denom
 
+        # per-head mean
+        denom = valid.float().sum(dim=(-2, -1)).clamp_min(1.0)  # (B,1)
+        head_mean = pair_strength_masked.sum(dim=(-2, -1)) / denom  # (B,H)
+
+        # per-head max
         neg_inf = torch.tensor(float("-inf"), device=pair_strength.device, dtype=pair_strength.dtype)
         pair_for_max = pair_strength.masked_fill(~valid, neg_inf)
-        head_max = pair_for_max.amax(dim=(-2, -1))
+        head_max = pair_for_max.amax(dim=(-2, -1))  # (B,H)
         head_max = torch.where(torch.isinf(head_max), torch.zeros_like(head_max), head_max)
 
-        global_mean = head_mean.mean(dim=-1, keepdim=True)
-        global_max = head_max.amax(dim=-1, keepdim=True)
+        # global mean/max
+        global_mean = head_mean.mean(dim=-1, keepdim=True)  # (B,1)
+        global_max = head_max.amax(dim=-1, keepdim=True)  # (B,1)
 
+        # optional: global top-k mean
         if topk_frac is not None and topk_frac > 0:
             B, H, Ll, Lp = pair_strength.shape
             flat = pair_for_max.view(B, H * Ll * Lp)
@@ -1415,7 +1417,8 @@ class DualStreamDTIClassifier(nn.Module):
                     k = max(1, int(vals.numel() * topk_frac))
                     topv, _ = torch.topk(vals, k=k)
                     feats_topk.append(topv.mean().unsqueeze(0))
-            topk_mean = torch.cat(feats_topk, dim=0).unsqueeze(-1)
+            topk_mean = torch.cat(feats_topk, dim=0).unsqueeze(-1)  # (B,1)
+
             feat = torch.cat([head_mean, head_max, global_mean, global_max, topk_mean], dim=-1)
         else:
             feat = torch.cat([head_mean, head_max, global_mean, global_max], dim=-1)
@@ -1426,9 +1429,13 @@ class DualStreamDTIClassifier(nn.Module):
         aux = {}
 
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
-        p_h = self.p_proj(p_h_raw) if self.p_proj is not None else p_h_raw
-        p_h = self.p_ln(p_h)
 
+        if self.p_proj is not None:
+            p_h = self.p_proj(p_h_raw)
+        else:
+            p_h = p_h_raw
+
+        p_h = self.p_ln(p_h)
         l_h = self.lig(l_ids)
         l_h = self.l_ln(l_h)
 
@@ -1448,6 +1455,7 @@ class DualStreamDTIClassifier(nn.Module):
         p_tok_ids = p_input_ids[:, 1:]
         p_pad = p_pad | (p_tok_ids == eos_id)
 
+        # Option Cでは pair_ctx が必要
         p_ctx, l_ctx, inter_aux = self.interaction(
             p_h=p_tok,
             l_h=l_tok,
@@ -1459,14 +1467,8 @@ class DualStreamDTIClassifier(nn.Module):
         # ligand prior
         l_prior_mean = self._masked_mean(l_tok, l_pad)
         l_prior_max = self._masked_max(l_tok, l_pad)
-        lig_base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
-        baseline_lig = self.base_lig_head(lig_base_feat).squeeze(-1)
-
-        # protein prior
-        p_prior_mean = self._masked_mean(p_tok, p_pad)
-        p_prior_max = self._masked_max(p_tok, p_pad)
-        prot_base_feat = torch.cat([p_prior_mean, p_prior_max], dim=-1)
-        baseline_prot = self.base_prot_head(prot_base_feat).squeeze(-1)
+        base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
+        baseline = self.base_head(base_feat).squeeze(-1)
 
         # interaction-only delta
         delta_feat = self._interaction_only_feat(
@@ -1478,10 +1480,9 @@ class DualStreamDTIClassifier(nn.Module):
         h_delta = self.delta_head(delta_feat)
         delta = self.delta_cls(h_delta).squeeze(-1)
 
-        if self.use_protein_prior:
-            logit = baseline_lig.detach() + self.protein_prior_scale * baseline_prot.detach() + delta
-        else:
-            logit = baseline_lig.detach() + delta
+        logit = baseline.detach() + delta
+        # あるいは純粋に試すなら:
+        # logit = delta
 
         yhat_reg = None
         if self.reg_head is not None:
@@ -1492,16 +1493,15 @@ class DualStreamDTIClassifier(nn.Module):
         aux["l_pad"] = l_pad
         aux["p_ctx_tok"] = p_ctx
         aux["l_ctx_tok"] = l_ctx
-        aux["baseline_lig_logit"] = baseline_lig
-        aux["baseline_prot_logit"] = baseline_prot
+        aux["baseline_logit"] = baseline
         aux["delta_logit"] = delta
 
         if not return_maps:
+            # 重い tensor を返したくないなら削る
             aux = {
                 "p_pad": p_pad,
                 "l_pad": l_pad,
-                "baseline_lig_logit": baseline_lig,
-                "baseline_prot_logit": baseline_prot,
+                "baseline_logit": baseline,
                 "delta_logit": delta,
             }
 
@@ -1659,7 +1659,7 @@ def main():
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
     ap.add_argument("--qk_norm", action="store_true")
-    ap.add_argument("--use_protein_prior", action="store_true")
+
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -1699,10 +1699,10 @@ def main():
         detach_attn_for_value=args.detach_attn_for_value,
         use_cls_in_head=args.use_cls_in_head,
         use_reg_head=args.use_reg_head,
-        pair_gate_threshold=args.pair_gate_threshold,
-        topk_frac=args.topk_frac,
-        protein_only=args.protein_only,
-        use_protein_prior=args.use_protein_prior,
+        pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
+        topk_frac=args.topk_frac,  # ← 追加
+        protein_only=args.protein_only,   # 追加
+
     ).to(device)
 
     if args.dti_ckpt is not None:
