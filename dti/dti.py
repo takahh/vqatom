@@ -1118,7 +1118,7 @@ class CrossAttention(nn.Module):
             logits = logits.masked_fill(mask, -1e4)
 
         if self.attn_activation == "softmax":
-            attn = torch.softmax(logits / 0.5, dim=-1)
+            attn = torch.softmax(logits, dim=-1)
         elif self.attn_activation == "sigmoid":
             attn = torch.sigmoid(logits)
         else:
@@ -1139,7 +1139,7 @@ class CrossAttention(nn.Module):
         pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)  # (B,H,Lq,Lk,Dh)
         ctx = pair_ctx.sum(dim=-2)  # (B,H,Lq,Dh)
 
-        ctx = ctx * q
+        # ctx = ctx * q
         out = self._merge_heads(ctx)  # (B,Lq,D)
         out = self.out_proj(out)
 
