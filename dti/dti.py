@@ -1056,9 +1056,9 @@ class CrossAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
 
-        self.q_proj = nn.Linear(d_model, d_model)
-        self.k_proj = nn.Linear(d_model, d_model)
-        self.v_proj = nn.Linear(d_model, d_model)
+        self.q_proj = nn.ModuleList([nn.Linear(d_model, self.d_head) for _ in range(n_heads)])
+        self.k_proj = nn.ModuleList([nn.Linear(d_model, self.d_head) for _ in range(n_heads)])
+        self.v_proj = nn.ModuleList([nn.Linear(d_model, self.d_head) for _ in range(n_heads)])
         self.out_proj = nn.Linear(d_model, d_model)
 
         self.dropout = nn.Dropout(dropout)
@@ -1095,14 +1095,17 @@ class CrossAttention(nn.Module):
         if v_in is None:
             v_in = k_in
 
-        q = self.q_proj(q_in)
-        k = self.k_proj(k_in)
-        v = self.v_proj(v_in)
-        v = torch.tanh(v)
+        # each: list of (B, L, Dh)
+        q_list = [proj(q_in) for proj in self.q_proj]
+        k_list = [proj(k_in) for proj in self.k_proj]
+        v_list = [proj(v_in) for proj in self.v_proj]
 
-        q = self._split_heads(q)
-        k = self._split_heads(k)
-        v = self._split_heads(v)
+        # -> (B, H, L, Dh)
+        q = torch.stack(q_list, dim=1)
+        k = torch.stack(k_list, dim=1)
+        v = torch.stack(v_list, dim=1)
+
+        v = torch.tanh(v)
 
         if self.qk_norm:
             q = F.normalize(q, dim=-1)
@@ -1133,11 +1136,11 @@ class CrossAttention(nn.Module):
 
         attn_for_v = attn.detach() if self.detach_attn_for_value else attn
 
-        pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)
-        ctx = pair_ctx.sum(dim=-2)
+        pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)  # (B,H,Lq,Lk,Dh)
+        ctx = pair_ctx.sum(dim=-2)  # (B,H,Lq,Dh)
 
         ctx = ctx * q
-        out = self._merge_heads(ctx)
+        out = self._merge_heads(ctx)  # (B,Lq,D)
         out = self.out_proj(out)
 
         if return_maps:
