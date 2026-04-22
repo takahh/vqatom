@@ -1973,16 +1973,51 @@ def main():
                 f"EF10={final_m['ef10']:.3f}",
             )
 
-        visualize_one_qk_map(
-            model=model,
-            loader=valid_loader,
-            device=device,
-            esm_tokenizer=esm_tokenizer,
-            sample_idx_in_batch=0,
-            show_token_labels=False,
-            save_dir=qk_save_dir,
-            prefix=f"epoch{ep:03d}_valid_sample0",
-        )
+        def find_pos_neg_indices(batch):
+            y = batch.y_bin.detach().cpu().numpy()
+
+            pos_idx = None
+            neg_idx = None
+
+            for i, v in enumerate(y):
+                if v >= 0.5 and pos_idx is None:
+                    pos_idx = i
+                if v < 0.5 and neg_idx is None:
+                    neg_idx = i
+                if (pos_idx is not None) and (neg_idx is not None):
+                    break
+
+            return pos_idx, neg_idx
+
+        # -----------------------------
+        # epoch loop 内
+        # -----------------------------
+        qk_save_dir = os.path.join(args.out_dir, "qk_maps")
+
+        # valid loader の最初の batch を取得
+        vis_batch = next(iter(valid_loader))
+
+        pos_idx, neg_idx = find_pos_neg_indices(vis_batch)
+
+        targets = []
+
+        if pos_idx is not None:
+            targets.append(("pos", pos_idx))
+
+        if neg_idx is not None:
+            targets.append(("neg", neg_idx))
+
+        for tag, sidx in targets:
+            visualize_one_qk_map(
+                model=model,
+                loader=valid_loader,
+                device=device,
+                esm_tokenizer=esm_tokenizer,
+                sample_idx_in_batch=sidx,
+                show_token_labels=False,
+                save_dir=qk_save_dir,
+                prefix=f"epoch{ep:03d}_{tag}_sample{sidx}",
+            )
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
