@@ -1324,8 +1324,7 @@ class DualStreamDTIClassifier(nn.Module):
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
         )
-
-        self.delta_feat_dim = 2 * self.n_heads + 2
+        self.delta_feat_dim = 2 * self.n_heads + 3
 
         self.delta_head = nn.Sequential(
             nn.LayerNorm(self.delta_feat_dim),
