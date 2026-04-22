@@ -1331,7 +1331,8 @@ class DualStreamDTIClassifier(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
-
+        self.mix_logit = nn.Parameter(torch.tensor(0.0))
+        self.logit_scale = nn.Parameter(torch.tensor(1.0))
         self.delta_cls = nn.Linear(128, 1)
         self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
@@ -1465,6 +1466,7 @@ class DualStreamDTIClassifier(nn.Module):
         )
 
         # ligand prior
+        # ligand prior
         l_prior_mean = self._masked_mean(l_tok, l_pad)
         l_prior_max = self._masked_max(l_tok, l_pad)
         base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
@@ -1480,7 +1482,11 @@ class DualStreamDTIClassifier(nn.Module):
         h_delta = self.delta_head(delta_feat)
         delta = self.delta_cls(h_delta).squeeze(-1)
 
-        logit = baseline.detach() + delta
+        mix = torch.sigmoid(self.mix_logit)
+        total_scale = F.softplus(self.logit_scale)
+
+        baseline_det = baseline.detach()
+        logit = total_scale * (mix * baseline_det + (1.0 - mix) * delta)
         # あるいは純粋に試すなら:
         # logit = delta
 
