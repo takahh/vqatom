@@ -946,17 +946,40 @@ def pass1_clean_and_dedup():
                 row_contact_n = 0
 
                 if pdb_mode == "multi" and best_pdb_seq:
+                    # multi-chain は PDB の contact-best chain seq を採用
                     seq = best_pdb_seq
                     src_pdbid = best_pdbid or ""
                     src_chain = best_chain or ""
                     row_contact_mask = contact_mask or ""
                     row_contact_n = int(contact_n or 0)
                     keep_counter["seq_from_pdb_multichain"] += 1
-                else:
+
+                elif pdb_mode == "single" and best_pdb_seq:
+                    # single-chain は BindingDB seq を優先するが、
+                    # 長さが一致する場合だけ PDB由来 contact_mask を付与
                     seq = bindingdb_seq
-                    if pdb_mode == "single":
-                        keep_counter["seq_from_bindingdb_pdb_single"] += 1
-                    elif pdb_mode == "none":
+
+                    src_pdbid = best_pdbid or ""
+                    src_chain = best_chain or ""
+
+                    if seq and best_pdb_seq and contact_mask and seq == best_pdb_seq:
+                        row_contact_mask = contact_mask
+                        row_contact_n = int(contact_n or 0)
+                        keep_counter["contact_from_pdb_single_len_match"] += 1
+                    else:
+                        row_contact_mask = ""
+                        row_contact_n = 0
+                        keep_counter["contact_from_pdb_single_len_mismatch_or_empty"] += 1
+
+                    keep_counter["seq_from_bindingdb_pdb_single"] += 1
+
+                else:
+                    # no usable PDB: BindingDB seq のみ
+                    seq = bindingdb_seq
+                    row_contact_mask = ""
+                    row_contact_n = 0
+
+                    if pdb_mode == "none":
                         keep_counter["seq_from_bindingdb_no_pdb"] += 1
                     else:
                         keep_counter["seq_from_bindingdb_other"] += 1
