@@ -1502,7 +1502,7 @@ class DualStreamDTIClassifier(nn.Module):
         # symmetric residue-atom pair tensor
         lp_pair = inter_aux["lp_pair_ctx"]                         # (B,H,Ll,Lp,Dh)
         pl_pair = inter_aux["pl_pair_ctx"].transpose(-3, -2)      # (B,H,Ll,Lp,Dh)
-        pair_sym = lp_pair
+        pair_sym = pl_pair
         # pair_sym = 0.5 * (lp_pair + pl_pair)                      # (B,H,Ll,Lp,Dh)
 
         # pair map: keep residue-atom structure
