@@ -388,27 +388,66 @@ def get_ligand_atoms(structure):
     return ligand_atoms
 
 
-def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int]:
+def build_contact_mask_for_chain(chain, ns, ligand_atoms, cutoff: float) -> Tuple[str, int]:
+    """
+    chain の protein residue 順に 0/1 mask を作る。
+    seq を作る residue 順と同じ順序になるようにする。
+    returns:
+      contact_mask: str  e.g. "0010110..."
+      contact_n: int
+    """
+    residues = []
+    seen = set()
+
+    for residue in chain.get_residues():
+        if not is_protein_residue(residue):
+            continue
+        rid = residue.id
+        if rid in seen:
+            continue
+        seen.add(rid)
+        residues.append(residue)
+
+    if not residues:
+        return "", 0
+
+    contact_res_ids = set()
+
+    for latom in ligand_atoms:
+        neighbors = ns.search(latom.coord, cutoff, level="A")
+        for nb in neighbors:
+            parent_res = nb.get_parent()
+            parent_chain = parent_res.get_parent()
+
+            if parent_chain.id != chain.id:
+                continue
+            if not is_protein_residue(parent_res):
+                continue
+
+            contact_res_ids.add(parent_res.id)
+
+    bits = ["1" if r.id in contact_res_ids else "0" for r in residues]
+    contact_mask = "".join(bits)
+    contact_n = sum(1 for b in bits if b == "1")
+    return contact_mask, contact_n
+
+
+def choose_best_chain_from_pdb_impl(pdbid: str):
     """
     returns:
-      (best_chain_id, best_seq, status, top_contacts, second_contacts)
-
-    status:
-      ok_single_chain     : exactly one usable protein chain in structure
-      ok                  : multiple usable protein chains; selected by ligand contacts
-      no_file / parse_error / no_model / no_protein_chains / no_ligand_atoms / no_atoms / bad_top_seq
+      (best_chain_id, best_seq, status, top_contacts, second_contacts, contact_mask, contact_n)
     """
     try:
         structure = open_mmcif_structure(pdbid)
     except FileNotFoundError:
-        return "", "", "no_file", 0, 0
+        return "", "", "no_file", 0, 0, "", 0
     except Exception as e:
-        return "", "", f"parse_error:{type(e).__name__}:{e}", 0, 0
+        return "", "", f"parse_error:{type(e).__name__}:{e}", 0, 0, "", 0
 
     try:
         model = next(structure.get_models())
     except StopIteration:
-        return "", "", "no_model", 0, 0
+        return "", "", "no_model", 0, 0, "", 0
 
     ligand_atoms = get_ligand_atoms(structure)
 
@@ -430,29 +469,44 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
             continue
 
         protein_chain_rows.append({
+            "chain": chain,
             "chain_id": chain.id,
             "seq": seq,
             "protein_atoms": protein_atoms,
         })
 
     if not protein_chain_rows:
-        return "", "", "no_protein_chains", 0, 0
+        return "", "", "no_protein_chains", 0, 0, "", 0
 
-    # single-chain case: no inspection needed
+    # single-chain case
     if len(protein_chain_rows) == 1:
         row = protein_chain_rows[0]
         best_seq = clean_protein_seq(row["seq"])
         if not best_seq:
-            return "", "", "bad_top_seq", 0, 0
-        return row["chain_id"], best_seq, "ok_single_chain", 0, 0
+            return "", "", "bad_top_seq", 0, 0, "", 0
 
-    # multi-chain case: inspect by contacts
+        # ligand があるなら mask 作成、なければ空
+        if ligand_atoms:
+            all_atoms = [a for a in structure.get_atoms() if a.element != "H"]
+            if all_atoms:
+                ns = NeighborSearch(all_atoms)
+                contact_mask, contact_n = build_contact_mask_for_chain(
+                    row["chain"], ns, ligand_atoms, CONTACT_CUTOFF
+                )
+            else:
+                contact_mask, contact_n = "", 0
+        else:
+            contact_mask, contact_n = "", 0
+
+        return row["chain_id"], best_seq, "ok_single_chain", 0, 0, contact_mask, contact_n
+
+    # multi-chain case
     if not ligand_atoms:
-        return "", "", "no_ligand_atoms", 0, 0
+        return "", "", "no_ligand_atoms", 0, 0, "", 0
 
     all_atoms = [a for a in structure.get_atoms() if a.element != "H"]
     if not all_atoms:
-        return "", "", "no_atoms", 0, 0
+        return "", "", "no_atoms", 0, 0, "", 0
 
     ns = NeighborSearch(all_atoms)
 
@@ -471,18 +525,33 @@ def choose_best_chain_from_pdb_impl(pdbid: str) -> Tuple[str, str, str, int, int
             if hit:
                 contact_count += 1
 
-        chain_rows.append((row["chain_id"], row["seq"], contact_count))
+        contact_mask, contact_n = build_contact_mask_for_chain(
+            row["chain"], ns, ligand_atoms, CONTACT_CUTOFF
+        )
+
+        chain_rows.append((
+            row["chain_id"],
+            row["seq"],
+            contact_count,
+            row["chain"],
+            contact_mask,
+            contact_n,
+        ))
 
     chain_rows.sort(key=lambda x: (-x[2], x[0]))
-    best_chain, best_seq, best_contacts = chain_rows[0]
+    best_chain, best_seq, best_contacts, best_chain_obj, best_contact_mask, best_contact_n = chain_rows[0]
     second_contacts = chain_rows[1][2] if len(chain_rows) >= 2 else 0
 
     best_seq = clean_protein_seq(best_seq)
     if not best_seq:
-        return "", "", "bad_top_seq", best_contacts, second_contacts
+        return "", "", "bad_top_seq", best_contacts, second_contacts, "", 0
 
-    return best_chain, best_seq, "ok", best_contacts, second_contacts
+    # 念のため長さ整合性チェック
+    if best_contact_mask and len(best_contact_mask) != len(best_seq):
+        best_contact_mask = ""
+        best_contact_n = 0
 
+    return best_chain, best_seq, "ok", best_contacts, second_contacts, best_contact_mask, best_contact_n
 
 # ============================================================
 # PDB cache stage
@@ -517,20 +586,21 @@ def init_pdb_cache_db(db_path: Path) -> sqlite3.Connection:
             seq TEXT,
             status TEXT NOT NULL,
             top_contacts INTEGER NOT NULL,
-            second_contacts INTEGER NOT NULL
+            second_contacts INTEGER NOT NULL,
+            contact_mask TEXT,
+            contact_n INTEGER NOT NULL
         )
     """)
     cur.execute("CREATE INDEX idx_pdb_cache_status ON pdb_chain_cache(status)")
     con.commit()
     return con
 
-
 def _worker_choose_best_chain(pdbid: str):
     try:
-        chain_id, seq, status, top_contacts, second_contacts = choose_best_chain_from_pdb_impl(pdbid)
-        return pdbid, chain_id, seq, status, top_contacts, second_contacts
+        chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n = choose_best_chain_from_pdb_impl(pdbid)
+        return pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n
     except Exception as e:
-        return pdbid, "", "", f"worker_error:{type(e).__name__}:{e}", 0, 0
+        return pdbid, "", "", f"worker_error:{type(e).__name__}:{e}", 0, 0, "", 0
 
 def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
     print(f"[pdb-cache] building for {len(unique_pdbids):,} unique pdb ids")
@@ -546,12 +616,14 @@ def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
             total=len(unique_pdbids),
             desc=f"build pdb cache ({PDB_PARSE_NPROC} proc)"
         ):
-            pdbid, chain_id, seq, status, top_contacts, second_contacts = rec
+            pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n = rec
 
             cur.execute("""
-                INSERT INTO pdb_chain_cache(pdbid, chain_id, seq, status, top_contacts, second_contacts)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (pdbid, chain_id, seq, status, top_contacts, second_contacts))
+                INSERT INTO pdb_chain_cache(
+                    pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n))
 
             if not status.startswith("ok"):
                 failures.append((pdbid, status, top_contacts, second_contacts))
@@ -564,31 +636,23 @@ def build_pdb_chain_cache(unique_pdbids: List[str]) -> None:
     con.commit()
     con.close()
 
-    with PDB_CACHE_FAIL_TSV.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
-        w.writerow(["pdbid", "status", "top_contacts", "second_contacts"])
-        for row in failures:
-            w.writerow(row)
-
-    print(f"[pdb-cache] wrote: {PDB_CACHE_DB}")
-    print(f"[pdb-cache] failures: {len(failures):,}")
-    print(f"[pdb-cache] wrote: {PDB_CACHE_FAIL_TSV}")
-
-def load_pdb_cache_map(db_path: Path) -> Dict[str, Tuple[str, str, str, int, int]]:
+def load_pdb_cache_map(db_path: Path):
     con = sqlite3.connect(str(db_path))
     cur = con.cursor()
     out = {}
     for row in cur.execute("""
-        SELECT pdbid, chain_id, seq, status, top_contacts, second_contacts
+        SELECT pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n
         FROM pdb_chain_cache
     """):
-        pdbid, chain_id, seq, status, top_contacts, second_contacts = row
+        pdbid, chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n = row
         out[pdbid] = (
             chain_id or "",
             seq or "",
             status,
             int(top_contacts),
             int(second_contacts),
+            contact_mask or "",
+            int(contact_n or 0),
         )
     con.close()
     return out
@@ -650,45 +714,40 @@ def choose_best_chain_across_pdbids_cached(
 
 def choose_best_chain_across_pdbids_cached_with_mode(
     pdbids: List[str],
-    pdb_cache_map: Dict[str, Tuple[str, str, str, int, int]],
+    pdb_cache_map,
 ):
     """
     returns:
-      (best_pdbid, best_chain, best_seq, debug_status, mode)
-
-    mode:
-      "single" : single-chain PDB candidate selected
-      "multi"  : multi-chain PDB candidate selected by contacts
-      "none"   : no usable PDB candidate
+      (best_pdbid, best_chain, best_seq, debug_status, mode, contact_mask, contact_n)
     """
     debug = []
 
-    # prefer any single-chain usable candidate
     for pdbid in pdbids:
         row = pdb_cache_map.get(pdbid)
         if row is None:
             debug.append(f"{pdbid}:missing_cache:0:0")
             continue
 
-        chain_id, seq, status, top_contacts, second_contacts = row
+        chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n = row
         debug.append(f"{pdbid}:{status}:{top_contacts}:{second_contacts}")
 
         if status == "ok_single_chain":
-            return pdbid, chain_id, seq, "ok_single_chain", "single"
+            return pdbid, chain_id, seq, "ok_single_chain", "single", contact_mask, contact_n
 
-    # otherwise choose best multi-chain candidate
     best_pdbid = None
     best_chain = None
     best_seq = None
     best_contacts = -1
     best_second = 0
+    best_contact_mask = ""
+    best_contact_n = 0
 
     for pdbid in pdbids:
         row = pdb_cache_map.get(pdbid)
         if row is None:
             continue
 
-        chain_id, seq, status, top_contacts, second_contacts = row
+        chain_id, seq, status, top_contacts, second_contacts, contact_mask, contact_n = row
         if status != "ok":
             continue
 
@@ -698,11 +757,13 @@ def choose_best_chain_across_pdbids_cached_with_mode(
             best_seq = seq
             best_contacts = top_contacts
             best_second = second_contacts
+            best_contact_mask = contact_mask
+            best_contact_n = contact_n
 
     if best_pdbid is not None:
-        return best_pdbid, best_chain, best_seq, f"ok:{best_contacts}:{best_second}", "multi"
+        return best_pdbid, best_chain, best_seq, f"ok:{best_contacts}:{best_second}", "multi", best_contact_mask, best_contact_n
 
-    return None, None, None, "all_failed|" + "|".join(debug), "none"
+    return None, None, None, "all_failed|" + "|".join(debug), "none", "", 0
 
 def choose_best_chain_across_pdbids_no_cache(pdbids: List[str]):
     best_pdbid = None
@@ -777,7 +838,9 @@ def init_dedup_db(db_path: Path) -> sqlite3.Connection:
             aff_nm REAL NOT NULL,
             y REAL NOT NULL,
             src_pdbid TEXT,
-            src_chain TEXT
+            src_chain TEXT,
+            contact_mask TEXT,
+            contact_n INTEGER NOT NULL
         )
     """)
     cur.execute("CREATE INDEX idx_pairs_smiles ON pairs(smiles)")
@@ -785,13 +848,14 @@ def init_dedup_db(db_path: Path) -> sqlite3.Connection:
     con.commit()
     return con
 
-
 def flush_pair_batch(cur: sqlite3.Cursor, con: sqlite3.Connection, batch: List[Tuple]):
     if not batch:
         return
     cur.executemany("""
-        INSERT INTO pairs(seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO pairs(
+            seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain, contact_mask, contact_n
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, batch)
     con.commit()
     batch.clear()
@@ -868,7 +932,7 @@ def pass1_clean_and_dedup():
                 # 2) optional PDB-based disambiguation
                 # --------------------------------------------------
                 pdb_ids = parse_pdb_ids(row.get(PDB_COL, ""))
-                best_pdbid, best_chain, best_pdb_seq, best_status, pdb_mode = \
+                best_pdbid, best_chain, best_pdb_seq, best_status, pdb_mode, contact_mask, contact_n = \
                     choose_best_chain_across_pdbids_cached_with_mode(pdb_ids, pdb_cache_map)
 
                 # policy:
@@ -878,11 +942,15 @@ def pass1_clean_and_dedup():
                 seq = None
                 src_pdbid = ""
                 src_chain = ""
+                row_contact_mask = ""
+                row_contact_n = 0
 
                 if pdb_mode == "multi" and best_pdb_seq:
                     seq = best_pdb_seq
                     src_pdbid = best_pdbid or ""
                     src_chain = best_chain or ""
+                    row_contact_mask = contact_mask or ""
+                    row_contact_n = int(contact_n or 0)
                     keep_counter["seq_from_pdb_multichain"] += 1
                 else:
                     seq = bindingdb_seq
@@ -931,7 +999,10 @@ def pass1_clean_and_dedup():
                     err_w.writerow([row_id, "bad_affinity", aff_nm])
                     continue
 
-                batch.append((seq, can_smiles, aff_type, aff_nm, y, src_pdbid, src_chain))
+                batch.append((
+                    seq, can_smiles, aff_type, aff_nm, y,
+                    src_pdbid, src_chain, row_contact_mask, row_contact_n
+                ))
                 kept += 1
                 if len(debug_rows_before) < 50000:
                     debug_rows_before.append({
@@ -951,18 +1022,21 @@ def pass1_clean_and_dedup():
 
     with PASS1_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["seq", "smiles", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain"])
+        w.writerow(["seq", "smiles", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain", "contact_mask", "contact_n"])
         dedup_rows = []
         for row in cur.execute("""
-            SELECT seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain
-            FROM pairs
-            """):
+                               SELECT seq,
+                                      smiles,
+                                      aff_type,
+                                      aff_nm,
+                                      y,
+                                      src_pdbid,
+                                      src_chain,
+                                      contact_mask,
+                                      contact_n
+                               FROM pairs
+                               """):
             w.writerow(row)
-            dedup_rows.append({
-                "seq": row[0],
-                "smiles": row[1],
-                "y": row[4],
-            })
 
     with UNIQUE_SMILES_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
@@ -1101,8 +1175,10 @@ def pass3_join_tokens():
 
         r = csv.DictReader(fin)
         w = csv.writer(fout)
-        w.writerow(["seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain"])
-
+        w.writerow([
+            "seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y",
+            "src_pdbid", "src_chain", "contact_mask", "contact_n"
+        ])
         for row in tqdm(r, desc="pass3 join tokens"):
             smi = row["smiles"]
             lig_tok = tok_map.get(smi)
@@ -1119,6 +1195,8 @@ def pass3_join_tokens():
                 row["y"],
                 row.get("src_pdbid", ""),
                 row.get("src_chain", ""),
+                row.get("contact_mask", ""),
+                row.get("contact_n", "0"),
             ])
             written += 1
 
@@ -1238,8 +1316,10 @@ def write_split_csvs(rows: List[Dict[str, str]]) -> None:
         "valid": VALID_CSV,
         "test": TEST_CSV,
     }
-    fieldnames = ["seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain"]
-
+    fieldnames = [
+        "seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y",
+        "src_pdbid", "src_chain", "contact_mask", "contact_n"
+    ]
     # split -> protein_cluster -> rows
     split_cluster_rows = {
         "train": defaultdict(list),
