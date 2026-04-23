@@ -831,7 +831,8 @@ def train_one_epoch(
 
     losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
     use_amp = (device.type == "cuda")
-
+    baseline_vals = []
+    delta_vals = []
     bce = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
     )
@@ -925,19 +926,6 @@ def train_one_epoch(
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
 
-                # ===== baseline / delta monitor =====
-                if ("baseline_logit" in aux) and ("delta_logit" in aux):
-                    baseline_mean = float(aux["baseline_logit"].detach().mean().cpu().item())
-                    delta_mean = float(aux["delta_logit"].detach().mean().cpu().item())
-                    total_mean = float(
-                        (aux["baseline_logit"].detach() + aux["delta_logit"].detach()).mean().cpu().item())
-
-                    print(
-                        f"[batch] baseline={baseline_mean:.4f} "
-                        f"delta={delta_mean:.4f} "
-                        f"total={total_mean:.4f}"
-                    )
-
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
 
@@ -991,15 +979,23 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
         losses_sym.append(float(loss_sym.detach().cpu().item()))
+        baseline_vals.append(baseline_mean)
+        delta_vals.append(delta_mean)
 
         pbar.update(1)
-        pbar.set_postfix(
-            loss=f"{losses[-1]:.4f}",
-            cls=f"{losses_cls[-1]:.4f}",
-            reg=f"{losses_reg[-1]:.4f}",
-            ent=f"{losses_entropy[-1]:.4f}",
-            sym=f"{losses_sym[-1]:.4f}",
-        )
+        if ("baseline_logit" in aux) and ("delta_logit" in aux):
+            baseline_mean = float(aux["baseline_logit"].detach().mean().cpu().item())
+            delta_mean = float(aux["delta_logit"].detach().mean().cpu().item())
+
+            pbar.set_postfix(
+                loss=f"{losses[-1]:.4f}",
+                cls=f"{losses_cls[-1]:.4f}",
+                reg=f"{losses_reg[-1]:.4f}",
+                ent=f"{losses_entropy[-1]:.4f}",
+                sym=f"{losses_sym[-1]:.4f}",
+                base=f"{baseline_mean:.3f}",
+                delta=f"{delta_mean:.3f}",
+            )
 
     pbar.close()
 
@@ -1009,6 +1005,8 @@ def train_one_epoch(
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
         "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
+        "baseline_mean": float(np.mean(baseline_vals)) if baseline_vals else 0.0,
+        "delta_mean": float(np.mean(delta_vals)) if delta_vals else 0.0,
     }
 
 
