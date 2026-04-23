@@ -988,17 +988,11 @@ def train_one_epoch(
             delta_mean = float(
                 aux["delta_logit"].detach().mean().cpu().item()
             )
-
-            baseline_std = float(
-                aux["baseline_logit"].detach().std(unbiased=False).cpu().item()
-            )
             delta_std = float(
                 aux["delta_logit"].detach().std(unbiased=False).cpu().item()
             )
 
             delta_vals.append(delta_mean)
-
-            baseline_std_vals.append(baseline_std)
             delta_std_vals.append(delta_std)
 
             pbar.set_postfix(
@@ -1008,7 +1002,6 @@ def train_one_epoch(
                 ent=f"{losses_entropy[-1]:.4f}",
                 sym=f"{losses_sym[-1]:.4f}",
                 delta=f"{delta_mean:.3f}",
-                bstd=f"{baseline_std:.3f}",
                 dstd=f"{delta_std:.3f}",
             )
 
