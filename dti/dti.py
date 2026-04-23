@@ -1295,7 +1295,6 @@ class DualStreamBlock(nn.Module):
 
         # residual + FFN
         l_h = l_h + self.drop(l_ctx)
-        l_h = l_h + self.drop(l_ctx)
         l_h = l_h + self.drop(self.ffn_l(l_h))
 
         p_h = p_h + self.drop(p_ctx)
