@@ -1424,8 +1424,8 @@ class DualStreamDTIClassifier(nn.Module):
         pair_strength_masked = pair_strength.masked_fill(~valid, 0.0)
 
         # per-head mean
-        # denom = valid.float().sum(dim=(-2, -1)).clamp_min(1.0)  # (B,1)
-        # head_mean = pair_strength_masked.sum(dim=(-2, -1)) / denom  # (B,H)
+        denom = valid.float().sum(dim=(-2, -1)).clamp_min(1.0)  # (B,1)
+        head_mean = pair_strength_masked.sum(dim=(-2, -1)) / denom  # (B,H)
 
         # per-head max
         neg_inf = torch.tensor(float("-inf"), device=pair_strength.device, dtype=pair_strength.dtype)
