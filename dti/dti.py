@@ -984,7 +984,7 @@ def train_one_epoch(
         losses_sym.append(float(loss_sym.detach().cpu().item()))
 
         pbar.update(1)
-        if ("baseline_logit" in aux) and ("delta_logit" in aux):
+        if "delta_logit" in aux:
             baseline_mean = float(
                 aux["baseline_logit"].detach().mean().cpu().item()
             )
@@ -1025,10 +1025,9 @@ def train_one_epoch(
         "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
         "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
         "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
-        "baseline_mean": float(np.mean(baseline_vals)) if baseline_vals else 0.0,
+        "baseline_mean": 0.0,
         "delta_mean": float(np.mean(delta_vals)) if delta_vals else 0.0,
-
-        "baseline_std": float(np.mean(baseline_std_vals)) if baseline_std_vals else 0.0,
+        "baseline_std": 0.0,
         "delta_std": float(np.mean(delta_std_vals)) if delta_std_vals else 0.0,
     }
 
@@ -1370,27 +1369,28 @@ class DualStreamDTIClassifier(nn.Module):
             pair_gate_threshold=pair_gate_threshold,
             topk_frac=topk_frac,
         )
-        self.delta_feat_dim = 2 * self.n_heads + 3
-
-        self.delta_head = nn.Sequential(
-            nn.LayerNorm(self.delta_feat_dim),
-            nn.Linear(self.delta_feat_dim, 128),
+        # pair_map classifier
+        self.pair_cnn = nn.Sequential(
+            nn.Conv2d(1, 8, kernel_size=3, padding=1),
             nn.GELU(),
-            nn.Dropout(dropout),
+            nn.Dropout2d(dropout),
+
+            nn.Conv2d(8, 16, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Dropout2d(dropout),
+
+            nn.AdaptiveMaxPool2d((8, 8)),
         )
 
-        self.delta_cls = nn.Linear(128, 1)
-        self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
-
-        # ----- baseline branch (ligand only) -----
-        # ligand shortcut branchを「学習用」ではなく prior 用として使う
-        self.base_head = nn.Sequential(
-            nn.LayerNorm(self.d_model * 2),  # l_mean, l_max
-            nn.Linear(self.d_model * 2, 128),
+        self.pair_head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(16 * 8 * 8, 128),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(128, 1),
         )
+
+        self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1511,50 +1511,50 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=True,
         )
 
-        # ligand prior
-        l_prior_mean = self._masked_mean(l_tok, l_pad)
-        l_prior_max = self._masked_max(l_tok, l_pad)
-        base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
-        baseline = self.base_head(base_feat).squeeze(-1)
+        # symmetric residue-atom pair tensor
+        lp_pair = inter_aux["lp_pair_ctx"]                         # (B,H,Ll,Lp,Dh)
+        pl_pair = inter_aux["pl_pair_ctx"].transpose(-3, -2)      # (B,H,Ll,Lp,Dh)
+        pair_sym = 0.5 * (lp_pair + pl_pair)                      # (B,H,Ll,Lp,Dh)
 
-        # dual-stream symmetric pair feature
-        lp_pair = inter_aux["lp_pair_ctx"]  # (B,H,Ll,Lp,Dh)
-        pl_pair = inter_aux["pl_pair_ctx"].transpose(-3, -2)  # (B,H,Ll,Lp,Dh)
+        # pair map: keep residue-atom structure
+        pair_map = torch.norm(pair_sym, dim=-1)                   # (B,H,Ll,Lp)
+        pair_map = pair_map.mean(dim=1)                           # (B,Ll,Lp)
 
-        pair_sym = 0.5 * (lp_pair + pl_pair)
+        # valid mask
+        valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)
 
-        delta_feat = self._interaction_only_feat(
-            lp_pair_ctx=pair_sym,
-            p_pad=p_pad,
-            l_pad=l_pad,
-            topk_frac=0.05,
-        )
-        h_delta = self.delta_head(delta_feat)
-        delta = self.delta_cls(h_delta).squeeze(-1)
+        # zero out invalid area
+        pair_map = pair_map.masked_fill(~valid, 0.0)
 
-        logit = baseline.detach() + delta
-        # あるいは純粋に試すなら:
-        # logit = delta
+        # optional area normalization to reduce length bias
+        denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+        pair_map = pair_map / denom.sqrt()
+
+        # 2D classifier
+        x2d = pair_map.unsqueeze(1)                               # (B,1,Ll,Lp)
+        h2d = self.pair_cnn(x2d)                                  # (B,16,8,8)
+
+        h_flat = h2d.flatten(1)
+        h_mid = self.pair_head[:-1](h_flat)                       # (B,128)
+        logit = self.pair_head[-1](h_mid).squeeze(-1)             # (B,)
 
         yhat_reg = None
         if self.reg_head is not None:
-            yhat_reg = self.reg_head(h_delta).squeeze(-1)
+            yhat_reg = self.reg_head(h_mid).squeeze(-1)
 
         aux.update(inter_aux)
         aux["p_pad"] = p_pad
         aux["l_pad"] = l_pad
         aux["p_ctx_tok"] = p_ctx
         aux["l_ctx_tok"] = l_ctx
-        aux["baseline_logit"] = baseline
-        aux["delta_logit"] = delta
+        aux["pair_map"] = pair_map
+        aux["delta_logit"] = logit
 
         if not return_maps:
-            # 重い tensor を返したくないなら削る
             aux = {
                 "p_pad": p_pad,
                 "l_pad": l_pad,
-                "baseline_logit": baseline,
-                "delta_logit": delta,
+                "delta_logit": logit,
             }
 
         return logit, yhat_reg, aux
