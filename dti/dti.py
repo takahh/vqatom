@@ -985,9 +985,6 @@ def train_one_epoch(
 
         pbar.update(1)
         if "delta_logit" in aux:
-            baseline_mean = float(
-                aux["baseline_logit"].detach().mean().cpu().item()
-            )
             delta_mean = float(
                 aux["delta_logit"].detach().mean().cpu().item()
             )
@@ -999,7 +996,6 @@ def train_one_epoch(
                 aux["delta_logit"].detach().std(unbiased=False).cpu().item()
             )
 
-            baseline_vals.append(baseline_mean)
             delta_vals.append(delta_mean)
 
             baseline_std_vals.append(baseline_std)
@@ -1011,7 +1007,6 @@ def train_one_epoch(
                 reg=f"{losses_reg[-1]:.4f}",
                 ent=f"{losses_entropy[-1]:.4f}",
                 sym=f"{losses_sym[-1]:.4f}",
-                base=f"{baseline_mean:.3f}",
                 delta=f"{delta_mean:.3f}",
                 bstd=f"{baseline_std:.3f}",
                 dstd=f"{delta_std:.3f}",
