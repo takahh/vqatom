@@ -979,13 +979,14 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
         losses_sym.append(float(loss_sym.detach().cpu().item()))
-        baseline_vals.append(baseline_mean)
-        delta_vals.append(delta_mean)
 
         pbar.update(1)
         if ("baseline_logit" in aux) and ("delta_logit" in aux):
             baseline_mean = float(aux["baseline_logit"].detach().mean().cpu().item())
             delta_mean = float(aux["delta_logit"].detach().mean().cpu().item())
+
+            baseline_vals.append(baseline_mean)
+            delta_vals.append(delta_mean)
 
             pbar.set_postfix(
                 loss=f"{losses[-1]:.4f}",
