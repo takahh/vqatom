@@ -833,6 +833,9 @@ def train_one_epoch(
     use_amp = (device.type == "cuda")
     baseline_vals = []
     delta_vals = []
+
+    baseline_std_vals = []
+    delta_std_vals = []
     bce = nn.BCEWithLogitsLoss(
         pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
     )
@@ -982,11 +985,25 @@ def train_one_epoch(
 
         pbar.update(1)
         if ("baseline_logit" in aux) and ("delta_logit" in aux):
-            baseline_mean = float(aux["baseline_logit"].detach().mean().cpu().item())
-            delta_mean = float(aux["delta_logit"].detach().mean().cpu().item())
+            baseline_mean = float(
+                aux["baseline_logit"].detach().mean().cpu().item()
+            )
+            delta_mean = float(
+                aux["delta_logit"].detach().mean().cpu().item()
+            )
+
+            baseline_std = float(
+                aux["baseline_logit"].detach().std().cpu().item()
+            )
+            delta_std = float(
+                aux["delta_logit"].detach().std().cpu().item()
+            )
 
             baseline_vals.append(baseline_mean)
             delta_vals.append(delta_mean)
+
+            baseline_std_vals.append(baseline_std)
+            delta_std_vals.append(delta_std)
 
             pbar.set_postfix(
                 loss=f"{losses[-1]:.4f}",
@@ -996,6 +1013,8 @@ def train_one_epoch(
                 sym=f"{losses_sym[-1]:.4f}",
                 base=f"{baseline_mean:.3f}",
                 delta=f"{delta_mean:.3f}",
+                bstd=f"{baseline_std:.3f}",
+                dstd=f"{delta_std:.3f}",
             )
 
     pbar.close()
@@ -1008,6 +1027,9 @@ def train_one_epoch(
         "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
         "baseline_mean": float(np.mean(baseline_vals)) if baseline_vals else 0.0,
         "delta_mean": float(np.mean(delta_vals)) if delta_vals else 0.0,
+
+        "baseline_std": float(np.mean(baseline_std_vals)) if baseline_std_vals else 0.0,
+        "delta_std": float(np.mean(delta_std_vals)) if delta_std_vals else 0.0,
     }
 
 
