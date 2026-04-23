@@ -1217,8 +1217,8 @@ class DualStreamBlock(nn.Module):
         detach_attn_for_value=False,
         attn_smooth_eps=0.0,
         attn_activation="softmax",
-        pair_gate_threshold=0.0,   # 追加
-        topk_frac=0.0,             # 追加
+        pair_gate_threshold=0.0,
+        topk_frac=0.0,
     ):
         super().__init__()
 
@@ -1271,9 +1271,9 @@ class DualStreamBlock(nn.Module):
         )
 
     def forward(self, p_h, l_h, p_pad=None, l_pad=None, return_maps=False):
+        # ligand <- protein
         l_q = self.ln_l_q(l_h)
         p_kv = self.ln_p_kv(p_h)
-
         l_ctx, aux_lp = self.lig_from_prot(
             q_in=l_q,
             k_in=p_kv,
@@ -1282,24 +1282,38 @@ class DualStreamBlock(nn.Module):
             return_maps=True,
         )
 
+        # protein <- ligand
+        p_q = self.ln_p_q(p_h)
+        l_kv = self.ln_l_kv(l_h)
+        p_ctx, aux_pl = self.prot_from_lig(
+            q_in=p_q,
+            k_in=l_kv,
+            v_in=l_kv,
+            kv_pad_mask=l_pad,
+            return_maps=True,
+        )
+
+        # residual + FFN
+        l_h = l_h + self.drop(l_ctx)
         l_h = l_h + self.drop(l_ctx)
         l_h = l_h + self.drop(self.ffn_l(l_h))
 
-        # protein side は更新しない
-        p_h = p_h
+        p_h = p_h + self.drop(p_ctx)
+        p_h = p_h + self.drop(self.ffn_p(p_h))
 
         if return_maps:
             return p_h, l_h, {
-                "lp_qk_logits": aux_lp["qk_logits"],
+                "lp_qk_logits": aux_lp["qk_logits"],   # (B,H,Ll,Lp)
                 "lp_attn": aux_lp["attn_map"],
-                "lp_ctx": aux_lp["ctx"],
-                "lp_pair_ctx": aux_lp["pair_ctx"],  # 追加
+                "lp_ctx": aux_lp["ctx"],               # (B,H,Ll,Dh)
+                "lp_pair_ctx": aux_lp["pair_ctx"],     # (B,H,Ll,Lp,Dh)
                 "lp_v": aux_lp["v_proj"],
-                "pl_qk_logits": None,
-                "pl_attn": None,
-                "pl_ctx": None,
-                "pl_pair_ctx": None,  # 追加
-                "pl_v": None,
+
+                "pl_qk_logits": aux_pl["qk_logits"],   # (B,H,Lp,Ll)
+                "pl_attn": aux_pl["attn_map"],
+                "pl_ctx": aux_pl["ctx"],               # (B,H,Lp,Dh)
+                "pl_pair_ctx": aux_pl["pair_ctx"],     # (B,H,Lp,Ll,Dh)
+                "pl_v": aux_pl["v_proj"],
             }
 
         return p_h, l_h
@@ -1504,9 +1518,14 @@ class DualStreamDTIClassifier(nn.Module):
         base_feat = torch.cat([l_prior_mean, l_prior_max], dim=-1)
         baseline = self.base_head(base_feat).squeeze(-1)
 
-        # interaction-only delta
+        # dual-stream symmetric pair feature
+        lp_pair = inter_aux["lp_pair_ctx"]  # (B,H,Ll,Lp,Dh)
+        pl_pair = inter_aux["pl_pair_ctx"].transpose(-3, -2)  # (B,H,Ll,Lp,Dh)
+
+        pair_sym = 0.5 * (lp_pair + pl_pair)
+
         delta_feat = self._interaction_only_feat(
-            lp_pair_ctx=inter_aux["lp_pair_ctx"],
+            lp_pair_ctx=pair_sym,
             p_pad=p_pad,
             l_pad=l_pad,
             topk_frac=0.05,
