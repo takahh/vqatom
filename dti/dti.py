@@ -925,6 +925,19 @@ def train_one_epoch(
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
 
+                # ===== baseline / delta monitor =====
+                if ("baseline_logit" in aux) and ("delta_logit" in aux):
+                    baseline_mean = float(aux["baseline_logit"].detach().mean().cpu().item())
+                    delta_mean = float(aux["delta_logit"].detach().mean().cpu().item())
+                    total_mean = float(
+                        (aux["baseline_logit"].detach() + aux["delta_logit"].detach()).mean().cpu().item())
+
+                    print(
+                        f"[batch] baseline={baseline_mean:.4f} "
+                        f"delta={delta_mean:.4f} "
+                        f"total={total_mean:.4f}"
+                    )
+
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
 
