@@ -954,25 +954,26 @@ def pass1_clean_and_dedup():
                     row_contact_n = int(contact_n or 0)
                     keep_counter["seq_from_pdb_multichain"] += 1
 
+
                 elif pdb_mode == "single" and best_pdb_seq:
-                    # single-chain は BindingDB seq を優先するが、
-                    # 長さが一致する場合だけ PDB由来 contact_mask を付与
-                    seq = bindingdb_seq
+
+                    # single-chain:
+
+                    # contact supervision を正しく使うため、
+
+                    # BindingDB seq ではなく PDB sequence を採用する
+
+                    seq = best_pdb_seq
 
                     src_pdbid = best_pdbid or ""
+
                     src_chain = best_chain or ""
 
-                    if seq and best_pdb_seq and contact_mask and seq == best_pdb_seq:
-                        row_contact_mask = contact_mask
-                        row_contact_n = int(contact_n or 0)
-                        keep_counter["contact_from_pdb_single_len_match"] += 1
-                    else:
-                        row_contact_mask = ""
-                        row_contact_n = 0
-                        keep_counter["contact_from_pdb_single_len_mismatch_or_empty"] += 1
+                    row_contact_mask = contact_mask or ""
 
-                    keep_counter["seq_from_bindingdb_pdb_single"] += 1
+                    row_contact_n = int(contact_n or 0)
 
+                    keep_counter["seq_from_pdb_single_with_contact"] += 1
                 else:
                     # no usable PDB: BindingDB seq のみ
                     seq = bindingdb_seq
@@ -1801,8 +1802,8 @@ def main():
     # print("\n=== stage 1b: build pdb chain cache ===")
     # build_pdb_chain_cache(unique_pdbids)
 
-    # print("\n=== stage 2: clean + dedup bindingdb rows ===")
-    # pass1_clean_and_dedup()
+    print("\n=== stage 2: clean + dedup bindingdb rows ===")
+    pass1_clean_and_dedup()
 
     print("\n=== stage 3: tokenize unique smiles ===")
     pass2_make_smiles_token_map_parallel()
