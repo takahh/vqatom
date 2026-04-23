@@ -993,10 +993,10 @@ def train_one_epoch(
             )
 
             baseline_std = float(
-                aux["baseline_logit"].detach().std().cpu().item()
+                aux["baseline_logit"].detach().std(unbiased=False).cpu().item()
             )
             delta_std = float(
-                aux["delta_logit"].detach().std().cpu().item()
+                aux["delta_logit"].detach().std(unbiased=False).cpu().item()
             )
 
             baseline_vals.append(baseline_mean)
