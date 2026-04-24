@@ -987,6 +987,7 @@ def train_one_epoch(
                         l_pad=aux["l_pad"],
                     )
                 loss_contact = torch.tensor(0.0, device=device)
+                loss_contact = torch.tensor(0.0, device=device)
 
                 if contact_lambda != 0.0:
                     if contact_mask is None:
@@ -994,41 +995,33 @@ def train_one_epoch(
                     if "pair_map" not in aux:
                         raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
 
-                    # pair_map: (B, Ll, Lp)
-                    # protein residue score: ligand方向にmax
-                    contact_score = aux["pair_map"].float().amax(dim=1)  # (B, Lp)
+                    contact_score = aux["pair_map"].float().amax(dim=1)
+                    p_valid = ~aux["p_pad"]
 
-                    # p_pad: True = PAD
-                    p_valid = ~aux["p_pad"]  # (B, Lp)
-
-                    # 長さ合わせ
                     L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
                     contact_score = contact_score[:, :L]
                     contact_target = contact_mask[:, :L]
                     p_valid = p_valid[:, :L]
 
-                    # scoreをlogitっぽく標準化
                     mean = contact_score[p_valid].mean().detach()
                     std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
                     contact_logit = (contact_score - mean) / std
 
                     pos_mask = (contact_target > 0.5) & p_valid
-                    losses = []
+
+                    per_sample_losses = []
                     for b in range(contact_logit.size(0)):
                         vals = contact_logit[b][pos_mask[b]]
                         if vals.numel() == 0:
                             continue
                         k = min(3, vals.numel())
                         topk_vals = vals.topk(k).values
-                        losses.append(F.softplus(-topk_vals).mean())
-                    if losses:
-                        loss_contact = torch.stack(losses).mean()
+                        per_sample_losses.append(F.softplus(-topk_vals).mean())
+
+                    if per_sample_losses:
+                        loss_contact = torch.stack(per_sample_losses).mean()
                     else:
                         loss_contact = contact_logit.sum() * 0.0
-                loss = loss_cls + loss_entropy + sym_lambda * loss_sym
-                loss = loss + contact_lambda * loss_contact
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss = loss + reg_lambda * loss_reg
 
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
@@ -1068,6 +1061,7 @@ def train_one_epoch(
                 )
 
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+            loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
 
