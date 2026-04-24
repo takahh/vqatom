@@ -1809,9 +1809,9 @@ def main():
                 "--smiles_vocab_path is required when --ligand_input_type smiles"
             )
 
-        from smiles_tokenizer import SmilesTokenizer
-        smiles_tokenizer = SmilesTokenizer(args.smiles_vocab_path)
-    smiles_tokenizer = SmilesTokenizer(args.smiles_vocab_path)
+        from smiles_mlm import SmilesCharTokenizer
+        smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
+
     lig_enc = PretrainedLigandEncoder(
         ckpt_path=args.lig_ckpt,
         device=device,
