@@ -245,7 +245,7 @@ class DTIDataset(Dataset):
         if self.ligand_input_type == "vqatom":
             lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
         else:
-            lig_ids = [self.lig_cls_id] + self.smiles_tokenizer.encode(row["lig_text"])
+            lig_ids = self.smiles_tokenizer.encode(row["lig_text"], add_cls=True)
 
         contact_mask = str(row.get("contact_mask", "") or "").strip()
 
@@ -390,16 +390,29 @@ class PretrainedLigandEncoder(nn.Module):
             self.mask_id = int(vm["mask_id"])
             self.vocab_source = f"vq_ckpt:{vq_ckpt_path}"
         else:
-            if "base_vocab" not in ckpt or "vocab_size" not in ckpt:
-                raise RuntimeError("Ligand MLM ckpt must contain base_vocab and vocab_size")
-            self.base_vocab = int(ckpt["base_vocab"])
-            self.vocab_size = int(ckpt["vocab_size"])
-            self.pad_id = self.base_vocab + 0
-            self.mask_id = self.base_vocab + 1
-            self.vocab_source = f"mlm_ckpt:{ckpt_path}"
+            if "base_vocab" in ckpt and "vocab_size" in ckpt:
+                self.base_vocab = int(ckpt["base_vocab"])
+                self.vocab_size = int(ckpt["vocab_size"])
+                self.pad_id = self.base_vocab + 0
+                self.mask_id = self.base_vocab + 1
+                self.cls_id = int(self.vocab_size)
+                self.vocab_size = int(self.vocab_size) + 1
+                self.vocab_source = f"mlm_ckpt:{ckpt_path}"
 
-        self.cls_id = int(self.vocab_size)
-        self.vocab_size = int(self.vocab_size) + 1
+            elif all(k in ckpt for k in ["vocab_size", "pad_id", "mask_id", "cls_id"]):
+                # SMILES MLM checkpoint
+                self.base_vocab = int(ckpt["vocab_size"])
+                self.vocab_size = int(ckpt["vocab_size"])
+                self.pad_id = int(ckpt["pad_id"])
+                self.mask_id = int(ckpt["mask_id"])
+                self.cls_id = int(ckpt["cls_id"])
+                self.vocab_source = f"smiles_mlm_ckpt:{ckpt_path}"
+
+            else:
+                raise RuntimeError(
+                    "Ligand MLM ckpt must contain either "
+                    "(base_vocab, vocab_size) or (vocab_size, pad_id, mask_id, cls_id)"
+                )
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
