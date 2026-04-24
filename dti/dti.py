@@ -824,7 +824,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "ef10": 0.0,
         }
 
-    score = y_pred
+    score = np.nan_to_num(y_pred, nan=0.5, posinf=1.0, neginf=0.0)
     y01 = (y_bin > 0.5).astype(np.int32)
     ef1 = enrichment_factor(score, y01, 0.01)
     ef5 = enrichment_factor(score, y01, 0.05)
@@ -1609,16 +1609,27 @@ class DualStreamDTIClassifier(nn.Module):
 
         valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
 
-        def masked_zscore(x, valid, dim, eps=1e-6):
-            x0 = x.masked_fill(~valid, 0.0)
-            denom = valid.float().sum(dim=dim, keepdim=True).clamp_min(1.0)
-            mean = x0.sum(dim=dim, keepdim=True) / denom
+        def masked_zscore(x, valid, dim, eps=1e-4):
+            valid_f = valid.to(x.dtype)
 
-            var = ((x - mean).masked_fill(~valid, 0.0) ** 2).sum(dim=dim, keepdim=True) / denom
+            x_safe = torch.where(valid, x, torch.zeros_like(x))
+            denom = valid_f.sum(dim=dim, keepdim=True).clamp_min(1.0)
+
+            mean = x_safe.sum(dim=dim, keepdim=True) / denom
+
+            diff = torch.where(valid, x - mean, torch.zeros_like(x))
+            var = (diff * diff).sum(dim=dim, keepdim=True) / denom
+            var = var.clamp_min(0.0)
+
             std = var.sqrt().clamp_min(eps)
 
-            z = (x - mean) / std
-            return z.masked_fill(~valid, 0.0)
+            z = diff / std
+            z = torch.where(valid, z, torch.zeros_like(z))
+            z = torch.nan_to_num(z, nan=0.0, posinf=5.0, neginf=-5.0)
+
+            # extreme z を切る
+            z = z.clamp(-5.0, 5.0)
+            return z
 
         # ligand ごとに protein 方向を z-score
         lp_z = masked_zscore(lp_score, valid, dim=-1)
