@@ -560,15 +560,14 @@ def visualize_one_qk_map(
     A_lp = trim_lp(headmean(aux.get("lp_attn")))
     X_lp = trim_lp(headmean(aux.get("lp_ctx")))
 
-    P_lp_raw = headmean(aux.get("lp_pair_ctx"))   # (Ll, Lp, Dh)
-    P_lp = trim_lp(pairctx_to_map(P_lp_raw))      # (Ll, Lp)
 
     S_pl = trim_pl(headmean(aux.get("pl_qk_logits")))
     A_pl = trim_pl(headmean(aux.get("pl_attn")))
     X_pl = trim_pl(headmean(aux.get("pl_ctx")))
+    P_lp = trim_lp(headmean(aux.get("lp_pair_score")))
 
-    P_pl_raw = headmean(aux.get("pl_pair_ctx"))
-    P_pl = trim_pl(pairctx_to_map(P_pl_raw)) if P_pl_raw is not None else None
+    P_pl_raw = headmean(aux.get("pl_pair_score"))
+    P_pl = trim_pl(P_pl_raw) if P_pl_raw is not None else None
 
     if S_lp is not None:
         plot_one(
@@ -625,12 +624,12 @@ def visualize_one_qk_map(
         lp_logits_heads = get_heads(aux.get("lp_qk_logits"))     # (H, Ll, Lp)
         lp_attn_heads   = get_heads(aux.get("lp_attn"))          # (H, Ll, Lp)
         lp_ctx_heads    = get_heads(aux.get("lp_ctx"))           # (H, Ll, Dh)
-        lp_pair_heads   = get_heads(aux.get("lp_pair_ctx"))      # (H, Ll, Lp, Dh)
 
         pl_logits_heads = get_heads(aux.get("pl_qk_logits"))
         pl_attn_heads   = get_heads(aux.get("pl_attn"))
         pl_ctx_heads    = get_heads(aux.get("pl_ctx"))
-        pl_pair_heads   = get_heads(aux.get("pl_pair_ctx"))
+        lp_pair_heads = get_heads(aux.get("lp_pair_score"))
+        pl_pair_heads = get_heads(aux.get("pl_pair_score"))
 
         if lp_attn_heads is not None:
             n_heads = lp_attn_heads.shape[0]
@@ -638,8 +637,7 @@ def visualize_one_qk_map(
                 S = trim_lp(lp_logits_heads[h]) if lp_logits_heads is not None else None
                 A = trim_lp(lp_attn_heads[h]) if lp_attn_heads is not None else None
                 X = trim_lp(lp_ctx_heads[h]) if lp_ctx_heads is not None else None
-                P = trim_lp(pairctx_to_map(lp_pair_heads[h])) if lp_pair_heads is not None else None
-
+                P = trim_lp(lp_pair_heads[h]) if lp_pair_heads is not None else None
                 head_dir = os.path.join(save_dir, f"{base}_head{h:02d}") if save_dir else None
                 if head_dir is not None:
                     os.makedirs(head_dir, exist_ok=True)
@@ -1804,7 +1802,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
+    smiles_tokenizer = None
+    if args.ligand_input_type == "smiles":
+        if args.smiles_vocab_path is None:
+            raise ValueError(
+                "--smiles_vocab_path is required when --ligand_input_type smiles"
+            )
 
+        from smiles_tokenizer import SmilesTokenizer
+        smiles_tokenizer = SmilesTokenizer(args.smiles_vocab_path)
+    smiles_tokenizer = SmilesTokenizer(args.smiles_vocab_path)
     lig_enc = PretrainedLigandEncoder(
         ckpt_path=args.lig_ckpt,
         device=device,
@@ -1879,6 +1886,9 @@ def main():
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
                 lig_cls_id=lig_enc.cls_id,
+                ligand_input_type=args.ligand_input_type,
+                smiles_tokenizer=smiles_tokenizer,
+                smiles_col=args.smiles_col,
             )
         else:
             all_rows = read_csv_rows(args.train_csv)
@@ -1888,6 +1898,9 @@ def main():
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
                 lig_cls_id=lig_enc.cls_id,
+                ligand_input_type=args.ligand_input_type,
+                smiles_tokenizer=smiles_tokenizer,
+                smiles_col=args.smiles_col,
             )
 
         fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
@@ -1905,6 +1918,9 @@ def main():
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
                     lig_cls_id=lig_enc.cls_id,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_tokenizer=smiles_tokenizer,
+                    smiles_col=args.smiles_col,
                 )
             else:
                 all_rows = read_csv_rows(args.train_csv)
@@ -1914,6 +1930,9 @@ def main():
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
                     lig_cls_id=lig_enc.cls_id,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_tokenizer=smiles_tokenizer,
+                    smiles_col=args.smiles_col,
                 )
             train_y_mean = float(tmp_train_ds.y_reg_mean)
             train_y_std = float(tmp_train_ds.y_reg_std)
@@ -1930,6 +1949,9 @@ def main():
         lig_cls_id=lig_enc.cls_id,
         y_reg_mean=train_y_mean,
         y_reg_std=train_y_std,
+        ligand_input_type=args.ligand_input_type,
+        smiles_tokenizer=smiles_tokenizer,
+        smiles_col=args.smiles_col,
     )
     valid_loader = make_loader(valid_ds, shuffle=False)
 
@@ -1942,6 +1964,9 @@ def main():
             lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
+            ligand_input_type=args.ligand_input_type,
+            smiles_tokenizer=smiles_tokenizer,
+            smiles_col=args.smiles_col,
         )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
@@ -1954,6 +1979,9 @@ def main():
             lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
+            ligand_input_type=args.ligand_input_type,
+            smiles_tokenizer=smiles_tokenizer,
+            smiles_col=args.smiles_col,
         )
         test_loader = make_loader(test_ds, shuffle=False)
 
@@ -2024,6 +2052,9 @@ def main():
                     lig_cls_id=lig_enc.cls_id,
                     y_reg_mean=train_y_mean,
                     y_reg_std=train_y_std,
+                    ligand_input_type=args.ligand_input_type,
+                    smiles_tokenizer=smiles_tokenizer,
+                    smiles_col=args.smiles_col,
                 )
                 for p in epoch_shards
             ]
