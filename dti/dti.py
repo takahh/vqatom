@@ -144,6 +144,7 @@ class Batch:
     l_ids: torch.Tensor
     y_bin: torch.Tensor
     y_reg: Optional[torch.Tensor]
+    contact_mask: Optional[torch.Tensor] = None
 
 class DTIDataset(Dataset):
     def __init__(
@@ -225,11 +226,14 @@ class DTIDataset(Dataset):
 
         lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
 
+        contact_mask = str(row.get("contact_mask", "") or "").strip()
+
         item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
             "y_bin": float(row["y_bin"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
+            "contact_mask": contact_mask,
         }
         return item
 
@@ -267,6 +271,22 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         y_reg = torch.tensor([float(s["y_reg"]) for s in samples], dtype=torch.float32)
     else:
         y_reg = None
+    contact_tensors = []
+    has_contact = all(len(str(s.get("contact_mask", "") or "")) > 0 for s in samples)
+
+    if has_contact:
+        for s in samples:
+            cm = str(s["contact_mask"]).strip()
+            contact_tensors.append(torch.tensor([1.0 if c == "1" else 0.0 for c in cm], dtype=torch.float32))
+
+        max_p = p_input_ids.shape[1] - 1  # CLS除去後の長さ
+        contact_mask = torch.zeros((len(samples), max_p), dtype=torch.float32)
+
+        for i, cm in enumerate(contact_tensors):
+            n = min(cm.numel(), max_p)
+            contact_mask[i, :n] = cm[:n]
+    else:
+        contact_mask = None
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -274,6 +294,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         l_ids=l_ids,
         y_bin=y_bin,
         y_reg=y_reg,
+        contact_mask=contact_mask,
     )
 
 # =========================================================
@@ -826,6 +847,7 @@ def train_one_epoch(
     sym_lambda: float = 0.0,   # <- 追加
     base_loss_alpha=0.3,
     epoch=1,
+    contact_lambda: float = 0.0,
 ) -> Dict[str, float]:
     model.train()
 
@@ -833,7 +855,7 @@ def train_one_epoch(
     use_amp = (device.type == "cuda")
     baseline_vals = []
     delta_vals = []
-
+    losses_contact = []
     baseline_std_vals = []
     delta_std_vals = []
     bce = nn.BCEWithLogitsLoss(
@@ -847,7 +869,7 @@ def train_one_epoch(
     # need_maps = False
 
     # sym loss か entropy loss を使うときだけ map を返す
-    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0)
+    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0) or (contact_lambda != 0.0)
     # attn entropy を使う時だけ map を返す
     # need_maps = (attn_entropy_lambda != 0.0)
 
@@ -885,6 +907,9 @@ def train_one_epoch(
             y_reg = batch.y_reg.to(device, non_blocking=True).float()
 
         optimizer.zero_grad(set_to_none=True)
+        contact_mask = None
+        if getattr(batch, "contact_mask", None) is not None:
+            contact_mask = batch.contact_mask.to(device, non_blocking=True).float()
 
         if use_amp:
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -924,8 +949,42 @@ def train_one_epoch(
                         p_pad=aux["p_pad"],
                         l_pad=aux["l_pad"],
                     )
+                loss_contact = torch.tensor(0.0, device=device)
+
+                if contact_lambda != 0.0:
+                    if contact_mask is None:
+                        raise ValueError("contact_lambda != 0, but batch.contact_mask is missing")
+                    if "pair_map" not in aux:
+                        raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
+
+                    # pair_map: (B, Ll, Lp)
+                    # protein residue score: ligand方向にmax
+                    contact_score = aux["pair_map"].float().amax(dim=1)  # (B, Lp)
+
+                    # p_pad: True = PAD
+                    p_valid = ~aux["p_pad"]  # (B, Lp)
+
+                    # 長さ合わせ
+                    L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
+                    contact_score = contact_score[:, :L]
+                    contact_target = contact_mask[:, :L]
+                    p_valid = p_valid[:, :L]
+
+                    # scoreをlogitっぽく標準化
+                    mean = contact_score[p_valid].mean().detach()
+                    std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
+                    contact_logit = (contact_score - mean) / std
+
+                    loss_raw = F.binary_cross_entropy_with_logits(
+                        contact_logit,
+                        contact_target,
+                        reduction="none",
+                    )
+
+                    loss_contact = loss_raw.masked_fill(~p_valid, 0.0).sum() / p_valid.float().sum().clamp_min(1.0)
 
                 loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+                loss = loss + contact_lambda * loss_contact
                 if (y_reg is not None) and (yhat_reg is not None):
                     loss = loss + reg_lambda * loss_reg
 
@@ -982,6 +1041,7 @@ def train_one_epoch(
         losses_reg.append(float(loss_reg.detach().cpu().item()))
         losses_entropy.append(float(loss_entropy.detach().cpu().item()))
         losses_sym.append(float(loss_sym.detach().cpu().item()))
+        losses_contact.append(float(loss_contact.detach().cpu().item()))
 
         pbar.update(1)
         if "delta_logit" in aux:
@@ -1003,6 +1063,7 @@ def train_one_epoch(
                 sym=f"{losses_sym[-1]:.4f}",
                 delta=f"{delta_mean:.3f}",
                 dstd=f"{delta_std:.3f}",
+                contact=f"{losses_contact[-1]:.4f}",
             )
 
     pbar.close()
@@ -1017,6 +1078,7 @@ def train_one_epoch(
         "delta_mean": float(np.mean(delta_vals)) if delta_vals else 0.0,
         "baseline_std": 0.0,
         "delta_std": float(np.mean(delta_std_vals)) if delta_std_vals else 0.0,
+        "loss_contact": float(np.mean(losses_contact)) if losses_contact else 0.0,
     }
 
 
@@ -1637,7 +1699,7 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 # =========================================================
 def main():
     ap = argparse.ArgumentParser()
-
+    ap.add_argument("--contact_lambda", type=float, default=0.0)
     ap.add_argument("--use_train_valid_csv", action="store_true")
     ap.add_argument("--train_csv", type=str, default=None)
     ap.add_argument("--valid_csv", type=str, required=True)
