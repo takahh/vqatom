@@ -1219,18 +1219,21 @@ class CrossAttention(nn.Module):
 
         attn_for_v = attn.detach() if self.detach_attn_for_value else attn
 
-        pair_ctx = attn_for_v.unsqueeze(-1) * v.unsqueeze(-3)  # (B,H,Lq,Lk,Dh)
-        ctx = pair_ctx.sum(dim=-2)  # (B,H,Lq,Dh)
+        ctx = torch.matmul(attn_for_v, v)  # (B,H,Lq,Dh)
+
+        # lightweight pair score: (B,H,Lq,Lk), no Dh dimension
+        v_norm = v.norm(dim=-1)  # (B,H,Lk)
+        pair_score = attn_for_v * v_norm.unsqueeze(-2)
         # ctx = ctx * q
         out = self._merge_heads(ctx)  # (B,Lq,D)
         out = self.out_proj(out)
 
         if return_maps:
             return out, {
-                "qk_logits": logits,
+                "qk_logits": logits if return_maps else None,
                 "attn_map": attn,
-                "v_proj": v,
-                "pair_ctx": pair_ctx,
+                "v_proj": v if return_maps else None,
+                "pair_score": pair_score,
                 "ctx": ctx,
             }
         return out
@@ -1354,13 +1357,13 @@ class DualStreamBlock(nn.Module):
                 "lp_qk_logits": aux_lp["qk_logits"],   # (B,H,Ll,Lp)
                 "lp_attn": aux_lp["attn_map"],
                 "lp_ctx": aux_lp["ctx"],               # (B,H,Ll,Dh)
-                "lp_pair_ctx": aux_lp["pair_ctx"],     # (B,H,Ll,Lp,Dh)
                 "lp_v": aux_lp["v_proj"],
 
                 "pl_qk_logits": aux_pl["qk_logits"],   # (B,H,Lp,Ll)
                 "pl_attn": aux_pl["attn_map"],
                 "pl_ctx": aux_pl["ctx"],               # (B,H,Lp,Dh)
-                "pl_pair_ctx": aux_pl["pair_ctx"],     # (B,H,Lp,Ll,Dh)
+                "lp_pair_score": aux_lp["pair_score"],  # (B,H,Ll,Lp)
+                "pl_pair_score": aux_pl["pair_score"],  # (B,H,Lp,Ll)
                 "pl_v": aux_pl["v_proj"],
             }
 
@@ -1561,15 +1564,11 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=True,
         )
 
-        # symmetric residue-atom pair tensor
-        lp_pair = inter_aux["lp_pair_ctx"]                         # (B,H,Ll,Lp,Dh)
-        pl_pair = inter_aux["pl_pair_ctx"].transpose(-3, -2)      # (B,H,Ll,Lp,Dh)
-        # pair_sym = pl_pair
-        pair_sym = 0.5 * (lp_pair + pl_pair)                      # (B,H,Ll,Lp,Dh)
+        lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
+        pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
 
-        # pair map: keep residue-atom structure
-        pair_map = torch.norm(pair_sym, dim=-1)                   # (B,H,Ll,Lp)
-        pair_map = pair_map.mean(dim=1)                           # (B,Ll,Lp)
+        pair_map = 0.5 * (lp_score + pl_score)  # (B,H,Ll,Lp)
+        pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
         valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)
@@ -2016,6 +2015,7 @@ def main():
             attn_entropy_lambda=float(args.attn_entropy_lambda),
             reg_lambda=float(args.reg_lambda),
             sym_lambda=float(args.sym_lambda),  # <- 追加
+            contact_lambda=float(args.contact_lambda),
             base_loss_alpha=0.3,
             epoch=ep,
         )
