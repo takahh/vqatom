@@ -1606,12 +1606,33 @@ class DualStreamDTIClassifier(nn.Module):
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
+
+        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+
+        def masked_zscore(x, valid, dim, eps=1e-6):
+            x0 = x.masked_fill(~valid, 0.0)
+            denom = valid.float().sum(dim=dim, keepdim=True).clamp_min(1.0)
+            mean = x0.sum(dim=dim, keepdim=True) / denom
+
+            var = ((x - mean).masked_fill(~valid, 0.0) ** 2).sum(dim=dim, keepdim=True) / denom
+            std = var.sqrt().clamp_min(eps)
+
+            z = (x - mean) / std
+            return z.masked_fill(~valid, 0.0)
+
+        # ligand ごとに protein 方向を z-score
+        lp_z = masked_zscore(lp_score, valid, dim=-1)
+
+        # protein ごとに ligand 方向を z-score
+        pl_z = masked_zscore(pl_score, valid, dim=-2)
+
         if self.pl_lp_overlap == "both":
-            pair_map = 0.5 * (lp_score + pl_score)  # (B,H,Ll,Lp)
+            pair_map = torch.minimum(lp_z, pl_z)
         elif self.pl_lp_overlap == "lp":
-            pair_map = lp_score  # (B,H,Ll,Lp)
+            pair_map = lp_z
         else:
-            pair_map = pl_score  # (B,H,Ll,Lp)
+            pair_map = pl_z
+
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
