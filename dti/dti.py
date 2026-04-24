@@ -1654,7 +1654,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         # optional area normalization to reduce length bias
         denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
-        pair_map = pair_map / denom.sqrt()
+        # pair_map = pair_map / denom.sqrt()
 
         # 2D classifier
         x2d = pair_map.unsqueeze(1)                               # (B,1,Ll,Lp)
