@@ -388,6 +388,11 @@ class PretrainedLigandEncoder(nn.Module):
             self.vocab_size = int(vm["vocab_size"])
             self.pad_id = int(vm["pad_id"])
             self.mask_id = int(vm["mask_id"])
+
+            # CLS token を追加
+            self.cls_id = int(self.vocab_size)
+            self.vocab_size = int(self.vocab_size) + 1
+
             self.vocab_source = f"vq_ckpt:{vq_ckpt_path}"
         else:
             if "base_vocab" in ckpt and "vocab_size" in ckpt:
