@@ -1428,11 +1428,12 @@ class DualStreamDTIClassifier(nn.Module):
         pair_gate_threshold: float = 0.5,
         topk_frac: float = 0.1,
         protein_only: bool = False,   # 追加
+        pl_lp_overlap: str = "both"
     ):
         super().__init__()
         self.prot = protein_encoder
         self.lig = ligand_encoder
-
+        self.pl_lp_overlap = pl_lp_overlap
         d_model = self.lig.d_model
         self.d_model = d_model
         self.n_heads = int(n_heads)
@@ -1605,8 +1606,12 @@ class DualStreamDTIClassifier(nn.Module):
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
-
-        pair_map = 0.5 * (lp_score + pl_score)  # (B,H,Ll,Lp)
+        if self.pl_lp_overlap == "both":
+            pair_map = 0.5 * (lp_score + pl_score)  # (B,H,Ll,Lp)
+        elif self.pl_lp_overlap == "lp":
+            pair_map = lp_score  # (B,H,Ll,Lp)
+        else:
+            pair_map = pl_score  # (B,H,Ll,Lp)
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
@@ -1794,6 +1799,7 @@ def main():
     ap.add_argument("--plateau_patience", type=int, default=2)
     ap.add_argument("--min_lr", type=float, default=1e-6)
     ap.add_argument("--dual_stream_layers", type=int, default=2)
+    ap.add_argument("--pl_lp_overlap", type=str, default="ap", choices=["lp", "pl", "both"])
     ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
@@ -1860,7 +1866,7 @@ def main():
         pair_gate_threshold=args.pair_gate_threshold,  # ← 追加
         topk_frac=args.topk_frac,  # ← 追加
         protein_only=args.protein_only,   # 追加
-
+        pl_lp_overlap=args.pl_lp_overlap,
     ).to(device)
 
     if args.dti_ckpt is not None:
