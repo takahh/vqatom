@@ -156,6 +156,9 @@ class DTIDataset(Dataset):
         lig_cls_id: int = 0,
         y_reg_mean: Optional[float] = None,
         y_reg_std: Optional[float] = None,
+        ligand_input_type: str = "vqatom",
+        smiles_tokenizer=None,
+        smiles_col: str = "smiles",
     ):
         if rows is not None:
             raw_rows = rows
@@ -169,10 +172,22 @@ class DTIDataset(Dataset):
 
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
-            lig_tok = (r.get("lig_tok") or "").strip()
+
+            if ligand_input_type == "vqatom":
+                lig_text = (r.get("lig_tok") or "").strip()
+            elif ligand_input_type == "smiles":
+                lig_text = (
+                        r.get(smiles_col)
+                        or r.get("canonical_smiles")
+                        or r.get("smiles")
+                        or ""
+                ).strip()
+            else:
+                raise ValueError(f"Unknown ligand_input_type: {ligand_input_type}")
+
             y_raw = r.get("y", "")
 
-            if not seq or not lig_tok:
+            if not seq or not lig_text:
                 continue
 
             if y_raw in ("", None):
@@ -184,7 +199,7 @@ class DTIDataset(Dataset):
 
             rr = dict(r)
             rr["seq"] = seq
-            rr["lig_tok"] = lig_tok
+            rr["lig_text"] = lig_text
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
             self.rows.append(rr)
@@ -215,6 +230,10 @@ class DTIDataset(Dataset):
             else:
                 r["y_reg"] = (y - mean) / std
 
+        self.ligand_input_type = ligand_input_type
+        self.smiles_tokenizer = smiles_tokenizer
+        self.smiles_col = smiles_col
+
     def __len__(self) -> int:
         return len(self.rows)
 
@@ -223,8 +242,10 @@ class DTIDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-
-        lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_tok"])
+        if self.ligand_input_type == "vqatom":
+            lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
+        else:
+            lig_ids = [self.lig_cls_id] + self.smiles_tokenizer.encode(row["lig_text"])
 
         contact_mask = str(row.get("contact_mask", "") or "").strip()
 
@@ -1721,6 +1742,14 @@ def main():
         default="softmax",
         choices=["softmax", "entmax15", "sigmoid"],
     )
+    ap.add_argument(
+        "--ligand_input_type",
+        type=str,
+        default="vqatom",
+        choices=["vqatom", "smiles"],
+    )
+    ap.add_argument("--smiles_vocab_path", type=str, default=None)
+    ap.add_argument("--smiles_col", type=str, default="smiles")
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
     ap.add_argument("--finetune_esm", action="store_true")
     ap.add_argument("--finetune_lig", action="store_true")
