@@ -1012,14 +1012,12 @@ def train_one_epoch(
                     std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
                     contact_logit = (contact_score - mean) / std
 
-                    loss_raw = F.binary_cross_entropy_with_logits(
-                        contact_logit,
-                        contact_target,
-                        reduction="none",
-                    )
+                    pos_mask = (contact_target > 0.5) & p_valid
 
-                    loss_contact = loss_raw.masked_fill(~p_valid, 0.0).sum() / p_valid.float().sum().clamp_min(1.0)
+                    # positive residue の score を上げるだけ
+                    loss_raw = F.softplus(-contact_logit)  # = -log(sigmoid(contact_logit))
 
+                    loss_contact = loss_raw.masked_fill(~pos_mask, 0.0).sum() / pos_mask.float().sum().clamp_min(1.0)
                 loss = loss_cls + loss_entropy + sym_lambda * loss_sym
                 loss = loss + contact_lambda * loss_contact
                 if (y_reg is not None) and (yhat_reg is not None):
