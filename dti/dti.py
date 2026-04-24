@@ -987,7 +987,6 @@ def train_one_epoch(
                         l_pad=aux["l_pad"],
                     )
                 loss_contact = torch.tensor(0.0, device=device)
-                loss_contact = torch.tensor(0.0, device=device)
 
                 if contact_lambda != 0.0:
                     if contact_mask is None:
@@ -1022,6 +1021,10 @@ def train_one_epoch(
                         loss_contact = torch.stack(per_sample_losses).mean()
                     else:
                         loss_contact = contact_logit.sum() * 0.0
+            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+            loss = loss + contact_lambda * loss_contact
+            if (y_reg is not None) and (yhat_reg is not None):
+                loss = loss + reg_lambda * loss_reg
 
         else:
             out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
