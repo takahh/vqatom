@@ -1013,11 +1013,18 @@ def train_one_epoch(
                     contact_logit = (contact_score - mean) / std
 
                     pos_mask = (contact_target > 0.5) & p_valid
-
-                    # positive residue の score を上げるだけ
-                    loss_raw = F.softplus(-contact_logit)  # = -log(sigmoid(contact_logit))
-
-                    loss_contact = loss_raw.masked_fill(~pos_mask, 0.0).sum() / pos_mask.float().sum().clamp_min(1.0)
+                    losses = []
+                    for b in range(contact_logit.size(0)):
+                        vals = contact_logit[b][pos_mask[b]]
+                        if vals.numel() == 0:
+                            continue
+                        k = min(3, vals.numel())
+                        topk_vals = vals.topk(k).values
+                        losses.append(F.softplus(-topk_vals).mean())
+                    if losses:
+                        loss_contact = torch.stack(losses).mean()
+                    else:
+                        loss_contact = contact_logit.sum() * 0.0
                 loss = loss_cls + loss_entropy + sym_lambda * loss_sym
                 loss = loss + contact_lambda * loss_contact
                 if (y_reg is not None) and (yhat_reg is not None):
