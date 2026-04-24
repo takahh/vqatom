@@ -1062,7 +1062,7 @@ def train_one_epoch(
                     p_pad=aux["p_pad"],
                     l_pad=aux["l_pad"],
                 )
-
+            loss_contact = torch.tensor(0.0, device=device)
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
             loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
