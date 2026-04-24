@@ -824,7 +824,7 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "ef10": 0.0,
         }
 
-    score = np.nan_to_num(y_pred, nan=0.5, posinf=1.0, neginf=0.0)
+    score = y_pred
     y01 = (y_bin > 0.5).astype(np.int32)
     ef1 = enrichment_factor(score, y01, 0.01)
     ef5 = enrichment_factor(score, y01, 0.05)
@@ -1606,44 +1606,12 @@ class DualStreamDTIClassifier(nn.Module):
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
-
-        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
-
-        def masked_zscore(x, valid, dim, eps=1e-4):
-            valid_f = valid.to(x.dtype)
-
-            x_safe = torch.where(valid, x, torch.zeros_like(x))
-            denom = valid_f.sum(dim=dim, keepdim=True).clamp_min(1.0)
-
-            mean = x_safe.sum(dim=dim, keepdim=True) / denom
-
-            diff = torch.where(valid, x - mean, torch.zeros_like(x))
-            var = (diff * diff).sum(dim=dim, keepdim=True) / denom
-            var = var.clamp_min(0.0)
-
-            std = var.sqrt().clamp_min(eps)
-
-            z = diff / std
-            z = torch.where(valid, z, torch.zeros_like(z))
-            z = torch.nan_to_num(z, nan=0.0, posinf=5.0, neginf=-5.0)
-
-            # extreme z を切る
-            z = z.clamp(-5.0, 5.0)
-            return z
-
-        # ligand ごとに protein 方向を z-score
-        lp_z = masked_zscore(lp_score, valid, dim=-1)
-
-        # protein ごとに ligand 方向を z-score
-        pl_z = masked_zscore(pl_score, valid, dim=-2)
-
         if self.pl_lp_overlap == "both":
-            pair_map = torch.minimum(lp_z, pl_z)
+            pair_map = 0.5 * (lp_score + pl_score)  # (B,H,Ll,Lp)
         elif self.pl_lp_overlap == "lp":
-            pair_map = lp_z
+            pair_map = lp_score  # (B,H,Ll,Lp)
         else:
-            pair_map = pl_z
-
+            pair_map = pl_score  # (B,H,Ll,Lp)
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
@@ -1654,7 +1622,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         # optional area normalization to reduce length bias
         denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
-        # pair_map = pair_map / denom.sqrt()
+        pair_map = pair_map / denom.sqrt()
 
         # 2D classifier
         x2d = pair_map.unsqueeze(1)                               # (B,1,Ll,Lp)
