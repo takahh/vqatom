@@ -944,39 +944,38 @@ def pass1_clean_and_dedup():
                 src_chain = ""
                 row_contact_mask = ""
                 row_contact_n = 0
-
                 if pdb_mode == "multi" and best_pdb_seq:
-                    # multi-chain は PDB の contact-best chain seq を採用
                     seq = best_pdb_seq
                     src_pdbid = best_pdbid or ""
                     src_chain = best_chain or ""
+
                     row_contact_mask = contact_mask or ""
                     row_contact_n = int(contact_n or 0)
+
                     keep_counter["seq_from_pdb_multichain"] += 1
 
 
                 elif pdb_mode == "single" and best_pdb_seq:
-
-                    # single-chain:
-
-                    # contact supervision を正しく使うため、
-
-                    # BindingDB seq ではなく PDB sequence を採用する
-
-                    seq = best_pdb_seq
+                    # single-chain は BindingDB seq 優先
+                    seq = bindingdb_seq if bindingdb_seq else best_pdb_seq
 
                     src_pdbid = best_pdbid or ""
-
                     src_chain = best_chain or ""
 
-                    row_contact_mask = contact_mask or ""
+                    # contact supervision は長さ一致時のみ使う
+                    if contact_mask and len(contact_mask) == len(seq):
+                        row_contact_mask = contact_mask
+                        row_contact_n = int(contact_n or 0)
+                    else:
+                        row_contact_mask = ""
+                        row_contact_n = 0
 
-                    row_contact_n = int(contact_n or 0)
+                    keep_counter["seq_from_bindingdb_single_chain"] += 1
 
-                    keep_counter["seq_from_pdb_single_with_contact"] += 1
+
                 else:
-                    # no usable PDB: BindingDB seq のみ
                     seq = bindingdb_seq
+
                     row_contact_mask = ""
                     row_contact_n = 0
 
@@ -984,6 +983,11 @@ def pass1_clean_and_dedup():
                         keep_counter["seq_from_bindingdb_no_pdb"] += 1
                     else:
                         keep_counter["seq_from_bindingdb_other"] += 1
+
+                # ★ 最終安全弁（multi でも single でも必ず）
+                if row_contact_mask and len(row_contact_mask) != len(seq):
+                    row_contact_mask = ""
+                    row_contact_n = 0
 
                 if not seq:
                     drop_counter["no_valid_sequence"] += 1
@@ -1744,6 +1748,21 @@ def stage4_protein_cold_split():
     # 4) stratified protein-cluster cold split
     #    protein_cluster を単位に保ったまま、
     #    row数とpositive数が train/valid/test で近くなるように greedy 割当する
+    # after kept_rows is made and before protein-cluster filtering
+    for r in kept_rows:
+        r["y_bin"] = int(r["y_bin"])
+
+    kept_rows, lig_stats, prot_stats, good_ligs, good_prots = filter_rows_by_entity_constraints(
+        kept_rows,
+        lig_min_pairs=2,
+        prot_min_pairs=2,
+        low=0.1,
+        high=0.9,
+    )
+
+    print(f"[split] after ligand/protein entity filtering: {len(kept_rows):,}")
+    print(f"[split] kept ligands: {len(good_ligs):,}")
+    print(f"[split] kept proteins: {len(good_prots):,}")
 
     def make_cluster_stratified_split(rows, ratios, seed=123):
         split_names = ["train", "valid", "test"]
@@ -1820,7 +1839,7 @@ def stage4_protein_cold_split():
             )
 
         return assigned["train"], assigned["valid"], assigned["test"]
-    
+
     train_clusters, valid_clusters, test_clusters = make_cluster_stratified_split(
         kept_rows,
         SPLIT_RATIOS,
@@ -1946,9 +1965,9 @@ def main():
     #
     # print("\n=== stage 3: tokenize unique smiles ===")
     # pass2_make_smiles_token_map_parallel()
-
-    print("\n=== stage 4: join tokens ===")
-    pass3_join_tokens()
+    #
+    # print("\n=== stage 4: join tokens ===")
+    # pass3_join_tokens()
 
     print("\n=== stage 5: protein-cluster + scaffold double-cold split (no balance) ===")
     stage4_protein_cold_split()
