@@ -47,27 +47,16 @@ GRAPHDTA_LIGANDS = GRAPHDTA_DIR / "ligands_can.txt"
 GRAPHDTA_PROTEINS = GRAPHDTA_DIR / "proteins.txt"
 GRAPHDTA_Y = GRAPHDTA_DIR / "Y"
 
-CORE_FINAL_EVAL_CSV = Path(
-    "/Users/taka/Desktop/final_eval.csv"
-)
-
-OUT_DIR = Path(
-    "/Users/taka/Desktop/bindingdb_fast_out"
-)
+OUT_DIR = Path("/Users/taka/Desktop/kiba_fast_out")
+FINAL_CSV = OUT_DIR / "kiba_tok.csv"
+ROW_ANNOT_CSV = OUT_DIR / "kiba_tok_annotated.csv"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MMCIF_DIR = Path("/Users/taka/Documents/mmcif")
 
-PDB_CACHE_DB = OUT_DIR / "pdb_chain_cache.sqlite"
-DEDUP_DB = OUT_DIR / "dedup.sqlite"
-
 PASS1_CSV = OUT_DIR / "pass1_rows.csv"
 UNIQUE_SMILES_CSV = OUT_DIR / "unique_smiles.csv"
 SMILES_TOK_CSV = OUT_DIR / "smiles_tok_map.csv"
-FINAL_CSV = OUT_DIR / "bindingdb_dedup_tok.csv"
-ERROR_TSV = OUT_DIR / "errors.tsv"
-PDBID_LIST_TXT = OUT_DIR / "bindingdb_unique_pdbids.txt"
-PDB_CACHE_FAIL_TSV = OUT_DIR / "pdb_cache_failures.tsv"
 SEQ_COL_CANDIDATES = [
     "BindingDB Target Chain Sequence",
     "Target Chain Sequence",
@@ -78,7 +67,6 @@ SPLIT_FASTA = OUT_DIR / "protein_unique_seqs.fasta"
 MMSEQS_DIR = OUT_DIR / "mmseqs40"
 MMSEQS_TMP = OUT_DIR / "mmseqs_tmp"
 SEQ_TO_CLUSTER_CSV = OUT_DIR / "seq_to_cluster_40id.csv"
-ROW_ANNOT_CSV = OUT_DIR / "bindingdb_dedup_tok_annotated.csv"
 COMPONENT_SUMMARY_CSV = OUT_DIR / "split_components_summary.csv"
 TRAIN_CSV = OUT_DIR / "train.csv"
 VALID_CSV = OUT_DIR / "valid.csv"
@@ -104,12 +92,10 @@ DROP_ROWS_WITH_MISSING_Y = True
 
 MIN_SEQ_LEN = 50
 MAX_SEQ_LEN = 1022
-AFFINITY_PRIORITY = ["Ki (nM)", "Kd (nM)", "IC50 (nM)"]
 
 CANON_CACHE_SIZE = 100_000
 AA_SET = set("ACDEFGHIKLMNPQRSTVWYBXZJUO")
 
-PDB_COL = "PDB ID(s) for Ligand-Target Complex"
 CONTACT_CUTOFF = 4.5
 SECOND_RATIO_MAX = 0.5   # discard if second > 50% of first
 
@@ -976,336 +962,6 @@ def analyze_pdb_chain_types():
     for k, v in counter.items():
         frac = v / max(1, total)
         print(f"{k:15s}: {v:,} ({frac:.2%})")
-
-def pass1_clean_and_dedup():
-    core_pairs, core_seqs = load_core_exact_pairs(CORE_FINAL_EVAL_CSV)
-    from collections import Counter
-
-    drop_counter = Counter()
-    keep_counter = Counter()
-
-    # build/load pdb chain cache once
-    if not PDB_CACHE_DB.exists():
-        unique_pdbids = collect_unique_bindingdb_pdbids(BINDINGDB_TSV, PDB_COL)
-        build_pdb_chain_cache(unique_pdbids)
-    else:
-        print(f"[pdb-cache] reuse existing: {PDB_CACHE_DB}")
-
-    pdb_cache_map = load_pdb_cache_map(PDB_CACHE_DB)
-    con = init_dedup_db(DEDUP_DB)
-    cur = con.cursor()
-
-    seen = 0
-    kept = 0
-    batch = []
-    from collections import Counter
-
-    lig_pair_counter_before = Counter()
-    prot_pair_counter_before = Counter()
-    pair_counter_before = Counter()
-
-    debug_rows_before = []
-    with ERROR_TSV.open("w", encoding="utf-8", newline="") as err_f:
-        err_w = csv.writer(err_f, delimiter="\t")
-        err_w.writerow(["row_id", "reason", "extra"])
-
-        with BINDINGDB_TSV.open("r", encoding="utf-8", errors="ignore", newline="") as f:
-            reader = csv.DictReader(f, delimiter="\t")
-            pre_pdb_lig_counter = Counter()
-            pre_pdb_prot_counter = Counter()
-            pre_pdb_pair_counter = Counter()
-
-            for row in tqdm(reader, desc="pass1 clean"):
-                seen += 1
-                row_id = row.get("BindingDB Reactant_set_id", str(seen))
-
-                # --------------------------------------------------
-                # 1) base sequence from BindingDB
-                # --------------------------------------------------
-                bindingdb_seq = get_bindingdb_target_seq(row)
-
-                raw_smiles = row.get("Ligand SMILES", "")
-                can_smiles = canonicalize_smiles_cached(raw_smiles)
-
-                pair_key = (bindingdb_seq, can_smiles)
-
-                pre_pdb_pair_counter[pair_key] += 1
-                if pre_pdb_pair_counter[pair_key] == 1:
-                    pre_pdb_lig_counter[can_smiles] += 1
-                    pre_pdb_prot_counter[bindingdb_seq] += 1
-                # --------------------------------------------------
-                # 2) optional PDB-based disambiguation
-                # --------------------------------------------------
-                pdb_ids = parse_pdb_ids(row.get(PDB_COL, ""))
-                best_pdbid, best_chain, best_pdb_seq, best_status, pdb_mode, contact_mask, contact_n = \
-                    choose_best_chain_across_pdbids_cached_with_mode(pdb_ids, pdb_cache_map)
-
-                # policy:
-                # - no PDB usable candidate      -> use BindingDB seq
-                # - single-chain PDB candidate   -> still prefer BindingDB seq
-                # - multi-chain PDB candidate    -> use best contact chain seq
-                seq = None
-                src_pdbid = ""
-                src_chain = ""
-                row_contact_mask = ""
-                row_contact_n = 0
-                if pdb_mode == "multi" and best_pdb_seq:
-                    seq = best_pdb_seq
-                    src_pdbid = best_pdbid or ""
-                    src_chain = best_chain or ""
-
-                    row_contact_mask = contact_mask or ""
-                    row_contact_n = int(contact_n or 0)
-
-                    keep_counter["seq_from_pdb_multichain"] += 1
-
-
-                elif pdb_mode == "single" and best_pdb_seq:
-                    # single-chain は BindingDB seq 優先
-                    seq = bindingdb_seq if bindingdb_seq else best_pdb_seq
-
-                    src_pdbid = best_pdbid or ""
-                    src_chain = best_chain or ""
-
-                    # contact supervision は長さ一致時のみ使う
-                    if contact_mask and len(contact_mask) == len(seq):
-                        row_contact_mask = contact_mask
-                        row_contact_n = int(contact_n or 0)
-                    else:
-                        row_contact_mask = ""
-                        row_contact_n = 0
-
-                    keep_counter["seq_from_bindingdb_single_chain"] += 1
-
-
-                else:
-                    seq = bindingdb_seq
-
-                    row_contact_mask = ""
-                    row_contact_n = 0
-
-                    if pdb_mode == "none":
-                        keep_counter["seq_from_bindingdb_no_pdb"] += 1
-                    else:
-                        keep_counter["seq_from_bindingdb_other"] += 1
-
-                # ★ 最終安全弁（multi でも single でも必ず）
-                if not seq:
-                    drop_counter["no_valid_sequence"] += 1
-                    err_w.writerow([row_id, "no_valid_sequence", best_status])
-                    continue
-
-                # ★ 最終安全弁
-                if row_contact_mask and len(row_contact_mask) != len(seq):
-                    row_contact_mask = ""
-                    row_contact_n = 0
-                    err_w.writerow([row_id, "no_valid_sequence", best_status])
-                    continue
-
-                # --------------------------------------------------
-                # 3) smiles
-                # --------------------------------------------------
-                raw_smiles = row.get("Ligand SMILES", "")
-                can_smiles = canonicalize_smiles_cached(raw_smiles)
-                if not can_smiles:
-                    drop_counter["bad_smiles"] += 1
-                    err_w.writerow([row_id, "bad_smiles", raw_smiles])
-                    continue
-
-                if (seq, can_smiles) in core_pairs:
-                    drop_counter["core_pair"] += 1
-                    continue
-
-                if EXCLUDE_ANY_CORE_SEQ and seq in core_seqs:
-                    drop_counter["core_seq"] += 1
-                    continue
-
-                # --------------------------------------------------
-                # 4) affinity
-                # --------------------------------------------------
-                aff_type, aff_nm = pick_affinity_nm(row)
-                if aff_nm is None:
-                    drop_counter["no_affinity"] += 1
-                    err_w.writerow([row_id, "no_affinity", ""])
-                    continue
-
-                y = affinity_to_pvalue_from_nm(aff_nm)
-                if y is None:
-                    drop_counter["bad_affinity"] += 1
-                    err_w.writerow([row_id, "bad_affinity", aff_nm])
-                    continue
-                pair_key = (seq, can_smiles)
-
-                # raw rows count
-                pair_counter_before[pair_key] += 1
-
-                # unique pair existence for ligand / protein
-                # 「同じ pair の assay repeat」はここでは1回として数えたい
-                if pair_counter_before[pair_key] == 1:
-                    lig_pair_counter_before[can_smiles] += 1
-                    prot_pair_counter_before[seq] += 1
-                batch.append((
-                    seq, can_smiles, aff_type, aff_nm, y,
-                    src_pdbid, src_chain, row_contact_mask, row_contact_n
-                ))
-                kept += 1
-                if len(debug_rows_before) < 50000:
-                    debug_rows_before.append({
-                        "seq": seq,
-                        "smiles": can_smiles,
-                        "y": y
-                    })
-                if len(batch) >= PASS1_BATCH_SIZE:
-                    flush_pair_batch(cur, con, batch)
-                if seen % 10000 == 0:
-                    err_f.flush()
-
-
-    flush_pair_batch(cur, con, batch)
-
-    # ---- dedup by (seq, smiles): median y ----
-
-    rows_by_pair = defaultdict(list)
-
-    for row in cur.execute("""
-                           SELECT seq,
-                                  smiles,
-                                  aff_type,
-                                  aff_nm,
-                                  y,
-                                  src_pdbid,
-                                  src_chain,
-                                  contact_mask,
-                                  contact_n
-                           FROM pairs
-                           """):
-        seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain, contact_mask, contact_n = row
-        rows_by_pair[(seq, smiles)].append({
-            "seq": seq,
-            "smiles": smiles,
-            "aff_type": aff_type,
-            "aff_nm": aff_nm,
-            "y": float(y),
-            "src_pdbid": src_pdbid or "",
-            "src_chain": src_chain or "",
-            "contact_mask": contact_mask or "",
-            "contact_n": int(contact_n or 0),
-        })
-
-    dedup_rows = []
-
-    for (seq, smiles), group in rows_by_pair.items():
-        group_sorted = sorted(group, key=lambda r: r["y"])
-        mid = len(group_sorted) // 2
-
-        if len(group_sorted) % 2 == 1:
-            y_med = group_sorted[mid]["y"]
-        else:
-            y_med = 0.5 * (group_sorted[mid - 1]["y"] + group_sorted[mid]["y"])
-
-        # median y に一番近い行を代表行にする
-        rep = min(group, key=lambda r: abs(r["y"] - y_med))
-        rep = dict(rep)
-        rep["y"] = y_med
-
-        # aff_nm は y_med から逆算しておく
-        rep["aff_nm"] = 10 ** (9.0 - y_med)
-
-        # 複数 assay が混ざるので aff_type は mixed にしてもよい
-        aff_types = sorted({r["aff_type"] for r in group})
-        rep["aff_type"] = aff_types[0] if len(aff_types) == 1 else "mixed"
-
-        dedup_rows.append(rep)
-
-    n_raw = cur.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
-    n_unique = len(dedup_rows)
-    n_duplicates_collapsed = n_raw - n_unique
-
-    with PASS1_CSV.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow([
-            "seq", "smiles", "aff_type", "aff_nm", "y",
-            "src_pdbid", "src_chain", "contact_mask", "contact_n"
-        ])
-
-        for r in dedup_rows:
-            w.writerow([
-                r["seq"],
-                r["smiles"],
-                r["aff_type"],
-                r["aff_nm"],
-                r["y"],
-                r["src_pdbid"],
-                r["src_chain"],
-                r["contact_mask"],
-                r["contact_n"],
-            ])
-
-    with UNIQUE_SMILES_CSV.open("w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["smiles"])
-        for smi in sorted({r["smiles"] for r in dedup_rows}):
-            w.writerow([smi])
-
-    n_unique_seq = len({r["seq"] for r in dedup_rows})
-    n_unique_smiles = len({r["smiles"] for r in dedup_rows})
-
-    con.close()
-    import pandas as pd
-
-    print("\n===== before dedup (true unique pair counts) =====")
-
-    lig_vals = list(lig_pair_counter_before.values())
-    prot_vals = list(prot_pair_counter_before.values())
-
-    lig_s = pd.Series(lig_vals)
-    prot_s = pd.Series(prot_vals)
-    import pandas as pd
-
-    print("\n===== BEFORE PDB FILTER =====")
-
-    lig_vals = list(pre_pdb_lig_counter.values())
-    prot_vals = list(pre_pdb_prot_counter.values())
-
-    lig_s = pd.Series(lig_vals)
-    prot_s = pd.Series(prot_vals)
-
-    print("[ligand pairs before PDB]")
-    print(lig_s.describe())
-    print("single ratio:", (lig_s == 1).mean())
-
-    print("\n[protein pairs before PDB]")
-    print(prot_s.describe())
-    print("single ratio:", (prot_s == 1).mean())
-
-    print("[ligand unique pairs before dedup]")
-    print(lig_s.describe())
-    print("single ratio:", (lig_s == 1).mean())
-
-    print("\n[protein unique pairs before dedup]")
-    print(prot_s.describe())
-    print("single ratio:", (prot_s == 1).mean())
-    print(f"[pass1] unique seq={n_unique_seq:,}")
-    print(f"[pass1] unique smiles={n_unique_smiles:,}")
-
-    print("\n=== pass1 drop summary ===")
-    for k, v in drop_counter.most_common():
-        print(f"{k:30s}: {v:,}")
-
-    print(f"\n[pass1] seen={seen:,}")
-    print(f"[pass1] kept(before dedup)={kept:,}")
-    print(f"[pass1] unique pairs(after dedup)={n_unique:,}")
-    print(f"[pass1] duplicates collapsed={n_duplicates_collapsed:,}")
-    print(f"[pass1] wrote: {PASS1_CSV}")
-    print(f"[pass1] wrote: {UNIQUE_SMILES_CSV}")
-    print(f"[pass1] wrote: {ERROR_TSV}")
-
-    print("\n=== pass1 keep summary ===")
-    for k, v in keep_counter.most_common():
-        print(f"{k:30s}: {v:,}")
-
-    debug_pair_stats(debug_rows_before, "pass1 before dedup (sample)")
-    debug_pair_stats(dedup_rows, "pass1 after dedup")
 
 # ============================================================
 # Pass 2: tokenize unique smiles only once
