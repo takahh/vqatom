@@ -42,8 +42,10 @@ rdBase.DisableLog("rdApp.debug")
 # ============================================================
 # PATHS
 # ============================================================
-
-BINDINGDB_TSV = Path("/Users/taka/Desktop/BindingDB_All.tsv")
+GRAPHDTA_DIR = Path("/Users/taka/Documents/GraphDTA/data/kiba")
+GRAPHDTA_LIGANDS = GRAPHDTA_DIR / "ligands_can.txt"
+GRAPHDTA_PROTEINS = GRAPHDTA_DIR / "proteins.txt"
+GRAPHDTA_Y = GRAPHDTA_DIR / "Y"
 
 CORE_FINAL_EVAL_CSV = Path(
     "/Users/taka/Desktop/final_eval.csv"
@@ -87,7 +89,7 @@ TEST_CSV = OUT_DIR / "test.csv"
 # SETTINGS
 # ============================================================
 # balanced split settings
-Y_THR = 7.0
+Y_THR = 12.1
 balance_iterations = 0
 
 LIG_MIN_PAIRS = 2
@@ -145,6 +147,92 @@ MIN_COMPONENT_ROWS = 20
 # ============================================================
 # RDKit / SMILES utils
 # ============================================================
+def load_graphdta_y(path: Path):
+    import numpy as np
+    import pickle
+
+    try:
+        return np.load(path, allow_pickle=True)
+    except Exception:
+        with path.open("rb") as f:
+            return pickle.load(f, encoding="latin1")
+
+
+def pass1_from_graphdta_processed():
+    import json
+    import numpy as np
+
+    with GRAPHDTA_LIGANDS.open("r") as f:
+        lig_dict = json.load(f)
+
+    with GRAPHDTA_PROTEINS.open("r") as f:
+        prot_dict = json.load(f)
+
+    Y = np.asarray(load_graphdta_y(GRAPHDTA_Y), dtype=float)
+
+    lig_items = list(lig_dict.items())
+    prot_items = list(prot_dict.items())
+
+    print("[graphdta] Y shape:", Y.shape)
+    print("[graphdta] Y min/max/mean:", np.nanmin(Y), np.nanmax(Y), np.nanmean(Y))
+    print("[graphdta] ligands:", len(lig_items))
+    print("[graphdta] proteins:", len(prot_items))
+
+    assert Y.shape[0] == len(lig_items)
+    assert Y.shape[1] == len(prot_items)
+
+    rows = []
+    bad_smiles = 0
+    bad_seq = 0
+    missing_y = 0
+
+    for i, (lig_id, smi_raw) in enumerate(lig_items):
+        smi = canonicalize_smiles_cached(smi_raw)
+        if not smi:
+            bad_smiles += 1
+            continue
+
+        for j, (prot_id, seq_raw) in enumerate(prot_items):
+            y = Y[i, j]
+
+            if not np.isfinite(y):
+                missing_y += 1
+                continue
+
+            seq = clean_protein_seq(seq_raw)
+            if not seq:
+                bad_seq += 1
+                continue
+
+            rows.append({
+                "seq": seq,
+                "smiles": smi,
+                "aff_type": "KIBA",
+                "aff_nm": 0.0,
+                "y": float(y),
+                "src_pdbid": "",
+                "src_chain": "",
+                "contact_mask": "",
+                "contact_n": 0,
+            })
+
+    with PASS1_CSV.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=[
+            "seq", "smiles", "aff_type", "aff_nm", "y",
+            "src_pdbid", "src_chain", "contact_mask", "contact_n"
+        ])
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+    with UNIQUE_SMILES_CSV.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["smiles"])
+        for smi in sorted({r["smiles"] for r in rows}):
+            w.writerow([smi])
+
+    print(f"[graphdta] rows={len(rows):,}")
+    print(f"[graphdta] bad_smiles={bad_smiles:,} bad_seq={bad_seq:,} missing_y={missing_y:,}")
 
 def try_sanitize_rescue(mol):
     if mol is None:
@@ -910,6 +998,11 @@ def pass1_clean_and_dedup():
     seen = 0
     kept = 0
     batch = []
+    from collections import Counter
+
+    lig_pair_counter_before = Counter()
+    prot_pair_counter_before = Counter()
+    pair_counter_before = Counter()
 
     debug_rows_before = []
     with ERROR_TSV.open("w", encoding="utf-8", newline="") as err_f:
@@ -918,6 +1011,9 @@ def pass1_clean_and_dedup():
 
         with BINDINGDB_TSV.open("r", encoding="utf-8", errors="ignore", newline="") as f:
             reader = csv.DictReader(f, delimiter="\t")
+            pre_pdb_lig_counter = Counter()
+            pre_pdb_prot_counter = Counter()
+            pre_pdb_pair_counter = Counter()
 
             for row in tqdm(reader, desc="pass1 clean"):
                 seen += 1
@@ -928,6 +1024,15 @@ def pass1_clean_and_dedup():
                 # --------------------------------------------------
                 bindingdb_seq = get_bindingdb_target_seq(row)
 
+                raw_smiles = row.get("Ligand SMILES", "")
+                can_smiles = canonicalize_smiles_cached(raw_smiles)
+
+                pair_key = (bindingdb_seq, can_smiles)
+
+                pre_pdb_pair_counter[pair_key] += 1
+                if pre_pdb_pair_counter[pair_key] == 1:
+                    pre_pdb_lig_counter[can_smiles] += 1
+                    pre_pdb_prot_counter[bindingdb_seq] += 1
                 # --------------------------------------------------
                 # 2) optional PDB-based disambiguation
                 # --------------------------------------------------
@@ -985,12 +1090,15 @@ def pass1_clean_and_dedup():
                         keep_counter["seq_from_bindingdb_other"] += 1
 
                 # ★ 最終安全弁（multi でも single でも必ず）
+                if not seq:
+                    drop_counter["no_valid_sequence"] += 1
+                    err_w.writerow([row_id, "no_valid_sequence", best_status])
+                    continue
+
+                # ★ 最終安全弁
                 if row_contact_mask and len(row_contact_mask) != len(seq):
                     row_contact_mask = ""
                     row_contact_n = 0
-
-                if not seq:
-                    drop_counter["no_valid_sequence"] += 1
                     err_w.writerow([row_id, "no_valid_sequence", best_status])
                     continue
 
@@ -1026,7 +1134,16 @@ def pass1_clean_and_dedup():
                     drop_counter["bad_affinity"] += 1
                     err_w.writerow([row_id, "bad_affinity", aff_nm])
                     continue
+                pair_key = (seq, can_smiles)
 
+                # raw rows count
+                pair_counter_before[pair_key] += 1
+
+                # unique pair existence for ligand / protein
+                # 「同じ pair の assay repeat」はここでは1回として数えたい
+                if pair_counter_before[pair_key] == 1:
+                    lig_pair_counter_before[can_smiles] += 1
+                    prot_pair_counter_before[seq] += 1
                 batch.append((
                     seq, can_smiles, aff_type, aff_nm, y,
                     src_pdbid, src_chain, row_contact_mask, row_contact_n
@@ -1042,6 +1159,7 @@ def pass1_clean_and_dedup():
                     flush_pair_batch(cur, con, batch)
                 if seen % 10000 == 0:
                     err_f.flush()
+
 
     flush_pair_batch(cur, con, batch)
 
@@ -1133,7 +1251,40 @@ def pass1_clean_and_dedup():
     n_unique_smiles = len({r["smiles"] for r in dedup_rows})
 
     con.close()
+    import pandas as pd
 
+    print("\n===== before dedup (true unique pair counts) =====")
+
+    lig_vals = list(lig_pair_counter_before.values())
+    prot_vals = list(prot_pair_counter_before.values())
+
+    lig_s = pd.Series(lig_vals)
+    prot_s = pd.Series(prot_vals)
+    import pandas as pd
+
+    print("\n===== BEFORE PDB FILTER =====")
+
+    lig_vals = list(pre_pdb_lig_counter.values())
+    prot_vals = list(pre_pdb_prot_counter.values())
+
+    lig_s = pd.Series(lig_vals)
+    prot_s = pd.Series(prot_vals)
+
+    print("[ligand pairs before PDB]")
+    print(lig_s.describe())
+    print("single ratio:", (lig_s == 1).mean())
+
+    print("\n[protein pairs before PDB]")
+    print(prot_s.describe())
+    print("single ratio:", (prot_s == 1).mean())
+
+    print("[ligand unique pairs before dedup]")
+    print(lig_s.describe())
+    print("single ratio:", (lig_s == 1).mean())
+
+    print("\n[protein unique pairs before dedup]")
+    print(prot_s.describe())
+    print("single ratio:", (prot_s == 1).mean())
     print(f"[pass1] unique seq={n_unique_seq:,}")
     print(f"[pass1] unique smiles={n_unique_smiles:,}")
 
@@ -1751,7 +1902,18 @@ def stage4_protein_cold_split():
     # after kept_rows is made and before protein-cluster filtering
     for r in kept_rows:
         r["y_bin"] = int(r["y_bin"])
+    lig_stats = compute_entity_stats(kept_rows, "lig_tok")
+    prot_stats = compute_entity_stats(kept_rows, "seq")
+    clust_stats = compute_entity_stats(kept_rows, "protein_cluster")
 
+    print("lig >=2:", sum(1 for s in lig_stats.values() if s["n"] >= 2))
+    print("rows with lig>=2:", sum(s["n"] for s in lig_stats.values() if s["n"] >= 2))
+
+    print("seq >=2:", sum(1 for s in prot_stats.values() if s["n"] >= 2))
+    print("rows with seq>=2:", sum(s["n"] for s in prot_stats.values() if s["n"] >= 2))
+
+    print("cluster >=2:", sum(1 for s in clust_stats.values() if s["n"] >= 2))
+    print("rows with cluster>=2:", sum(s["n"] for s in clust_stats.values() if s["n"] >= 2))
     kept_rows, lig_stats, prot_stats, good_ligs, good_prots = filter_rows_by_entity_constraints(
         kept_rows,
         lig_min_pairs=2,
@@ -1954,23 +2116,18 @@ def debug_tokenizer_once():
 # ============================================================
 
 def main():
-    # print("\n=== stage 1a: collect unique pdb ids ===")
-    # unique_pdbids = collect_unique_bindingdb_pdbids(BINDINGDB_TSV, PDB_COL)
-    #
-    # print("\n=== stage 1b: build pdb chain cache ===")
-    # build_pdb_chain_cache(unique_pdbids)
+    print("\n=== stage 2: make KIBA rows ===")
+    pass1_from_graphdta_processed()
 
-    # print("\n=== stage 2: clean + dedup bindingdb rows ===")
-    # pass1_clean_and_dedup()
-    #
-    # print("\n=== stage 3: tokenize unique smiles ===")
-    # pass2_make_smiles_token_map_parallel()
-    #
-    # print("\n=== stage 4: join tokens ===")
-    # pass3_join_tokens()
+    print("\n=== stage 3: tokenize unique smiles ===")
+    pass2_make_smiles_token_map_parallel()
 
-    print("\n=== stage 5: protein-cluster + scaffold double-cold split (no balance) ===")
+    print("\n=== stage 4: join tokens ===")
+    pass3_join_tokens()
+
+    print("\n=== stage 5: protein-cold split ===")
     stage4_protein_cold_split()
+
 
 if __name__ == "__main__":
     main()
