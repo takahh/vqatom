@@ -1041,35 +1041,93 @@ def pass1_clean_and_dedup():
 
     flush_pair_batch(cur, con, batch)
 
-    n_unique = cur.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
-    n_duplicates_collapsed = kept - n_unique
+    # ---- dedup by (seq, smiles): median y ----
+
+    rows_by_pair = defaultdict(list)
+
+    for row in cur.execute("""
+                           SELECT seq,
+                                  smiles,
+                                  aff_type,
+                                  aff_nm,
+                                  y,
+                                  src_pdbid,
+                                  src_chain,
+                                  contact_mask,
+                                  contact_n
+                           FROM pairs
+                           """):
+        seq, smiles, aff_type, aff_nm, y, src_pdbid, src_chain, contact_mask, contact_n = row
+        rows_by_pair[(seq, smiles)].append({
+            "seq": seq,
+            "smiles": smiles,
+            "aff_type": aff_type,
+            "aff_nm": aff_nm,
+            "y": float(y),
+            "src_pdbid": src_pdbid or "",
+            "src_chain": src_chain or "",
+            "contact_mask": contact_mask or "",
+            "contact_n": int(contact_n or 0),
+        })
+
+    dedup_rows = []
+
+    for (seq, smiles), group in rows_by_pair.items():
+        group_sorted = sorted(group, key=lambda r: r["y"])
+        mid = len(group_sorted) // 2
+
+        if len(group_sorted) % 2 == 1:
+            y_med = group_sorted[mid]["y"]
+        else:
+            y_med = 0.5 * (group_sorted[mid - 1]["y"] + group_sorted[mid]["y"])
+
+        # median y に一番近い行を代表行にする
+        rep = min(group, key=lambda r: abs(r["y"] - y_med))
+        rep = dict(rep)
+        rep["y"] = y_med
+
+        # aff_nm は y_med から逆算しておく
+        rep["aff_nm"] = 10 ** (9.0 - y_med)
+
+        # 複数 assay が混ざるので aff_type は mixed にしてもよい
+        aff_types = sorted({r["aff_type"] for r in group})
+        rep["aff_type"] = aff_types[0] if len(aff_types) == 1 else "mixed"
+
+        dedup_rows.append(rep)
+
+    n_raw = cur.execute("SELECT COUNT(*) FROM pairs").fetchone()[0]
+    n_unique = len(dedup_rows)
+    n_duplicates_collapsed = n_raw - n_unique
 
     with PASS1_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["seq", "smiles", "aff_type", "aff_nm", "y", "src_pdbid", "src_chain", "contact_mask", "contact_n"])
-        dedup_rows = []
-        for row in cur.execute("""
-                               SELECT seq,
-                                      smiles,
-                                      aff_type,
-                                      aff_nm,
-                                      y,
-                                      src_pdbid,
-                                      src_chain,
-                                      contact_mask,
-                                      contact_n
-                               FROM pairs
-                               """):
-            w.writerow(row)
+        w.writerow([
+            "seq", "smiles", "aff_type", "aff_nm", "y",
+            "src_pdbid", "src_chain", "contact_mask", "contact_n"
+        ])
+
+        for r in dedup_rows:
+            w.writerow([
+                r["seq"],
+                r["smiles"],
+                r["aff_type"],
+                r["aff_nm"],
+                r["y"],
+                r["src_pdbid"],
+                r["src_chain"],
+                r["contact_mask"],
+                r["contact_n"],
+            ])
 
     with UNIQUE_SMILES_CSV.open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
         w.writerow(["smiles"])
-        for row in cur.execute("SELECT DISTINCT smiles FROM pairs"):
-            w.writerow([row[0]])
+        for smi in sorted({r["smiles"] for r in dedup_rows}):
+            w.writerow([smi])
 
-    n_unique_seq = cur.execute("SELECT COUNT(DISTINCT seq) FROM pairs").fetchone()[0]
-    n_unique_smiles = cur.execute("SELECT COUNT(DISTINCT smiles) FROM pairs").fetchone()[0]
+    n_unique_seq = len({r["seq"] for r in dedup_rows})
+    n_unique_smiles = len({r["smiles"] for r in dedup_rows})
+
     con.close()
 
     print(f"[pass1] unique seq={n_unique_seq:,}")
@@ -1683,23 +1741,104 @@ def stage4_protein_cold_split():
 
     kept_rows = filtered_rows
 
-    # 4) split protein clusters only
-    prot_clusters = sorted({r["protein_cluster"] for r in kept_rows})
-    rng = random.Random(SPLIT_SEED)
-    rng.shuffle(prot_clusters)
+    # 4) stratified protein-cluster cold split
+    #    protein_cluster を単位に保ったまま、
+    #    row数とpositive数が train/valid/test で近くなるように greedy 割当する
 
-    n_total = len(prot_clusters)
-    n_train = int(round(n_total * SPLIT_RATIOS["train"]))
-    n_valid = int(round(n_total * SPLIT_RATIOS["valid"]))
-    n_test = n_total - n_train - n_valid
+    def make_cluster_stratified_split(rows, ratios, seed=123):
+        split_names = ["train", "valid", "test"]
 
-    train_clusters = set(prot_clusters[:n_train])
-    valid_clusters = set(prot_clusters[n_train:n_train + n_valid])
-    test_clusters = set(prot_clusters[n_train + n_valid:])
+        by_cluster = defaultdict(list)
+        for r in rows:
+            by_cluster[r["protein_cluster"]].append(r)
+
+        total_rows = len(rows)
+        total_pos = sum(int(r["y_bin"]) for r in rows)
+        global_pos_rate = total_pos / max(1, total_rows)
+
+        cluster_stats = []
+        for c, rs in by_cluster.items():
+            n = len(rs)
+            pos = sum(int(r["y_bin"]) for r in rs)
+            pos_rate = pos / max(1, n)
+            cluster_stats.append({
+                "cluster": c,
+                "n": n,
+                "pos": pos,
+                "pos_rate": pos_rate,
+                "n_lig": len({r["lig_tok"] for r in rs}),
+            })
+
+        rng = random.Random(seed)
+        rng.shuffle(cluster_stats)
+
+        # 大きさとpos_rateで並べて、各binから8:1:1で取る
+        cluster_stats.sort(
+            key=lambda d: (
+                -d["n"],
+                -abs(d["pos_rate"] - global_pos_rate),
+                -d["n_lig"],
+            )
+        )
+
+        assigned = {s: set() for s in split_names}
+
+        # 10個ずつのブロックで 8 train, 1 valid, 1 test
+        # これで巨大clusterがvalid/testに偏りにくい
+        for i in range(0, len(cluster_stats), 10):
+            block = cluster_stats[i:i + 10]
+            rng.shuffle(block)
+
+            for j, st in enumerate(block):
+                if j < 8:
+                    s = "train"
+                elif j == 8:
+                    s = "valid"
+                else:
+                    s = "test"
+                assigned[s].add(st["cluster"])
+
+        # stats
+        cur_rows = {s: 0 for s in split_names}
+        cur_pos = {s: 0 for s in split_names}
+
+        for st in cluster_stats:
+            for s in split_names:
+                if st["cluster"] in assigned[s]:
+                    cur_rows[s] += st["n"]
+                    cur_pos[s] += st["pos"]
+                    break
+
+        print("\n[split] rank-stratified protein-cluster assignment")
+        for s in split_names:
+            pr = cur_pos[s] / max(1, cur_rows[s])
+            print(
+                f"    {s}: clusters={len(assigned[s]):,} "
+                f"rows={cur_rows[s]:,} "
+                f"pos={cur_pos[s]:,} "
+                f"pos_rate={pr:.3f}"
+            )
+
+        return assigned["train"], assigned["valid"], assigned["test"]
+    
+    train_clusters, valid_clusters, test_clusters = make_cluster_stratified_split(
+        kept_rows,
+        SPLIT_RATIOS,
+        seed=SPLIT_SEED,
+    )
 
     print(
-        f"[split] protein clusters total={n_total:,} "
-        f"train={len(train_clusters):,} valid={len(valid_clusters):,} test={len(test_clusters):,}"
+        f"[split] protein clusters total="
+        f"{len(train_clusters) + len(valid_clusters) + len(test_clusters):,} "
+        f"train={len(train_clusters):,} "
+        f"valid={len(valid_clusters):,} "
+        f"test={len(test_clusters):,}"
+    )
+
+    n_total_clusters = (
+            len(train_clusters)
+            + len(valid_clusters)
+            + len(test_clusters)
     )
 
     # 5) assign rows by protein cluster
@@ -1802,11 +1941,11 @@ def main():
     # print("\n=== stage 1b: build pdb chain cache ===")
     # build_pdb_chain_cache(unique_pdbids)
 
-    print("\n=== stage 2: clean + dedup bindingdb rows ===")
-    pass1_clean_and_dedup()
-
-    print("\n=== stage 3: tokenize unique smiles ===")
-    pass2_make_smiles_token_map_parallel()
+    # print("\n=== stage 2: clean + dedup bindingdb rows ===")
+    # pass1_clean_and_dedup()
+    #
+    # print("\n=== stage 3: tokenize unique smiles ===")
+    # pass2_make_smiles_token_map_parallel()
 
     print("\n=== stage 4: join tokens ===")
     pass3_join_tokens()
