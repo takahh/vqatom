@@ -373,6 +373,7 @@ class PretrainedLigandEncoder(nn.Module):
         vq_ckpt_path: Optional[str] = None,
         verbose_load: bool = True,
         debug_index_check: bool = False,
+        load_pretrained: bool = True,  # 追加
     ):
         super().__init__()
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -436,16 +437,20 @@ class PretrainedLigandEncoder(nn.Module):
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
         self.debug_index_check = bool(debug_index_check)
 
-        load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
+        if load_pretrained:
+            load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
 
-        mlm_tok_key = "tok.weight"
-        if mlm_tok_key in self.state:
-            w = self.state[mlm_tok_key]
-            if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
-                overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
-                if overlap > 0:
-                    with torch.no_grad():
-                        self.tok.weight[:overlap].copy_(w[:overlap])
+            mlm_tok_key = "tok.weight"
+            if mlm_tok_key in self.state:
+                w = self.state[mlm_tok_key]
+                if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
+                    overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
+                    if overlap > 0:
+                        with torch.no_grad():
+                            self.tok.weight[:overlap].copy_(w[:overlap])
+        else:
+            print("[lig] NO PRETRAIN: random initialized ligand Transformer")
+            self.vocab_source = self.vocab_source + ":no_pretrain"
 
         self.to(device)
         if not finetune:
@@ -1742,6 +1747,7 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 # =========================================================
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--lig_no_pretrain", action="store_true")
     ap.add_argument("--contact_lambda", type=float, default=0.0)
     ap.add_argument("--use_train_valid_csv", action="store_true")
     ap.add_argument("--train_csv", type=str, default=None)
@@ -1841,10 +1847,11 @@ def main():
     lig_enc = PretrainedLigandEncoder(
         ckpt_path=args.lig_ckpt,
         device=device,
-        finetune=args.finetune_lig,
+        finetune=True if args.lig_no_pretrain else args.finetune_lig,
         vq_ckpt_path=args.vq_ckpt,
         verbose_load=True,
         debug_index_check=bool(args.lig_debug_index),
+        load_pretrained=not args.lig_no_pretrain,
     )
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
