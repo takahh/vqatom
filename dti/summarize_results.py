@@ -9,8 +9,8 @@ import matplotlib.pyplot as plt
 # =========================================================
 # settings
 # =========================================================
-base_dir = "/Users/taka/Documents/results"
-exp_names = ["smiles", "dti"]   # results/smiles, results/dti
+base_dir = "/Users/taka/Documents/dti_results/"
+exp_names = ["smiles", "vq"]   # results/smiles, results/dti
 seed_pattern = "seed*"
 
 save_summary_csv = os.path.join(base_dir, "summary_best_valid_per_seed.csv")
@@ -165,7 +165,8 @@ for exp_name in exp_names:
 
     for seed_dir in seed_dirs:
         seed_name = os.path.basename(seed_dir)
-        json_dir = os.path.join(seed_dir, "json")
+        # json_dir = os.path.join(seed_dir, "json")
+        json_dir = seed_dir
 
         if not os.path.isdir(json_dir):
             print(f"[skip] no json dir: {json_dir}")
