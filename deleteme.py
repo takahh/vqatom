@@ -6,6 +6,7 @@ import math
 import matplotlib.pyplot as plt
 
 json_dir = "/Users/taka/Documents/dti_results/vq_no_pretrained/seed2"
+json_dir = "/Users/taka/Documents/dti_results/smiles_no_pretrained/seed1"
 # json_dir = "/Users/taka/Downloads"
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
 

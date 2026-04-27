@@ -23,7 +23,7 @@ init_tokenizer(
 def draw_single_mol(
     mol,
     width=1800,
-    height=700,
+    height=800,
     token_mode=False,
 ):
     drawer = rdMolDraw2D.MolDraw2DCairo(width, height)
@@ -34,19 +34,15 @@ def draw_single_mol(
     opts.baseFontSize = 1.0
 
     if token_mode:
-        # Token ID を大きめに
-        opts.annotationFontScale = 0.85
-        opts.additionalAtomLabelPadding = 0.18
+        # Token ID を少し小さめに
+        opts.annotationFontScale = 0.70
+        opts.additionalAtomLabelPadding = 0.16
 
-        # かなり薄いグレー（かなり明るい）
-        # 前: (0.62, 0.62, 0.62)
-        # 今回: さらに薄く
+        # 構造線と元素記号をかなり薄く
         opts.setSymbolColour((0.94, 0.94, 0.94))
-
-        # 線もさらに細め
         opts.bondLineWidth = 1
 
-        # Token ID は黒のまま
+        # Token ID は黒
         try:
             opts.setAnnotationColour((0.0, 0.0, 0.0))
         except Exception:
@@ -104,15 +100,13 @@ for mol_name, smiles in example_smiles.items():
     mol = Chem.MolFromSmiles(smiles)
     AllChem.Compute2DCoords(mol)
 
-    # =================================================
-    # 上：通常の分子図
-    # =================================================
+    # 左：通常の分子図
     mol_plain = Chem.Mol(mol)
 
     img_plain = draw_single_mol(
         mol_plain,
-        width=1800,
-        height=650,
+        width=1600,
+        height=850,
         token_mode=False,
     )
 
@@ -123,9 +117,7 @@ for mol_name, smiles in example_smiles.items():
         title_height=120,
     )
 
-    # =================================================
-    # 下：VQ-Atom ID付き（構造線だけ薄い）
-    # =================================================
+    # 右：VQ-Atom ID付き
     mol_token = Chem.Mol(mol)
 
     for i, atom in enumerate(mol_token.GetAtoms()):
@@ -134,8 +126,8 @@ for mol_name, smiles in example_smiles.items():
 
     img_token = draw_single_mol(
         mol_token,
-        width=1800,
-        height=800,
+        width=1600,
+        height=850,
         token_mode=True,
     )
 
@@ -146,27 +138,25 @@ for mol_name, smiles in example_smiles.items():
         title_height=120,
     )
 
-    # =================================================
-    # 縦に連結
-    # =================================================
-    gap = 80
+    # 横に連結
+    gap = 100
 
-    w = max(img_plain.width, img_token.width)
-    h = img_plain.height + gap + img_token.height
+    w = img_plain.width + gap + img_token.width
+    h = max(img_plain.height, img_token.height)
 
     canvas = Image.new("RGB", (w, h), "white")
 
     canvas.paste(
         img_plain,
-        ((w - img_plain.width) // 2, 0),
+        (0, (h - img_plain.height) // 2),
     )
 
     canvas.paste(
         img_token,
-        ((w - img_token.width) // 2, img_plain.height + gap),
+        (img_plain.width + gap, (h - img_token.height) // 2),
     )
 
-    out_path = f"{mol_name}_vertical_pair.png"
+    out_path = f"{mol_name}_horizontal_pair.png"
     canvas.save(out_path, dpi=(300, 300))
 
     print(f"saved: {out_path}")

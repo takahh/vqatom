@@ -10,7 +10,8 @@ import matplotlib.pyplot as plt
 # settings
 # =========================================================
 base_dir = "/Users/taka/Documents/dti_results/"
-exp_names = ["smiles", "vq"]   # results/smiles, results/dti
+# exp_names = ["smiles", "vq"]   # results/smiles, results/dti
+exp_names = ["smiles_no_pretrained", "vq_no_pretrained"]   # results/smiles, results/dti
 seed_pattern = "seed*"
 
 save_summary_csv = os.path.join(base_dir, "summary_best_valid_per_seed.csv")
