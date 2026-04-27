@@ -22,25 +22,25 @@ init_tokenizer(
 
 def draw_single_mol(
     mol,
-    width=1800,
-    height=800,
+    width=1350,
+    height=820,
     token_mode=False,
 ):
     drawer = rdMolDraw2D.MolDraw2DCairo(width, height)
     opts = drawer.drawOptions()
 
-    opts.padding = 0.06
+    opts.padding = 0.035
     opts.bondLineWidth = 2.4
     opts.baseFontSize = 1.0
 
     if token_mode:
-        # Token ID を少し小さめに
-        opts.annotationFontScale = 0.70
+        # Token ID を少し小さめ
+        opts.annotationFontScale = 0.90
         opts.additionalAtomLabelPadding = 0.16
 
         # 構造線と元素記号をかなり薄く
         opts.setSymbolColour((0.94, 0.94, 0.94))
-        opts.bondLineWidth = 1
+        opts.bondLineWidth = 0.7
 
         # Token ID は黒
         try:
@@ -69,7 +69,7 @@ def add_title(
 
     try:
         font = ImageFont.truetype("Arial.ttf", font_size)
-    except:
+    except Exception:
         font = ImageFont.load_default()
 
     bbox = draw.textbbox((0, 0), title, font=font)
@@ -100,13 +100,15 @@ for mol_name, smiles in example_smiles.items():
     mol = Chem.MolFromSmiles(smiles)
     AllChem.Compute2DCoords(mol)
 
+    # =================================================
     # 左：通常の分子図
+    # =================================================
     mol_plain = Chem.Mol(mol)
 
     img_plain = draw_single_mol(
         mol_plain,
-        width=1600,
-        height=850,
+        width=1350,
+        height=920,
         token_mode=False,
     )
 
@@ -117,7 +119,9 @@ for mol_name, smiles in example_smiles.items():
         title_height=120,
     )
 
+    # =================================================
     # 右：VQ-Atom ID付き
+    # =================================================
     mol_token = Chem.Mol(mol)
 
     for i, atom in enumerate(mol_token.GetAtoms()):
@@ -126,8 +130,8 @@ for mol_name, smiles in example_smiles.items():
 
     img_token = draw_single_mol(
         mol_token,
-        width=1600,
-        height=850,
+        width=1350,
+        height=1020,
         token_mode=True,
     )
 
@@ -138,8 +142,10 @@ for mol_name, smiles in example_smiles.items():
         title_height=120,
     )
 
-    # 横に連結
-    gap = 100
+    # =================================================
+    # 横に連結：絵の間と左右余白を小さく
+    # =================================================
+    gap = 5
 
     w = img_plain.width + gap + img_token.width
     h = max(img_plain.height, img_token.height)
