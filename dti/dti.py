@@ -1616,10 +1616,10 @@ class DualStreamDTIClassifier(nn.Module):
 
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
-        pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
+        pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)
 
         lp_z = row_zscore(lp_score)
-        pl_z = row_zscore(pl_score.transpose(-1, -2))
+        pl_z = row_zscore(pl_score)
 
         if self.pl_lp_overlap == "both":
             pair_map = torch.minimum(lp_z, pl_z)
