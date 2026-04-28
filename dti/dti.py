@@ -1609,17 +1609,24 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=True,
         )
 
+        def row_zscore(x, eps=1e-6):
+            mu = x.mean(dim=-1, keepdim=True)
+            sd = x.std(dim=-1, keepdim=True).clamp_min(eps)
+            return (x - mu) / sd
+
+
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
 
+        lp_z = row_zscore(lp_score)
+        pl_z = row_zscore(pl_score.transpose(-1, -2))
+
         if self.pl_lp_overlap == "both":
-            pair_map = torch.minimum(lp_score, pl_score)
-
+            pair_map = torch.minimum(lp_z, pl_z)
         elif self.pl_lp_overlap == "lp":
-            pair_map = lp_score
-
+            pair_map = lp_z
         else:
-            pair_map = pl_score
+            pair_map = pl_z
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
