@@ -1635,6 +1635,7 @@ class DualStreamDTIClassifier(nn.Module):
         else:
             pair_map = pl_score
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
+        pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
 
         # valid mask
         valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)

@@ -121,3 +121,47 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+# -------------------
+# EF Plot (Final Eval) + Save
+# -------------------
+
+final_ef1 = []
+final_ef5 = []
+final_ef10 = []
+
+for fp in files:
+    with open(fp, "r") as f:
+        d = json.load(f)
+
+    final_metrics = d.get("final_eval_metrics", {})
+
+    final_ef1.append(final_metrics.get("ef1"))
+    final_ef5.append(final_metrics.get("ef5"))
+    final_ef10.append(final_metrics.get("ef10"))
+
+
+plt.figure(figsize=(8, 5))
+
+plt.plot(epochs, final_ef1, marker="o", label="Final EF1")
+plt.plot(epochs, final_ef5, marker="o", label="Final EF5")
+plt.plot(epochs, final_ef10, marker="o", label="Final EF10")
+
+plt.axvline(
+    epochs[best_i],
+    linestyle="--",
+    label=f"best valid ep={epochs[best_i]}"
+)
+
+plt.xlabel("Epoch")
+plt.ylabel("Enrichment Factor")
+plt.title("Final Eval EF vs Epoch")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+
+save_path = os.path.join(json_dir, "final_eval_ef_plot.png")
+plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+print(f"saved to: {save_path}")
+
+plt.show()
