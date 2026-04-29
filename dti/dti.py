@@ -591,6 +591,10 @@ def visualize_one_qk_map(
 
     P_pl_raw = headmean(aux.get("pl_pair_score"))
     P_pl = trim_pl(P_pl_raw) if P_pl_raw is not None else None
+    PairMap = aux.get("pair_map")
+    if PairMap is not None:
+        PairMap = PairMap[sample_idx_in_batch].detach().float().cpu().numpy()
+        PairMap = trim_lp(PairMap)
 
     if S_lp is not None:
         plot_one(
@@ -616,7 +620,12 @@ def visualize_one_qk_map(
             f"lig <- prot pair_ctx_norm(mean) | prob={prob:.4f} y_bin={y_bin:.0f}",
             os.path.join(save_dir, f"{base}_lp_pairctx_norm_mean.png") if save_dir else None,
         )
-
+    if PairMap is not None:
+        plot_one(
+            PairMap,
+            f"pair_map(final overlap) | prob={prob:.4f} y_bin={y_bin:.0f}",
+            os.path.join(save_dir, f"{base}_pair_map.png") if save_dir else None,
+        )
     if S_pl is not None:
         plot_one(
             S_pl,
@@ -699,6 +708,7 @@ def visualize_one_qk_map(
         "attn_pl": A_pl,
         "attn_pl_x_v": X_pl,
         "attn_pl_pairctx": P_pl,
+        "pair_map": PairMap,  # ←追加
         "prob": prob,
         "y_bin": y_bin,
     }
@@ -1618,15 +1628,12 @@ class DualStreamDTIClassifier(nn.Module):
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)
 
-        lp_z = row_zscore(lp_score)
-        pl_z = row_zscore(pl_score)
-
         if self.pl_lp_overlap == "both":
-            pair_map = torch.minimum(lp_z, pl_z)
+            pair_map = torch.minimum(lp_score, pl_score)
         elif self.pl_lp_overlap == "lp":
-            pair_map = lp_z
+            pair_map = lp_score
         else:
-            pair_map = pl_z
+            pair_map = pl_score
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
 
         # valid mask
