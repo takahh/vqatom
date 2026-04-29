@@ -1498,7 +1498,7 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Linear(128, 1),
         )
         self.cls_head = nn.Sequential(
-            nn.Linear(d_model * 4, 256),
+            nn.Linear(d_model * 8 + 2, 256),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(256, 1),
@@ -1649,14 +1649,14 @@ class DualStreamDTIClassifier(nn.Module):
         pair_map = pair_map.masked_fill(~valid, 0.0)
 
         # optional area normalization to reduce length bias
-        denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
-        pair_map = pair_map / denom.sqrt()
+        # denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+        # pair_map = pair_map / denom.sqrt()
 
         # p_ctx: (B, Lp, D)
         # l_ctx: (B, Ll, D)
 
-        Lp = p_ctx.unsqueeze(1)  # (B,1,Lp,D)
-        Ll = l_ctx.unsqueeze(2)  # (B,Ll,1,D)
+        Lp = p_tok.unsqueeze(1)  # original protein token features
+        Ll = l_tok.unsqueeze(2)  # original ligand token features
 
         pair_feat = torch.cat([
             Ll.expand(-1, -1, p_ctx.size(1), -1),
@@ -1669,8 +1669,12 @@ class DualStreamDTIClassifier(nn.Module):
 
         weighted = pair_feat * score
 
-        denom = score.sum(dim=(1, 2)).clamp_min(1e-6)
-        h_mid = weighted.sum(dim=(1, 2)) / denom  # (B,4D)
+        h_sum = weighted.sum(dim=(1, 2))  # intensity kept
+        h_mean = h_sum / score.sum(dim=(1, 2)).clamp_min(1e-6)  # pattern/identity
+        score_mass = score.sum(dim=(1, 2))  # total interaction strength
+        score_max = score.amax(dim=(1, 2))  # strongest pair
+
+        h_mid = torch.cat([h_mean, h_sum, score_mass, score_max], dim=-1)
 
         logit = self.cls_head(h_mid).squeeze(-1)
 
