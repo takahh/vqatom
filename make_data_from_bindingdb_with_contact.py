@@ -47,12 +47,37 @@ def open_text_maybe_gz(path):
 def get_resolution_from_cif(cif_path):
     try:
         d = MMCIF2Dict(cif_path)
-        v = d.get("_refine.ls_d_res_high")
-        if isinstance(v, list):
-            v = v[0]
-        if v in (None, "?", "."):
-            return None
-        return float(v)
+
+        keys = [
+            "_refine.ls_d_res_high",
+            "_em_3d_reconstruction.resolution",
+            "_reflns.d_resolution_high",
+        ]
+
+        for k in keys:
+            v = d.get(k)
+            if v is None:
+                continue
+
+            # list対応
+            if isinstance(v, list):
+                for x in v:
+                    if x not in (None, "?", ".", ""):
+                        try:
+                            print(float(str(x).strip()))
+                            return float(str(x).strip())
+                        except:
+                            continue
+            else:
+                if v not in (None, "?", ".", ""):
+                    try:
+                        print(float(str(v).strip()))
+                        return float(str(v).strip())
+                    except:
+                        pass
+
+        return None
+
     except Exception:
         return None
 
@@ -493,6 +518,7 @@ def main():
 
     parser = MMCIFParser(QUIET=True)
     struct_cache = {}
+    res_cache = {}
 
     out_fields = [
         "seq",
@@ -572,8 +598,17 @@ def main():
                     stats["no_cif_path"] += 1
                     continue
 
-                res = get_resolution_from_cif(cif_path)
-                if res is None or res > args.min_resolution:
+                if pdb_id in res_cache:
+                    res = res_cache[pdb_id]
+                else:
+                    res = get_resolution_from_cif(cif_path)
+                    res_cache[pdb_id] = res
+
+                if res is None:
+                    stats["resolution_missing"] += 1
+                    continue
+
+                if res > args.min_resolution:
                     stats["bad_resolution"] += 1
                     continue
 
