@@ -9,7 +9,7 @@ import json
 import random
 import argparse
 from collections import defaultdict
-from Bio.PDB.MMCIF2Dict import MMCIF2Dict
+
 import numpy as np
 from tqdm import tqdm
 
@@ -18,8 +18,10 @@ from rdkit.Chem import AllChem
 
 from Bio.PDB import MMCIFParser, NeighborSearch
 from Bio.PDB.Polypeptide import is_aa
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 
-MIN_RESOLUTION = 2.5
+
+MIN_RESOLUTION = 3.5
 
 AA3_TO_1 = {
     "ALA":"A","ARG":"R","ASN":"N","ASP":"D","CYS":"C",
@@ -41,6 +43,7 @@ def open_text_maybe_gz(path):
         return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
     return open(path, "r", encoding="utf-8", errors="ignore")
 
+
 def get_resolution_from_cif(cif_path):
     try:
         d = MMCIF2Dict(cif_path)
@@ -52,6 +55,7 @@ def get_resolution_from_cif(cif_path):
         return float(v)
     except Exception:
         return None
+
 
 def norm_smiles(s):
     if not s:
@@ -76,8 +80,6 @@ def mol_has_3d(mol):
     if mol is None or mol.GetNumConformers() == 0:
         return False
     conf = mol.GetConformer()
-    if not conf.Is3D():
-        return False
     coords = []
     for i in range(mol.GetNumAtoms()):
         p = conf.GetAtomPosition(i)
@@ -87,12 +89,6 @@ def mol_has_3d(mol):
 
 
 def load_sdf_index(sdf_path, max_mols=None):
-    """
-    index:
-      monomer_id -> mol
-      canonical_smiles -> mol
-      inchikey -> mol
-    """
     by_monomer = {}
     by_smiles = {}
     by_inchikey = {}
@@ -105,6 +101,7 @@ def load_sdf_index(sdf_path, max_mols=None):
 
     n = 0
     kept = 0
+
     for mol in tqdm(suppl, desc="index SDF"):
         n += 1
         if mol is None:
@@ -129,18 +126,20 @@ def load_sdf_index(sdf_path, max_mols=None):
             or ""
         ).strip()
 
-        can = norm_smiles(smi)
-        if not can:
-            try:
-                can = Chem.MolToSmiles(Chem.RemoveHs(mol), canonical=True)
-            except Exception:
-                can = ""
         try:
             mol_noh = Chem.RemoveHs(mol, sanitize=False)
         except Exception:
             continue
 
+        can = norm_smiles(smi)
+        if not can:
+            try:
+                can = Chem.MolToSmiles(mol_noh, canonical=True)
+            except Exception:
+                can = ""
+
         ik = inchikey_from_mol(mol_noh)
+
         if monomer:
             by_monomer[monomer] = mol
         if can:
@@ -260,18 +259,20 @@ def residue_to_pdb_block(residue, chain_id="A"):
 
 
 def match_sdf_to_pdb_ligand(sdf_mol, residue, chain_id):
-    """
-    returns:
-      pdb_mol, sdf_to_pdb_atom_idx dict, pdb_to_sdf_atom_idx dict
-    """
-    sdf_noh = Chem.RemoveHs(sdf_mol)
+    try:
+        sdf_noh = Chem.RemoveHs(sdf_mol, sanitize=False)
+    except Exception:
+        return None
 
     block = residue_to_pdb_block(residue, chain_id=chain_id)
     pdb_mol = Chem.MolFromPDBBlock(block, sanitize=False, removeHs=False)
     if pdb_mol is None:
         return None
 
-    pdb_noh = Chem.RemoveHs(pdb_mol, sanitize=False)
+    try:
+        pdb_noh = Chem.RemoveHs(pdb_mol, sanitize=False)
+    except Exception:
+        return None
 
     try:
         pdb_bo = AllChem.AssignBondOrdersFromTemplate(sdf_noh, pdb_noh)
@@ -280,9 +281,7 @@ def match_sdf_to_pdb_ligand(sdf_mol, residue, chain_id):
 
     match = pdb_bo.GetSubstructMatch(sdf_noh)
     if not match or len(match) != sdf_noh.GetNumAtoms():
-        match = sdf_noh.GetSubstructMatch(pdb_bo)
-        if match:
-            return None
+        return None
 
     sdf_to_pdb = {int(i): int(match[i]) for i in range(len(match))}
     pdb_to_sdf = {v: k for k, v in sdf_to_pdb.items()}
@@ -290,7 +289,7 @@ def match_sdf_to_pdb_ligand(sdf_mol, residue, chain_id):
     return pdb_bo, sdf_to_pdb, pdb_to_sdf
 
 
-def compute_contacts(structure, chain, ligand_residue, pdb_to_sdf, cutoff=4.5):
+def compute_contacts(chain, ligand_residue, pdb_to_sdf, cutoff=4.5):
     seq, res_ids = residue_seq(chain)
     if not seq:
         return None
@@ -299,6 +298,7 @@ def compute_contacts(structure, chain, ligand_residue, pdb_to_sdf, cutoff=4.5):
 
     protein_atoms = []
     atom_to_res_j = {}
+
     for res in chain:
         if res.get_id() not in res_id_to_j:
             continue
@@ -346,7 +346,7 @@ def compute_contacts(structure, chain, ligand_residue, pdb_to_sdf, cutoff=4.5):
     }
 
 
-def find_best_ligand_match_in_structure(sdf_mol, structure):
+def find_best_ligand_match_in_structure(sdf_mol, structure, cutoff=4.5):
     best = None
 
     for model in structure:
@@ -364,13 +364,12 @@ def find_best_ligand_match_in_structure(sdf_mol, structure):
                 if matched is None:
                     continue
 
-                pdb_mol, sdf_to_pdb, pdb_to_sdf = matched
+                _, sdf_to_pdb, pdb_to_sdf = matched
                 contacts = compute_contacts(
-                    structure=structure,
                     chain=chain,
                     ligand_residue=res,
                     pdb_to_sdf=pdb_to_sdf,
-                    cutoff=4.5,
+                    cutoff=cutoff,
                 )
                 if contacts is None:
                     continue
@@ -418,16 +417,12 @@ def parse_structure_cached(parser, cache, mmcif_dir, pdb_id):
             structure = parser.get_structure(pdb_id, path)
         cache[pdb_id] = structure
         return structure
-    except Exception as e:
+    except Exception:
         cache[pdb_id] = None
         return None
 
 
 def encode_vqatom(smiles):
-    """
-    あなたの環境の関数名に合わせる。
-    失敗したら空にして drop。
-    """
     try:
         from vqatom_module import encode_smiles_to_atom_tokens
         toks = encode_smiles_to_atom_tokens(smiles)
@@ -454,8 +449,9 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--contact_cutoff", type=float, default=4.5)
     ap.add_argument("--min_contact_n", type=int, default=3)
-    ap.add_argument("--max_scan_rows", type=int, default=500000)
+    ap.add_argument("--max_scan_rows", type=int, default=3000000)
     ap.add_argument("--shuffle_rows", action="store_true")
+    ap.add_argument("--min_resolution", type=float, default=3.5)
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -571,20 +567,26 @@ def main():
             best_pdb = None
 
             for pdb_id in pdb_ids:
-                structure = parse_structure_cached(parser, struct_cache, args.mmcif_dir, pdb_id)
                 cif_path = get_cif_path(args.mmcif_dir, pdb_id)
                 if cif_path is None:
+                    stats["no_cif_path"] += 1
                     continue
 
                 res = get_resolution_from_cif(cif_path)
-                if res is None or res > MIN_RESOLUTION:
+                if res is None or res > args.min_resolution:
                     stats["bad_resolution"] += 1
                     continue
+
+                structure = parse_structure_cached(parser, struct_cache, args.mmcif_dir, pdb_id)
                 if structure is None:
                     stats["no_cif"] += 1
                     continue
 
-                hit = find_best_ligand_match_in_structure(sdf_mol, structure)
+                hit = find_best_ligand_match_in_structure(
+                    sdf_mol=sdf_mol,
+                    structure=structure,
+                    cutoff=float(args.contact_cutoff),
+                )
                 if hit is None:
                     stats["no_lig_match"] += 1
                     continue
@@ -599,7 +601,7 @@ def main():
 
             if best is None:
                 continue
-            # sequence consistency check（簡易）
+
             if seq_tsv not in best["seq"] and best["seq"] not in seq_tsv:
                 stats["seq_mismatch"] += 1
                 continue

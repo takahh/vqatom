@@ -1011,7 +1011,6 @@ def train_one_epoch(
 
                     contact_score = aux["pair_map"].float().amax(dim=1)
                     p_valid = ~aux["p_pad"]
-
                     L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
                     contact_score = contact_score[:, :L]
                     contact_target = contact_mask[:, :L]
