@@ -596,11 +596,12 @@ def main():
                 if best is None or hit["contact_n"] > best["contact_n"]:
                     best = hit
                     best_pdb = pdb_id
+
+            if best is None:
+                continue
             # sequence consistency check（簡易）
             if seq_tsv not in best["seq"] and best["seq"] not in seq_tsv:
                 stats["seq_mismatch"] += 1
-                continue
-            if best is None:
                 continue
 
             writer.writerow({
