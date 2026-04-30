@@ -819,12 +819,16 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         n_pos = int(y01.sum())
         if n_pos == 0:
             return 0.0
+
         k = max(1, int(math.ceil(n * float(frac))))
         order = np.argsort(-score)
         top_idx = order[:k]
+
         hits_topk = int(y01[top_idx].sum())
         hit_rate_topk = hits_topk / float(k)
-        return float(hit_rate_topk)
+        base_rate = n_pos / float(n)
+
+        return float(hit_rate_topk / base_rate)
 
     if y_pred.size == 0:
         return {
