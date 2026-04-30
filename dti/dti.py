@@ -1497,7 +1497,7 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Linear(128, 1),
         )
         self.cls_head = nn.Sequential(
-            nn.Linear(d_model * 4 + 2, 256)
+            nn.Linear(d_model * 4 + 2, 256))
 
         self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
