@@ -9,7 +9,7 @@ import json
 import random
 import argparse
 from collections import defaultdict
-
+from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 import numpy as np
 from tqdm import tqdm
 
@@ -19,6 +19,7 @@ from rdkit.Chem import AllChem
 from Bio.PDB import MMCIFParser, NeighborSearch
 from Bio.PDB.Polypeptide import is_aa
 
+MIN_RESOLUTION = 2.5
 
 AA3_TO_1 = {
     "ALA":"A","ARG":"R","ASN":"N","ASP":"D","CYS":"C",
@@ -40,6 +41,17 @@ def open_text_maybe_gz(path):
         return gzip.open(path, "rt", encoding="utf-8", errors="ignore")
     return open(path, "r", encoding="utf-8", errors="ignore")
 
+def get_resolution_from_cif(cif_path):
+    try:
+        d = MMCIF2Dict(cif_path)
+        v = d.get("_refine.ls_d_res_high")
+        if isinstance(v, list):
+            v = v[0]
+        if v in (None, "?", "."):
+            return None
+        return float(v)
+    except Exception:
+        return None
 
 def norm_smiles(s):
     if not s:
@@ -560,6 +572,14 @@ def main():
 
             for pdb_id in pdb_ids:
                 structure = parse_structure_cached(parser, struct_cache, args.mmcif_dir, pdb_id)
+                cif_path = get_cif_path(args.mmcif_dir, pdb_id)
+                if cif_path is None:
+                    continue
+
+                res = get_resolution_from_cif(cif_path)
+                if res is None or res > MIN_RESOLUTION:
+                    stats["bad_resolution"] += 1
+                    continue
                 if structure is None:
                     stats["no_cif"] += 1
                     continue
@@ -576,7 +596,10 @@ def main():
                 if best is None or hit["contact_n"] > best["contact_n"]:
                     best = hit
                     best_pdb = pdb_id
-
+            # sequence consistency check（簡易）
+            if seq_tsv not in best["seq"] and best["seq"] not in seq_tsv:
+                stats["seq_mismatch"] += 1
+                continue
             if best is None:
                 continue
 
