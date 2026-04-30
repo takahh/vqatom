@@ -1017,15 +1017,16 @@ def train_one_epoch(
                     contact_target = contact_mask[:, :L]
                     p_valid = p_valid[:, :L]
 
-                    mean = contact_score[p_valid].mean().detach()
-                    std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
+                    mean = contact_score.mean(dim=(1, 2), keepdim=True)
+                    std = contact_score.std(dim=(1, 2), keepdim=True).clamp_min(1e-6)
+
                     contact_logit = (contact_score - mean) / std
 
                     pos_mask = (contact_target > 0.5) & p_valid
 
                     per_sample_losses = []
                     for b in range(contact_logit.size(0)):
-                        vals = contact_logit[b][pos_mask[b]]
+                        vals = contact_logit[b].max(dim=0).values[pos_mask[b]]
                         if vals.numel() == 0:
                             continue
                         k = min(3, vals.numel())
