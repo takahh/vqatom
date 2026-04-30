@@ -1497,12 +1497,11 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Linear(128, 1),
         )
         self.cls_head = nn.Sequential(
-            nn.Linear(d_model * 4 + 2, 256),
+            nn.Linear(d_model * 4, 256),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(256, 1),
         )
-
         self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
@@ -1624,6 +1623,12 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=True,
         )
 
+        def row_zscore(x, eps=1e-6):
+            mu = x.mean(dim=-1, keepdim=True)
+            sd = x.std(dim=-1, keepdim=True).clamp_min(eps)
+            return (x - mu) / sd
+
+
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)
 
@@ -1652,29 +1657,12 @@ class DualStreamDTIClassifier(nn.Module):
         Lp = p_ctx.unsqueeze(1)  # (B,1,Lp,D)
         Ll = l_ctx.unsqueeze(2)  # (B,Ll,1,D)
 
-        Ll_exp = Ll.expand(-1, -1, p_ctx.size(1), -1)
-        Lp_exp = Lp.expand(-1, l_ctx.size(1), -1, -1)
-
-        elem_prod = Ll_exp * Lp_exp
-        abs_diff = torch.abs(Ll_exp - Lp_exp)
-
-        dot = elem_prod.sum(dim=-1, keepdim=True)
-        import torch.nn.functional as F
-        cos = F.cosine_similarity(
-            Ll_exp.float(),
-            Lp_exp.float(),
-            dim=-1,
-            eps=1e-6,
-        ).to(Ll_exp.dtype).unsqueeze(-1)
-
         pair_feat = torch.cat([
-            Ll_exp,
-            Lp_exp,
-            elem_prod,
-            abs_diff,
-            dot,
-            cos,
-        ], dim=-1)  # (B,Ll,Lp,4D+2)
+            Ll.expand(-1, -1, p_ctx.size(1), -1),
+            Lp.expand(-1, l_ctx.size(1), -1, -1),
+            Ll * Lp,
+            torch.abs(Ll - Lp),
+        ], dim=-1)  # (B,Ll,Lp,4D)
 
         score = pair_map.unsqueeze(-1)  # (B,Ll,Lp,1)
 
