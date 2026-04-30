@@ -1009,24 +1009,23 @@ def train_one_epoch(
                     if "pair_map" not in aux:
                         raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
 
-                    contact_score = aux["pair_map"].float()   # (B, Ll, Lp)
+                    contact_score = aux["pair_map"].float().amax(dim=1)
                     p_valid = ~aux["p_pad"]
 
                     L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
-                    contact_score = contact_score[:, :, :L]
+                    contact_score = contact_score[:, :L]
                     contact_target = contact_mask[:, :L]
                     p_valid = p_valid[:, :L]
 
-                    mean = contact_score.mean(dim=(1, 2), keepdim=True)
-                    std = contact_score.std(dim=(1, 2), keepdim=True).clamp_min(1e-6)
-
+                    mean = contact_score[p_valid].mean().detach()
+                    std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
                     contact_logit = (contact_score - mean) / std
 
                     pos_mask = (contact_target > 0.5) & p_valid
 
                     per_sample_losses = []
                     for b in range(contact_logit.size(0)):
-                        vals = contact_logit[b].max(dim=0).values[pos_mask[b]]
+                        vals = contact_logit[b][pos_mask[b]]
                         if vals.numel() == 0:
                             continue
                         k = min(3, vals.numel())
@@ -1459,7 +1458,6 @@ class DualStreamDTIClassifier(nn.Module):
         self.use_cls_in_head = bool(use_cls_in_head)
         self.use_reg_head = bool(use_reg_head)
         self.protein_only = bool(protein_only)
-        self.topk_frac = float(topk_frac)
         self.p_proj = None
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
@@ -1499,13 +1497,13 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(128, 1),
         )
-        self.cls_head_maponly = nn.Sequential(
-            nn.Linear(4, 32),
+        self.cls_head = nn.Sequential(
+            nn.Linear(d_model * 8 + 2, 256),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(32, 1),
+            nn.Linear(256, 1),
         )
-        self.reg_head = nn.Linear(4, 1) if self.use_reg_head else None
+        self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1641,32 +1639,44 @@ class DualStreamDTIClassifier(nn.Module):
             pair_map = lp_score
         else:
             pair_map = pl_score
-        pair_map = pair_map.amax(dim=1)
+        pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
 
         # valid mask
         valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)
 
         # zero out invalid area
-        # pair_map: (B, Ll, Lp)
-        # valid:    (B, Ll, Lp)
+        pair_map = pair_map.masked_fill(~valid, 0.0)
 
-        pm = pair_map.masked_fill(~valid, 0.0)
+        # optional area normalization to reduce length bias
+        # denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+        # pair_map = pair_map / denom.sqrt()
 
-        mass = pm.sum(dim=(1, 2), keepdim=False)  # (B,)
-        mean = mass / valid.float().sum(dim=(1, 2)).clamp_min(1.0)  # (B,)
-        maxv = pm.masked_fill(~valid, float("-inf")).amax(dim=(1, 2))
-        maxv = torch.where(torch.isinf(maxv), torch.zeros_like(maxv), maxv)
+        # p_ctx: (B, Lp, D)
+        # l_ctx: (B, Ll, D)
 
-        # top-k mean
-        flat = pm.masked_fill(~valid, float("-inf")).flatten(1)
-        k = max(1, int(flat.size(1) * self.topk_frac))
-        topk_mean = flat.topk(k, dim=1).values
-        topk_mean = torch.where(torch.isinf(topk_mean), torch.zeros_like(topk_mean), topk_mean)
-        topk_mean = topk_mean.mean(dim=1)
+        Lp = p_tok.unsqueeze(1)  # original protein token features
+        Ll = l_tok.unsqueeze(2)  # original ligand token features
 
-        h_mid = torch.stack([mass, mean, maxv, topk_mean], dim=-1)
-        logit = self.cls_head_maponly(h_mid).squeeze(-1)
+        pair_feat = torch.cat([
+            Ll.expand(-1, -1, p_ctx.size(1), -1),
+            Lp.expand(-1, l_ctx.size(1), -1, -1),
+            Ll * Lp,
+            torch.abs(Ll - Lp),
+        ], dim=-1)  # (B,Ll,Lp,4D)
+
+        score = pair_map.unsqueeze(-1)  # (B,Ll,Lp,1)
+
+        weighted = pair_feat * score
+
+        h_sum = weighted.sum(dim=(1, 2))  # intensity kept
+        h_mean = h_sum / score.sum(dim=(1, 2)).clamp_min(1e-6)  # pattern/identity
+        score_mass = score.sum(dim=(1, 2))  # total interaction strength
+        score_max = score.amax(dim=(1, 2))  # strongest pair
+
+        h_mid = torch.cat([h_mean, h_sum, score_mass, score_max], dim=-1)
+
+        logit = self.cls_head(h_mid).squeeze(-1)
 
         yhat_reg = None
         if self.reg_head is not None:
@@ -1677,7 +1687,7 @@ class DualStreamDTIClassifier(nn.Module):
         aux["l_pad"] = l_pad
         aux["p_ctx_tok"] = p_ctx
         aux["l_ctx_tok"] = l_ctx
-        aux["pair_map"] = pm
+        aux["pair_map"] = pair_map
         aux["delta_logit"] = logit
 
         if not return_maps:
@@ -1685,7 +1695,6 @@ class DualStreamDTIClassifier(nn.Module):
                 "p_pad": p_pad,
                 "l_pad": l_pad,
                 "delta_logit": logit,
-                "pair_map": pm,
             }
 
         return logit, yhat_reg, aux
