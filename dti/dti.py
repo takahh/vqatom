@@ -1009,11 +1009,11 @@ def train_one_epoch(
                     if "pair_map" not in aux:
                         raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
 
-                    contact_score = aux["pair_map"].float().amax(dim=1)
+                    contact_score = aux["pair_map"].float()   # (B, Ll, Lp)
                     p_valid = ~aux["p_pad"]
 
                     L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
-                    contact_score = contact_score[:, :L]
+                    contact_score = contact_score[:, :, :L]
                     contact_target = contact_mask[:, :L]
                     p_valid = p_valid[:, :L]
 
