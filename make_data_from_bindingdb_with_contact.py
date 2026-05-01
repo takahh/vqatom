@@ -46,12 +46,17 @@ def open_text_maybe_gz(path):
 
 def get_resolution_from_cif(cif_path):
     try:
-        d = MMCIF2Dict(cif_path)
+        if cif_path.endswith(".gz"):
+            with gzip.open(cif_path, "rt", encoding="utf-8", errors="ignore") as f:
+                d = MMCIF2Dict(f)
+        else:
+            d = MMCIF2Dict(cif_path)
 
         keys = [
             "_refine.ls_d_res_high",
             "_em_3d_reconstruction.resolution",
             "_reflns.d_resolution_high",
+            "_refine_hist.d_res_high",
         ]
 
         for k in keys:
@@ -59,28 +64,19 @@ def get_resolution_from_cif(cif_path):
             if v is None:
                 continue
 
-            # list対応
-            if isinstance(v, list):
-                for x in v:
-                    if x not in (None, "?", ".", ""):
-                        try:
-                            print(float(str(x).strip()))
-                            return float(str(x).strip())
-                        except:
-                            continue
-            else:
-                if v not in (None, "?", ".", ""):
-                    try:
-                        print(float(str(v).strip()))
-                        return float(str(v).strip())
-                    except:
-                        pass
+            vals = v if isinstance(v, list) else [v]
+            for x in vals:
+                x = str(x).strip()
+                if x in ("", "?", "."):
+                    continue
+                try:
+                    return float(x)
+                except Exception:
+                    continue
 
         return None
-
     except Exception:
         return None
-
 
 def norm_smiles(s):
     if not s:
@@ -474,14 +470,20 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--contact_cutoff", type=float, default=4.5)
     ap.add_argument("--min_contact_n", type=int, default=3)
-    ap.add_argument("--max_scan_rows", type=int, default=3000000)
+    ap.add_argument("--max_scan_rows", type=int, default=1000)
+    # ap.add_argument("--max_scan_rows", type=int, default=3000000)
     ap.add_argument("--shuffle_rows", action="store_true")
     ap.add_argument("--min_resolution", type=float, default=3.5)
+    ap.add_argument("--max_sdf_mols", type=int, default=300)
     args = ap.parse_args()
 
     random.seed(args.seed)
 
-    by_monomer, by_smiles, by_inchikey = load_sdf_index(args.sdf)
+    # by_monomer, by_smiles, by_inchikey = load_sdf_index(args.sdf)
+    by_monomer, by_smiles, by_inchikey = load_sdf_index(
+        args.sdf,
+        max_mols=args.max_sdf_mols
+    )
 
     with open_text_maybe_gz(args.bindingdb_tsv) as f:
         reader = csv.DictReader(f, delimiter="\t")

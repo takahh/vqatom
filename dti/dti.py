@@ -35,7 +35,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader, ConcatDataset
-from transformers import AutoTokenizer, EsmModel
+from transformers import AutoTokenizer, EsmModel, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
 Y_THR = 7.0
@@ -896,11 +896,12 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    pos_weight: float,
+    pos_weight: float,        # ← ここに移動
+    scheduler=None,
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
-    sym_lambda: float = 0.0,   # <- 追加
+    sym_lambda: float = 0.0,
     base_loss_alpha=0.3,
     epoch=1,
     contact_lambda: float = 0.0,
@@ -1092,7 +1093,8 @@ def train_one_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         optimizer.step()
-
+        if scheduler is not None:
+            scheduler.step()
         losses.append(float(loss.detach().cpu().item()))
         losses_cls.append(float(loss_cls.detach().cpu().item()))
         losses_reg.append(float(loss_reg.detach().cpu().item()))
@@ -1843,6 +1845,8 @@ def main():
     ap.add_argument("--plateau", action="store_true")
     ap.add_argument("--plateau_factor", type=float, default=0.5)
     ap.add_argument("--plateau_patience", type=int, default=2)
+    ap.add_argument("--warmup_ratio", type=float, default=0.05)
+    ap.add_argument("--warmup_steps", type=int, default=None)
     ap.add_argument("--min_lr", type=float, default=1e-6)
     ap.add_argument("--dual_stream_layers", type=int, default=2)
     ap.add_argument("--pl_lp_overlap", type=str, default="ap", choices=["lp", "pl", "both"])
@@ -2060,14 +2064,30 @@ def main():
 
     optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
     scheduler = None
-    if optimizer is not None and args.plateau:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer,
-            mode="max",
-            factor=float(args.plateau_factor),
-            patience=int(args.plateau_patience),
-            min_lr=float(args.min_lr),
+    if optimizer is not None:
+        if args.use_train_valid_csv:
+            steps_per_epoch = len(fixed_train_loader)
+        else:
+            steps_per_epoch = math.ceil(
+                int(args.train_num_shards_per_epoch or math.ceil(args.train_size / args.train_shard_size))
+                * int(args.train_shard_size)
+                / int(args.batch_size)
+            )
+
+        total_steps = int(steps_per_epoch * args.epochs)
+        warmup_steps = (
+            int(args.warmup_steps)
+            if args.warmup_steps is not None
+            else int(total_steps * float(args.warmup_ratio))
         )
+
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
+
+        print(f"[scheduler] linear warmup: warmup_steps={warmup_steps} total_steps={total_steps}")
 
     if args.eval_only:
         yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
@@ -2143,6 +2163,7 @@ def main():
             loader=train_loader,
             optimizer=optimizer,
             device=device,
+            scheduler=scheduler,
             pos_weight=pos_weight,
             grad_clip=float(args.grad_clip),
             attn_entropy_lambda=float(args.attn_entropy_lambda),
@@ -2160,9 +2181,6 @@ def main():
         yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
         v_r = eval_reg_metrics(yhatr_v, yr_v)
-
-        if scheduler is not None:
-            scheduler.step(float(v_m[args.select_on]))
 
         if float(v_m[args.select_on]) > float(best[args.select_on]):
             best.update(
