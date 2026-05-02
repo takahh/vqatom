@@ -2272,7 +2272,6 @@ def main():
             guide_loader=guide_loader,
             guide_every=int(args.guide_every),
             contact_topk=int(args.contact_topk),
-            base_loss_alpha=0.3,
             epoch=ep,
         )
 
