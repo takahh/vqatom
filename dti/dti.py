@@ -2115,7 +2115,9 @@ def main():
     guide_loader = None
     if args.guide_csv is not None and float(args.contact_lambda) > 0.0:
         guide_rows = read_csv_rows_filter_split(args.guide_csv, args.guide_split)
-
+        if len(guide_rows) > 1000:
+            rng = random.Random(args.seed)
+            guide_rows = rng.sample(guide_rows, 1000)
         guide_ds = DTIDataset(
             rows=guide_rows,
             y_thr=float(args.y_thr),
