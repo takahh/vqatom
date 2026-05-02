@@ -1172,9 +1172,6 @@ def train_one_epoch(
                     topk = vals.topk(k).values
                     losses_tmp.append(F.softplus(-topk).mean())
 
-                if losses_tmp:
-                    loss_contact = torch.stack(losses_tmp).mean()
-
         # =========================
         # TOTAL LOSS
         # =========================
