@@ -1426,6 +1426,23 @@ class DualStreamBlock(nn.Module):
 
         return p_h, l_h
 
+def masked_zscore(x, valid, dim, eps=1e-6):
+    """
+    x:     (B, Ll, Lp)
+    valid: (B, Ll, Lp) bool
+    dim:   -1 for row/protein axis, -2 for column/ligand axis
+    """
+    v = valid.to(dtype=x.dtype)
+
+    count = v.sum(dim=dim, keepdim=True).clamp_min(1.0)
+    mean = (x * v).sum(dim=dim, keepdim=True) / count
+
+    var = (((x - mean) * v) ** 2).sum(dim=dim, keepdim=True) / count
+    std = var.sqrt().clamp_min(eps)
+
+    z = (x - mean) / std
+    return z.masked_fill(~valid, 0.0)
+
 class DualStreamDTIClassifier(nn.Module):
     def __init__(
         self,
@@ -1635,28 +1652,31 @@ class DualStreamDTIClassifier(nn.Module):
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)
-
         if self.pl_lp_overlap == "both":
             pair_map = torch.minimum(lp_score, pl_score)
         elif self.pl_lp_overlap == "lp":
             pair_map = lp_score
         else:
             pair_map = pl_score
+
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
 
         # valid mask
-        valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)
+        valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)  # (B,Ll,Lp)
 
-        # zero out invalid area
-        pair_map = pair_map.masked_fill(~valid, 0.0)
+        if getattr(self, "pairmap_norm", "none") == "rowcol_z":
+            row_z = masked_zscore(pair_map, valid, dim=-1)
+            col_z = masked_zscore(pair_map, valid, dim=-2)
+            pair_map = torch.minimum(row_z, col_z)
+            pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
+            pair_map = pair_map.masked_fill(~valid, 0.0)
 
-        # optional area normalization to reduce length bias
-        denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
-        pair_map = pair_map / denom.sqrt()
+        else:
+            pair_map = pair_map.masked_fill(~valid, 0.0)
 
-        # p_ctx: (B, Lp, D)
-        # l_ctx: (B, Ll, D)
+            denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+            pair_map = pair_map / denom.sqrt()
 
         Lp = p_ctx.unsqueeze(1)  # (B,1,Lp,D)
         Ll = l_ctx.unsqueeze(2)  # (B,Ll,1,D)
