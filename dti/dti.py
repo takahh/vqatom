@@ -65,6 +65,15 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
         raise ValueError(f"No rows found in {path}")
     return rows
 
+def read_csv_rows_filter_split(path: str, split_name: str) -> List[Dict[str, str]]:
+    rows = read_csv_rows(path)
+    out = []
+    for r in rows:
+        if (r.get("split") or "").strip() == split_name:
+            out.append(r)
+    if not out:
+        raise ValueError(f"No rows with split={split_name} in {path}")
+    return out
 
 def read_csv_random_rows(path: str, n_rows: int, seed: int) -> List[Dict[str, str]]:
     rows = read_csv_rows(path)
@@ -887,6 +896,54 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
+def compute_contact_loss_from_aux(
+    aux: dict,
+    contact_mask: torch.Tensor,
+    contact_topk: int = 3,
+) -> torch.Tensor:
+    """
+    aux["pair_map"]: (B, Ll, Lp)
+    contact_mask:   (B, Lp)
+    """
+    if "pair_map" not in aux:
+        raise ValueError("aux['pair_map'] is missing")
+
+    pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
+    p_pad = aux["p_pad"]                # (B, Lp), True=PAD
+
+    # ligand方向にmax poolingして residue-level score にする
+    contact_score = pair_map.amax(dim=1)  # (B, Lp)
+
+    L = min(contact_score.shape[1], contact_mask.shape[1], p_pad.shape[1])
+    contact_score = contact_score[:, :L]
+    contact_target = contact_mask[:, :L].float()
+    p_valid = (~p_pad[:, :L])
+
+    valid_vals = contact_score[p_valid]
+    if valid_vals.numel() == 0:
+        return contact_score.sum() * 0.0
+
+    # batch内z-score。弱いranking guideとして使う
+    mean = valid_vals.mean().detach()
+    std = valid_vals.std(unbiased=False).detach().clamp_min(1e-6)
+    contact_logit = (contact_score - mean) / std
+
+    pos_mask = (contact_target > 0.5) & p_valid
+
+    losses = []
+    for b in range(contact_logit.size(0)):
+        vals = contact_logit[b][pos_mask[b]]
+        if vals.numel() == 0:
+            continue
+        k = min(int(contact_topk), vals.numel())
+        topk_vals = vals.topk(k).values
+        losses.append(F.softplus(-topk_vals).mean())
+
+    if not losses:
+        return contact_score.sum() * 0.0
+
+    return torch.stack(losses).mean()
+
 
 # =========================================================
 # Train
@@ -896,250 +953,150 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    pos_weight: float,        # ← ここに移動
+    pos_weight: float,
     scheduler=None,
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
     reg_lambda: float = 0.1,
     sym_lambda: float = 0.0,
-    base_loss_alpha=0.3,
     epoch=1,
     contact_lambda: float = 0.0,
+    guide_loader: Optional[DataLoader] = None,
+    guide_every: int = 1,
+    contact_topk: int = 3,
 ) -> Dict[str, float]:
+
     model.train()
 
-    losses, losses_cls, losses_reg, losses_entropy, losses_sym = [], [], [], [], []
-    use_amp = (device.type == "cuda")
-    baseline_vals = []
-    delta_vals = []
-    losses_contact = []
-    baseline_std_vals = []
-    delta_std_vals = []
     bce = nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor([pos_weight], device=device, dtype=torch.float32)
+        pos_weight=torch.tensor([pos_weight], device=device)
     )
     reg_loss_fn = nn.SmoothL1Loss(beta=1.0)
 
-    pbar = tqdm(total=len(loader), desc="train", leave=False, dynamic_ncols=True)
-    # train中は絶対に重いmapを返さない（OOM対策）
-    # train中は map を返さない
-    # need_maps = False
+    losses = []
+    losses_contact = []
 
-    # sym loss か entropy loss を使うときだけ map を返す
-    need_maps = (sym_lambda != 0.0) or (attn_entropy_lambda != 0.0) or (contact_lambda != 0.0)
-    # attn entropy を使う時だけ map を返す
-    # need_maps = (attn_entropy_lambda != 0.0)
+    use_amp = (device.type == "cuda")
 
-    def attention_symmetry_loss(attn_lp, attn_pl, p_pad=None, l_pad=None):
-        """
-        attn_lp: (B, H, Ll, Lp)   ligand <- protein
-        attn_pl: (B, H, Lp, Ll)   protein <- ligand
+    guide_iter = iter(guide_loader) if guide_loader is not None else None
 
-        比較対象:
-          attn_lp  vs  transpose(attn_pl)
-        """
+    pbar = tqdm(loader, desc="train", leave=False)
 
-        # (B,H,Ll,Lp)
+    def attention_symmetry_loss(attn_lp, attn_pl, p_pad, l_pad):
         attn_pl_t = attn_pl.transpose(-1, -2)
+        diff = (attn_lp - attn_pl_t) ** 2
 
-        diff = (attn_lp - attn_pl_t) ** 2  # (B,H,Ll,Lp)
+        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+        diff = diff.masked_fill(~valid, 0.0)
 
-        if (p_pad is not None) and (l_pad is not None):
-            # p_pad: (B, Lp), l_pad: (B, Ll), True=PAD
-            valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
-            diff = diff.masked_fill(~valid, 0.0)
-            denom = valid.float().sum().clamp_min(1.0)
-            return diff.sum() / denom
+        return diff.sum() / valid.float().sum().clamp_min(1.0)
 
-        return diff.mean()
+    for step, batch in enumerate(pbar):
 
-    for batch in loader:
-        p_ids = batch.p_input_ids.to(device, non_blocking=True)
-        p_msk = batch.p_attn_mask.to(device, non_blocking=True)
-        l_ids = batch.l_ids.to(device, non_blocking=True)
-        y_bin = batch.y_bin.to(device, non_blocking=True).float()
-
-        y_reg = None
-        if getattr(batch, "y_reg", None) is not None:
-            y_reg = batch.y_reg.to(device, non_blocking=True).float()
+        # =========================
+        # MAIN DTI BATCH
+        # =========================
+        p_ids = batch.p_input_ids.to(device)
+        p_msk = batch.p_attn_mask.to(device)
+        l_ids = batch.l_ids.to(device)
+        y_bin = batch.y_bin.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        contact_mask = None
-        if getattr(batch, "contact_mask", None) is not None:
-            contact_mask = batch.contact_mask.to(device, non_blocking=True).float()
 
         if use_amp:
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
-
-                if need_maps:
-                    if not (isinstance(out, tuple) and len(out) == 3):
-                        raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
-                    logit, yhat_reg, aux = out
-                else:
-                    # return_maps=False でも現在の model は (logit, yhat_reg, aux) を返しているはず
-                    if isinstance(out, tuple) and len(out) == 3:
-                        logit, yhat_reg, aux = out
-                    elif isinstance(out, tuple) and len(out) == 2:
-                        logit, aux = out
-                        yhat_reg = None
-                    else:
-                        raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
-
-                loss_cls = bce(logit.float(), y_bin.float())
-
-                loss_reg = torch.tensor(0.0, device=device)
-                if (y_reg is not None) and (yhat_reg is not None):
-                    loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
-
-                loss_entropy = torch.tensor(0.0, device=device)
-                if attn_entropy_lambda != 0.0:
-                    if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
-                        raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
-                    loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
-
-                loss_sym = torch.tensor(0.0, device=device)
-                if sym_lambda != 0.0:
-                    loss_sym = attention_symmetry_loss(
-                        aux["lp_attn"].float(),
-                        aux["pl_attn"].float(),
-                        p_pad=aux["p_pad"],
-                        l_pad=aux["l_pad"],
-                    )
-                loss_contact = torch.tensor(0.0, device=device)
-
-                if contact_lambda != 0.0:
-                    if contact_mask is None:
-                        raise ValueError("contact_lambda != 0, but batch.contact_mask is missing")
-                    if "pair_map" not in aux:
-                        raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
-
-                    contact_score = aux["pair_map"].float().amax(dim=1)
-                    p_valid = ~aux["p_pad"]
-                    L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
-                    contact_score = contact_score[:, :L]
-                    contact_target = contact_mask[:, :L]
-                    p_valid = p_valid[:, :L]
-
-                    mean = contact_score[p_valid].mean().detach()
-                    std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
-                    contact_logit = (contact_score - mean) / std
-
-                    pos_mask = (contact_target > 0.5) & p_valid
-
-                    per_sample_losses = []
-                    for b in range(contact_logit.size(0)):
-                        vals = contact_logit[b][pos_mask[b]]
-                        if vals.numel() == 0:
-                            continue
-                        k = min(3, vals.numel())
-                        topk_vals = vals.topk(k).values
-                        per_sample_losses.append(F.softplus(-topk_vals).mean())
-
-                    if per_sample_losses:
-                        loss_contact = torch.stack(per_sample_losses).mean()
-                    else:
-                        loss_contact = contact_logit.sum() * 0.0
-            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
-            loss = loss + contact_lambda * loss_contact
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss = loss + reg_lambda * loss_reg
-
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=False)
+                loss_cls = bce(logit, y_bin)
+                loss = loss_cls
         else:
-            out = model(p_ids, p_msk, l_ids, return_maps=need_maps)
+            logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=False)
+            loss_cls = bce(logit, y_bin)
+            loss = loss_cls
 
-            if need_maps:
-                if not (isinstance(out, tuple) and len(out) == 3):
-                    raise ValueError("When return_maps=True, model must return (logit, yhat_reg, aux)")
-                logit, yhat_reg, aux = out
+        # =========================
+        # GUIDE CONTACT BATCH
+        # =========================
+        loss_contact = torch.tensor(0.0, device=device)
+
+        if (
+            contact_lambda > 0.0
+            and guide_loader is not None
+            and step % guide_every == 0
+        ):
+            try:
+                g = next(guide_iter)
+            except StopIteration:
+                guide_iter = iter(guide_loader)
+                g = next(guide_iter)
+
+            gp_ids = g.p_input_ids.to(device)
+            gp_msk = g.p_attn_mask.to(device)
+            gl_ids = g.l_ids.to(device)
+            g_mask = g.contact_mask.to(device)
+
+            if use_amp:
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
             else:
-                if isinstance(out, tuple) and len(out) == 3:
-                    logit, yhat_reg, aux = out
-                elif isinstance(out, tuple) and len(out) == 2:
-                    logit, aux = out
-                    yhat_reg = None
-                else:
-                    raise ValueError("model must return (logit, aux) or (logit, yhat_reg, aux)")
+                _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
 
-            loss_cls = bce(logit.float(), y_bin.float())
+            pair_map = g_aux["pair_map"]           # (B, Ll, Lp)
+            p_pad = g_aux["p_pad"]                # (B, Lp)
 
-            loss_reg = torch.tensor(0.0, device=device)
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss_reg = reg_loss_fn(yhat_reg.float(), y_reg.float())
+            # ligand方向max → residue score
+            contact_score = pair_map.amax(dim=1)  # (B, Lp)
 
-            loss_entropy = torch.tensor(0.0, device=device)
-            if attn_entropy_lambda != 0.0:
-                if ("attn_entropy" not in aux) or (aux["attn_entropy"] is None):
-                    raise ValueError("attn_entropy_lambda != 0, but aux['attn_entropy'] is missing")
-                loss_entropy = attn_entropy_lambda * aux["attn_entropy"].float()
+            L = min(contact_score.shape[1], g_mask.shape[1])
+            contact_score = contact_score[:, :L]
+            contact_target = g_mask[:, :L]
+            p_valid = (~p_pad[:, :L])
 
-            loss_sym = torch.tensor(0.0, device=device)
-            if sym_lambda != 0.0:
-                loss_sym = attention_symmetry_loss(
-                    aux["lp_attn"].float(),
-                    aux["pl_attn"].float(),
-                    p_pad=aux["p_pad"],
-                    l_pad=aux["l_pad"],
-                )
-            loss_contact = torch.tensor(0.0, device=device)
-            loss = loss_cls + loss_entropy + sym_lambda * loss_sym
-            loss = loss + contact_lambda * loss_contact
-            if (y_reg is not None) and (yhat_reg is not None):
-                loss = loss + reg_lambda * loss_reg
+            valid_vals = contact_score[p_valid]
+            if valid_vals.numel() > 0:
+                mean = valid_vals.mean().detach()
+                std = valid_vals.std().clamp_min(1e-6).detach()
+                contact_logit = (contact_score - mean) / std
+
+                pos_mask = (contact_target > 0.5) & p_valid
+
+                losses_tmp = []
+                for b in range(contact_logit.size(0)):
+                    vals = contact_logit[b][pos_mask[b]]
+                    if vals.numel() == 0:
+                        continue
+                    k = min(contact_topk, vals.numel())
+                    topk = vals.topk(k).values
+                    losses_tmp.append(F.softplus(-topk).mean())
+
+                if losses_tmp:
+                    loss_contact = torch.stack(losses_tmp).mean()
+
+        # =========================
+        # TOTAL LOSS
+        # =========================
+        loss = loss + contact_lambda * loss_contact
 
         loss.backward()
 
-        if grad_clip > 0.0:
+        if grad_clip > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
-        losses.append(float(loss.detach().cpu().item()))
-        losses_cls.append(float(loss_cls.detach().cpu().item()))
-        losses_reg.append(float(loss_reg.detach().cpu().item()))
-        losses_entropy.append(float(loss_entropy.detach().cpu().item()))
-        losses_sym.append(float(loss_sym.detach().cpu().item()))
-        losses_contact.append(float(loss_contact.detach().cpu().item()))
 
-        pbar.update(1)
-        if "delta_logit" in aux:
-            delta_mean = float(
-                aux["delta_logit"].detach().mean().cpu().item()
-            )
-            delta_std = float(
-                aux["delta_logit"].detach().std(unbiased=False).cpu().item()
-            )
+        losses.append(loss.item())
+        losses_contact.append(loss_contact.item())
 
-            delta_vals.append(delta_mean)
-            delta_std_vals.append(delta_std)
-
-            pbar.set_postfix(
-                loss=f"{losses[-1]:.4f}",
-                cls=f"{losses_cls[-1]:.4f}",
-                reg=f"{losses_reg[-1]:.4f}",
-                ent=f"{losses_entropy[-1]:.4f}",
-                sym=f"{losses_sym[-1]:.4f}",
-                delta=f"{delta_mean:.3f}",
-                dstd=f"{delta_std:.3f}",
-                contact=f"{losses_contact[-1]:.4f}",
-            )
-
-    pbar.close()
+        pbar.set_postfix(
+            loss=f"{loss.item():.4f}",
+            contact=f"{loss_contact.item():.4f}"
+        )
 
     return {
-        "loss": float(np.mean(losses)) if losses else 0.0,
-        "loss_cls": float(np.mean(losses_cls)) if losses_cls else 0.0,
-        "loss_reg": float(np.mean(losses_reg)) if losses_reg else 0.0,
-        "loss_entropy": float(np.mean(losses_entropy)) if losses_entropy else 0.0,
-        "loss_sym": float(np.mean(losses_sym)) if losses_sym else 0.0,
-        "baseline_mean": 0.0,
-        "delta_mean": float(np.mean(delta_vals)) if delta_vals else 0.0,
-        "baseline_std": 0.0,
-        "delta_std": float(np.mean(delta_std_vals)) if delta_std_vals else 0.0,
-        "loss_contact": float(np.mean(losses_contact)) if losses_contact else 0.0,
+        "loss": float(np.mean(losses)),
+        "loss_contact": float(np.mean(losses_contact)),
     }
-
 
 # =========================================================
 # Save/load
@@ -1864,7 +1821,11 @@ def main():
     ap.add_argument("--n_heads", type=int, default=4)
     ap.add_argument("--reg_lambda", type=float, default=0.1)
     ap.add_argument("--qk_norm", action="store_true")
-
+    ap.add_argument("--guide_csv", type=str, default=None)
+    ap.add_argument("--guide_split", type=str, default="guide_train")
+    ap.add_argument("--guide_batch_size", type=int, default=8)
+    ap.add_argument("--guide_every", type=int, default=1)
+    ap.add_argument("--contact_topk", type=int, default=3)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2047,6 +2008,38 @@ def main():
         )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
+    guide_loader = None
+    if args.guide_csv is not None and float(args.contact_lambda) > 0.0:
+        guide_rows = read_csv_rows_filter_split(args.guide_csv, args.guide_split)
+
+        guide_ds = DTIDataset(
+            rows=guide_rows,
+            y_thr=float(args.y_thr),
+            drop_missing_y=True,
+            lig_cls_id=lig_enc.cls_id,
+            y_reg_mean=train_y_mean,
+            y_reg_std=train_y_std,
+            ligand_input_type=args.ligand_input_type,
+            smiles_tokenizer=smiles_tokenizer,
+            smiles_col=args.smiles_col,
+        )
+
+        guide_loader = DataLoader(
+            guide_ds,
+            batch_size=int(args.guide_batch_size),
+            shuffle=True,
+            num_workers=0,
+            pin_memory=False,
+            collate_fn=lambda xs: collate_fn(
+                xs,
+                esm_tokenizer=esm_tokenizer,
+                lig_pad=lig_enc.pad_id,
+                lig_cls=lig_enc.cls_id,
+            ),
+        )
+
+        print(f"[guide] loaded {len(guide_ds)} rows from {args.guide_csv} split={args.guide_split}")
+
     test_loader = None
     if args.test_csv:
         test_ds = DTIDataset(
@@ -2168,8 +2161,11 @@ def main():
             grad_clip=float(args.grad_clip),
             attn_entropy_lambda=float(args.attn_entropy_lambda),
             reg_lambda=float(args.reg_lambda),
-            sym_lambda=float(args.sym_lambda),  # <- 追加
+            sym_lambda=float(args.sym_lambda),
             contact_lambda=float(args.contact_lambda),
+            guide_loader=guide_loader,
+            guide_every=int(args.guide_every),
+            contact_topk=int(args.contact_topk),
             base_loss_alpha=0.3,
             epoch=ep,
         )
