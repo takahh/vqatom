@@ -83,6 +83,77 @@ def read_csv_random_rows(path: str, n_rows: int, seed: int) -> List[Dict[str, st
     idx = rng.sample(range(len(rows)), n_rows)
     return [rows[i] for i in idx]
 
+def compute_atom_res_contact_loss_from_aux(
+    aux: dict,
+    atom_contact_pairs: List[List[Tuple[int, int]]],
+    contact_topk: int = 8,
+) -> torch.Tensor:
+    """
+    pair_map: (B, Ll, Lp)
+      Ll = ligand atoms/tokens, CLS除去後
+      Lp = protein residues, CLS/EOS除去後
+
+    atom_contact_pairs:
+      list of [(lig_atom_idx, residue_idx), ...]
+      indices are 0-based, matching SDF heavy atom order and protein seq order.
+    """
+    if "pair_map" not in aux:
+        raise ValueError("aux['pair_map'] is missing")
+
+    pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
+    l_pad = aux["l_pad"]                # (B, Ll)
+    p_pad = aux["p_pad"]                # (B, Lp)
+
+    valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)
+
+    vals_valid = pair_map[valid]
+    if vals_valid.numel() == 0:
+        return pair_map.sum() * 0.0
+
+    mean = vals_valid.mean().detach()
+    std = vals_valid.std(unbiased=False).detach().clamp_min(1e-6)
+    logits = (pair_map - mean) / std
+
+    losses = []
+
+    B, Ll, Lp = logits.shape
+
+    for b in range(B):
+        pos_vals = []
+
+        for ai, ri in atom_contact_pairs[b]:
+            # ai: ligand atom index
+            # ri: protein residue index
+            # pair_map already excludes ligand CLS and protein CLS
+            if ai < 0 or ri < 0:
+                continue
+            if ai >= Ll or ri >= Lp:
+                continue
+            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
+                continue
+
+            pos_vals.append(logits[b, ai, ri])
+
+        if not pos_vals:
+            continue
+
+        pos_vals = torch.stack(pos_vals)
+        k = min(int(contact_topk), pos_vals.numel())
+        topk_vals = pos_vals.topk(k).values
+
+        # reward-style guide:
+        # contact pair score が大きいほど loss が下がる
+        losses.append(-topk_vals.mean())
+
+    if not losses:
+        return pair_map.sum() * 0.0
+
+    loss_contact = torch.stack(losses).mean()
+
+    # スコア爆発を少し抑える
+    loss_contact = loss_contact + 0.01 * (pair_map[valid] ** 2).mean()
+
+    return loss_contact
 
 def list_train_shards(shard_dir: str, pattern: str = "train_part_*.csv") -> List[str]:
     paths = sorted(glob(os.path.join(shard_dir, pattern)))
@@ -154,6 +225,7 @@ class Batch:
     y_bin: torch.Tensor
     y_reg: Optional[torch.Tensor]
     contact_mask: Optional[torch.Tensor] = None
+    atom_contact_pairs: Optional[List[List[Tuple[int, int]]]] = None
 
 class DTIDataset(Dataset):
     def __init__(
@@ -258,12 +330,15 @@ class DTIDataset(Dataset):
 
         contact_mask = str(row.get("contact_mask", "") or "").strip()
 
+        atom_contact_pairs = row.get("atom_contact_pairs", "")
+
         item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
             "y_bin": float(row["y_bin"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
             "contact_mask": contact_mask,
+            "atom_contact_pairs": atom_contact_pairs,
         }
         return item
 
@@ -317,6 +392,19 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
             contact_mask[i, :n] = cm[:n]
     else:
         contact_mask = None
+    atom_contact_pairs = []
+
+    for s in samples:
+        raw = s.get("atom_contact_pairs", "")
+        if raw:
+            try:
+                pairs = json.loads(raw)
+                pairs = [(int(a), int(r)) for a, r in pairs]
+            except Exception:
+                pairs = []
+        else:
+            pairs = []
+        atom_contact_pairs.append(pairs)
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -325,6 +413,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         y_bin=y_bin,
         y_reg=y_reg,
         contact_mask=contact_mask,
+        atom_contact_pairs=atom_contact_pairs,
     )
 
 # =========================================================
@@ -1019,9 +1108,9 @@ def train_one_epoch(
         loss_contact = torch.tensor(0.0, device=device)
 
         if (
-            contact_lambda > 0.0
-            and guide_loader is not None
-            and step % guide_every == 0
+                contact_lambda > 0.0
+                and guide_loader is not None
+                and step % guide_every == 0
         ):
             try:
                 g = next(guide_iter)
@@ -1032,7 +1121,22 @@ def train_one_epoch(
             gp_ids = g.p_input_ids.to(device)
             gp_msk = g.p_attn_mask.to(device)
             gl_ids = g.l_ids.to(device)
-            g_mask = g.contact_mask.to(device)
+
+            if use_amp:
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
+                    loss_contact = compute_atom_res_contact_loss_from_aux(
+                        g_aux,
+                        g.atom_contact_pairs,
+                        contact_topk=int(contact_topk),
+                    )
+            else:
+                _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
+                loss_contact = compute_atom_res_contact_loss_from_aux(
+                    g_aux,
+                    g.atom_contact_pairs,
+                    contact_topk=int(contact_topk),
+                )
 
             if use_amp:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
