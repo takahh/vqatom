@@ -1629,14 +1629,38 @@ class DualStreamDTIClassifier(nn.Module):
             return_maps=True,
         )
 
-        def row_zscore(x, eps=1e-6):
-            mu = x.mean(dim=-1, keepdim=True)
-            sd = x.std(dim=-1, keepdim=True).clamp_min(eps)
-            return (x - mu) / sd
+        def masked_zscore(x, valid, dim, eps=1e-6):
+            """
+            x:     (B,H,Ll,Lp) or (B,Ll,Lp)
+            valid: (B,1,Ll,Lp) or (B,Ll,Lp)
+            dim:   -1 or -2
+            """
+            v = valid.to(dtype=x.dtype)
 
+            count = v.sum(dim=dim, keepdim=True).clamp_min(1.0)
+            mean = (x * v).sum(dim=dim, keepdim=True) / count
+
+            var = (((x - mean) * v) ** 2).sum(dim=dim, keepdim=True) / count
+            std = var.sqrt().clamp_min(eps)
+
+            z = (x - mean) / std
+            return z.masked_fill(~valid, 0.0)
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
-        pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)
+        pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
+
+        # valid mask
+        valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)  # (B,Ll,Lp)
+        valid_h = valid.unsqueeze(1)  # (B,1,Ll,Lp)
+
+        # row/column z-score BEFORE lp/pl overlap
+        lp_row = masked_zscore(lp_score, valid_h, dim=-1)
+        lp_col = masked_zscore(lp_score, valid_h, dim=-2)
+        lp_score = torch.minimum(lp_row, lp_col)
+
+        pl_row = masked_zscore(pl_score, valid_h, dim=-1)
+        pl_col = masked_zscore(pl_score, valid_h, dim=-2)
+        pl_score = torch.minimum(pl_row, pl_col)
 
         if self.pl_lp_overlap == "both":
             pair_map = torch.minimum(lp_score, pl_score)
@@ -1644,18 +1668,14 @@ class DualStreamDTIClassifier(nn.Module):
             pair_map = lp_score
         else:
             pair_map = pl_score
+
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
-
-        # valid mask
-        valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)   # (B,Ll,Lp)
-
-        # zero out invalid area
         pair_map = pair_map.masked_fill(~valid, 0.0)
 
-        # optional area normalization to reduce length bias
-        denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
-        pair_map = pair_map / denom.sqrt()
+        # z-score使用時は area normalization は入れない
+        # denom = valid.float().sum(dim=(-2, -1), keepdim=True).clamp_min(1.0)
+        # pair_map = pair_map / denom.sqrt()
 
         # p_ctx: (B, Lp, D)
         # l_ctx: (B, Ll, D)
