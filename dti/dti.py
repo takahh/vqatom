@@ -1630,20 +1630,17 @@ class DualStreamDTIClassifier(nn.Module):
         )
 
         def masked_zscore(x, valid, dim, eps=1e-6):
-            """
-            x:     (B,H,Ll,Lp) or (B,Ll,Lp)
-            valid: (B,1,Ll,Lp) or (B,Ll,Lp)
-            dim:   -1 or -2
-            """
             v = valid.to(dtype=x.dtype)
 
             count = v.sum(dim=dim, keepdim=True).clamp_min(1.0)
             mean = (x * v).sum(dim=dim, keepdim=True) / count
 
             var = (((x - mean) * v) ** 2).sum(dim=dim, keepdim=True) / count
-            std = var.sqrt().clamp_min(eps)
+            std = torch.sqrt(var + eps)
 
             z = (x - mean) / std
+            z = torch.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
+
             return z.masked_fill(~valid, 0.0)
 
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
@@ -1690,12 +1687,20 @@ class DualStreamDTIClassifier(nn.Module):
             torch.abs(Ll - Lp),
         ], dim=-1)  # (B,Ll,Lp,4D)
 
-        score = pair_map.unsqueeze(-1)  # (B,Ll,Lp,1)
+        score = pair_map.masked_fill(~valid, 0.0)
+
+        # z-score は負値を含むので、重みとして使う前に非負化
+        score = torch.relu(score)
+
+        # すべて0になるケースを防ぐ
+        score = score + valid.float() * 1e-6
+        score = score.masked_fill(~valid, 0.0)
+
+        score = score.unsqueeze(-1)
 
         weighted = pair_feat * score
-
         denom = score.sum(dim=(1, 2)).clamp_min(1e-6)
-        h_mid = weighted.sum(dim=(1, 2)) / denom  # (B,4D)
+        h_mid = weighted.sum(dim=(1, 2)) / denom
 
         logit = self.cls_head(h_mid).squeeze(-1)
 

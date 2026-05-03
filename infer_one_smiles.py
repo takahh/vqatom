@@ -1,8 +1,8 @@
 # ---------------------------
-# Public API for CSV builders
+# Public API for CSV builders / molecule tokenizer
 # ---------------------------
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 import sys
 
@@ -14,25 +14,17 @@ for p in [HERE, ROOT]:
     if s not in sys.path:
         sys.path.insert(0, s)
 
-# ---------------------------
-# Public API for CSV builders
-# ---------------------------
-import sys
-from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
-
 _GLOBAL = {
     "model": None,
     "dev": None,
     "maxn": 100,
     "d_attr": 79,
     "offsets": None,   # cache global offsets
+    "global_id_meta": None,
 }
-# infer_one_smiles.py
 
 _MODEL_READY = False
 
-_MODEL_READY = False
 
 def infer_smiles(smiles: str):
     global _MODEL_READY
@@ -51,10 +43,11 @@ def infer_smiles(smiles: str):
         )
         _MODEL_READY = True
     return encode_smiles_to_atom_tokens(smiles)
+
+
 # ---------------------------
 # Minimal args for model build
 # ---------------------------
-
 def _build_args_for_ckpt(
     hidden_dim: int,
     codebook_size: int,
@@ -68,12 +61,10 @@ def _build_args_for_ckpt(
         ema_decay=ema_decay,
     )
 
+
 def _load_global_id_meta_any(ckpt_path: str, map_location="cpu") -> Optional[dict]:
     """
     Returns ckpt['global_id_meta'] if present, else None.
-    Supports:
-      - dict ckpt with 'global_id_meta'
-      - dict ckpt with nested dict (same)
     """
     import torch
     ckpt = torch.load(ckpt_path, map_location=map_location, weights_only=False)
@@ -83,10 +74,10 @@ def _load_global_id_meta_any(ckpt_path: str, map_location="cpu") -> Optional[dic
 
     return None
 
-# ---------------------------
-# Safe helpers (ported from previous version)
-# ---------------------------
 
+# ---------------------------
+# Safe helpers
+# ---------------------------
 def _load_state_dict_any(ckpt_path: str, map_location):
     """
     Supports:
@@ -96,7 +87,7 @@ def _load_state_dict_any(ckpt_path: str, map_location):
       - dict with 'model_state_dict'
     """
     import torch
-    ckpt = torch.load(ckpt_path, map_location=map_location)
+    ckpt = torch.load(ckpt_path, map_location=map_location, weights_only=False)
 
     if isinstance(ckpt, dict):
         if "model" in ckpt:
@@ -107,6 +98,7 @@ def _load_state_dict_any(ckpt_path: str, map_location):
             return ckpt["model_state_dict"]
 
     return ckpt
+
 
 def _as_torch(x, *, dtype=None, device=None):
     import numpy as np
@@ -119,23 +111,18 @@ def _as_torch(x, *, dtype=None, device=None):
         x = x.to(device)
     return x
 
+
 def _pad_adj_attr(adj, attr, *, maxn: int = 100, d_attr: int = 79):
     """
     Ensure:
       adj:  (maxn, maxn) float32
       attr: (maxn, d_attr) float32
-
-    Accepts:
-      adj:  (N,N)
-      attr: (N,d_attr) or flattened (N*d_attr,)
-      either numpy or torch
     """
     import torch
 
     adj = _as_torch(adj, dtype=torch.float32)
     attr = _as_torch(attr, dtype=torch.float32)
 
-    # attr could be flattened
     if attr.dim() == 1:
         if attr.numel() % d_attr != 0:
             raise RuntimeError(
@@ -165,23 +152,20 @@ def _pad_adj_attr(adj, attr, *, maxn: int = 100, d_attr: int = 79):
 
     return adj_pad, attr_pad, n
 
+
 def _compute_global_offsets(model) -> Dict[str, int]:
-    """
-    Compute global token offsets per safe_key by iterating codebook sizes.
-    Uses model.vq._codebook.embed[<safe_key>].shape[0] as K.
-    """
     offsets: Dict[str, int] = {}
     cur = 0
-    for safe_key in model.vq._codebook.embed.keys():
+    for safe_key in sorted(model.vq._codebook.embed.keys()):
         K = int(model.vq._codebook.embed[safe_key].shape[0])
         offsets[safe_key] = cur
         cur += K
     return offsets
 
-# ---------------------------
-# Model / inference (ported)
-# ---------------------------
 
+# ---------------------------
+# Model / inference
+# ---------------------------
 def load_model(
     ckpt_path: str,
     dev,
@@ -196,7 +180,6 @@ def load_model(
     """
     Build EquivariantThreeHopGINE and load checkpoint weights.
     """
-    # Prevent imported training modules from parsing our argv.
     sys.argv = [sys.argv[0]]
 
     from models import EquivariantThreeHopGINE
@@ -223,6 +206,135 @@ def load_model(
     return model
 
 
+def _build_dgl_inputs_from_smiles(smiles: str, dev, *, maxn: int, d_attr: int):
+    import dgl
+    from smiles_to_npy_discretize import smiles_to_graph_with_labels
+    from new_train_and_eval import convert_to_dgl
+
+    adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
+    adj_pad, attr_pad, n = _pad_adj_attr(adj, attr, maxn=maxn, d_attr=d_attr)
+
+    adj_batch = [adj_pad.unsqueeze(0)]
+    attr_batch = [attr_pad.unsqueeze(0)]
+
+    _, extended_graphs, masks_dict, attr_matrices_all, _, _ = convert_to_dgl(
+        adj_batch,
+        attr_batch,
+        logger=None,
+        start_atom_id=0,
+        start_mol_id=0,
+        device=str(dev),
+    )
+
+    g = extended_graphs[0]
+    X = attr_matrices_all[0]
+    batched_graph = dgl.batch([g]).to(dev)
+    feats = batched_graph.ndata["feat"]
+    attr_list = [X.to(dev)]
+    return batched_graph, feats, masks_dict, attr_list, n, adj, attr
+
+
+def _build_dgl_inputs_from_mol(mol, dev, *, maxn: int, d_attr: int):
+    import dgl
+    from smiles_to_npy_discretize import mol_to_graph_with_labels
+    from new_train_and_eval import convert_to_dgl
+
+    adj, attr, _ = mol_to_graph_with_labels(mol)
+    adj_pad, attr_pad, n = _pad_adj_attr(adj, attr, maxn=maxn, d_attr=d_attr)
+
+    adj_batch = [adj_pad.unsqueeze(0)]
+    attr_batch = [attr_pad.unsqueeze(0)]
+
+    _, extended_graphs, masks_dict, attr_matrices_all, _, _ = convert_to_dgl(
+        adj_batch,
+        attr_batch,
+        logger=None,
+        start_atom_id=0,
+        start_mol_id=0,
+        device=str(dev),
+    )
+
+    g = extended_graphs[0]
+    X = attr_matrices_all[0]
+    batched_graph = dgl.batch([g]).to(dev)
+    feats = batched_graph.ndata["feat"]
+    attr_list = [X.to(dev)]
+    return batched_graph, feats, masks_dict, attr_list, n, adj, attr
+
+
+def _tokens_from_ids(model, kid, cid, id2safe) -> Tuple[List[int], List[int], List[int]]:
+    import torch
+    kid_list = torch.as_tensor(kid).reshape(-1).detach().cpu().tolist()
+    cid_list = torch.as_tensor(cid).reshape(-1).detach().cpu().tolist()
+
+    offsets = _GLOBAL.get("offsets")
+    if offsets is None:
+        offsets = _compute_global_offsets(model)
+        _GLOBAL["offsets"] = offsets
+
+    tokens: List[int] = []
+    for k, c in zip(kid_list, cid_list):
+        safe = id2safe[int(k)]
+        if safe not in offsets:
+            raise RuntimeError(f"safe_key '{safe}' not in offsets. ckpt/meta mismatch?")
+        tokens.append(int(offsets[safe]) + int(c))
+    return tokens, kid_list, cid_list
+
+
+def _extract_vq_latents(model, batched_graph, feats, masks_dict, attr_list, *, n_atoms: int):
+    """
+    Return atom-level continuous representations before vector quantization.
+
+    Saves two useful views:
+      - h_raw: output of the GINE/JK/out_proj stack before pre_vq_ln
+      - h_vq:  actual VQ input after pre_vq_ln + L2 normalization
+
+    The code assumes the EquivariantThreeHopGINE forward supports
+    mode='init_kmeans_loop' and returns h_out before the VQ module.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    with torch.no_grad():
+        h_raw = model(
+            batched_graph,
+            feats,
+            chunk_i=0,
+            mask_dict=masks_dict,
+            logger=None,
+            epoch=0,
+            batched_graph_base=None,
+            mode="init_kmeans_loop",
+            attr_list=attr_list,
+        )
+
+        if not torch.is_tensor(h_raw):
+            raise RuntimeError(
+                "model(..., mode='init_kmeans_loop') did not return a tensor. "
+                "Check EquivariantThreeHopGINE.forward."
+            )
+
+        h_raw = h_raw.reshape(-1, h_raw.shape[-1])[:n_atoms]
+
+        if hasattr(model, "pre_vq_ln"):
+            h_vq = model.pre_vq_ln(h_raw)
+        else:
+            h_vq = h_raw
+        h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
+
+    return {
+        "h_raw": h_raw.detach().cpu(),
+        "h_vq": h_vq.detach().cpu(),
+    }
+
+
+def _save_latent_payload(save_latents_path: str, payload: Dict[str, Any]) -> None:
+    import os
+    import torch
+    os.makedirs(os.path.dirname(os.path.abspath(save_latents_path)), exist_ok=True)
+    torch.save(payload, save_latents_path)
+
+
 def infer_one(
     model,
     dev,
@@ -230,38 +342,34 @@ def infer_one(
     *,
     maxn: int = 100,
     d_attr: int = 79,
+    return_latents: bool = False,
+    save_latents_path: Optional[str] = None,
 ):
+    """
+    Infer VQ-Atom token IDs from a SMILES string.
+
+    New options for UMAP:
+      return_latents=True returns a fifth object: latent_payload
+      save_latents_path='xxx.pt' saves latent_payload to disk
+
+    latent_payload['h_vq'] is the recommended input for UMAP because it is
+    the actual normalized representation fed into vector quantization.
+    """
     sys.argv = [sys.argv[0]]
 
     import torch
-    import dgl
-
-    from smiles_to_npy_discretize import smiles_to_graph_with_labels
-    from new_train_and_eval import evaluate, convert_to_dgl
+    from new_train_and_eval import evaluate
 
     with torch.no_grad():
-        adj, attr, _ = smiles_to_graph_with_labels(smiles, idx=0)
-
-        adj_pad, attr_pad, n = _pad_adj_attr(adj, attr, maxn=maxn, d_attr=d_attr)
-
-        adj_batch = [adj_pad.unsqueeze(0)]
-        attr_batch = [attr_pad.unsqueeze(0)]
-
-        _, extended_graphs, masks_dict, attr_matrices_all, _, _ = convert_to_dgl(
-            adj_batch,
-            attr_batch,
-            logger=None,
-            start_atom_id=0,
-            start_mol_id=0,
-            device=str(dev),
+        batched_graph, feats, masks_dict, attr_list, n, adj, attr = _build_dgl_inputs_from_smiles(
+            smiles, dev, maxn=maxn, d_attr=d_attr
         )
 
-        g = extended_graphs[0]
-        X = attr_matrices_all[0]
-
-        batched_graph = dgl.batch([g]).to(dev)
-        feats = batched_graph.ndata["feat"]
-        attr_list = [X.to(dev)]
+        latent_payload = None
+        if return_latents or save_latents_path is not None:
+            latent_payload = _extract_vq_latents(
+                model, batched_graph, feats, masks_dict, attr_list, n_atoms=n
+            )
 
         _, ids, _ = evaluate(
             model=model,
@@ -276,37 +384,37 @@ def infer_one(
             attr_list=attr_list,
         )
 
-        # ids may be (kid,cid,gid,id2safe) or legacy (kid,cid,id2safe)
         if isinstance(ids, (tuple, list)) and len(ids) == 4:
             kid, cid, gid, id2safe = ids
         elif isinstance(ids, (tuple, list)) and len(ids) == 3:
             kid, cid, id2safe = ids
             gid = None
         else:
-            raise TypeError(f"infer ids format unexpected: {type(ids)} len={len(ids) if isinstance(ids,(tuple,list)) else 'n/a'}")
+            raise TypeError(
+                f"infer ids format unexpected: {type(ids)} "
+                f"len={len(ids) if isinstance(ids,(tuple,list)) else 'n/a'}"
+            )
 
-        kid_list = torch.as_tensor(kid).reshape(-1).detach().cpu().tolist()
-        cid_list = torch.as_tensor(cid).reshape(-1).detach().cpu().tolist()
+        tokens, kid_list, cid_list = _tokens_from_ids(model, kid, cid, id2safe)
 
-        # ---- (NEW) prefer offsets from ckpt meta; fallback only if missing ----
-        offsets = _GLOBAL.get("offsets")
-        if offsets is None:
-            # fallback (still safer to sort to match your old convention)
-            offsets = {}
-            cur = 0
-            for safe_key in sorted(model.vq._codebook.embed.keys()):
-                K = int(model.vq._codebook.embed[safe_key].shape[0])
-                offsets[safe_key] = cur
-                cur += K
-            _GLOBAL["offsets"] = offsets
+        if latent_payload is not None:
+            latent_payload.update({
+                "smiles": smiles,
+                "n_atoms": int(n),
+                "tokens": tokens,
+                "kid": kid_list,
+                "cid": cid_list,
+                "id2safe": id2safe,
+                "adj": torch.as_tensor(adj).detach().cpu(),
+                "attr": torch.as_tensor(attr).detach().cpu(),
+            })
+            if gid is not None:
+                latent_payload["gid"] = torch.as_tensor(gid).reshape(-1).detach().cpu().tolist()
+            if save_latents_path is not None:
+                _save_latent_payload(save_latents_path, latent_payload)
 
-        tokens: List[int] = []
-        for k, c in zip(kid_list, cid_list):
-            safe = id2safe[int(k)]
-            if safe not in offsets:
-                raise RuntimeError(f"safe_key '{safe}' not in offsets. ckpt/meta mismatch?")
-            tokens.append(int(offsets[safe]) + int(c))
-
+        if return_latents:
+            return tokens, kid_list, cid_list, id2safe, latent_payload
         return tokens, kid_list, cid_list, id2safe
 
 
@@ -317,37 +425,22 @@ def infer_one_from_mol(
     *,
     maxn: int = 100,
     d_attr: int = 79,
+    return_latents: bool = False,
+    save_latents_path: Optional[str] = None,
 ):
     import torch
-    import dgl
-
-    from smiles_to_npy_discretize import mol_to_graph_with_labels
-    from new_train_and_eval import evaluate, convert_to_dgl
+    from new_train_and_eval import evaluate
 
     with torch.no_grad():
-
-        adj, attr, _ = mol_to_graph_with_labels(mol)
-
-        adj_pad, attr_pad, n = _pad_adj_attr(adj, attr, maxn=maxn, d_attr=d_attr)
-
-        adj_batch = [adj_pad.unsqueeze(0)]
-        attr_batch = [attr_pad.unsqueeze(0)]
-
-        _, extended_graphs, masks_dict, attr_matrices_all, _, _ = convert_to_dgl(
-            adj_batch,
-            attr_batch,
-            logger=None,
-            start_atom_id=0,
-            start_mol_id=0,
-            device=str(dev),
+        batched_graph, feats, masks_dict, attr_list, n, adj, attr = _build_dgl_inputs_from_mol(
+            mol, dev, maxn=maxn, d_attr=d_attr
         )
 
-        g = extended_graphs[0]
-        X = attr_matrices_all[0]
-
-        batched_graph = dgl.batch([g]).to(dev)
-        feats = batched_graph.ndata["feat"]
-        attr_list = [X.to(dev)]
+        latent_payload = None
+        if return_latents or save_latents_path is not None:
+            latent_payload = _extract_vq_latents(
+                model, batched_graph, feats, masks_dict, attr_list, n_atoms=n
+            )
 
         _, ids, _ = evaluate(
             model=model,
@@ -362,27 +455,42 @@ def infer_one_from_mol(
             attr_list=attr_list,
         )
 
-        if len(ids) == 4:
+        if isinstance(ids, (tuple, list)) and len(ids) == 4:
             kid, cid, gid, id2safe = ids
-        else:
+        elif isinstance(ids, (tuple, list)) and len(ids) == 3:
             kid, cid, id2safe = ids
+            gid = None
+        else:
+            raise TypeError(
+                f"infer ids format unexpected: {type(ids)} "
+                f"len={len(ids) if isinstance(ids,(tuple,list)) else 'n/a'}"
+            )
 
-        kid_list = torch.as_tensor(kid).reshape(-1).cpu().tolist()
-        cid_list = torch.as_tensor(cid).reshape(-1).cpu().tolist()
+        tokens, kid_list, cid_list = _tokens_from_ids(model, kid, cid, id2safe)
 
-        offsets = _GLOBAL["offsets"]
+        if latent_payload is not None:
+            latent_payload.update({
+                "n_atoms": int(n),
+                "tokens": tokens,
+                "kid": kid_list,
+                "cid": cid_list,
+                "id2safe": id2safe,
+                "adj": torch.as_tensor(adj).detach().cpu(),
+                "attr": torch.as_tensor(attr).detach().cpu(),
+            })
+            if gid is not None:
+                latent_payload["gid"] = torch.as_tensor(gid).reshape(-1).detach().cpu().tolist()
+            if save_latents_path is not None:
+                _save_latent_payload(save_latents_path, latent_payload)
 
-        tokens = []
-        for k, c in zip(kid_list, cid_list):
-            safe = id2safe[int(k)]
-            tokens.append(offsets[safe] + int(c))
-
+        if return_latents:
+            return tokens, kid_list, cid_list, id2safe, latent_payload
         return tokens
 
-# ---------------------------
-# Public API (kept)
-# ---------------------------
 
+# ---------------------------
+# Public API
+# ---------------------------
 def init_tokenizer(
     ckpt_path: str,
     device: int = 0,
@@ -401,14 +509,13 @@ def init_tokenizer(
         f"cuda:{device}" if device >= 0 and torch.cuda.is_available() else "cpu"
     )
 
-    # ---- (NEW) read global_id_meta from ckpt (CPU is fine) ----
     meta = _load_global_id_meta_any(ckpt_path, map_location="cpu")
     if meta is not None:
         offsets = meta.get("global_offsets")
         if not isinstance(offsets, dict) or not all(isinstance(v, int) for v in offsets.values()):
             raise RuntimeError(f"ckpt has global_id_meta but global_offsets is invalid: {type(offsets)}")
-        _GLOBAL["offsets"] = dict(offsets)  # FIXED OFFSETS from training truth
-        _GLOBAL["global_id_meta"] = meta    # optional, for debugging/inspection
+        _GLOBAL["offsets"] = dict(offsets)
+        _GLOBAL["global_id_meta"] = meta
     else:
         _GLOBAL["offsets"] = None
         _GLOBAL["global_id_meta"] = None
@@ -429,16 +536,13 @@ def init_tokenizer(
     _GLOBAL["maxn"] = maxn
     _GLOBAL["d_attr"] = d_attr
 
-    # NOTE: ここで offsets を None に “リセットしない”
-    #       ckpt内metaがあるならそれを使い続けたいので。
     return model, dev
+
 
 def encode_smiles_to_atom_tokens(smiles: str) -> List[int]:
     """
     Returns global token ids (List[int]) for this SMILES.
     Requires init_tokenizer() to be called once beforehand.
-
-    IMPORTANT: token order is whatever convert_to_dgl/evaluate produces.
     """
     if _GLOBAL["model"] is None or _GLOBAL["dev"] is None:
         raise RuntimeError("Tokenizer not initialized. Call init_tokenizer(...) first.")
@@ -452,5 +556,28 @@ def encode_smiles_to_atom_tokens(smiles: str) -> List[int]:
     )
     return tokens
 
+
+def save_smiles_latents(smiles: str, out_path: str) -> Dict[str, Any]:
+    """
+    Convenience wrapper for UMAP data extraction.
+    Requires init_tokenizer() first.
+    """
+    if _GLOBAL["model"] is None or _GLOBAL["dev"] is None:
+        raise RuntimeError("Tokenizer not initialized. Call init_tokenizer(...) first.")
+
+    *_, payload = infer_one(
+        _GLOBAL["model"],
+        _GLOBAL["dev"],
+        smiles,
+        maxn=_GLOBAL["maxn"],
+        d_attr=_GLOBAL["d_attr"],
+        return_latents=True,
+        save_latents_path=out_path,
+    )
+    return payload
+
+
+# Keep old name
+# NOTE: This intentionally overrides the bootstrap infer_smiles above, preserving old behavior.
 def infer_smiles(smiles: str):
     return encode_smiles_to_atom_tokens(smiles)
