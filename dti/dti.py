@@ -1646,25 +1646,33 @@ class DualStreamDTIClassifier(nn.Module):
         lp_score = inter_aux["lp_pair_score"]  # (B,H,Ll,Lp)
         pl_score = inter_aux["pl_pair_score"].transpose(-1, -2)  # (B,H,Ll,Lp)
 
-        # valid mask
         valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)  # (B,Ll,Lp)
         valid_h = valid.unsqueeze(1)  # (B,1,Ll,Lp)
 
-        # row/column z-score BEFORE lp/pl overlap
-        lp_row = masked_zscore(lp_score, valid_h, dim=-1)
-        lp_col = masked_zscore(lp_score, valid_h, dim=-2)
-        lp_score = torch.minimum(lp_row, lp_col)
-
-        pl_row = masked_zscore(pl_score, valid_h, dim=-1)
-        pl_col = masked_zscore(pl_score, valid_h, dim=-2)
-        pl_score = torch.minimum(pl_row, pl_col)
-
-        if self.pl_lp_overlap == "both":
-            pair_map = torch.minimum(lp_score, pl_score)
-        elif self.pl_lp_overlap == "lp":
+        # lp/pl の軸処理
+        if self.pl_lp_overlap == "lp":
+            # ligand atom ごとに protein residue 軸だけを見る
+            # dim=-1 = protein axis
+            lp_score = masked_zscore(lp_score, valid_h, dim=-1)
             pair_map = lp_score
-        else:
+
+        elif self.pl_lp_overlap == "pl":
+            # pl_score は transpose 済みなので形は (B,H,Ll,Lp)
+            # protein residue ごとに ligand atom 軸を見るなら dim=-2
+            pl_score = masked_zscore(pl_score, valid_h, dim=-2)
             pair_map = pl_score
+
+        else:
+            # both のときだけ従来通り、両軸で hotspot 的に絞る
+            lp_row = masked_zscore(lp_score, valid_h, dim=-1)
+            lp_col = masked_zscore(lp_score, valid_h, dim=-2)
+            lp_score = torch.minimum(lp_row, lp_col)
+
+            pl_row = masked_zscore(pl_score, valid_h, dim=-1)
+            pl_col = masked_zscore(pl_score, valid_h, dim=-2)
+            pl_score = torch.minimum(pl_row, pl_col)
+
+            pair_map = torch.minimum(lp_score, pl_score)
 
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
