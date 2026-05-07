@@ -968,24 +968,6 @@ def compute_atom_res_contact_loss_from_aux(
 
         losses.append(pos_loss + neg_lambda * neg_loss)
 
-    debug_valid_pos = []
-
-    for b in range(B):
-        pos_mask = torch.zeros((Ll, Lp), dtype=torch.bool, device=logits.device)
-
-        raw_n = len(atom_contact_pairs[b])
-        kept_n = 0
-
-        for ai, ri in atom_contact_pairs[b]:
-            if ai < 0 or ri < 0 or ai >= Ll or ri >= Lp:
-                continue
-            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
-                continue
-            pos_mask[ai, ri] = True
-            kept_n += 1
-
-        debug_valid_pos.append((raw_n, kept_n, Ll, Lp))
-    print("contact debug raw/kept/Ll/Lp:", debug_valid_pos[:4])
     if not losses:
         return pair_map.sum() * 0.0
 
@@ -1082,11 +1064,6 @@ def train_one_epoch(
             if use_amp:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
-
-                    print("guide batch pairs:", [len(x) for x in g.atom_contact_pairs[:4]])
-                    print("pair_map shape:", g_aux["pair_map"].shape)
-                    print("l_pad shape:", g_aux["l_pad"].shape, "p_pad shape:", g_aux["p_pad"].shape)
-
                     loss_contact = compute_atom_res_contact_loss_from_aux(
                         g_aux,
                         g.atom_contact_pairs,
@@ -1103,7 +1080,6 @@ def train_one_epoch(
         # =========================
         # TOTAL LOSS
         # =========================
-        print(f"loss_contact: {loss_contact:.4f}, loss: {loss:.4f}, contact_lambda: {contact_lambda:.4f}")
         loss = loss + contact_lambda * loss_contact
 
         loss.backward()
