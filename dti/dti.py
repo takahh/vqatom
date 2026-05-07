@@ -83,77 +83,6 @@ def read_csv_random_rows(path: str, n_rows: int, seed: int) -> List[Dict[str, st
     idx = rng.sample(range(len(rows)), n_rows)
     return [rows[i] for i in idx]
 
-def compute_atom_res_contact_loss_from_aux(
-    aux: dict,
-    atom_contact_pairs: List[List[Tuple[int, int]]],
-    contact_topk: int = 8,
-) -> torch.Tensor:
-    """
-    pair_map: (B, Ll, Lp)
-      Ll = ligand atoms/tokens, CLS除去後
-      Lp = protein residues, CLS/EOS除去後
-
-    atom_contact_pairs:
-      list of [(lig_atom_idx, residue_idx), ...]
-      indices are 0-based, matching SDF heavy atom order and protein seq order.
-    """
-    if "pair_map" not in aux:
-        raise ValueError("aux['pair_map'] is missing")
-
-    pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
-    l_pad = aux["l_pad"]                # (B, Ll)
-    p_pad = aux["p_pad"]                # (B, Lp)
-
-    valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)
-
-    vals_valid = pair_map[valid]
-    if vals_valid.numel() == 0:
-        return pair_map.sum() * 0.0
-
-    mean = vals_valid.mean().detach()
-    std = vals_valid.std(unbiased=False).detach().clamp_min(1e-6)
-    logits = (pair_map - mean) / std
-
-    losses = []
-
-    B, Ll, Lp = logits.shape
-
-    for b in range(B):
-        pos_vals = []
-
-        for ai, ri in atom_contact_pairs[b]:
-            # ai: ligand atom index
-            # ri: protein residue index
-            # pair_map already excludes ligand CLS and protein CLS
-            if ai < 0 or ri < 0:
-                continue
-            if ai >= Ll or ri >= Lp:
-                continue
-            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
-                continue
-
-            pos_vals.append(logits[b, ai, ri])
-
-        if not pos_vals:
-            continue
-
-        pos_vals = torch.stack(pos_vals)
-        k = min(int(contact_topk), pos_vals.numel())
-        topk_vals = pos_vals.topk(k).values
-
-        # reward-style guide:
-        # contact pair score が大きいほど loss が下がる
-        losses.append(-topk_vals.mean())
-
-    if not losses:
-        return pair_map.sum() * 0.0
-
-    loss_contact = torch.stack(losses).mean()
-
-    # スコア爆発を少し抑える
-    loss_contact = loss_contact + 0.01 * (pair_map[valid] ** 2).mean()
-
-    return loss_contact
 
 def list_train_shards(shard_dir: str, pattern: str = "train_part_*.csv") -> List[str]:
     paths = sorted(glob(os.path.join(shard_dir, pattern)))
@@ -985,54 +914,64 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
-def compute_contact_loss_from_aux(
+def compute_atom_res_contact_loss_from_aux(
     aux: dict,
-    contact_mask: torch.Tensor,
-    contact_topk: int = 3,
-) -> torch.Tensor:
-    """
-    aux["pair_map"]: (B, Ll, Lp)
-    contact_mask:   (B, Lp)
-    """
-    if "pair_map" not in aux:
-        raise ValueError("aux['pair_map'] is missing")
-
+    atom_contact_pairs,
+    contact_topk: int = 8,
+    neg_lambda: float = 0.3,
+    margin: float = 0.0,
+):
     pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
-    p_pad = aux["p_pad"]                # (B, Lp), True=PAD
+    l_pad = aux["l_pad"]
+    p_pad = aux["p_pad"]
 
-    # ligand方向にmax poolingして residue-level score にする
-    contact_score = pair_map.amax(dim=1)  # (B, Lp)
+    valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)
 
-    L = min(contact_score.shape[1], contact_mask.shape[1], p_pad.shape[1])
-    contact_score = contact_score[:, :L]
-    contact_target = contact_mask[:, :L].float()
-    p_valid = (~p_pad[:, :L])
+    vals_valid = pair_map[valid]
+    if vals_valid.numel() == 0:
+        return pair_map.sum() * 0.0
 
-    valid_vals = contact_score[p_valid]
-    if valid_vals.numel() == 0:
-        return contact_score.sum() * 0.0
+    mean = vals_valid.mean().detach()
+    std = vals_valid.std(unbiased=False).detach().clamp_min(1e-6)
+    logits = (pair_map - mean) / std
 
-    # batch内z-score。弱いranking guideとして使う
-    mean = valid_vals.mean().detach()
-    std = valid_vals.std(unbiased=False).detach().clamp_min(1e-6)
-    contact_logit = (contact_score - mean) / std
-
-    pos_mask = (contact_target > 0.5) & p_valid
-
+    B, Ll, Lp = logits.shape
     losses = []
-    for b in range(contact_logit.size(0)):
-        vals = contact_logit[b][pos_mask[b]]
-        if vals.numel() == 0:
+
+    for b in range(B):
+        pos_mask = torch.zeros((Ll, Lp), dtype=torch.bool, device=logits.device)
+
+        for ai, ri in atom_contact_pairs[b]:
+            if ai < 0 or ri < 0 or ai >= Ll or ri >= Lp:
+                continue
+            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
+                continue
+            pos_mask[ai, ri] = True
+
+        pos_mask = pos_mask & valid[b]
+        neg_mask = valid[b] & (~pos_mask)
+
+        if pos_mask.sum() == 0:
             continue
-        k = min(int(contact_topk), vals.numel())
-        topk_vals = vals.topk(k).values
-        losses.append(F.softplus(-topk_vals).mean())
+
+        # contact pair は高くする
+        pos_vals = logits[b][pos_mask]
+        k = min(int(contact_topk), pos_vals.numel())
+        pos_loss = F.softplus(-pos_vals.topk(k).values).mean()
+
+        # non-contact pair は正の値を罰する
+        neg_vals = logits[b][neg_mask]
+        if neg_vals.numel() > 0:
+            neg_loss = F.softplus(neg_vals - margin).mean()
+        else:
+            neg_loss = pos_loss * 0.0
+
+        losses.append(pos_loss + neg_lambda * neg_loss)
 
     if not losses:
-        return contact_score.sum() * 0.0
+        return pair_map.sum() * 0.0
 
     return torch.stack(losses).mean()
-
 
 # =========================================================
 # Train
@@ -1138,43 +1077,10 @@ def train_one_epoch(
                     contact_topk=int(contact_topk),
                 )
 
-            if use_amp:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
-            else:
-                _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
-
-            pair_map = g_aux["pair_map"]           # (B, Ll, Lp)
-            p_pad = g_aux["p_pad"]                # (B, Lp)
-
-            # ligand方向max → residue score
-            contact_score = pair_map.amax(dim=1)  # (B, Lp)
-
-            L = min(contact_score.shape[1], g_mask.shape[1])
-            contact_score = contact_score[:, :L]
-            contact_target = g_mask[:, :L]
-            p_valid = (~p_pad[:, :L])
-
-            valid_vals = contact_score[p_valid]
-            if valid_vals.numel() > 0:
-                mean = valid_vals.mean().detach()
-                std = valid_vals.std().clamp_min(1e-6).detach()
-                contact_logit = (contact_score - mean) / std
-
-                pos_mask = (contact_target > 0.5) & p_valid
-
-                losses_tmp = []
-                for b in range(contact_logit.size(0)):
-                    vals = contact_logit[b][pos_mask[b]]
-                    if vals.numel() == 0:
-                        continue
-                    k = min(contact_topk, vals.numel())
-                    topk = vals.topk(k).values
-                    losses_tmp.append(F.softplus(-topk).mean())
-
         # =========================
         # TOTAL LOSS
         # =========================
+        print(f"loss_contact: {loss_contact:.4f}, loss: {loss:.4f}, contact_lambda: {contact_lambda:.4f}")
         loss = loss + contact_lambda * loss_contact
 
         loss.backward()
