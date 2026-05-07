@@ -968,8 +968,6 @@ def compute_atom_res_contact_loss_from_aux(
 
         losses.append(pos_loss + neg_lambda * neg_loss)
 
-    if not losses:
-        return pair_map.sum() * 0.0
     debug_valid_pos = []
 
     for b in range(B):
@@ -988,6 +986,9 @@ def compute_atom_res_contact_loss_from_aux(
 
         debug_valid_pos.append((raw_n, kept_n, Ll, Lp))
     print("contact debug raw/kept/Ll/Lp:", debug_valid_pos[:4])
+    if not losses:
+        return pair_map.sum() * 0.0
+
     return torch.stack(losses).mean()
 
 # =========================================================
