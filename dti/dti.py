@@ -930,6 +930,43 @@ def train_one_epoch(
     # attn entropy を使う時だけ map を返す
     # need_maps = (attn_entropy_lambda != 0.0)
 
+    def contact_guide_loss(aux, contact_mask):
+        if contact_mask is None:
+            return torch.tensor(0.0, device=aux["pair_map"].device)
+
+        pair_map = aux["pair_map"].float()  # (B,Ll,Lp)
+        p_valid = ~aux["p_pad"]  # (B,Lp)
+
+        # ligand atom 方向で max → residueごとの接触スコア
+        contact_score = torch.relu(pair_map).amax(dim=1)  # (B,Lp)
+
+        L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
+        contact_score = contact_score[:, :L]
+        contact_target = contact_mask[:, :L]
+        p_valid = p_valid[:, :L]
+
+        if p_valid.sum() == 0:
+            return contact_score.sum() * 0.0
+
+        mean = contact_score[p_valid].mean().detach()
+        std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
+        contact_logit = (contact_score - mean) / std
+
+        pos_mask = (contact_target > 0.5) & p_valid
+
+        losses = []
+        for b in range(contact_logit.size(0)):
+            vals = contact_logit[b][pos_mask[b]]
+            if vals.numel() == 0:
+                continue
+            k = min(3, vals.numel())
+            losses.append(F.softplus(-vals.topk(k).values).mean())
+
+        if not losses:
+            return contact_logit.sum() * 0.0
+
+        return torch.stack(losses).mean()
+
     def attention_symmetry_loss(attn_lp, attn_pl, p_pad=None, l_pad=None):
         """
         attn_lp: (B, H, Ll, Lp)   ligand <- protein
@@ -1009,37 +1046,15 @@ def train_one_epoch(
                 loss_contact = torch.tensor(0.0, device=device)
 
                 if contact_lambda != 0.0:
-                    if contact_mask is None:
-                        raise ValueError("contact_lambda != 0, but batch.contact_mask is missing")
-                    if "pair_map" not in aux:
-                        raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
+                    loss_contact = torch.tensor(0.0, device=device)
 
-                    contact_score = aux["pair_map"].float().amax(dim=1)
-                    p_valid = ~aux["p_pad"]
-                    L = min(contact_score.shape[1], contact_mask.shape[1], p_valid.shape[1])
-                    contact_score = contact_score[:, :L]
-                    contact_target = contact_mask[:, :L]
-                    p_valid = p_valid[:, :L]
+                    if contact_lambda != 0.0:
+                        if contact_mask is None:
+                            raise ValueError("contact_lambda != 0, but batch.contact_mask is missing")
+                        if "pair_map" not in aux:
+                            raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
 
-                    mean = contact_score[p_valid].mean().detach()
-                    std = contact_score[p_valid].std(unbiased=False).detach().clamp_min(1e-6)
-                    contact_logit = (contact_score - mean) / std
-
-                    pos_mask = (contact_target > 0.5) & p_valid
-
-                    per_sample_losses = []
-                    for b in range(contact_logit.size(0)):
-                        vals = contact_logit[b][pos_mask[b]]
-                        if vals.numel() == 0:
-                            continue
-                        k = min(3, vals.numel())
-                        topk_vals = vals.topk(k).values
-                        per_sample_losses.append(F.softplus(-topk_vals).mean())
-
-                    if per_sample_losses:
-                        loss_contact = torch.stack(per_sample_losses).mean()
-                    else:
-                        loss_contact = contact_logit.sum() * 0.0
+                        loss_contact = contact_guide_loss(aux, contact_mask)
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
             loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
@@ -1082,6 +1097,15 @@ def train_one_epoch(
                     l_pad=aux["l_pad"],
                 )
             loss_contact = torch.tensor(0.0, device=device)
+
+            if contact_lambda != 0.0:
+                if contact_mask is None:
+                    raise ValueError("contact_lambda != 0, but batch.contact_mask is missing")
+                if "pair_map" not in aux:
+                    raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
+
+                loss_contact = contact_guide_loss(aux, contact_mask)
+                
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
             loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
