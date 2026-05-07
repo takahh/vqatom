@@ -1056,6 +1056,7 @@ def train_one_epoch(
 
                         loss_contact = contact_guide_loss(aux, contact_mask)
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
+            print(f"loss = {loss}, contact loss = {loss_contact}, contact_lambda = {contact_lambda}")
             loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
                 loss = loss + reg_lambda * loss_reg
@@ -1105,7 +1106,7 @@ def train_one_epoch(
                     raise ValueError("contact_lambda != 0, but aux['pair_map'] is missing")
 
                 loss_contact = contact_guide_loss(aux, contact_mask)
-                
+
             loss = loss_cls + loss_entropy + sym_lambda * loss_sym
             loss = loss + contact_lambda * loss_contact
             if (y_reg is not None) and (yhat_reg is not None):
