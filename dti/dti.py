@@ -1692,9 +1692,9 @@ class DualStreamDTIClassifier(nn.Module):
 
         # p_ctx: (B, Lp, D)
         # l_ctx: (B, Ll, D)
-
-        Lp = p_ctx.unsqueeze(1)  # (B,1,Lp,D)
-        Ll = l_ctx.unsqueeze(2)  # (B,Ll,1,D)
+        # use self-attention encoder outputs before cross-attention
+        Lp = p_tok.unsqueeze(1)  # (B,1,Lp,D)
+        Ll = l_tok.unsqueeze(2)  # (B,Ll,1,D)
 
         pair_feat = torch.cat([
             Ll.expand(-1, -1, p_ctx.size(1), -1),
