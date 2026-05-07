@@ -1651,10 +1651,18 @@ class DualStreamDTIClassifier(nn.Module):
 
         # lp/pl の軸処理
         if self.pl_lp_overlap == "lp":
-            # ligand atom ごとに protein residue 軸だけを見る
-            # dim=-1 = protein axis
+            # まず ligand atom ごとに protein 軸で正規化
             lp_score = masked_zscore(lp_score, valid_h, dim=-1)
-            pair_map = lp_score
+
+            # 縦縞除去: protein token ごとに ligand 軸方向の平均を引く
+            col_mean = (lp_score * valid_h).sum(dim=-2, keepdim=True) / \
+                       valid_h.float().sum(dim=-2, keepdim=True).clamp_min(1.0)
+
+            lp_score = lp_score - col_mean
+            lp_score = lp_score.masked_fill(~valid_h, 0.0)
+
+            # 負値を消して、線ではなく局所ピークだけ残す
+            pair_map = torch.relu(lp_score)
 
         elif self.pl_lp_overlap == "pl":
             # pl_score は transpose 済みなので形は (B,H,Ll,Lp)
