@@ -1081,6 +1081,11 @@ def train_one_epoch(
             if use_amp:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
+
+                    print("guide batch pairs:", [len(x) for x in g.atom_contact_pairs[:4]])
+                    print("pair_map shape:", g_aux["pair_map"].shape)
+                    print("l_pad shape:", g_aux["l_pad"].shape, "p_pad shape:", g_aux["p_pad"].shape)
+
                     loss_contact = compute_atom_res_contact_loss_from_aux(
                         g_aux,
                         g.atom_contact_pairs,
@@ -1098,9 +1103,6 @@ def train_one_epoch(
         # TOTAL LOSS
         # =========================
         print(f"loss_contact: {loss_contact:.4f}, loss: {loss:.4f}, contact_lambda: {contact_lambda:.4f}")
-        print("guide batch pairs:", [len(x) for x in g.atom_contact_pairs[:4]])
-        print("pair_map shape:", g_aux["pair_map"].shape)
-        print("l_pad shape:", g_aux["l_pad"].shape, "p_pad shape:", g_aux["p_pad"].shape)
         loss = loss + contact_lambda * loss_contact
 
         loss.backward()
