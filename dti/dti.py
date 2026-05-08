@@ -153,8 +153,11 @@ class Batch:
     l_ids: torch.Tensor
     y_bin: torch.Tensor
     y_reg: Optional[torch.Tensor]
+    edge_index: Optional[torch.Tensor] = None
+    edge_batch: Optional[torch.Tensor] = None
+    edge_attr: Optional[torch.Tensor] = None
     contact_mask: Optional[torch.Tensor] = None
-    atom_contact_pairs: Optional[List[List[Tuple[int, int]]]] = None
+    atom_contact_pairs: Optional[list] = None
 
 class DTIDataset(Dataset):
     def __init__(
@@ -260,10 +263,14 @@ class DTIDataset(Dataset):
         contact_mask = str(row.get("contact_mask", "") or "").strip()
 
         atom_contact_pairs = row.get("atom_contact_pairs", "")
+        edge_index = json.loads(row["edge_index"])  # [[src...], [dst...]]
+        edge_attr = json.loads(row.get("edge_attr", "[]"))
 
         item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
+            "edge_index": edge_index,
+            "edge_attr": edge_attr,
             "y_bin": float(row["y_bin"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
             "contact_mask": contact_mask,
@@ -295,6 +302,29 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
 
     max_l = max(len(x) for x in l_ids_list)
     l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
+
+    edge_indices = []
+    edge_attrs = []
+    node_batch = []
+
+    offset = 0
+    for b, s in enumerate(samples):
+        n = len(s["lig_ids"]) - 1  # exclude CLS if you keep CLS
+        node_batch.extend([b] * n)
+
+        ei = torch.tensor(s["edge_index"], dtype=torch.long)
+        ei = ei + offset
+        edge_indices.append(ei)
+
+        if s.get("edge_attr"):
+            edge_attrs.append(torch.tensor(s["edge_attr"], dtype=torch.long))
+
+        offset += n
+
+    edge_index = torch.cat(edge_indices, dim=1)
+    edge_batch = torch.tensor(node_batch, dtype=torch.long)
+    edge_attr = torch.cat(edge_attrs, dim=0) if edge_attrs else None
+
     for i, ids in enumerate(l_ids_list):
         l_ids[i, :len(ids)] = torch.tensor(ids, dtype=torch.long)
 
@@ -341,6 +371,9 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         l_ids=l_ids,
         y_bin=y_bin,
         y_reg=y_reg,
+        edge_index=edge_index,
+        edge_batch=edge_batch,
+        edge_attr=edge_attr,
         contact_mask=contact_mask,
         atom_contact_pairs=atom_contact_pairs,
     )
@@ -387,126 +420,53 @@ def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = T
             print("[load_shape_safe] missing (up to 20):", missing[:20])
     return missing, unexpected, skipped
 
+from torch_geometric.nn import GINConv
+from torch_geometric.utils import to_dense_batch
 
-# =========================================================
-# Encoders
-# =========================================================
-class PretrainedLigandEncoder(nn.Module):
-    def __init__(
-        self,
-        ckpt_path: str,
-        device: torch.device,
-        finetune: bool = False,
-        vq_ckpt_path: Optional[str] = None,
-        verbose_load: bool = True,
-        debug_index_check: bool = False,
-        load_pretrained: bool = True,  # 追加
-    ):
+class VQAtomGraphEncoder(nn.Module):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=3, dropout=0.1):
         super().__init__()
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        if not (isinstance(ckpt, dict) and "model" in ckpt and "config" in ckpt):
-            raise RuntimeError("Ligand checkpoint must contain keys: model, config")
+        self.vocab_size = vocab_size
+        self.pad_id = pad_id
+        self.cls_id = cls_id
+        self.conf = {"d_model": d_model}
+        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
 
-        self.state = ckpt["model"]
-        self.conf = ckpt["config"]
+        self.convs = nn.ModuleList()
+        for _ in range(n_layers):
+            mlp = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+            )
+            self.convs.append(GINConv(mlp))
 
-        if vq_ckpt_path is not None:
-            vm = load_vocab_meta_from_vq_ckpt(vq_ckpt_path)
-            self.base_vocab = int(vm["base_vocab"])
-            self.vocab_size = int(vm["vocab_size"])
-            self.pad_id = int(vm["pad_id"])
-            self.mask_id = int(vm["mask_id"])
-
-            # CLS token を追加
-            self.cls_id = int(self.vocab_size)
-            self.vocab_size = int(self.vocab_size) + 1
-
-            self.vocab_source = f"vq_ckpt:{vq_ckpt_path}"
-        else:
-            if "base_vocab" in ckpt and "vocab_size" in ckpt:
-                self.base_vocab = int(ckpt["base_vocab"])
-                self.vocab_size = int(ckpt["vocab_size"])
-                self.pad_id = self.base_vocab + 0
-                self.mask_id = self.base_vocab + 1
-                self.cls_id = int(self.vocab_size)
-                self.vocab_size = int(self.vocab_size) + 1
-                self.vocab_source = f"mlm_ckpt:{ckpt_path}"
-
-            elif all(k in ckpt for k in ["vocab_size", "pad_id", "mask_id", "cls_id"]):
-                # SMILES MLM checkpoint
-                self.base_vocab = int(ckpt["vocab_size"])
-                self.vocab_size = int(ckpt["vocab_size"])
-                self.pad_id = int(ckpt["pad_id"])
-                self.mask_id = int(ckpt["mask_id"])
-                self.cls_id = int(ckpt["cls_id"])
-                self.vocab_source = f"smiles_mlm_ckpt:{ckpt_path}"
-
-            else:
-                raise RuntimeError(
-                    "Ligand MLM ckpt must contain either "
-                    "(base_vocab, vocab_size) or (vocab_size, pad_id, mask_id, cls_id)"
-                )
-
-        d_model = int(self.conf["d_model"])
-        nhead = int(self.conf["nhead"])
-        layers = int(self.conf["layers"])
-        dim_ff = int(self.conf["dim_ff"])
-        dropout = float(self.conf["dropout"])
-
-        self.tok = nn.Embedding(self.vocab_size, d_model, padding_idx=self.pad_id)
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=nhead,
-            dim_feedforward=dim_ff,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
-        self.debug_index_check = bool(debug_index_check)
-
-        if load_pretrained:
-            load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
-
-            mlm_tok_key = "tok.weight"
-            if mlm_tok_key in self.state:
-                w = self.state[mlm_tok_key]
-                if isinstance(w, torch.Tensor) and w.ndim == 2 and w.shape[1] == d_model:
-                    overlap = min(int(w.shape[0]), int(self.tok.weight.shape[0]))
-                    if overlap > 0:
-                        with torch.no_grad():
-                            self.tok.weight[:overlap].copy_(w[:overlap])
-        else:
-            print("[lig] NO PRETRAIN: random initialized ligand Transformer")
-            self.vocab_source = self.vocab_source + ":no_pretrain"
-
-        self.to(device)
-        if not finetune:
-            for p in self.parameters():
-                p.requires_grad = False
-            self.eval()
-        else:
-            self.train()
+        self.ln = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
 
     @property
-    def d_model(self) -> int:
+    def d_model(self):
         return int(self.conf["d_model"])
 
-    def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
-        if self.debug_index_check:
-            with torch.no_grad():
-                li = l_ids.detach()
-                li_cpu = li.cpu() if li.is_cuda else li
-                bad = ((li_cpu < 0) | (li_cpu >= self.tok.num_embeddings)).nonzero(as_tuple=False)
-                if bad.numel() > 0:
-                    b0 = bad[0].tolist()
-                    v0 = int(li_cpu[b0[0], b0[1]].item())
-                    raise RuntimeError(
-                        f"Ligand token id out of range: id={v0}, num_embeddings={self.tok.num_embeddings}"
-                    )
+    def forward(self, l_ids, edge_index, edge_batch):
+        # remove CLS
+        node_ids = []
+        for b in range(l_ids.size(0)):
+            ids = l_ids[b]
+            ids = ids[(ids != self.pad_id)]
+            ids = ids[1:]  # remove CLS
+            node_ids.append(ids)
 
-        x = self.tok(l_ids)
-        pad_mask = (l_ids == self.pad_id)
-        return self.enc(x, src_key_padding_mask=pad_mask)
+        node_ids = torch.cat(node_ids, dim=0)
+
+        x = self.tok(node_ids)
+
+        for conv in self.convs:
+            x = x + self.drop(conv(x, edge_index))
+            x = self.ln(x)
+
+        l_dense, l_mask = to_dense_batch(x, edge_batch)
+        return l_dense, ~l_mask  # l_h, l_pad
 
 import os
 import numpy as np
@@ -556,7 +516,14 @@ def visualize_one_qk_map(
     l_ids = batch.l_ids.to(device, non_blocking=True)
 
     with torch.inference_mode():
-        logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=True)
+        logit, yhat_reg, aux = model(
+            p_ids,
+            p_msk,
+            l_ids,
+            edge_index=batch.edge_index.to(device),
+            edge_batch=batch.edge_batch.to(device),
+            return_maps=True,
+        )
 
     prob = float(torch.sigmoid(logit[sample_idx_in_batch]).detach().cpu())
     y_bin = float(batch.y_bin[sample_idx_in_batch].detach().cpu())
@@ -793,9 +760,21 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
 
             if use_amp:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logit, yhat_reg, _ = model(p_ids, p_msk, l_ids)
+                    logit, yhat_reg, _ = model(
+                                            p_ids,
+                                            p_msk,
+                                            l_ids,
+                                            edge_index=batch.edge_index.to(device),
+                                            edge_batch=batch.edge_batch.to(device),
+                                        )
             else:
-                logit, yhat_reg, _ = model(p_ids, p_msk, l_ids)
+                logit, yhat_reg, _ = model(
+                                        p_ids,
+                                        p_msk,
+                                        l_ids,
+                                        edge_index=batch.edge_index.to(device),
+                                        edge_batch=batch.edge_batch.to(device),
+                                    )
 
             prob = torch.sigmoid(logit)
 
@@ -1032,12 +1011,24 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
 
         if use_amp:
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=False)
+            with (torch.autocast("cuda", dtype=torch.bfloat16)):
+                logit, yhat_reg, aux = model(
+                                            p_ids,
+                                            p_msk,
+                                            l_ids,
+                                            edge_index=batch.edge_index.to(device),
+                                            edge_batch=batch.edge_batch.to(device),
+                                            return_maps=False)
                 loss_cls = bce(logit, y_bin)
                 loss = loss_cls
         else:
-            logit, yhat_reg, aux = model(p_ids, p_msk, l_ids, return_maps=False)
+            logit, yhat_reg, aux = model(
+                                        p_ids,
+                                        p_msk,
+                                        l_ids,
+                                        edge_index=batch.edge_index.to(device),
+                                        edge_batch=batch.edge_batch.to(device),
+                                        return_maps=False)
             loss_cls = bce(logit, y_bin)
             loss = loss_cls
 
@@ -1063,14 +1054,28 @@ def train_one_epoch(
 
             if use_amp:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
+                    _, _, g_aux = model(
+                        gp_ids,
+                        gp_msk,
+                        gl_ids,
+                        edge_index=g.edge_index.to(device),
+                        edge_batch=g.edge_batch.to(device),
+                        return_maps=True
+                    )
                     loss_contact = compute_atom_res_contact_loss_from_aux(
                         g_aux,
                         g.atom_contact_pairs,
                         contact_topk=int(contact_topk),
                     )
             else:
-                _, _, g_aux = model(gp_ids, gp_msk, gl_ids, return_maps=True)
+                _, _, g_aux = model(
+                    gp_ids,
+                    gp_msk,
+                    gl_ids,
+                    edge_index=g.edge_index.to(device),
+                    edge_batch=g.edge_batch.to(device),
+                    return_maps=True,
+                )
                 loss_contact = compute_atom_res_contact_loss_from_aux(
                     g_aux,
                     g.atom_contact_pairs,
@@ -1471,7 +1476,7 @@ class DualStreamDTIClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(256, 1),
         )
-        self.reg_head = nn.Linear(128, 1) if self.use_reg_head else None
+        self.reg_head = nn.Linear(d_model * 4, 1)
 
     def _masked_mean(self, x: torch.Tensor, pad: torch.Tensor) -> torch.Tensor:
         x = x.masked_fill(pad.unsqueeze(-1), 0.0)
@@ -1553,7 +1558,7 @@ class DualStreamDTIClassifier(nn.Module):
 
         return feat
 
-    def forward(self, p_input_ids, p_attn_mask, l_ids, return_maps: bool = False):
+    def forward(self, p_input_ids, p_attn_mask, l_ids, edge_index=None, edge_batch=None, return_maps=False):
         aux = {}
 
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
@@ -1564,17 +1569,17 @@ class DualStreamDTIClassifier(nn.Module):
             p_h = p_h_raw
 
         p_h = self.p_ln(p_h)
-        l_h = self.lig(l_ids)
-        l_h = self.l_ln(l_h)
 
-        if self.protein_only:
-            l_h = torch.zeros_like(l_h)
+        l_tok, l_pad = self.lig(
+            l_ids,
+            edge_index=edge_index,
+            edge_batch=edge_batch,
+        )
+
+        l_tok = self.l_ln(l_tok)
 
         p_tok = p_h[:, 1:, :]
-        l_tok = l_h[:, 1:, :]
-
         p_pad = (p_attn_mask == 0)[:, 1:]
-        l_pad = (l_ids == self.lig_pad_id)[:, 1:]
 
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
@@ -1796,8 +1801,8 @@ def main():
     ap.add_argument("--train_shard_size", type=int, default=1000)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
     ap.add_argument("--sym_lambda", type=float, default=0.0)
-    ap.add_argument("--lig_ckpt", type=str, required=True)
-    ap.add_argument("--vq_ckpt", type=str, default=None)
+    ap.add_argument("--lig_ckpt", type=str, default=None)
+    ap.add_argument("--vq_ckpt", type=str, required=True)
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument(
         "--attn_activation",
@@ -1884,15 +1889,28 @@ def main():
         from smiles_mlm import SmilesCharTokenizer
         smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
 
-    lig_enc = PretrainedLigandEncoder(
-        ckpt_path=args.lig_ckpt,
-        device=device,
-        finetune=True if args.lig_no_pretrain else args.finetune_lig,
-        vq_ckpt_path=args.vq_ckpt,
-        verbose_load=True,
-        debug_index_check=bool(args.lig_debug_index),
-        load_pretrained=not args.lig_no_pretrain,
-    )
+    vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
+
+    base_vocab = int(vm["base_vocab"])
+    vocab_size = int(vm["vocab_size"])
+    pad_id = int(vm["pad_id"])
+    mask_id = int(vm["mask_id"])
+
+    cls_id = vocab_size
+    vocab_size = vocab_size + 1
+
+    lig_enc = VQAtomGraphEncoder(
+        vocab_size=vocab_size,
+        pad_id=pad_id,
+        cls_id=cls_id,
+        d_model=256,  # or match your old ligand d_model
+        n_layers=3,
+        dropout=args.dropout,
+    ).to(device)
+
+    lig_enc.base_vocab = base_vocab
+    lig_enc.mask_id = mask_id
+    lig_enc.vocab_source = f"graph_vqatom:{args.vq_ckpt}"
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
