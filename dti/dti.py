@@ -1846,7 +1846,7 @@ def main():
     ap.add_argument("--warmup_steps", type=int, default=None)
     ap.add_argument("--min_lr", type=float, default=1e-6)
     ap.add_argument("--dual_stream_layers", type=int, default=2)
-    ap.add_argument("--pl_lp_overlap", type=str, default="ap", choices=["lp", "pl", "both"])
+    ap.add_argument("--pl_lp_overlap", type=str, default="both", choices=["lp", "pl", "both"])
     ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
