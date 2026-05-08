@@ -256,8 +256,8 @@ def compute_contacts_from_complex(protein_pdb, ligand_mol, cutoff=4.5):
             continue
         p = lig_conf.GetAtomPosition(i)
         ligand_atoms.append(np.array([p.x, p.y, p.z], dtype=float))
-        ligand_atom_indices.append(i)
-
+        ligand_atom_indices.append(len(ligand_atom_indices))
+        
     best = None
 
     for model in structure:
@@ -470,6 +470,7 @@ def build_pdbbind_contacts(args):
             continue
 
         lig_tok_list = encode_vqatom(smiles_atom_order)
+        edge_index = mol_to_edge_index_json(mol)
         if not lig_tok_list:
             stats["token_fail"] += 1
             continue
@@ -489,6 +490,7 @@ def build_pdbbind_contacts(args):
             "lig_tok_list": json.dumps(lig_tok_list),
             "lig_heavy_atom_n": heavy_n,
             "lig_tok_n": tok_n,
+            "edge_index": edge_index,
             "atom_token_aligned": atom_token_aligned,
             "y": "" if aff_rec is None else f"{aff_rec['y']:.6f}",
             "aff_type": "" if aff_rec is None else aff_rec["aff_type"],
@@ -516,6 +518,7 @@ def build_pdbbind_contacts(args):
 def write_contacts_csv(rows, path):
     fields = [
         "seq", "smiles", "smiles_canonical", "lig_tok", "lig_tok_list",
+        "edge_index",
         "lig_heavy_atom_n", "lig_tok_n", "atom_token_aligned",
         "y", "aff_type", "aff_nm", "aff_op", "raw_affinity",
         "pdb_id", "chain_id", "contact_mask", "contact_n", "atom_contact_pairs",
@@ -617,11 +620,23 @@ def assign_guide_split(hit_train, hit_valid, hit_final):
         return "guide_test"
     return "drop_overlap"
 
+def mol_to_edge_index_json(mol):
+    mol_noh = Chem.RemoveHs(mol, sanitize=False)
+
+    src, dst = [], []
+    for bond in mol_noh.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        src += [i, j]
+        dst += [j, i]
+
+    return json.dumps([src, dst], separators=(",", ":"))
 
 def write_guide_csv(args, pdbbind_rows, overlap):
     fields = [
         "split",
         "seq", "smiles", "smiles_canonical", "lig_tok", "lig_tok_list",
+        "edge_index",
         "y", "aff_type", "aff_nm", "aff_op", "raw_affinity",
         "pdb_id", "chain_id",
         "contact_mask", "contact_n", "atom_contact_pairs",

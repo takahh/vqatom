@@ -1646,6 +1646,77 @@ class DualStreamDTIClassifier(nn.Module):
 
             pair_map = torch.minimum(lp_score, pl_score)
 
+        def ligand_adj_smooth_pairmap(pair_map, edge_index, edge_batch, valid_h, alpha=0.3):
+            """
+            pair_map:   (B,H,Ll,Lp)
+            edge_index: global ligand atom edges, CLS excluded
+            edge_batch: global atom -> batch id
+            valid_h:    (B,1,Ll,Lp)
+            """
+            if edge_index is None or edge_batch is None:
+                return pair_map.masked_fill(~valid_h, 0.0)
+
+            out = pair_map.clone()
+            B, H, Ll, Lp = pair_map.shape
+
+            for b in range(B):
+                local_nodes = (edge_batch == b).nonzero(as_tuple=False).view(-1)
+                n = local_nodes.numel()
+
+                if n == 0:
+                    continue
+
+                # global node id -> local node id
+                global_to_local = {
+                    int(g.item()): i
+                    for i, g in enumerate(local_nodes)
+                }
+
+                src_list = []
+                dst_list = []
+
+                E = edge_index.size(1)
+
+                for e in range(E):
+                    gs = int(edge_index[0, e].item())
+                    gd = int(edge_index[1, e].item())
+
+                    if gs in global_to_local and gd in global_to_local:
+                        src_list.append(global_to_local[gs])
+                        dst_list.append(global_to_local[gd])
+
+                if len(src_list) == 0:
+                    continue
+
+                src = torch.tensor(src_list, device=pair_map.device, dtype=torch.long)
+                dst = torch.tensor(dst_list, device=pair_map.device, dtype=torch.long)
+
+                neigh_sum = torch.zeros_like(pair_map[b])  # (H,Ll,Lp)
+                deg = torch.zeros((n,), device=pair_map.device, dtype=pair_map.dtype)
+
+                neigh_sum.index_add_(1, dst, pair_map[b, :, src, :])
+                neigh_sum.index_add_(1, src, pair_map[b, :, dst, :])
+
+                deg.index_add_(0, dst, torch.ones_like(dst, dtype=pair_map.dtype))
+                deg.index_add_(0, src, torch.ones_like(src, dtype=pair_map.dtype))
+                deg.index_add_(0, dst, torch.ones_like(dst, dtype=pair_map.dtype))
+
+                neigh_mean = neigh_sum / deg.clamp_min(1.0).view(1, Ll, 1)
+
+                out[b] = pair_map[b] + alpha * neigh_mean
+
+            return out.masked_fill(~valid_h, 0.0)
+
+
+        pair_map = ligand_adj_smooth_pairmap(
+            pair_map=pair_map,
+            edge_index=edge_index,
+            edge_batch=edge_batch,
+            valid_h=valid_h,
+            alpha=0.3,
+        )
+
+
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
         pair_map = pair_map.masked_fill(~valid, 0.0)
