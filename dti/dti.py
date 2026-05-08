@@ -1656,29 +1656,31 @@ class DualStreamDTIClassifier(nn.Module):
             if edge_index is None:
                 return pair_map
 
-            B, Ll, Lp = pair_map.shape
+            orig_dim = pair_map.dim()
 
-            adj = pair_map.new_zeros(B, Ll, Ll)
+            if orig_dim == 4:
+                B, H, Ll, Lp = pair_map.shape
+                x = pair_map.reshape(B * H, Ll, Lp)
+            elif orig_dim == 3:
+                B, Ll, Lp = pair_map.shape
+                H = 1
+                x = pair_map
+            else:
+                raise ValueError(f"Unexpected pair_map shape: {pair_map.shape}")
+
+            adj = x.new_zeros(B, Ll, Ll)
 
             if edge_index.numel() > 0:
                 src = edge_index[0].long()
                 dst = edge_index[1].long()
+
                 if edge_batch is None:
                     valid = (src < Ll) & (dst < Ll)
-
-                    if valid_h is not None:
-                        vh = valid_h.to(pair_map.device).bool()
-                        valid = valid & vh[src].to(valid.device) & vh[dst].to(valid.device)
-
                     adj[:, src[valid], dst[valid]] = 1.0
                     adj[:, dst[valid], src[valid]] = 1.0
                 else:
                     eb = edge_batch.long()
                     valid = (eb < B) & (src < Ll) & (dst < Ll)
-
-                    if valid_h is not None:
-                        vh = valid_h.to(pair_map.device).bool()
-                        valid = valid & vh[eb, src] & vh[eb, dst]
 
                     b = eb[valid]
                     s = src[valid]
@@ -1686,15 +1688,22 @@ class DualStreamDTIClassifier(nn.Module):
                     adj[b, s, d] = 1.0
                     adj[b, d, s] = 1.0
 
-            deg = adj.sum(dim=-1)  # [B, Ll]
-            neigh_sum = torch.bmm(adj, pair_map)  # [B, Ll, Lp]
+            if orig_dim == 4:
+                adj = adj.repeat_interleave(H, dim=0)
+
+            deg = adj.sum(dim=-1)
+            neigh_sum = torch.bmm(adj, x)
             neigh_mean = neigh_sum / deg.clamp_min(1.0).unsqueeze(-1)
 
-            # 孤立ノードは元の pair_map を維持
             has_neigh = (deg > 0).unsqueeze(-1)
-            smoothed = torch.where(has_neigh, neigh_mean, pair_map)
+            smoothed = torch.where(has_neigh, neigh_mean, x)
 
-            return (1.0 - alpha) * pair_map + alpha * smoothed
+            out = (1.0 - alpha) * x + alpha * smoothed
+
+            if orig_dim == 4:
+                out = out.reshape(B, H, Ll, Lp)
+
+            return out
 
         pair_map = ligand_adj_smooth_pairmap(
             pair_map=pair_map,
