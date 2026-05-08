@@ -1679,12 +1679,20 @@ class DualStreamDTIClassifier(nn.Module):
                     adj[:, src[valid], dst[valid]] = 1.0
                     adj[:, dst[valid], src[valid]] = 1.0
                 else:
-                    eb = edge_batch.long()
-                    valid = (eb < B) & (src < Ll) & (dst < Ll)
+                    src = src.to(pair_map.device)
+                    dst = dst.to(pair_map.device)
+                    eb_node = edge_batch.long().to(pair_map.device)
 
-                    b = eb[valid]
+                    # edge_batch は「nodeごと」の batch ID
+                    # なので edgeごとの batch ID は src node から取る
+                    edge_b = eb_node[src]
+
+                    valid = (edge_b < B) & (src < Ll) & (dst < Ll)
+
+                    b = edge_b[valid]
                     s = src[valid]
                     d = dst[valid]
+
                     adj[b, s, d] = 1.0
                     adj[b, d, s] = 1.0
 
