@@ -1650,6 +1650,7 @@ class DualStreamDTIClassifier(nn.Module):
                 pair_map,
                 edge_index=None,
                 edge_batch=None,
+                valid_h=None,
                 alpha=0.5,
         ):
             if edge_index is None:
@@ -1662,15 +1663,23 @@ class DualStreamDTIClassifier(nn.Module):
             if edge_index.numel() > 0:
                 src = edge_index[0].long()
                 dst = edge_index[1].long()
-
                 if edge_batch is None:
-                    # 全バッチ共通の edge_index として扱う
                     valid = (src < Ll) & (dst < Ll)
+
+                    if valid_h is not None:
+                        vh = valid_h.to(pair_map.device).bool()
+                        valid = valid & vh[src].to(valid.device) & vh[dst].to(valid.device)
+
                     adj[:, src[valid], dst[valid]] = 1.0
                     adj[:, dst[valid], src[valid]] = 1.0
                 else:
                     eb = edge_batch.long()
                     valid = (eb < B) & (src < Ll) & (dst < Ll)
+
+                    if valid_h is not None:
+                        vh = valid_h.to(pair_map.device).bool()
+                        valid = valid & vh[eb, src] & vh[eb, dst]
+
                     b = eb[valid]
                     s = src[valid]
                     d = dst[valid]
