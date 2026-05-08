@@ -1646,38 +1646,46 @@ class DualStreamDTIClassifier(nn.Module):
 
             pair_map = torch.minimum(lp_score, pl_score)
 
-        def ligand_adj_smooth_pairmap(pair_map, edge_index=None, edge_weight=None, alpha=0.5):
-            # pair_map: [B, Ll, Lp]
-            B, Ll, Lp = pair_map.shape
-
-            # adj: [B, Ll, Ll] or [Ll, Ll] を想定
-            if adj is None:
+        def ligand_adj_smooth_pairmap(
+                pair_map,
+                edge_index=None,
+                edge_batch=None,
+                alpha=0.5,
+        ):
+            if edge_index is None:
                 return pair_map
 
-            if adj.dim() == 2:
-                # adj が実原子数だけの場合、pair_map の Ll に pad する
-                A = pair_map.new_zeros(Ll, Ll)
-                n = min(adj.size(0), Ll)
-                A[:n, :n] = adj[:n, :n].to(pair_map.device, pair_map.dtype)
+            B, Ll, Lp = pair_map.shape
 
-                deg = A.sum(dim=-1)  # [Ll]
-                neigh_sum = torch.einsum("ij,bjp->bip", A, pair_map)
-                neigh_mean = neigh_sum / deg.clamp_min(1.0).view(1, Ll, 1)
+            adj = pair_map.new_zeros(B, Ll, Ll)
 
-            elif adj.dim() == 3:
-                # adj: [B, n, n] の場合も Ll に合わせて pad/crop
-                A = pair_map.new_zeros(B, Ll, Ll)
-                n = min(adj.size(1), Ll)
-                A[:, :n, :n] = adj[:, :n, :n].to(pair_map.device, pair_map.dtype)
+            if edge_index.numel() > 0:
+                src = edge_index[0].long()
+                dst = edge_index[1].long()
 
-                deg = A.sum(dim=-1)  # [B, Ll]
-                neigh_sum = torch.bmm(A, pair_map)  # [B, Ll, Lp]
-                neigh_mean = neigh_sum / deg.clamp_min(1.0).unsqueeze(-1)
+                if edge_batch is None:
+                    # 全バッチ共通の edge_index として扱う
+                    valid = (src < Ll) & (dst < Ll)
+                    adj[:, src[valid], dst[valid]] = 1.0
+                    adj[:, dst[valid], src[valid]] = 1.0
+                else:
+                    eb = edge_batch.long()
+                    valid = (eb < B) & (src < Ll) & (dst < Ll)
+                    b = eb[valid]
+                    s = src[valid]
+                    d = dst[valid]
+                    adj[b, s, d] = 1.0
+                    adj[b, d, s] = 1.0
 
-            else:
-                raise ValueError(f"Unexpected adj shape: {adj.shape}")
+            deg = adj.sum(dim=-1)  # [B, Ll]
+            neigh_sum = torch.bmm(adj, pair_map)  # [B, Ll, Lp]
+            neigh_mean = neigh_sum / deg.clamp_min(1.0).unsqueeze(-1)
 
-            return (1.0 - alpha) * pair_map + alpha * neigh_mean
+            # 孤立ノードは元の pair_map を維持
+            has_neigh = (deg > 0).unsqueeze(-1)
+            smoothed = torch.where(has_neigh, neigh_mean, pair_map)
+
+            return (1.0 - alpha) * pair_map + alpha * smoothed
 
         pair_map = ligand_adj_smooth_pairmap(
             pair_map=pair_map,
