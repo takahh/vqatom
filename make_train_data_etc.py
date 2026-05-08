@@ -130,6 +130,22 @@ MAX_SCAFFOLD_DEGREE = 8
 MAX_PROTEIN_CLUSTER_DEGREE = 20
 MIN_COMPONENT_ROWS = 20
 
+def smiles_to_edge_index_json(smiles: str) -> str:
+    mol = Chem.MolFromSmiles(smiles)
+    import json
+    if mol is None:
+        raise ValueError(f"Bad SMILES for edge_index: {smiles}")
+
+    src = []
+    dst = []
+    for bond in mol.GetBonds():
+        i = bond.GetBeginAtomIdx()
+        j = bond.GetEndAtomIdx()
+        src += [i, j]
+        dst += [j, i]
+
+    return json.dumps([src, dst], separators=(",", ":"))
+
 # ============================================================
 # RDKit / SMILES utils
 # ============================================================
@@ -1069,7 +1085,7 @@ def pass3_join_tokens():
         r = csv.DictReader(fin)
         w = csv.writer(fout)
         w.writerow([
-            "seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y",
+            "seq", "smiles", "lig_tok", "edge_index", "aff_type", "aff_nm", "y",
             "src_pdbid", "src_chain", "contact_mask", "contact_n"
         ])
         for row in tqdm(r, desc="pass3 join tokens"):
@@ -1078,11 +1094,13 @@ def pass3_join_tokens():
             if not lig_tok:
                 skipped += 1
                 continue
+            edge_index = smiles_to_edge_index_json(smi)
 
             w.writerow([
                 row["seq"],
                 smi,
                 lig_tok,
+                edge_index,
                 row["aff_type"],
                 row["aff_nm"],
                 row["y"],
@@ -1210,7 +1228,7 @@ def write_split_csvs(rows: List[Dict[str, str]]) -> None:
         "test": TEST_CSV,
     }
     fieldnames = [
-        "seq", "smiles", "lig_tok", "aff_type", "aff_nm", "y",
+        "seq", "smiles", "lig_tok", "edge_index", "aff_type", "aff_nm", "y",
         "src_pdbid", "src_chain", "contact_mask", "contact_n"
     ]
     # split -> protein_cluster -> rows
