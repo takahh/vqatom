@@ -1646,7 +1646,7 @@ class DualStreamDTIClassifier(nn.Module):
 
             pair_map = torch.minimum(lp_score, pl_score)
 
-        def ligand_adj_smooth_pairmap(pair_map, adj, alpha=0.5):
+        def ligand_adj_smooth_pairmap(pair_map, edge_index=None, edge_weight=None, alpha=0.5):
             # pair_map: [B, Ll, Lp]
             B, Ll, Lp = pair_map.shape
 
