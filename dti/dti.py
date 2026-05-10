@@ -982,6 +982,8 @@ def train_one_epoch(
 
     losses = []
     losses_contact = []
+    losses_cls = []
+    losses_reg = []
 
     use_amp = (device.type == "cuda")
 
@@ -1108,6 +1110,8 @@ def train_one_epoch(
 
         losses.append(loss.item())
         losses_contact.append(loss_contact.item())
+        losses_cls.append(loss_cls.item())
+        losses_reg.append(loss_reg.item())
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
@@ -1116,6 +1120,8 @@ def train_one_epoch(
 
     return {
         "loss": float(np.mean(losses)),
+        "loss_cls": float(np.mean(losses_cls)),
+        "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
     }
 
