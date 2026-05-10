@@ -1115,7 +1115,9 @@ def train_one_epoch(
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
-            contact=f"{loss_contact.item():.4f}"
+            cls=f"{loss_cls.item():.4f}",
+            reg=f"{loss_reg.item():.4f}",
+            contact=f"{loss_contact.item():.4f}",
         )
 
     return {
