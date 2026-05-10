@@ -1019,8 +1019,13 @@ def train_one_epoch(
                                             edge_index=batch.edge_index.to(device),
                                             edge_batch=batch.edge_batch.to(device),
                                             return_maps=False)
+                y_reg = batch.y_reg.to(device)
                 loss_cls = bce(logit, y_bin)
-                loss = loss_cls
+
+                y_reg = batch.y_reg.to(device)
+                loss_reg = reg_loss_fn(yhat_reg, y_reg)
+
+                loss = loss_cls + reg_lambda * loss_reg
         else:
             logit, yhat_reg, aux = model(
                                         p_ids,
@@ -1029,8 +1034,13 @@ def train_one_epoch(
                                         edge_index=batch.edge_index.to(device),
                                         edge_batch=batch.edge_batch.to(device),
                                         return_maps=False)
+            y_reg = batch.y_reg.to(device)
             loss_cls = bce(logit, y_bin)
-            loss = loss_cls
+
+            y_reg = batch.y_reg.to(device)
+            loss_reg = reg_loss_fn(yhat_reg, y_reg)
+
+            loss = loss_cls + reg_lambda * loss_reg
 
         # =========================
         # GUIDE CONTACT BATCH
