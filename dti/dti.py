@@ -991,7 +991,12 @@ def compute_atom_res_contact_loss_from_aux(
                       float(neg_vals.mean().detach().cpu()),
                       float(neg_vals.max().detach().cpu()),
                       float(neg_vals.min().detach().cpu()))
+        gap = pos_vals.mean() - neg_vals.mean()
 
+        print(
+            "  pos-neg gap:",
+            float(gap.detach().cpu())
+        )
         pos_loss = F.softplus(-pos_vals).mean()
 
         if neg_vals.numel() > 0:
