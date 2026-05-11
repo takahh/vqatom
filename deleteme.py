@@ -5,7 +5,7 @@ import re
 import math
 import matplotlib.pyplot as plt
 
-json_dir = "/Users/taka/Downloads/"
+json_dir = "/Users/taka/Downloads/json"
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
 
 

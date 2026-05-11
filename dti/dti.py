@@ -791,29 +791,23 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     return y_prob, y_bin, y_reg_pred, y_reg_true
 
 
-def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
+def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray, y_thr: float = 12.1) -> Dict[str, float]:
     if y_pred.size == 0:
-        return {"mae": 0.0, "rmse": 0.0, "pearson": 0.0, "spearman": 0.0}
+        return {
+            "mae": 0.0, "rmse": 0.0, "pearson": 0.0, "spearman": 0.0,
+            "recall_top1": 0.0, "hit_rate_top1": 0.0, "ef_top1": 0.0,
+            "top1_k": 0, "top1_pos": 0, "pos_rate": 0.0,
+            "auroc": 0.0, "ap": 0.0,
+        }
 
-    mae = float(np.mean(np.abs(y_pred - y_true)))
-    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
-
-    if len(y_pred) < 2:
-        return {"mae": mae, "rmse": rmse, "pearson": 0.0, "spearman": 0.0}
-
-    pearson = float(np.corrcoef(y_pred, y_true)[0, 1]) if np.std(y_pred) > 0 and np.std(y_true) > 0 else 0.0
-
-    # simple spearman via rank
-    yp_rank = np.argsort(np.argsort(y_pred))
-    yt_rank = np.argsort(np.argsort(y_true))
-    spearman = float(np.corrcoef(yp_rank, yt_rank)[0, 1]) if np.std(yp_rank) > 0 and np.std(yt_rank) > 0 else 0.0
-
-    return {
-        "mae": mae,
-        "rmse": rmse,
-        "pearson": pearson,
-        "spearman": spearman,
-    }
+    out = compute_regression_ranking_metrics(
+        y_true=y_true,
+        y_pred=y_pred,
+        y_thr=y_thr,
+        top_frac=0.01,
+    )
+    out["mae"] = float(np.mean(np.abs(y_pred - y_true)))
+    return out
 
 def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
@@ -892,6 +886,52 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef5": float(ef5),
         "ef10": float(ef10),
     }
+
+def compute_regression_ranking_metrics(y_true, y_pred, y_thr=12.1, top_frac=0.01):
+    import numpy as np
+    from scipy.stats import spearmanr, pearsonr
+    from sklearn.metrics import roc_auc_score, average_precision_score, mean_squared_error
+
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    y_bin = (y_true >= y_thr).astype(int)
+
+    n = len(y_true)
+    k = max(1, int(np.ceil(n * top_frac)))
+
+    order = np.argsort(-y_pred)
+    top_idx = order[:k]
+
+    total_pos = y_bin.sum()
+    top_pos = y_bin[top_idx].sum()
+
+    pos_rate = total_pos / max(n, 1)
+    top_hit_rate = top_pos / k
+
+    recall_top = top_pos / max(total_pos, 1)
+    ef_top = top_hit_rate / max(pos_rate, 1e-12)
+
+    out = {
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "spearman": float(spearmanr(y_true, y_pred).correlation),
+        "pearson": float(pearsonr(y_true, y_pred)[0]),
+        "recall_top1": float(recall_top),
+        "hit_rate_top1": float(top_hit_rate),
+        "ef_top1": float(ef_top),
+        "top1_k": int(k),
+        "top1_pos": int(top_pos),
+        "pos_rate": float(pos_rate),
+    }
+
+    if len(np.unique(y_bin)) == 2:
+        out["auroc"] = float(roc_auc_score(y_bin, y_pred))
+        out["ap"] = float(average_precision_score(y_bin, y_pred))
+    else:
+        out["auroc"] = float("nan")
+        out["ap"] = float("nan")
+
+    return out
 
 def compute_atom_res_contact_loss_from_aux(
     aux: dict,
@@ -1080,6 +1120,8 @@ def train_one_epoch(
     guide_loader: Optional[DataLoader] = None,
     guide_every: int = 1,
     contact_topk: int = 3,
+    task=None,
+    cls_lambda: float = 0.0,
 ) -> Dict[str, float]:
 
     model.train()
@@ -1140,7 +1182,14 @@ def train_one_epoch(
                 y_reg = batch.y_reg.to(device)
                 loss_reg = reg_loss_fn(yhat_reg, y_reg)
 
-                loss = loss_cls + reg_lambda * loss_reg
+                if task == "classification":
+                    loss = cls_lambda * loss_cls
+                elif task == "regression":
+                    loss = reg_lambda * loss_reg
+                elif task == "hybrid":
+                    loss = cls_lambda * loss_cls + reg_lambda * loss_reg
+                else:
+                    raise ValueError(task)
         else:
             logit, yhat_reg, aux = model(
                                         p_ids,
@@ -1155,7 +1204,14 @@ def train_one_epoch(
             y_reg = batch.y_reg.to(device)
             loss_reg = reg_loss_fn(yhat_reg, y_reg)
 
-            loss = loss_cls + reg_lambda * loss_reg
+            if task == "classification":
+                loss = cls_lambda * loss_cls
+            elif task == "regression":
+                loss = reg_lambda * loss_reg
+            elif task == "hybrid":
+                loss = cls_lambda * loss_cls + reg_lambda * loss_reg
+            else:
+                raise ValueError(task)
 
         # =========================
         # GUIDE CONTACT BATCH
@@ -2078,7 +2134,6 @@ def main():
     ap.add_argument("--min_lr", type=float, default=1e-6)
     ap.add_argument("--dual_stream_layers", type=int, default=2)
     ap.add_argument("--pl_lp_overlap", type=str, default="both", choices=["lp", "pl", "both"])
-    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
@@ -2097,6 +2152,14 @@ def main():
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
+    ap.add_argument("--task", type=str, default="classification",
+                        choices=["classification", "regression", "hybrid"])
+
+    ap.add_argument("--cls_lambda", type=float, default=1.0)
+
+    ap.add_argument("--select_on", type=str, default="auroc",
+                        choices=["auroc", "ap", "spearman", "pearson", "rmse",
+                                 "ef1", "ef_top1", "recall_top1", "hit_rate_top1"])
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2398,7 +2461,10 @@ def main():
         )
         return
 
-    best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
+    best = {
+        "_score": -1e9,
+        "epoch": -1,
+    }
 
     for ep in range(1, args.epochs + 1):
         qk_save_dir = os.path.join(args.out_dir, "qk_maps")
@@ -2407,7 +2473,6 @@ def main():
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
         else:
-            # Minimal shard-mode support
             epoch_shards = pick_epoch_shards_random(
                 shard_paths=train_shard_paths,
                 train_size=args.train_size,
@@ -2453,27 +2518,78 @@ def main():
             guide_every=int(args.guide_every),
             contact_topk=int(args.contact_topk),
             epoch=ep,
+            task=args.task,
+            cls_lambda=float(args.cls_lambda),
         )
 
+        # =========================
+        # PREDICT / METRICS
+        # =========================
         yhat_tr, yb_tr, yhatr_tr, yr_tr = predict(model, train_loader, device)
         tr_m = eval_metrics(yhat_tr, yb_tr)
-        tr_r = eval_reg_metrics(yhatr_tr, yr_tr)
+        tr_r = eval_reg_metrics(yhatr_tr, yr_tr, y_thr=args.y_thr)
 
         yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
-        v_r = eval_reg_metrics(yhatr_v, yr_v)
+        v_r = eval_reg_metrics(yhatr_v, yr_v, y_thr=args.y_thr)
 
-        if float(v_m[args.select_on]) > float(best[args.select_on]):
-            best.update(
-                {
-                    "ap": float(v_m["ap"]),
-                    "auroc": float(v_m["auroc"]),
-                    "f1": float(v_m["f1"]),
-                    "epoch": ep,
-                }
+        tr_all = {}
+        tr_all.update(tr_m)
+        tr_all.update(tr_r)
+
+        v_all = {}
+        v_all.update(v_m)
+        v_all.update(v_r)
+
+        test_all = None
+        if test_loader is not None:
+            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
+            test_m = eval_metrics(yhat_t, yb_t)
+            test_r = eval_reg_metrics(yhatr_t, yr_t, y_thr=args.y_thr)
+
+            test_all = {}
+            test_all.update(test_m)
+            test_all.update(test_r)
+
+        final_all = None
+        if final_eval_loader is not None:
+            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
+            final_m = eval_metrics(yhat_f, yb_f)
+            final_r = eval_reg_metrics(yhatr_f, yr_f, y_thr=args.y_thr)
+
+            final_all = {}
+            final_all.update(final_m)
+            final_all.update(final_r)
+
+        # =========================
+        # BEST CHECKPOINT SELECTION
+        # =========================
+        key = args.select_on
+        if key not in v_all:
+            raise KeyError(
+                f"--select_on {key} not found in valid metrics. "
+                f"Available keys: {sorted(v_all.keys())}"
             )
+
+        score = float(v_all[key])
+        if key == "rmse":
+            score = -score
+
+        if score > float(best.get("_score", -1e9)):
+            best = dict(v_all)
+            best["_score"] = score
+            best["select_on"] = key
+            best["epoch"] = ep
+
             save_path = os.path.join(args.out_dir, "best.pt")
-            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
+            save_dti_checkpoint(
+                save_path,
+                model,
+                args,
+                lig_enc,
+                epoch=ep,
+                best=best,
+            )
             print("  saved:", save_path)
 
         save_dti_checkpoint(
@@ -2485,63 +2601,81 @@ def main():
             best=best,
         )
 
-        test_m, test_r = None, None
-        if test_loader is not None:
-            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
-            test_m = eval_metrics(yhat_t, yb_t)
-            test_r = eval_reg_metrics(yhatr_t, yr_t)
-
-        final_m, final_r = None, None
-        if final_eval_loader is not None:
-            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
-            final_m = eval_metrics(yhat_f, yb_f)
-            final_r = eval_reg_metrics(yhatr_f, yr_f)
+        # =========================
+        # SAVE EPOCH JSON
+        # =========================
+        epoch_obj = {
+            "epoch": ep,
+            "train_loss": tr_stat,
+            "train": tr_all,
+            "valid": v_all,
+            "test": test_all,
+            "final": final_all,
+            "best": best,
+            "select_on": args.select_on,
+            "train_y_reg_mean": train_y_mean,
+            "train_y_reg_std": train_y_std,
+        }
 
         save_json(
             os.path.join(args.out_dir, f"epoch_{ep:03d}.json"),
-            {
-                "epoch": ep,
-                "train_stat": tr_stat,
-                "train_metrics": tr_m,
-                "train_reg_metrics": tr_r,
-                "valid_metrics": v_m,
-                "valid_reg_metrics": v_r,
-                "final_eval_metrics": final_m,
-                "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
-                "test_metrics": test_m,
-                "test_reg_metrics": test_r if test_loader is not None else None,
-                "pos_weight": pos_weight,
-                "train_y_reg_mean": train_y_mean,
-                "train_y_reg_std": train_y_std,
-            },
+            epoch_obj,
         )
 
+        # =========================
+        # PRINT
+        # =========================
         print(f"\n===== Epoch {ep} =====")
         print(
             "[train]",
-            f"AUC={tr_m['auroc']:.4f}",
-            f"AP={tr_m['ap']:.4f}",
-            f"F1={tr_m['f1']:.4f}",
-            f"RMSE={tr_r['rmse']:.4f}",
-            f"SP={tr_r['spearman']:.4f}",
+            f"AUC={tr_all['auroc']:.4f}",
+            f"AP={tr_all['ap']:.4f}",
+            f"F1={tr_all['f1']:.4f}",
+            f"RMSE={tr_all['rmse']:.4f}",
+            f"SP={tr_all['spearman']:.4f}",
+            f"EF1={tr_all.get('ef1', 0.0):.3f}",
+            f"R@1={tr_all.get('recall_top1', 0.0):.4f}",
+            f"Hit@1={tr_all.get('hit_rate_top1', 0.0):.4f}",
         )
+
         print(
             "[valid]",
-            f"AUC={v_m['auroc']:.4f}",
-            f"AP={v_m['ap']:.4f}",
-            f"F1={v_m['f1']:.4f}",
-            f"RMSE={v_r['rmse']:.4f}",
-            f"SP={v_r['spearman']:.4f}",
+            f"AUC={v_all['auroc']:.4f}",
+            f"AP={v_all['ap']:.4f}",
+            f"F1={v_all['f1']:.4f}",
+            f"RMSE={v_all['rmse']:.4f}",
+            f"SP={v_all['spearman']:.4f}",
+            f"EF1={v_all.get('ef1', 0.0):.3f}",
+            f"R@1={v_all.get('recall_top1', 0.0):.4f}",
+            f"Hit@1={v_all.get('hit_rate_top1', 0.0):.4f}",
         )
-        if final_m is not None:
+
+        if test_all is not None:
+            print(
+                "[test ]",
+                f"AUC={test_all['auroc']:.4f}",
+                f"AP={test_all['ap']:.4f}",
+                f"F1={test_all['f1']:.4f}",
+                f"RMSE={test_all['rmse']:.4f}",
+                f"SP={test_all['spearman']:.4f}",
+                f"EF1={test_all.get('ef1', 0.0):.3f}",
+                f"R@1={test_all.get('recall_top1', 0.0):.4f}",
+                f"Hit@1={test_all.get('hit_rate_top1', 0.0):.4f}",
+            )
+
+        if final_all is not None:
             print(
                 "[final]",
-                f"AUC={final_m['auroc']:.4f}",
-                f"AP={final_m['ap']:.4f}",
-                f"F1={final_m['f1']:.4f}",
-                f"EF1={final_m['ef1']:.3f}",
-                f"EF5={final_m['ef5']:.3f}",
-                f"EF10={final_m['ef10']:.3f}",
+                f"AUC={final_all['auroc']:.4f}",
+                f"AP={final_all['ap']:.4f}",
+                f"F1={final_all['f1']:.4f}",
+                f"RMSE={final_all['rmse']:.4f}",
+                f"SP={final_all['spearman']:.4f}",
+                f"EF1={final_all.get('ef1', 0.0):.3f}",
+                f"EF5={final_all.get('ef5', 0.0):.3f}",
+                f"EF10={final_all.get('ef10', 0.0):.3f}",
+                f"R@1={final_all.get('recall_top1', 0.0):.4f}",
+                f"Hit@1={final_all.get('hit_rate_top1', 0.0):.4f}",
             )
 
         def find_pos_neg_indices(batch):
@@ -2560,21 +2694,12 @@ def main():
 
             return pos_idx, neg_idx
 
-        # -----------------------------
-        # epoch loop 内
-        # -----------------------------
-        qk_save_dir = os.path.join(args.out_dir, "qk_maps")
-
-        # valid loader の最初の batch を取得
         vis_batch = next(iter(valid_loader))
-
         pos_idx, neg_idx = find_pos_neg_indices(vis_batch)
 
         targets = []
-
         if pos_idx is not None:
             targets.append(("pos", pos_idx))
-
         if neg_idx is not None:
             targets.append(("neg", neg_idx))
 
@@ -2592,6 +2717,7 @@ def main():
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
+
 
 if __name__ == "__main__":
     main()
