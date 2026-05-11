@@ -900,15 +900,21 @@ def compute_atom_res_contact_loss_from_aux(
     neg_lambda: float = 0.3,
     margin: float = 1.0,
     hard_neg_k: int = 64,
+    debug: bool = True,
 ):
+    import torch
+    import torch.nn.functional as F
+
     pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
-    l_pad = aux["l_pad"]
-    p_pad = aux["p_pad"]
+    l_pad = aux["l_pad"]                # (B, Ll)
+    p_pad = aux["p_pad"]                # (B, Lp)
 
     valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)
 
     vals_valid = pair_map[valid]
     if vals_valid.numel() == 0:
+        if debug:
+            print("[contact debug] no valid pair_map values")
         return pair_map.sum() * 0.0
 
     mean = vals_valid.mean().detach()
@@ -918,53 +924,109 @@ def compute_atom_res_contact_loss_from_aux(
     B, Ll, Lp = logits.shape
     losses = []
 
+    if debug:
+        print("\n[contact debug]")
+        print("pair_map shape:", tuple(pair_map.shape))
+        print("l valid:", (~l_pad).sum(dim=1).detach().cpu().tolist()[:8])
+        print("p valid:", (~p_pad).sum(dim=1).detach().cpu().tolist()[:8])
+        print("pairs example:", atom_contact_pairs[:2])
+        print("pair_map valid mean/std:",
+              float(vals_valid.mean().detach().cpu()),
+              float(vals_valid.std(unbiased=False).detach().cpu()))
+
     for b in range(B):
         pos_mask = torch.zeros((Ll, Lp), dtype=torch.bool, device=logits.device)
 
-        for ai, ri in atom_contact_pairs[b]:
-            if ai < 0 or ri < 0 or ai >= Ll or ri >= Lp:
+        raw_pairs = atom_contact_pairs[b] if b < len(atom_contact_pairs) else []
+
+        kept_pairs = []
+        skipped_pairs = []
+
+        for ai, ri in raw_pairs:
+            ai = int(ai)
+            ri = int(ri)
+
+            reason = None
+            if ai < 0 or ri < 0:
+                reason = "negative_index"
+            elif ai >= Ll or ri >= Lp:
+                reason = "out_of_shape"
+            elif bool(l_pad[b, ai]):
+                reason = "ligand_pad"
+            elif bool(p_pad[b, ri]):
+                reason = "protein_pad"
+
+            if reason is not None:
+                skipped_pairs.append((ai, ri, reason))
                 continue
-            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
-                continue
+
             pos_mask[ai, ri] = True
+            kept_pairs.append((ai, ri))
 
         pos_mask = pos_mask & valid[b]
         neg_mask = valid[b] & (~pos_mask)
 
-        if pos_mask.sum() == 0:
+        n_pos = int(pos_mask.sum().detach().cpu())
+        n_neg = int(neg_mask.sum().detach().cpu())
+
+        if debug and b < 4:
+            print(f"[b={b}] raw_pairs={len(raw_pairs)} kept={len(kept_pairs)} "
+                  f"pos={n_pos} neg={n_neg}")
+            print("  kept first:", kept_pairs[:10])
+            print("  skipped first:", skipped_pairs[:10])
+
+        if n_pos == 0:
             continue
 
         pos_vals = logits[b][pos_mask]
         neg_vals = logits[b][neg_mask]
 
-        # 1) contact pairs should be high
+        if debug and b < 4:
+            print("  pos mean/max/min:",
+                  float(pos_vals.mean().detach().cpu()),
+                  float(pos_vals.max().detach().cpu()),
+                  float(pos_vals.min().detach().cpu()))
+            if neg_vals.numel() > 0:
+                print("  neg mean/max/min:",
+                      float(neg_vals.mean().detach().cpu()),
+                      float(neg_vals.max().detach().cpu()),
+                      float(neg_vals.min().detach().cpu()))
+
         pos_loss = F.softplus(-pos_vals).mean()
 
-        # 2) only hard negatives matter
         if neg_vals.numel() > 0:
             k = min(int(hard_neg_k), neg_vals.numel())
             hard_neg_vals = neg_vals.topk(k).values
             neg_loss = F.softplus(hard_neg_vals).mean()
-        else:
-            neg_loss = pos_loss * 0.0
-
-        # 3) positive should exceed hard negative by margin
-        if neg_vals.numel() > 0:
-            k = min(int(hard_neg_k), neg_vals.numel())
-            hard_neg_vals = neg_vals.topk(k).values
 
             pos_ref = pos_vals.mean()
             neg_ref = hard_neg_vals.mean()
             rank_loss = F.softplus(margin - pos_ref + neg_ref)
         else:
+            neg_loss = pos_loss * 0.0
             rank_loss = pos_loss * 0.0
 
-        losses.append(pos_loss + neg_lambda * neg_loss + rank_loss)
+        one_loss = pos_loss + neg_lambda * neg_loss + rank_loss
+        losses.append(one_loss)
+
+        if debug and b < 4:
+            print("  loss parts:",
+                  "pos", float(pos_loss.detach().cpu()),
+                  "neg", float(neg_loss.detach().cpu()),
+                  "rank", float(rank_loss.detach().cpu()),
+                  "total", float(one_loss.detach().cpu()))
 
     if not losses:
+        if debug:
+            print("[contact debug] no samples with positive contact pairs")
         return pair_map.sum() * 0.0
 
-    return torch.stack(losses).mean()
+    loss = torch.stack(losses).mean()
+
+    if debug:
+        print("[contact debug] final loss:", float(loss.detach().cpu()))
+
+    return loss
 
 # =========================================================
 # Train
