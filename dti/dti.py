@@ -1157,6 +1157,7 @@ def train_one_epoch(
                         neg_lambda=0.3,
                         margin=1.0,
                         hard_neg_k=64,
+                        debug=(step < 3),
                     )
             else:
                 _, _, g_aux = model(
@@ -1174,6 +1175,7 @@ def train_one_epoch(
                     neg_lambda=0.3,
                     margin=1.0,
                     hard_neg_k=64,
+                    debug=(step < 3),
                 )
 
         # =========================
