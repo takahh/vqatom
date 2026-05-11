@@ -1154,9 +1154,9 @@ def train_one_epoch(
                         g_aux,
                         g.atom_contact_pairs,
                         contact_topk=int(contact_topk),
-                        neg_lambda=0.3,
-                        margin=1.0,
-                        hard_neg_k=64,
+                        neg_lambda=0.05,
+                        margin=0.2,
+                        hard_neg_k=16,
                         debug=(step < 3),
                     )
             else:
@@ -1172,9 +1172,9 @@ def train_one_epoch(
                     g_aux,
                     g.atom_contact_pairs,
                     contact_topk=int(contact_topk),
-                    neg_lambda=0.3,
-                    margin=1.0,
-                    hard_neg_k=64,
+                    neg_lambda=0.05,
+                    margin=0.2,
+                    hard_neg_k=16,
                     debug=(step < 3),
                 )
 
