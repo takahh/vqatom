@@ -1667,7 +1667,8 @@ class DualStreamDTIClassifier(nn.Module):
             lp_score = lp_score.masked_fill(~valid_h, 0.0)
 
             # 局所ピークだけ残す
-            pair_map = torch.relu(lp_score)
+            # contact loss / downstream pooling に負値も含む連続スコアを渡す
+            pair_map = lp_score
 
         elif self.pl_lp_overlap == "pl":
             pl_score = masked_zscore(pl_score, valid_h, dim=-2)
@@ -1751,12 +1752,13 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
+        # graph smoothing は hotspot を潰す可能性があるので一旦 OFF
         pair_map = ligand_adj_smooth_pairmap(
             pair_map=pair_map,
             edge_index=edge_index,
             edge_batch=edge_batch,
             valid_h=valid_h,
-            alpha=0.3,
+            alpha=0.0,
         )
 
 
