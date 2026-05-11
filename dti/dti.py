@@ -898,7 +898,8 @@ def compute_atom_res_contact_loss_from_aux(
     atom_contact_pairs,
     contact_topk: int = 8,
     neg_lambda: float = 0.3,
-    margin: float = 0.0,
+    margin: float = 1.0,
+    hard_neg_k: int = 64,
 ):
     pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
     l_pad = aux["l_pad"]
@@ -933,19 +934,32 @@ def compute_atom_res_contact_loss_from_aux(
         if pos_mask.sum() == 0:
             continue
 
-        # contact pair は高くする
         pos_vals = logits[b][pos_mask]
-        k = min(int(contact_topk), pos_vals.numel())
-        pos_loss = F.softplus(-pos_vals.topk(k).values).mean()
-
-        # non-contact pair は正の値を罰する
         neg_vals = logits[b][neg_mask]
+
+        # 1) contact pairs should be high
+        pos_loss = F.softplus(-pos_vals).mean()
+
+        # 2) only hard negatives matter
         if neg_vals.numel() > 0:
-            neg_loss = F.softplus(neg_vals - margin).mean()
+            k = min(int(hard_neg_k), neg_vals.numel())
+            hard_neg_vals = neg_vals.topk(k).values
+            neg_loss = F.softplus(hard_neg_vals).mean()
         else:
             neg_loss = pos_loss * 0.0
 
-        losses.append(pos_loss + neg_lambda * neg_loss)
+        # 3) positive should exceed hard negative by margin
+        if neg_vals.numel() > 0:
+            k = min(int(hard_neg_k), neg_vals.numel())
+            hard_neg_vals = neg_vals.topk(k).values
+
+            pos_ref = pos_vals.mean()
+            neg_ref = hard_neg_vals.mean()
+            rank_loss = F.softplus(margin - pos_ref + neg_ref)
+        else:
+            rank_loss = pos_loss * 0.0
+
+        losses.append(pos_loss + neg_lambda * neg_loss + rank_loss)
 
     if not losses:
         return pair_map.sum() * 0.0
@@ -1078,6 +1092,9 @@ def train_one_epoch(
                         g_aux,
                         g.atom_contact_pairs,
                         contact_topk=int(contact_topk),
+                        neg_lambda=0.3,
+                        margin=1.0,
+                        hard_neg_k=64,
                     )
             else:
                 _, _, g_aux = model(
@@ -1092,6 +1109,9 @@ def train_one_epoch(
                     g_aux,
                     g.atom_contact_pairs,
                     contact_topk=int(contact_topk),
+                    neg_lambda=0.3,
+                    margin=1.0,
+                    hard_neg_k=64,
                 )
 
         # =========================
