@@ -915,8 +915,12 @@ def compute_atom_res_contact_loss_from_aux(
     if vals_valid.numel() == 0:
         if debug:
             print("[contact debug] no valid pair_map values")
-        return pair_map.sum() * 0.0
-
+        return {
+            "loss": pair_map.sum() * 0.0,
+            "pos_mean": 0.0,
+            "neg_mean": 0.0,
+            "gap": 0.0,
+        }
     mean = vals_valid.mean().detach()
     std = vals_valid.std(unbiased=False).detach().clamp_min(1e-6)
     logits = (pair_map - mean) / std
