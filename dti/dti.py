@@ -1775,15 +1775,14 @@ class DualStreamDTIClassifier(nn.Module):
             # ligand atom ごとに protein 軸で正規化
             lp_score = masked_zscore(lp_score, valid_h, dim=-1)
 
-            # 縦縞除去: protein token ごとに ligand 軸方向の平均を引く
-            col_mean = (lp_score * valid_h).sum(dim=-2, keepdim=True) / \
-                       valid_h.float().sum(dim=-2, keepdim=True).clamp_min(1.0)
+            # 縦縞除去はいったんOFF
+            # col_mean = (lp_score * valid_h).sum(dim=-2, keepdim=True) / \
+            #            valid_h.float().sum(dim=-2, keepdim=True).clamp_min(1.0)
+            # lp_score = lp_score - col_mean
 
-            lp_score = lp_score - col_mean
             lp_score = lp_score.masked_fill(~valid_h, 0.0)
 
-            # 局所ピークだけ残す
-            # contact loss / downstream pooling に負値も含む連続スコアを渡す
+            # ReLUせず、contact loss 用に連続値を残す
             pair_map = lp_score
 
         elif self.pl_lp_overlap == "pl":
@@ -1896,9 +1895,9 @@ class DualStreamDTIClassifier(nn.Module):
         ], dim=-1)  # (B,Ll,Lp,4D)
 
         score = pair_map.masked_fill(~valid, 0.0)
-        score = torch.relu(score)
-        score = score + valid.float() * 1e-6
+        score = torch.sigmoid(score)
         score = score.masked_fill(~valid, 0.0)
+        score = score + valid.float() * 1e-6
         score = score.unsqueeze(-1)
 
         weighted = pair_feat * score
