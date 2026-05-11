@@ -1006,7 +1006,9 @@ def compute_atom_res_contact_loss_from_aux(
             neg_loss = pos_loss * 0.0
             rank_loss = pos_loss * 0.0
 
-        one_loss = pos_loss + neg_lambda * neg_loss + rank_loss
+        rank_lambda = 0.2
+        one_loss = pos_loss + neg_lambda * neg_loss + rank_lambda * rank_loss
+        # one_loss = pos_loss + neg_lambda * neg_loss + rank_loss
         losses.append(one_loss)
 
         if debug and b < 4:
