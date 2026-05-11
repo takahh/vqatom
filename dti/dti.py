@@ -923,6 +923,8 @@ def compute_atom_res_contact_loss_from_aux(
 
     B, Ll, Lp = logits.shape
     losses = []
+    all_pos_vals = []
+    all_neg_vals = []
 
     if debug:
         print("\n[contact debug]")
@@ -1015,6 +1017,8 @@ def compute_atom_res_contact_loss_from_aux(
         one_loss = pos_loss + neg_lambda * neg_loss + rank_lambda * rank_loss
         # one_loss = pos_loss + neg_lambda * neg_loss + rank_loss
         losses.append(one_loss)
+        all_pos_vals.append(pos_vals.detach())
+        all_neg_vals.append(neg_vals.detach())
 
         if debug and b < 4:
             print("  loss parts:",
@@ -1030,10 +1034,33 @@ def compute_atom_res_contact_loss_from_aux(
 
     loss = torch.stack(losses).mean()
 
+    if not losses:
+        return {
+            "loss": pair_map.sum() * 0.0,
+            "pos_mean": 0.0,
+            "neg_mean": 0.0,
+            "gap": 0.0,
+        }
+
+    loss = torch.stack(losses).mean()
+
+    all_pos = torch.cat(all_pos_vals)
+    all_neg = torch.cat(all_neg_vals)
+
+    pos_mean = all_pos.mean()
+    neg_mean = all_neg.mean()
+    gap = pos_mean - neg_mean
+
     if debug:
         print("[contact debug] final loss:", float(loss.detach().cpu()))
 
-    return loss
+    return {
+        "loss": loss,
+        "pos_mean": pos_mean.detach(),
+        "neg_mean": neg_mean.detach(),
+        "gap": gap.detach(),
+    }
+
 
 # =========================================================
 # Train
@@ -1067,6 +1094,10 @@ def train_one_epoch(
     losses_contact = []
     losses_cls = []
     losses_reg = []
+
+    contact_gap_hist = []
+    contact_pos_hist = []
+    contact_neg_hist = []
 
     use_amp = (device.type == "cuda")
 
@@ -1157,15 +1188,20 @@ def train_one_epoch(
                         edge_batch=g.edge_batch.to(device),
                         return_maps=True
                     )
-                    loss_contact = compute_atom_res_contact_loss_from_aux(
-                        g_aux,
-                        g.atom_contact_pairs,
-                        contact_topk=int(contact_topk),
-                        neg_lambda=0.05,
-                        margin=0.2,
-                        hard_neg_k=16,
-                        debug=(step < 3),
-                    )
+                    contact_out = compute_atom_res_contact_loss_from_aux(
+                                        g_aux,
+                                        g.atom_contact_pairs,
+                                        contact_topk=int(contact_topk),
+                                        neg_lambda=0.05,
+                                        margin=0.2,
+                                        hard_neg_k=16,
+                                        debug=(step < 3),
+                                    )
+
+                    loss_contact = contact_out["loss"]
+                    contact_gap_hist.append(float(contact_out["gap"]))
+                    contact_pos_hist.append(float(contact_out["pos_mean"]))
+                    contact_neg_hist.append(float(contact_out["neg_mean"]))
             else:
                 _, _, g_aux = model(
                     gp_ids,
@@ -1175,15 +1211,20 @@ def train_one_epoch(
                     edge_batch=g.edge_batch.to(device),
                     return_maps=True,
                 )
-                loss_contact = compute_atom_res_contact_loss_from_aux(
-                    g_aux,
-                    g.atom_contact_pairs,
-                    contact_topk=int(contact_topk),
-                    neg_lambda=0.05,
-                    margin=0.2,
-                    hard_neg_k=16,
-                    debug=(step < 3),
-                )
+                contact_out = compute_atom_res_contact_loss_from_aux(
+                                    g_aux,
+                                    g.atom_contact_pairs,
+                                    contact_topk=int(contact_topk),
+                                    neg_lambda=0.05,
+                                    margin=0.2,
+                                    hard_neg_k=16,
+                                    debug=(step < 3),
+                                )
+
+                loss_contact = contact_out["loss"]
+                contact_gap_hist.append(float(contact_out["gap"]))
+                contact_pos_hist.append(float(contact_out["pos_mean"]))
+                contact_neg_hist.append(float(contact_out["neg_mean"]))
 
         # =========================
         # TOTAL LOSS
@@ -1198,6 +1239,7 @@ def train_one_epoch(
         optimizer.step()
         if scheduler is not None:
             scheduler.step()
+
 
         losses.append(loss.item())
         losses_contact.append(loss_contact.item())
@@ -1216,6 +1258,10 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)),
         "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
+
+        "contact_gap": float(np.mean(contact_gap_hist)) if contact_gap_hist else 0.0,
+        "contact_pos_mean": float(np.mean(contact_pos_hist)) if contact_pos_hist else 0.0,
+        "contact_neg_mean": float(np.mean(contact_neg_hist)) if contact_neg_hist else 0.0,
     }
 
 # =========================================================
