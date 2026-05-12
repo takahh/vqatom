@@ -787,13 +787,19 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
                     ds0 = loader.dataset
 
                 y_true_denorm = (
-                        batch.y_reg.detach().cpu().numpy()
+                        batch.y_reg.detach().float().cpu().numpy()
+                        * ds0.y_reg_std
+                        + ds0.y_reg_mean
+                )
+
+                y_pred_denorm = (
+                        yhat_reg.detach().float().cpu().numpy()
                         * ds0.y_reg_std
                         + ds0.y_reg_mean
                 )
 
                 yreg_true_list.append(y_true_denorm)
-                yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
+                yreg_pred_list.append(y_pred_denorm)
 
     y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
     y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
