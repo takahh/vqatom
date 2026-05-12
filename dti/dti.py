@@ -29,7 +29,7 @@ import random
 import csv
 import argparse
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 
 import numpy as np
 import torch
@@ -815,7 +815,8 @@ def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]
         "spearman": spearman,
     }
 
-def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
+def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> dict[str, float] | dict[str | Any, float | Any] | tuple[
+    dict[str | Any, float | Any], str, str]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
     def enrichment_factor(score: np.ndarray, y01: np.ndarray, frac: float) -> float:
@@ -836,6 +837,24 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
 
         return float(hit_rate_topk / base_rate)
 
+    def recall_at_frac(score: np.ndarray, y01: np.ndarray, frac: float) -> float:
+        n = int(len(y01))
+        if n == 0:
+            return 0.0
+
+        n_pos = int(y01.sum())
+        if n_pos == 0:
+            return 0.0
+
+        k = max(1, int(math.ceil(n * float(frac))))
+
+        order = np.argsort(-score)
+        top_idx = order[:k]
+
+        hits = int(y01[top_idx].sum())
+
+        return float(hits / n_pos)
+
     if y_pred.size == 0:
         return {
             "auroc": 0.0,
@@ -847,6 +866,9 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "ef1": 0.0,
             "ef5": 0.0,
             "ef10": 0.0,
+            "r1": 0.0,
+            "r5": 0.0,
+            "r10": 0.0,
         }
 
     score = y_pred
@@ -854,6 +876,9 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
     ef1 = enrichment_factor(score, y01, 0.01)
     ef5 = enrichment_factor(score, y01, 0.05)
     ef10 = enrichment_factor(score, y01, 0.10)
+    r1 = recall_at_frac(score, y01, 0.01)
+    r5 = recall_at_frac(score, y01, 0.05)
+    r10 = recall_at_frac(score, y01, 0.10)
 
     if len(np.unique(y01)) <= 1:
         return {
@@ -870,6 +895,9 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
             "ef1": float(ef1),
             "ef5": float(ef5),
             "ef10": float(ef10),
+            "r1": float(r1),
+            "r5": float(r5),
+            "r10": float(r10),
         }
 
     auroc = roc_auc_score(y01, score)
@@ -891,6 +919,9 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef1": float(ef1),
         "ef5": float(ef5),
         "ef10": float(ef10),
+        "r1": float(r1),
+        "r5": float(r5),
+        "r10": float(r10),
     }
 
 def compute_atom_res_contact_loss_from_aux(
@@ -982,6 +1013,8 @@ def train_one_epoch(
 
     losses = []
     losses_contact = []
+    losses_cls = []
+    losses_reg = []
 
     use_amp = (device.type == "cuda")
 
@@ -1020,7 +1053,14 @@ def train_one_epoch(
                                             edge_batch=batch.edge_batch.to(device),
                                             return_maps=False)
                 loss_cls = bce(logit, y_bin)
-                loss = loss_cls
+
+                if yhat_reg is not None and batch.y_reg is not None and float(reg_lambda) > 0:
+                    y_reg = batch.y_reg.to(device)
+                    loss_reg = reg_loss_fn(yhat_reg, y_reg)
+                else:
+                    loss_reg = torch.tensor(0.0, device=device)
+
+                loss = loss_cls + float(reg_lambda) * loss_reg
         else:
             logit, yhat_reg, aux = model(
                                         p_ids,
@@ -1030,7 +1070,14 @@ def train_one_epoch(
                                         edge_batch=batch.edge_batch.to(device),
                                         return_maps=False)
             loss_cls = bce(logit, y_bin)
-            loss = loss_cls
+
+            if yhat_reg is not None and batch.y_reg is not None and float(reg_lambda) > 0:
+                y_reg = batch.y_reg.to(device)
+                loss_reg = reg_loss_fn(yhat_reg, y_reg)
+            else:
+                loss_reg = torch.tensor(0.0, device=device)
+
+            loss = loss_cls + float(reg_lambda) * loss_reg
 
         # =========================
         # GUIDE CONTACT BATCH
@@ -1098,6 +1145,8 @@ def train_one_epoch(
 
         losses.append(loss.item())
         losses_contact.append(loss_contact.item())
+        losses_cls.append(float(loss_cls.item()))
+        losses_reg.append(float(loss_reg.item()))
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
@@ -1106,6 +1155,8 @@ def train_one_epoch(
 
     return {
         "loss": float(np.mean(losses)),
+        "loss_cls": float(np.mean(losses_cls)),
+        "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
     }
 
