@@ -5,6 +5,7 @@ import re
 import math
 import matplotlib.pyplot as plt
 
+
 json_dir = "/Users/taka/Downloads/"
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
 
@@ -15,8 +16,6 @@ def get_epoch_from_name(path):
 
 
 def safe_float(x):
-    if x is None:
-        return float("-inf")
     try:
         x = float(x)
         if math.isnan(x):
@@ -27,8 +26,6 @@ def safe_float(x):
 
 
 def none_to_nan(x):
-    if x is None:
-        return float("nan")
     try:
         x = float(x)
         if math.isnan(x):
@@ -36,6 +33,14 @@ def none_to_nan(x):
         return x
     except Exception:
         return float("nan")
+
+
+def get_dict(d, *names):
+    for name in names:
+        v = d.get(name)
+        if isinstance(v, dict):
+            return v
+    return {}
 
 
 def plot_metric(filename, title, ylabel, series, best_epoch=None, hline0=False):
@@ -72,23 +77,24 @@ train_ap, valid_ap, final_ap = [], [], []
 train_f1, valid_f1, final_f1 = [], [], []
 
 loss_total, loss_cls, loss_reg, loss_contact = [], [], [], []
-
 contact_gap, contact_pos_mean, contact_neg_mean = [], [], []
 
-final_ef1, final_ef5, final_ef10 = [], [], []
+train_ef1, train_ef5, train_ef10 = [], [], []
 valid_ef1, valid_ef5, valid_ef10 = [], [], []
+final_ef1, final_ef5, final_ef10 = [], [], []
+
+train_r1, train_r5, train_r10 = [], [], []
+valid_r1, valid_r5, valid_r10 = [], [], []
+final_r1, final_r5, final_r10 = [], [], []
 
 train_rmse, valid_rmse, final_rmse = [], [], []
 train_mae, valid_mae, final_mae = [], [], []
 train_spearman, valid_spearman, final_spearman = [], [], []
 train_pearson, valid_pearson, final_pearson = [], [], []
 
-train_recall_top1, valid_recall_top1, final_recall_top1 = [], [], []
-train_hit_top1, valid_hit_top1, final_hit_top1 = [], [], []
-train_ef_top1, valid_ef_top1, final_ef_top1 = [], [], []
-
-train_top1_pos, valid_top1_pos, final_top1_pos = [], [], []
-train_top1_k, valid_top1_k, final_top1_k = [], [], []
+train_pred_mean, valid_pred_mean, final_pred_mean = [], [], []
+train_pred_std, valid_pred_std, final_pred_std = [], [], []
+train_pred_pos_rate, valid_pred_pos_rate, final_pred_pos_rate = [], [], []
 
 
 for fp in files:
@@ -98,13 +104,17 @@ for fp in files:
     ep = d.get("epoch", get_epoch_from_name(fp))
     epochs.append(ep)
 
-    # current JSON format
-    train_metrics = d.get("train", {}) or {}
-    valid_metrics = d.get("valid", {}) or {}
-    final_metrics = d.get("final", {}) or {}
-    train_stat = d.get("train_loss", {}) or {}
+    # new format, with fallback to old names
+    train_stat = get_dict(d, "train_stat", "train_loss")
+    train_metrics = get_dict(d, "train_metrics", "train")
+    valid_metrics = get_dict(d, "valid_metrics", "valid")
+    final_metrics = get_dict(d, "final_eval_metrics", "final_eval", "final")
 
-    # classification metrics
+    train_reg_metrics = get_dict(d, "train_reg_metrics")
+    valid_reg_metrics = get_dict(d, "valid_reg_metrics")
+    final_reg_metrics = get_dict(d, "final_eval_reg_metrics", "final_reg_metrics")
+
+    # classification
     train_auc.append(none_to_nan(train_metrics.get("auroc")))
     valid_auc.append(none_to_nan(valid_metrics.get("auroc")))
     final_auc.append(none_to_nan(final_metrics.get("auroc")))
@@ -117,6 +127,10 @@ for fp in files:
     valid_f1.append(none_to_nan(valid_metrics.get("f1")))
     final_f1.append(none_to_nan(final_metrics.get("f1")))
 
+    train_ef1.append(none_to_nan(train_metrics.get("ef1")))
+    train_ef5.append(none_to_nan(train_metrics.get("ef5")))
+    train_ef10.append(none_to_nan(train_metrics.get("ef10")))
+
     valid_ef1.append(none_to_nan(valid_metrics.get("ef1")))
     valid_ef5.append(none_to_nan(valid_metrics.get("ef5")))
     valid_ef10.append(none_to_nan(valid_metrics.get("ef10")))
@@ -125,53 +139,58 @@ for fp in files:
     final_ef5.append(none_to_nan(final_metrics.get("ef5")))
     final_ef10.append(none_to_nan(final_metrics.get("ef10")))
 
+    # r1/r5/r10 in your new log
+    train_r1.append(none_to_nan(train_metrics.get("r1")))
+    train_r5.append(none_to_nan(train_metrics.get("r5")))
+    train_r10.append(none_to_nan(train_metrics.get("r10")))
+
+    valid_r1.append(none_to_nan(valid_metrics.get("r1")))
+    valid_r5.append(none_to_nan(valid_metrics.get("r5")))
+    valid_r10.append(none_to_nan(valid_metrics.get("r10")))
+
+    final_r1.append(none_to_nan(final_metrics.get("r1")))
+    final_r5.append(none_to_nan(final_metrics.get("r5")))
+    final_r10.append(none_to_nan(final_metrics.get("r10")))
+
+    # prediction distribution
+    train_pred_mean.append(none_to_nan(train_metrics.get("pred_mean")))
+    valid_pred_mean.append(none_to_nan(valid_metrics.get("pred_mean")))
+    final_pred_mean.append(none_to_nan(final_metrics.get("pred_mean")))
+
+    train_pred_std.append(none_to_nan(train_metrics.get("pred_std")))
+    valid_pred_std.append(none_to_nan(valid_metrics.get("pred_std")))
+    final_pred_std.append(none_to_nan(final_metrics.get("pred_std")))
+
+    train_pred_pos_rate.append(none_to_nan(train_metrics.get("pred_pos_rate@thr")))
+    valid_pred_pos_rate.append(none_to_nan(valid_metrics.get("pred_pos_rate@thr")))
+    final_pred_pos_rate.append(none_to_nan(final_metrics.get("pred_pos_rate@thr")))
+
     # losses
     loss_total.append(none_to_nan(train_stat.get("loss")))
     loss_cls.append(none_to_nan(train_stat.get("loss_cls")))
     loss_reg.append(none_to_nan(train_stat.get("loss_reg")))
     loss_contact.append(none_to_nan(train_stat.get("loss_contact")))
 
-    # contact guide stats
     contact_gap.append(none_to_nan(train_stat.get("contact_gap")))
     contact_pos_mean.append(none_to_nan(train_stat.get("contact_pos_mean")))
     contact_neg_mean.append(none_to_nan(train_stat.get("contact_neg_mean")))
 
-    # regression metrics
-    train_rmse.append(none_to_nan(train_metrics.get("rmse")))
-    valid_rmse.append(none_to_nan(valid_metrics.get("rmse")))
-    final_rmse.append(none_to_nan(final_metrics.get("rmse")))
+    # regression
+    train_rmse.append(none_to_nan(train_reg_metrics.get("rmse")))
+    valid_rmse.append(none_to_nan(valid_reg_metrics.get("rmse")))
+    final_rmse.append(none_to_nan(final_reg_metrics.get("rmse")))
 
-    train_mae.append(none_to_nan(train_metrics.get("mae")))
-    valid_mae.append(none_to_nan(valid_metrics.get("mae")))
-    final_mae.append(none_to_nan(final_metrics.get("mae")))
+    train_mae.append(none_to_nan(train_reg_metrics.get("mae")))
+    valid_mae.append(none_to_nan(valid_reg_metrics.get("mae")))
+    final_mae.append(none_to_nan(final_reg_metrics.get("mae")))
 
-    train_spearman.append(none_to_nan(train_metrics.get("spearman")))
-    valid_spearman.append(none_to_nan(valid_metrics.get("spearman")))
-    final_spearman.append(none_to_nan(final_metrics.get("spearman")))
+    train_spearman.append(none_to_nan(train_reg_metrics.get("spearman")))
+    valid_spearman.append(none_to_nan(valid_reg_metrics.get("spearman")))
+    final_spearman.append(none_to_nan(final_reg_metrics.get("spearman")))
 
-    train_pearson.append(none_to_nan(train_metrics.get("pearson")))
-    valid_pearson.append(none_to_nan(valid_metrics.get("pearson")))
-    final_pearson.append(none_to_nan(final_metrics.get("pearson")))
-
-    train_recall_top1.append(none_to_nan(train_metrics.get("recall_top1")))
-    valid_recall_top1.append(none_to_nan(valid_metrics.get("recall_top1")))
-    final_recall_top1.append(none_to_nan(final_metrics.get("recall_top1")))
-
-    train_hit_top1.append(none_to_nan(train_metrics.get("hit_rate_top1")))
-    valid_hit_top1.append(none_to_nan(valid_metrics.get("hit_rate_top1")))
-    final_hit_top1.append(none_to_nan(final_metrics.get("hit_rate_top1")))
-
-    train_ef_top1.append(none_to_nan(train_metrics.get("ef_top1")))
-    valid_ef_top1.append(none_to_nan(valid_metrics.get("ef_top1")))
-    final_ef_top1.append(none_to_nan(final_metrics.get("ef_top1")))
-
-    train_top1_pos.append(none_to_nan(train_metrics.get("top1_pos")))
-    valid_top1_pos.append(none_to_nan(valid_metrics.get("top1_pos")))
-    final_top1_pos.append(none_to_nan(final_metrics.get("top1_pos")))
-
-    train_top1_k.append(none_to_nan(train_metrics.get("top1_k")))
-    valid_top1_k.append(none_to_nan(valid_metrics.get("top1_k")))
-    final_top1_k.append(none_to_nan(final_metrics.get("top1_k")))
+    train_pearson.append(none_to_nan(train_reg_metrics.get("pearson")))
+    valid_pearson.append(none_to_nan(valid_reg_metrics.get("pearson")))
+    final_pearson.append(none_to_nan(final_reg_metrics.get("pearson")))
 
 
 if not epochs:
@@ -189,18 +208,18 @@ print(f"best epoch       : {epochs[best_i]}")
 print(f"valid AUROC      : {safe_float(valid_auc[best_i]):.6f}")
 print(f"final AUROC      : {safe_float(final_auc[best_i]):.6f}")
 print(f"train AUROC      : {safe_float(train_auc[best_i]):.6f}")
+print(f"valid AP         : {safe_float(valid_ap[best_i]):.6f}")
+print(f"final AP         : {safe_float(final_ap[best_i]):.6f}")
+print(f"valid EF1        : {safe_float(valid_ef1[best_i]):.6f}")
+print(f"final EF1        : {safe_float(final_ef1[best_i]):.6f}")
+print(f"valid r1         : {safe_float(valid_r1[best_i]):.6f}")
+print(f"final r1         : {safe_float(final_r1[best_i]):.6f}")
 print(f"valid RMSE       : {safe_float(valid_rmse[best_i]):.6f}")
 print(f"final RMSE       : {safe_float(final_rmse[best_i]):.6f}")
 print(f"valid Spearman   : {safe_float(valid_spearman[best_i]):.6f}")
 print(f"final Spearman   : {safe_float(final_spearman[best_i]):.6f}")
 print(f"valid Pearson    : {safe_float(valid_pearson[best_i]):.6f}")
 print(f"final Pearson    : {safe_float(final_pearson[best_i]):.6f}")
-print(f"valid R@1%       : {safe_float(valid_recall_top1[best_i]):.6f}")
-print(f"final R@1%       : {safe_float(final_recall_top1[best_i]):.6f}")
-print(f"valid Hit@1%     : {safe_float(valid_hit_top1[best_i]):.6f}")
-print(f"final Hit@1%     : {safe_float(final_hit_top1[best_i]):.6f}")
-print(f"valid EF@1%      : {safe_float(valid_ef_top1[best_i]):.6f}")
-print(f"final EF@1%      : {safe_float(final_ef_top1[best_i]):.6f}")
 print(f"loss total       : {safe_float(loss_total[best_i]):.6f}")
 print(f"loss cls         : {safe_float(loss_cls[best_i]):.6f}")
 print(f"loss reg         : {safe_float(loss_reg[best_i]):.6f}")
@@ -252,15 +271,16 @@ plot_metric(
 )
 
 plot_metric(
-    "valid_final_ef_plot.png",
-    "Classification EF vs Epoch",
+    "ef_plot.png",
+    "EF vs Epoch",
     "Enrichment Factor",
     [
+        ("train EF1", train_ef1),
         ("valid EF1", valid_ef1),
-        ("valid EF5", valid_ef5),
-        ("valid EF10", valid_ef10),
         ("final EF1", final_ef1),
+        ("valid EF5", valid_ef5),
         ("final EF5", final_ef5),
+        ("valid EF10", valid_ef10),
         ("final EF10", final_ef10),
     ],
     best_epoch=best_epoch,
@@ -274,6 +294,49 @@ plot_metric(
         ("final EF1", final_ef1),
         ("final EF5", final_ef5),
         ("final EF10", final_ef10),
+    ],
+    best_epoch=best_epoch,
+)
+
+plot_metric(
+    "r_at_top_plot.png",
+    "Recall-like r@Top% vs Epoch",
+    "r",
+    [
+        ("train r1", train_r1),
+        ("valid r1", valid_r1),
+        ("final r1", final_r1),
+        ("valid r5", valid_r5),
+        ("final r5", final_r5),
+        ("valid r10", valid_r10),
+        ("final r10", final_r10),
+    ],
+    best_epoch=best_epoch,
+)
+
+plot_metric(
+    "pred_distribution_plot.png",
+    "Prediction Distribution vs Epoch",
+    "Value",
+    [
+        ("train pred mean", train_pred_mean),
+        ("valid pred mean", valid_pred_mean),
+        ("final pred mean", final_pred_mean),
+        ("train pred std", train_pred_std),
+        ("valid pred std", valid_pred_std),
+        ("final pred std", final_pred_std),
+    ],
+    best_epoch=best_epoch,
+)
+
+plot_metric(
+    "pred_pos_rate_plot.png",
+    "Predicted Positive Rate @ Threshold vs Epoch",
+    "Predicted positive rate",
+    [
+        ("train pred_pos_rate", train_pred_pos_rate),
+        ("valid pred_pos_rate", valid_pred_pos_rate),
+        ("final pred_pos_rate", final_pred_pos_rate),
     ],
     best_epoch=best_epoch,
 )
@@ -307,7 +370,7 @@ plot_metric(
 )
 
 
-# regression core
+# regression
 plot_metric(
     "regression_rmse_plot.png",
     "Regression RMSE vs Epoch",
@@ -352,68 +415,6 @@ plot_metric(
         ("train Pearson", train_pearson),
         ("valid Pearson", valid_pearson),
         ("final Pearson", final_pearson),
-    ],
-    best_epoch=best_epoch,
-)
-
-
-# regression ranking / virtual screening
-plot_metric(
-    "regression_recall_top1_plot.png",
-    "Regression Recall@Top1% vs Epoch",
-    "Recall@Top1%",
-    [
-        ("train R@1%", train_recall_top1),
-        ("valid R@1%", valid_recall_top1),
-        ("final R@1%", final_recall_top1),
-    ],
-    best_epoch=best_epoch,
-)
-
-plot_metric(
-    "regression_hit_top1_plot.png",
-    "Regression Hit-rate@Top1% vs Epoch",
-    "Hit-rate@Top1%",
-    [
-        ("train Hit@1%", train_hit_top1),
-        ("valid Hit@1%", valid_hit_top1),
-        ("final Hit@1%", final_hit_top1),
-    ],
-    best_epoch=best_epoch,
-)
-
-plot_metric(
-    "regression_ef_top1_plot.png",
-    "Regression EF@Top1% vs Epoch",
-    "EF@Top1%",
-    [
-        ("train EF@1%", train_ef_top1),
-        ("valid EF@1%", valid_ef_top1),
-        ("final EF@1%", final_ef_top1),
-    ],
-    best_epoch=best_epoch,
-)
-
-plot_metric(
-    "regression_top1_hits_plot.png",
-    "Top1% Positive Hits vs Epoch",
-    "Count",
-    [
-        ("train top1_pos", train_top1_pos),
-        ("valid top1_pos", valid_top1_pos),
-        ("final top1_pos", final_top1_pos),
-    ],
-    best_epoch=best_epoch,
-)
-
-plot_metric(
-    "regression_top1_k_plot.png",
-    "Top1% K vs Epoch",
-    "K",
-    [
-        ("train top1_k", train_top1_k),
-        ("valid top1_k", valid_top1_k),
-        ("final top1_k", final_top1_k),
     ],
     best_epoch=best_epoch,
 )
