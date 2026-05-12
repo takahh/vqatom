@@ -781,7 +781,18 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
             if (batch.y_reg is not None) and (yhat_reg is not None):
-                yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
+                if isinstance(loader.dataset, ConcatDataset):
+                    ds0 = loader.dataset.datasets[0]
+                else:
+                    ds0 = loader.dataset
+
+                y_true_denorm = (
+                        batch.y_reg.detach().cpu().numpy()
+                        * ds0.y_reg_std
+                        + ds0.y_reg_mean
+                )
+
+                yreg_true_list.append(y_true_denorm)
                 yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
 
     y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
