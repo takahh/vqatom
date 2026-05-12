@@ -1124,15 +1124,15 @@ def train_one_epoch(
     scheduler=None,
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
-    reg_lambda: float = 0.1,
+    reg_lambda: float = 1.0,
+    cls_lambda: float = 0.0,
     sym_lambda: float = 0.0,
     epoch=1,
     contact_lambda: float = 0.0,
     guide_loader: Optional[DataLoader] = None,
     guide_every: int = 1,
     contact_topk: int = 3,
-    task=None,
-    cls_lambda: float = 0.0,
+    task: str = "regression",
 ) -> Dict[str, float]:
 
     model.train()
@@ -1152,87 +1152,55 @@ def train_one_epoch(
     contact_neg_hist = []
 
     use_amp = (device.type == "cuda")
-
     guide_iter = iter(guide_loader) if guide_loader is not None else None
-
     pbar = tqdm(loader, desc="train", leave=False)
-
-    def attention_symmetry_loss(attn_lp, attn_pl, p_pad, l_pad):
-        attn_pl_t = attn_pl.transpose(-1, -2)
-        diff = (attn_lp - attn_pl_t) ** 2
-
-        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
-        diff = diff.masked_fill(~valid, 0.0)
-
-        return diff.sum() / valid.float().sum().clamp_min(1.0)
 
     for step, batch in enumerate(pbar):
 
-        # =========================
-        # MAIN DTI BATCH
-        # =========================
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         y_bin = batch.y_bin.to(device)
+        y_reg = batch.y_reg.to(device)
 
         optimizer.zero_grad(set_to_none=True)
 
-        if use_amp:
-            with (torch.autocast("cuda", dtype=torch.bfloat16)):
-                logit, yhat_reg, aux = model(
-                                            p_ids,
-                                            p_msk,
-                                            l_ids,
-                                            edge_index=batch.edge_index.to(device),
-                                            edge_batch=batch.edge_batch.to(device),
-                                            return_maps=False)
-                y_reg = batch.y_reg.to(device)
-                loss_cls = bce(logit, y_bin)
-
-                y_reg = batch.y_reg.to(device)
-                loss_reg = reg_loss_fn(yhat_reg, y_reg)
-
-                if task == "classification":
-                    loss = cls_lambda * loss_cls
-                elif task == "regression":
-                    loss = reg_lambda * loss_reg
-                elif task == "hybrid":
-                    loss = cls_lambda * loss_cls + reg_lambda * loss_reg
-                else:
-                    raise ValueError(task)
-        else:
+        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
             logit, yhat_reg, aux = model(
-                                        p_ids,
-                                        p_msk,
-                                        l_ids,
-                                        edge_index=batch.edge_index.to(device),
-                                        edge_batch=batch.edge_batch.to(device),
-                                        return_maps=False)
-            y_reg = batch.y_reg.to(device)
-            loss_cls = bce(logit, y_bin)
+                p_ids,
+                p_msk,
+                l_ids,
+                edge_index=batch.edge_index.to(device),
+                edge_batch=batch.edge_batch.to(device),
+                return_maps=False,
+            )
 
-            y_reg = batch.y_reg.to(device)
+            loss_cls = bce(logit, y_bin)
             loss_reg = reg_loss_fn(yhat_reg, y_reg)
 
             if task == "classification":
-                loss = cls_lambda * loss_cls
-            elif task == "regression":
-                loss = reg_lambda * loss_reg
-            elif task == "hybrid":
-                loss = cls_lambda * loss_cls + reg_lambda * loss_reg
-            else:
-                raise ValueError(task)
+                # pure classification
+                loss_main = loss_cls
 
-        # =========================
-        # GUIDE CONTACT BATCH
-        # =========================
+            elif task == "regression":
+                # pure regression
+                loss_main = loss_reg
+
+            elif task == "hybrid":
+                # regression-main hybrid
+                loss_main = reg_lambda * loss_reg + cls_lambda * loss_cls
+
+            else:
+                raise ValueError(
+                    f"Unknown task={task}. Use classification, regression, or hybrid."
+                )
+
         loss_contact = torch.tensor(0.0, device=device)
 
         if (
-                contact_lambda > 0.0
-                and guide_loader is not None
-                and step % guide_every == 0
+            contact_lambda > 0.0
+            and guide_loader is not None
+            and step % guide_every == 0
         ):
             try:
                 g = next(guide_iter)
@@ -1244,31 +1212,7 @@ def train_one_epoch(
             gp_msk = g.p_attn_mask.to(device)
             gl_ids = g.l_ids.to(device)
 
-            if use_amp:
-                with torch.autocast("cuda", dtype=torch.bfloat16):
-                    _, _, g_aux = model(
-                        gp_ids,
-                        gp_msk,
-                        gl_ids,
-                        edge_index=g.edge_index.to(device),
-                        edge_batch=g.edge_batch.to(device),
-                        return_maps=True
-                    )
-                    contact_out = compute_atom_res_contact_loss_from_aux(
-                                        g_aux,
-                                        g.atom_contact_pairs,
-                                        contact_topk=int(contact_topk),
-                                        neg_lambda=0.05,
-                                        margin=0.2,
-                                        hard_neg_k=16,
-                                        debug=(step < 3),
-                                    )
-
-                    loss_contact = contact_out["loss"]
-                    contact_gap_hist.append(float(contact_out["gap"]))
-                    contact_pos_hist.append(float(contact_out["pos_mean"]))
-                    contact_neg_hist.append(float(contact_out["neg_mean"]))
-            else:
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
                 _, _, g_aux = model(
                     gp_ids,
                     gp_msk,
@@ -1277,25 +1221,24 @@ def train_one_epoch(
                     edge_batch=g.edge_batch.to(device),
                     return_maps=True,
                 )
+
                 contact_out = compute_atom_res_contact_loss_from_aux(
-                                    g_aux,
-                                    g.atom_contact_pairs,
-                                    contact_topk=int(contact_topk),
-                                    neg_lambda=0.05,
-                                    margin=0.2,
-                                    hard_neg_k=16,
-                                    debug=(step < 3),
-                                )
+                    g_aux,
+                    g.atom_contact_pairs,
+                    contact_topk=int(contact_topk),
+                    neg_lambda=0.05,
+                    margin=0.2,
+                    hard_neg_k=16,
+                    debug=(step < 3),
+                )
 
                 loss_contact = contact_out["loss"]
-                contact_gap_hist.append(float(contact_out["gap"]))
-                contact_pos_hist.append(float(contact_out["pos_mean"]))
-                contact_neg_hist.append(float(contact_out["neg_mean"]))
 
-        # =========================
-        # TOTAL LOSS
-        # =========================
-        loss = loss + contact_lambda * loss_contact
+            contact_gap_hist.append(float(contact_out["gap"]))
+            contact_pos_hist.append(float(contact_out["pos_mean"]))
+            contact_neg_hist.append(float(contact_out["neg_mean"]))
+
+        loss = loss_main + contact_lambda * loss_contact
 
         loss.backward()
 
@@ -1303,14 +1246,14 @@ def train_one_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         optimizer.step()
+
         if scheduler is not None:
             scheduler.step()
 
-
-        losses.append(loss.item())
-        losses_contact.append(loss_contact.item())
-        losses_cls.append(loss_cls.item())
-        losses_reg.append(loss_reg.item())
+        losses.append(float(loss.item()))
+        losses_contact.append(float(loss_contact.item()))
+        losses_cls.append(float(loss_cls.item()))
+        losses_reg.append(float(loss_reg.item()))
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
@@ -1324,7 +1267,6 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)),
         "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
-
         "contact_gap": float(np.mean(contact_gap_hist)) if contact_gap_hist else 0.0,
         "contact_pos_mean": float(np.mean(contact_pos_hist)) if contact_pos_hist else 0.0,
         "contact_neg_mean": float(np.mean(contact_neg_hist)) if contact_neg_hist else 0.0,
