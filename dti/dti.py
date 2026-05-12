@@ -781,25 +781,8 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
             if (batch.y_reg is not None) and (yhat_reg is not None):
-                if isinstance(loader.dataset, ConcatDataset):
-                    ds0 = loader.dataset.datasets[0]
-                else:
-                    ds0 = loader.dataset
-
-                y_true_denorm = (
-                        batch.y_reg.detach().float().cpu().numpy()
-                        * ds0.y_reg_std
-                        + ds0.y_reg_mean
-                )
-
-                y_pred_denorm = (
-                        yhat_reg.detach().float().cpu().numpy()
-                        * ds0.y_reg_std
-                        + ds0.y_reg_mean
-                )
-
-                yreg_true_list.append(y_true_denorm)
-                yreg_pred_list.append(y_pred_denorm)
+                yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
+                yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
 
     y_prob = np.concatenate(prob_list, axis=0) if prob_list else np.array([], dtype=np.float64)
     y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
@@ -808,23 +791,29 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     return y_prob, y_bin, y_reg_pred, y_reg_true
 
 
-def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray, y_thr: float = 12.1) -> Dict[str, float]:
+def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
     if y_pred.size == 0:
-        return {
-            "mae": 0.0, "rmse": 0.0, "pearson": 0.0, "spearman": 0.0,
-            "recall_top1": 0.0, "hit_rate_top1": 0.0, "ef_top1": 0.0,
-            "top1_k": 0, "top1_pos": 0, "pos_rate": 0.0,
-            "auroc": 0.0, "ap": 0.0,
-        }
+        return {"mae": 0.0, "rmse": 0.0, "pearson": 0.0, "spearman": 0.0}
 
-    out = compute_regression_ranking_metrics(
-        y_true=y_true,
-        y_pred=y_pred,
-        y_thr=y_thr,
-        top_frac=0.01,
-    )
-    out["mae"] = float(np.mean(np.abs(y_pred - y_true)))
-    return out
+    mae = float(np.mean(np.abs(y_pred - y_true)))
+    rmse = float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
+
+    if len(y_pred) < 2:
+        return {"mae": mae, "rmse": rmse, "pearson": 0.0, "spearman": 0.0}
+
+    pearson = float(np.corrcoef(y_pred, y_true)[0, 1]) if np.std(y_pred) > 0 and np.std(y_true) > 0 else 0.0
+
+    # simple spearman via rank
+    yp_rank = np.argsort(np.argsort(y_pred))
+    yt_rank = np.argsort(np.argsort(y_true))
+    spearman = float(np.corrcoef(yp_rank, yt_rank)[0, 1]) if np.std(yp_rank) > 0 and np.std(yt_rank) > 0 else 0.0
+
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "pearson": pearson,
+        "spearman": spearman,
+    }
 
 def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
@@ -904,219 +893,64 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> Dict[str, float]:
         "ef10": float(ef10),
     }
 
-def compute_regression_ranking_metrics(y_true, y_pred, y_thr=12.1, top_frac=0.01):
-    import numpy as np
-    from scipy.stats import spearmanr, pearsonr
-    from sklearn.metrics import roc_auc_score, average_precision_score, mean_squared_error
-
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-
-    y_bin = (y_true >= y_thr).astype(int)
-
-    n = len(y_true)
-    k = max(1, int(np.ceil(n * top_frac)))
-
-    order = np.argsort(-y_pred)
-    top_idx = order[:k]
-
-    total_pos = y_bin.sum()
-    top_pos = y_bin[top_idx].sum()
-
-    pos_rate = total_pos / max(n, 1)
-    top_hit_rate = top_pos / k
-
-    recall_top = top_pos / max(total_pos, 1)
-    ef_top = top_hit_rate / max(pos_rate, 1e-12)
-
-    out = {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "spearman": float(spearmanr(y_true, y_pred).correlation),
-        "pearson": float(pearsonr(y_true, y_pred)[0]),
-        "recall_top1": float(recall_top),
-        "hit_rate_top1": float(top_hit_rate),
-        "ef_top1": float(ef_top),
-        "top1_k": int(k),
-        "top1_pos": int(top_pos),
-        "pos_rate": float(pos_rate),
-    }
-
-    if len(np.unique(y_bin)) == 2:
-        out["auroc"] = float(roc_auc_score(y_bin, y_pred))
-        out["ap"] = float(average_precision_score(y_bin, y_pred))
-    else:
-        out["auroc"] = float("nan")
-        out["ap"] = float("nan")
-
-    return out
-
 def compute_atom_res_contact_loss_from_aux(
     aux: dict,
     atom_contact_pairs,
     contact_topk: int = 8,
     neg_lambda: float = 0.3,
-    margin: float = 1.0,
-    hard_neg_k: int = 64,
-    debug: bool = True,
+    margin: float = 0.0,
 ):
-    import torch
-    import torch.nn.functional as F
-
     pair_map = aux["pair_map"].float()  # (B, Ll, Lp)
-    l_pad = aux["l_pad"]                # (B, Ll)
-    p_pad = aux["p_pad"]                # (B, Lp)
+    l_pad = aux["l_pad"]
+    p_pad = aux["p_pad"]
 
     valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)
 
     vals_valid = pair_map[valid]
     if vals_valid.numel() == 0:
-        if debug:
-            print("[contact debug] no valid pair_map values")
-        return {
-            "loss": pair_map.sum() * 0.0,
-            "pos_mean": 0.0,
-            "neg_mean": 0.0,
-            "gap": 0.0,
-        }
+        return pair_map.sum() * 0.0
+
     mean = vals_valid.mean().detach()
     std = vals_valid.std(unbiased=False).detach().clamp_min(1e-6)
     logits = (pair_map - mean) / std
 
     B, Ll, Lp = logits.shape
     losses = []
-    all_pos_vals = []
-    all_neg_vals = []
-
-    if debug:
-        print("\n[contact debug]")
-        print("pair_map shape:", tuple(pair_map.shape))
-        print("l valid:", (~l_pad).sum(dim=1).detach().cpu().tolist()[:8])
-        print("p valid:", (~p_pad).sum(dim=1).detach().cpu().tolist()[:8])
-        print("pairs example:", atom_contact_pairs[:2])
-        print("pair_map valid mean/std:",
-              float(vals_valid.mean().detach().cpu()),
-              float(vals_valid.std(unbiased=False).detach().cpu()))
 
     for b in range(B):
         pos_mask = torch.zeros((Ll, Lp), dtype=torch.bool, device=logits.device)
 
-        raw_pairs = atom_contact_pairs[b] if b < len(atom_contact_pairs) else []
-
-        kept_pairs = []
-        skipped_pairs = []
-
-        for ai, ri in raw_pairs:
-            ai = int(ai)
-            ri = int(ri)
-
-            reason = None
-            if ai < 0 or ri < 0:
-                reason = "negative_index"
-            elif ai >= Ll or ri >= Lp:
-                reason = "out_of_shape"
-            elif bool(l_pad[b, ai]):
-                reason = "ligand_pad"
-            elif bool(p_pad[b, ri]):
-                reason = "protein_pad"
-
-            if reason is not None:
-                skipped_pairs.append((ai, ri, reason))
+        for ai, ri in atom_contact_pairs[b]:
+            if ai < 0 or ri < 0 or ai >= Ll or ri >= Lp:
                 continue
-
+            if bool(l_pad[b, ai]) or bool(p_pad[b, ri]):
+                continue
             pos_mask[ai, ri] = True
-            kept_pairs.append((ai, ri))
 
         pos_mask = pos_mask & valid[b]
         neg_mask = valid[b] & (~pos_mask)
 
-        n_pos = int(pos_mask.sum().detach().cpu())
-        n_neg = int(neg_mask.sum().detach().cpu())
-
-        if debug and b < 4:
-            print(f"[b={b}] raw_pairs={len(raw_pairs)} kept={len(kept_pairs)} "
-                  f"pos={n_pos} neg={n_neg}")
-            print("  kept first:", kept_pairs[:10])
-            print("  skipped first:", skipped_pairs[:10])
-
-        if n_pos == 0:
+        if pos_mask.sum() == 0:
             continue
 
+        # contact pair は高くする
         pos_vals = logits[b][pos_mask]
+        k = min(int(contact_topk), pos_vals.numel())
+        pos_loss = F.softplus(-pos_vals.topk(k).values).mean()
+
+        # non-contact pair は正の値を罰する
         neg_vals = logits[b][neg_mask]
-
-        if debug and b < 4:
-            print("  pos mean/max/min:",
-                  float(pos_vals.mean().detach().cpu()),
-                  float(pos_vals.max().detach().cpu()),
-                  float(pos_vals.min().detach().cpu()))
-            if neg_vals.numel() > 0:
-                print("  neg mean/max/min:",
-                      float(neg_vals.mean().detach().cpu()),
-                      float(neg_vals.max().detach().cpu()),
-                      float(neg_vals.min().detach().cpu()))
-        gap = pos_vals.mean() - neg_vals.mean()
-        pos_loss = F.softplus(-pos_vals).mean()
-
         if neg_vals.numel() > 0:
-            k = min(int(hard_neg_k), neg_vals.numel())
-            hard_neg_vals = neg_vals.topk(k).values
-            neg_loss = F.softplus(hard_neg_vals).mean()
-
-            pos_ref = pos_vals.mean()
-            neg_ref = hard_neg_vals.mean()
-            rank_loss = F.softplus(margin - pos_ref + neg_ref)
+            neg_loss = F.softplus(neg_vals - margin).mean()
         else:
             neg_loss = pos_loss * 0.0
-            rank_loss = pos_loss * 0.0
 
-        rank_lambda = 0.2
-        one_loss = pos_loss + neg_lambda * neg_loss + rank_lambda * rank_loss
-        # one_loss = pos_loss + neg_lambda * neg_loss + rank_loss
-        losses.append(one_loss)
-        all_pos_vals.append(pos_vals.detach())
-        all_neg_vals.append(neg_vals.detach())
-
-        if debug and b < 4:
-            print("  loss parts:",
-                  "pos", float(pos_loss.detach().cpu()),
-                  "neg", float(neg_loss.detach().cpu()),
-                  "rank", float(rank_loss.detach().cpu()),
-                  "total", float(one_loss.detach().cpu()))
+        losses.append(pos_loss + neg_lambda * neg_loss)
 
     if not losses:
-        if debug:
-            print("[contact debug] no samples with positive contact pairs")
         return pair_map.sum() * 0.0
 
-    loss = torch.stack(losses).mean()
-
-    if not losses:
-        return {
-            "loss": pair_map.sum() * 0.0,
-            "pos_mean": 0.0,
-            "neg_mean": 0.0,
-            "gap": 0.0,
-        }
-
-    loss = torch.stack(losses).mean()
-
-    all_pos = torch.cat(all_pos_vals)
-    all_neg = torch.cat(all_neg_vals)
-
-    pos_mean = all_pos.mean()
-    neg_mean = all_neg.mean()
-    gap = pos_mean - neg_mean
-
-    if debug:
-        print("[contact debug] final loss:", float(loss.detach().cpu()))
-
-    return {
-        "loss": loss,
-        "pos_mean": pos_mean.detach(),
-        "neg_mean": neg_mean.detach(),
-        "gap": gap.detach(),
-    }
-
+    return torch.stack(losses).mean()
 
 # =========================================================
 # Train
@@ -1130,15 +964,13 @@ def train_one_epoch(
     scheduler=None,
     grad_clip: float = 1.0,
     attn_entropy_lambda: float = 0.0,
-    reg_lambda: float = 1.0,
-    cls_lambda: float = 0.0,
+    reg_lambda: float = 0.1,
     sym_lambda: float = 0.0,
     epoch=1,
     contact_lambda: float = 0.0,
     guide_loader: Optional[DataLoader] = None,
     guide_every: int = 1,
     contact_topk: int = 3,
-    task: str = "regression",
 ) -> Dict[str, float]:
 
     model.train()
@@ -1150,63 +982,65 @@ def train_one_epoch(
 
     losses = []
     losses_contact = []
-    losses_cls = []
-    losses_reg = []
-
-    contact_gap_hist = []
-    contact_pos_hist = []
-    contact_neg_hist = []
 
     use_amp = (device.type == "cuda")
+
     guide_iter = iter(guide_loader) if guide_loader is not None else None
+
     pbar = tqdm(loader, desc="train", leave=False)
+
+    def attention_symmetry_loss(attn_lp, attn_pl, p_pad, l_pad):
+        attn_pl_t = attn_pl.transpose(-1, -2)
+        diff = (attn_lp - attn_pl_t) ** 2
+
+        valid = (~l_pad).unsqueeze(1).unsqueeze(-1) & (~p_pad).unsqueeze(1).unsqueeze(2)
+        diff = diff.masked_fill(~valid, 0.0)
+
+        return diff.sum() / valid.float().sum().clamp_min(1.0)
 
     for step, batch in enumerate(pbar):
 
+        # =========================
+        # MAIN DTI BATCH
+        # =========================
         p_ids = batch.p_input_ids.to(device)
         p_msk = batch.p_attn_mask.to(device)
         l_ids = batch.l_ids.to(device)
         y_bin = batch.y_bin.to(device)
-        y_reg = batch.y_reg.to(device)
 
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+        if use_amp:
+            with (torch.autocast("cuda", dtype=torch.bfloat16)):
+                logit, yhat_reg, aux = model(
+                                            p_ids,
+                                            p_msk,
+                                            l_ids,
+                                            edge_index=batch.edge_index.to(device),
+                                            edge_batch=batch.edge_batch.to(device),
+                                            return_maps=False)
+                loss_cls = bce(logit, y_bin)
+                loss = loss_cls
+        else:
             logit, yhat_reg, aux = model(
-                p_ids,
-                p_msk,
-                l_ids,
-                edge_index=batch.edge_index.to(device),
-                edge_batch=batch.edge_batch.to(device),
-                return_maps=False,
-            )
-
+                                        p_ids,
+                                        p_msk,
+                                        l_ids,
+                                        edge_index=batch.edge_index.to(device),
+                                        edge_batch=batch.edge_batch.to(device),
+                                        return_maps=False)
             loss_cls = bce(logit, y_bin)
-            loss_reg = reg_loss_fn(yhat_reg, y_reg)
+            loss = loss_cls
 
-            if task == "classification":
-                # pure classification
-                loss_main = loss_cls
-
-            elif task == "regression":
-                # pure regression
-                loss_main = loss_reg
-
-            elif task == "hybrid":
-                # regression-main hybrid
-                loss_main = reg_lambda * loss_reg + cls_lambda * loss_cls
-
-            else:
-                raise ValueError(
-                    f"Unknown task={task}. Use classification, regression, or hybrid."
-                )
-
+        # =========================
+        # GUIDE CONTACT BATCH
+        # =========================
         loss_contact = torch.tensor(0.0, device=device)
 
         if (
-            contact_lambda > 0.0
-            and guide_loader is not None
-            and step % guide_every == 0
+                contact_lambda > 0.0
+                and guide_loader is not None
+                and step % guide_every == 0
         ):
             try:
                 g = next(guide_iter)
@@ -1218,7 +1052,22 @@ def train_one_epoch(
             gp_msk = g.p_attn_mask.to(device)
             gl_ids = g.l_ids.to(device)
 
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            if use_amp:
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    _, _, g_aux = model(
+                        gp_ids,
+                        gp_msk,
+                        gl_ids,
+                        edge_index=g.edge_index.to(device),
+                        edge_batch=g.edge_batch.to(device),
+                        return_maps=True
+                    )
+                    loss_contact = compute_atom_res_contact_loss_from_aux(
+                        g_aux,
+                        g.atom_contact_pairs,
+                        contact_topk=int(contact_topk),
+                    )
+            else:
                 _, _, g_aux = model(
                     gp_ids,
                     gp_msk,
@@ -1227,24 +1076,16 @@ def train_one_epoch(
                     edge_batch=g.edge_batch.to(device),
                     return_maps=True,
                 )
-
-                contact_out = compute_atom_res_contact_loss_from_aux(
+                loss_contact = compute_atom_res_contact_loss_from_aux(
                     g_aux,
                     g.atom_contact_pairs,
                     contact_topk=int(contact_topk),
-                    neg_lambda=0.05,
-                    margin=0.2,
-                    hard_neg_k=16,
-                    debug=(step < 3),
                 )
 
-                loss_contact = contact_out["loss"]
-
-            contact_gap_hist.append(float(contact_out["gap"]))
-            contact_pos_hist.append(float(contact_out["pos_mean"]))
-            contact_neg_hist.append(float(contact_out["neg_mean"]))
-
-        loss = loss_main + contact_lambda * loss_contact
+        # =========================
+        # TOTAL LOSS
+        # =========================
+        loss = loss + contact_lambda * loss_contact
 
         loss.backward()
 
@@ -1252,30 +1093,20 @@ def train_one_epoch(
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
 
         optimizer.step()
-
         if scheduler is not None:
             scheduler.step()
 
-        losses.append(float(loss.item()))
-        losses_contact.append(float(loss_contact.item()))
-        losses_cls.append(float(loss_cls.item()))
-        losses_reg.append(float(loss_reg.item()))
+        losses.append(loss.item())
+        losses_contact.append(loss_contact.item())
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
-            cls=f"{loss_cls.item():.4f}",
-            reg=f"{loss_reg.item():.4f}",
-            contact=f"{loss_contact.item():.4f}",
+            contact=f"{loss_contact.item():.4f}"
         )
 
     return {
         "loss": float(np.mean(losses)),
-        "loss_cls": float(np.mean(losses_cls)),
-        "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
-        "contact_gap": float(np.mean(contact_gap_hist)) if contact_gap_hist else 0.0,
-        "contact_pos_mean": float(np.mean(contact_pos_hist)) if contact_pos_hist else 0.0,
-        "contact_neg_mean": float(np.mean(contact_neg_hist)) if contact_neg_hist else 0.0,
     }
 
 # =========================================================
@@ -1790,15 +1621,15 @@ class DualStreamDTIClassifier(nn.Module):
             # ligand atom ごとに protein 軸で正規化
             lp_score = masked_zscore(lp_score, valid_h, dim=-1)
 
-            # 縦縞除去はいったんOFF
-            # col_mean = (lp_score * valid_h).sum(dim=-2, keepdim=True) / \
-            #            valid_h.float().sum(dim=-2, keepdim=True).clamp_min(1.0)
-            # lp_score = lp_score - col_mean
+            # 縦縞除去: protein token ごとに ligand 軸方向の平均を引く
+            col_mean = (lp_score * valid_h).sum(dim=-2, keepdim=True) / \
+                       valid_h.float().sum(dim=-2, keepdim=True).clamp_min(1.0)
 
+            lp_score = lp_score - col_mean
             lp_score = lp_score.masked_fill(~valid_h, 0.0)
 
-            # ReLUせず、contact loss 用に連続値を残す
-            pair_map = lp_score
+            # 局所ピークだけ残す
+            pair_map = torch.relu(lp_score)
 
         elif self.pl_lp_overlap == "pl":
             pl_score = masked_zscore(pl_score, valid_h, dim=-2)
@@ -1882,13 +1713,12 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
-        # graph smoothing は hotspot を潰す可能性があるので一旦 OFF
         pair_map = ligand_adj_smooth_pairmap(
             pair_map=pair_map,
             edge_index=edge_index,
             edge_batch=edge_batch,
             valid_h=valid_h,
-            alpha=0.0,
+            alpha=0.3,
         )
 
 
@@ -1910,9 +1740,9 @@ class DualStreamDTIClassifier(nn.Module):
         ], dim=-1)  # (B,Ll,Lp,4D)
 
         score = pair_map.masked_fill(~valid, 0.0)
-        score = torch.sigmoid(score)
-        score = score.masked_fill(~valid, 0.0)
+        score = torch.relu(score)
         score = score + valid.float() * 1e-6
+        score = score.masked_fill(~valid, 0.0)
         score = score.unsqueeze(-1)
 
         weighted = pair_feat * score
@@ -2093,6 +1923,7 @@ def main():
     ap.add_argument("--min_lr", type=float, default=1e-6)
     ap.add_argument("--dual_stream_layers", type=int, default=2)
     ap.add_argument("--pl_lp_overlap", type=str, default="both", choices=["lp", "pl", "both"])
+    ap.add_argument("--select_on", type=str, default="ap", choices=["ap", "auroc", "f1"])
     ap.add_argument("--protein_token_dropout", type=float, default=0.10)
     ap.add_argument("--llrd", action="store_true")
     ap.add_argument("--llrd_decay", type=float, default=0.95)
@@ -2111,14 +1942,6 @@ def main():
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
-    ap.add_argument("--task", type=str, default="classification",
-                        choices=["classification", "regression", "hybrid"])
-
-    ap.add_argument("--cls_lambda", type=float, default=1.0)
-
-    ap.add_argument("--select_on", type=str, default="auroc",
-                        choices=["auroc", "ap", "spearman", "pearson", "rmse",
-                                 "ef1", "ef_top1", "recall_top1", "hit_rate_top1"])
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2420,10 +2243,7 @@ def main():
         )
         return
 
-    best = {
-        "_score": -1e9,
-        "epoch": -1,
-    }
+    best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
 
     for ep in range(1, args.epochs + 1):
         qk_save_dir = os.path.join(args.out_dir, "qk_maps")
@@ -2432,6 +2252,7 @@ def main():
             epoch_train_ds = fixed_train_ds
             train_loader = fixed_train_loader
         else:
+            # Minimal shard-mode support
             epoch_shards = pick_epoch_shards_random(
                 shard_paths=train_shard_paths,
                 train_size=args.train_size,
@@ -2477,78 +2298,27 @@ def main():
             guide_every=int(args.guide_every),
             contact_topk=int(args.contact_topk),
             epoch=ep,
-            task=args.task,
-            cls_lambda=float(args.cls_lambda),
         )
 
-        # =========================
-        # PREDICT / METRICS
-        # =========================
         yhat_tr, yb_tr, yhatr_tr, yr_tr = predict(model, train_loader, device)
         tr_m = eval_metrics(yhat_tr, yb_tr)
-        tr_r = eval_reg_metrics(yhatr_tr, yr_tr, y_thr=args.y_thr)
+        tr_r = eval_reg_metrics(yhatr_tr, yr_tr)
 
         yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
-        v_r = eval_reg_metrics(yhatr_v, yr_v, y_thr=args.y_thr)
+        v_r = eval_reg_metrics(yhatr_v, yr_v)
 
-        tr_all = {}
-        tr_all.update(tr_m)
-        tr_all.update(tr_r)
-
-        v_all = {}
-        v_all.update(v_m)
-        v_all.update(v_r)
-
-        test_all = None
-        if test_loader is not None:
-            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
-            test_m = eval_metrics(yhat_t, yb_t)
-            test_r = eval_reg_metrics(yhatr_t, yr_t, y_thr=args.y_thr)
-
-            test_all = {}
-            test_all.update(test_m)
-            test_all.update(test_r)
-
-        final_all = None
-        if final_eval_loader is not None:
-            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
-            final_m = eval_metrics(yhat_f, yb_f)
-            final_r = eval_reg_metrics(yhatr_f, yr_f, y_thr=args.y_thr)
-
-            final_all = {}
-            final_all.update(final_m)
-            final_all.update(final_r)
-
-        # =========================
-        # BEST CHECKPOINT SELECTION
-        # =========================
-        key = args.select_on
-        if key not in v_all:
-            raise KeyError(
-                f"--select_on {key} not found in valid metrics. "
-                f"Available keys: {sorted(v_all.keys())}"
+        if float(v_m[args.select_on]) > float(best[args.select_on]):
+            best.update(
+                {
+                    "ap": float(v_m["ap"]),
+                    "auroc": float(v_m["auroc"]),
+                    "f1": float(v_m["f1"]),
+                    "epoch": ep,
+                }
             )
-
-        score = float(v_all[key])
-        if key == "rmse":
-            score = -score
-
-        if score > float(best.get("_score", -1e9)):
-            best = dict(v_all)
-            best["_score"] = score
-            best["select_on"] = key
-            best["epoch"] = ep
-
             save_path = os.path.join(args.out_dir, "best.pt")
-            save_dti_checkpoint(
-                save_path,
-                model,
-                args,
-                lig_enc,
-                epoch=ep,
-                best=best,
-            )
+            save_dti_checkpoint(save_path, model, args, lig_enc, epoch=ep, best=best)
             print("  saved:", save_path)
 
         save_dti_checkpoint(
@@ -2560,81 +2330,63 @@ def main():
             best=best,
         )
 
-        # =========================
-        # SAVE EPOCH JSON
-        # =========================
-        epoch_obj = {
-            "epoch": ep,
-            "train_loss": tr_stat,
-            "train": tr_all,
-            "valid": v_all,
-            "test": test_all,
-            "final": final_all,
-            "best": best,
-            "select_on": args.select_on,
-            "train_y_reg_mean": train_y_mean,
-            "train_y_reg_std": train_y_std,
-        }
+        test_m, test_r = None, None
+        if test_loader is not None:
+            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
+            test_m = eval_metrics(yhat_t, yb_t)
+            test_r = eval_reg_metrics(yhatr_t, yr_t)
+
+        final_m, final_r = None, None
+        if final_eval_loader is not None:
+            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
+            final_m = eval_metrics(yhat_f, yb_f)
+            final_r = eval_reg_metrics(yhatr_f, yr_f)
 
         save_json(
             os.path.join(args.out_dir, f"epoch_{ep:03d}.json"),
-            epoch_obj,
+            {
+                "epoch": ep,
+                "train_stat": tr_stat,
+                "train_metrics": tr_m,
+                "train_reg_metrics": tr_r,
+                "valid_metrics": v_m,
+                "valid_reg_metrics": v_r,
+                "final_eval_metrics": final_m,
+                "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
+                "test_metrics": test_m,
+                "test_reg_metrics": test_r if test_loader is not None else None,
+                "pos_weight": pos_weight,
+                "train_y_reg_mean": train_y_mean,
+                "train_y_reg_std": train_y_std,
+            },
         )
 
-        # =========================
-        # PRINT
-        # =========================
         print(f"\n===== Epoch {ep} =====")
         print(
             "[train]",
-            f"AUC={tr_all['auroc']:.4f}",
-            f"AP={tr_all['ap']:.4f}",
-            f"F1={tr_all['f1']:.4f}",
-            f"RMSE={tr_all['rmse']:.4f}",
-            f"SP={tr_all['spearman']:.4f}",
-            f"EF1={tr_all.get('ef1', 0.0):.3f}",
-            f"R@1={tr_all.get('recall_top1', 0.0):.4f}",
-            f"Hit@1={tr_all.get('hit_rate_top1', 0.0):.4f}",
+            f"AUC={tr_m['auroc']:.4f}",
+            f"AP={tr_m['ap']:.4f}",
+            f"F1={tr_m['f1']:.4f}",
+            f"RMSE={tr_r['rmse']:.4f}",
+            f"SP={tr_r['spearman']:.4f}",
         )
-
         print(
             "[valid]",
-            f"AUC={v_all['auroc']:.4f}",
-            f"AP={v_all['ap']:.4f}",
-            f"F1={v_all['f1']:.4f}",
-            f"RMSE={v_all['rmse']:.4f}",
-            f"SP={v_all['spearman']:.4f}",
-            f"EF1={v_all.get('ef1', 0.0):.3f}",
-            f"R@1={v_all.get('recall_top1', 0.0):.4f}",
-            f"Hit@1={v_all.get('hit_rate_top1', 0.0):.4f}",
+            f"AUC={v_m['auroc']:.4f}",
+            f"AP={v_m['ap']:.4f}",
+            f"F1={v_m['f1']:.4f}",
+            f"RMSE={v_r['rmse']:.4f}",
+            f"SP={v_r['spearman']:.4f}",
         )
-
-        if test_all is not None:
-            print(
-                "[test ]",
-                f"AUC={test_all['auroc']:.4f}",
-                f"AP={test_all['ap']:.4f}",
-                f"F1={test_all['f1']:.4f}",
-                f"RMSE={test_all['rmse']:.4f}",
-                f"SP={test_all['spearman']:.4f}",
-                f"EF1={test_all.get('ef1', 0.0):.3f}",
-                f"R@1={test_all.get('recall_top1', 0.0):.4f}",
-                f"Hit@1={test_all.get('hit_rate_top1', 0.0):.4f}",
-            )
-
-        if final_all is not None:
+        if final_m is not None:
             print(
                 "[final]",
-                f"AUC={final_all['auroc']:.4f}",
-                f"AP={final_all['ap']:.4f}",
-                f"F1={final_all['f1']:.4f}",
-                f"RMSE={final_all['rmse']:.4f}",
-                f"SP={final_all['spearman']:.4f}",
-                f"EF1={final_all.get('ef1', 0.0):.3f}",
-                f"EF5={final_all.get('ef5', 0.0):.3f}",
-                f"EF10={final_all.get('ef10', 0.0):.3f}",
-                f"R@1={final_all.get('recall_top1', 0.0):.4f}",
-                f"Hit@1={final_all.get('hit_rate_top1', 0.0):.4f}",
+                f"AUC={final_m['auroc']:.4f}",
+                f"AP={final_m['ap']:.4f}",
+                f"F1={final_m['f1']:.4f}",
+                f"EF1={final_m['ef1']:.3f}",
+                f"EF5={final_m['ef5']:.3f}",
+                f"EF10={final_m['ef10']:.3f}",
             )
 
         def find_pos_neg_indices(batch):
@@ -2653,12 +2405,21 @@ def main():
 
             return pos_idx, neg_idx
 
+        # -----------------------------
+        # epoch loop 内
+        # -----------------------------
+        qk_save_dir = os.path.join(args.out_dir, "qk_maps")
+
+        # valid loader の最初の batch を取得
         vis_batch = next(iter(valid_loader))
+
         pos_idx, neg_idx = find_pos_neg_indices(vis_batch)
 
         targets = []
+
         if pos_idx is not None:
             targets.append(("pos", pos_idx))
+
         if neg_idx is not None:
             targets.append(("neg", neg_idx))
 
@@ -2676,7 +2437,6 @@ def main():
 
     print("BEST:", best)
     save_json(os.path.join(args.out_dir, "best.json"), best)
-
 
 if __name__ == "__main__":
     main()
