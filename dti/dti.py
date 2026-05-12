@@ -153,6 +153,9 @@ class Batch:
     l_ids: torch.Tensor
     y_bin: torch.Tensor
     y_reg: Optional[torch.Tensor]
+    y_raw: Optional[torch.Tensor] = None
+    protein_id: Optional[list] = None
+    ligand_id: Optional[list] = None
     edge_index: Optional[torch.Tensor] = None
     edge_batch: Optional[torch.Tensor] = None
     edge_attr: Optional[torch.Tensor] = None
@@ -272,7 +275,10 @@ class DTIDataset(Dataset):
             "edge_index": edge_index,
             "edge_attr": edge_attr,
             "y_bin": float(row["y_bin"]),
+            "y_raw": float(row["y"]),
             "y_reg": None if row["y_reg"] is None else float(row["y_reg"]),
+            "protein_id": row.get("protein_id", row.get("target_id", row.get("seq", ""))),
+            "ligand_id": row.get("ligand_id", row.get("compound_id", row.get("smiles", row.get("lig_text", "")))),
             "contact_mask": contact_mask,
             "atom_contact_pairs": atom_contact_pairs,
         }
@@ -365,6 +371,10 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
             pairs = []
         atom_contact_pairs.append(pairs)
 
+    y_raw = torch.tensor([float(s["y_raw"]) for s in samples], dtype=torch.float32)
+    protein_id = [str(s.get("protein_id", "")) for s in samples]
+    ligand_id = [str(s.get("ligand_id", "")) for s in samples]
+
     return Batch(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
@@ -376,6 +386,9 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         edge_attr=edge_attr,
         contact_mask=contact_mask,
         atom_contact_pairs=atom_contact_pairs,
+        y_raw=y_raw,
+        protein_id=protein_id,
+        ligand_id=ligand_id,
     )
 
 # =========================================================
@@ -751,6 +764,9 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     prob_list, ybin_list = [], []
     yreg_pred_list, yreg_true_list = [], []
     use_amp = (device.type == "cuda")
+    prob_list, ybin_list = [], []
+    yraw_list = []
+    pid_list, lid_list = [], []
 
     with torch.inference_mode():
         for batch in loader:
@@ -780,6 +796,9 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
 
             prob_list.append(prob.detach().float().cpu().numpy())
             ybin_list.append(batch.y_bin.detach().cpu().numpy())
+            yraw_list.append(batch.y_raw.detach().cpu().numpy())
+            pid_list.extend(batch.protein_id)
+            lid_list.extend(batch.ligand_id)
             if (batch.y_reg is not None) and (yhat_reg is not None):
                 yreg_true_list.append(batch.y_reg.detach().cpu().numpy())
                 yreg_pred_list.append(yhat_reg.detach().float().cpu().numpy())
@@ -788,8 +807,85 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
     y_bin = np.concatenate(ybin_list, axis=0) if ybin_list else np.array([], dtype=np.float64)
     y_reg_pred = np.concatenate(yreg_pred_list, axis=0) if yreg_pred_list else np.array([], dtype=np.float64)
     y_reg_true = np.concatenate(yreg_true_list, axis=0) if yreg_true_list else np.array([], dtype=np.float64)
-    return y_prob, y_bin, y_reg_pred, y_reg_true
+    y_raw = np.concatenate(yraw_list, axis=0) if yraw_list else np.array([], dtype=np.float64)
+    return y_prob, y_bin, y_reg_pred, y_reg_true, y_raw, pid_list, lid_list
 
+def eval_group_ranking_metrics(
+    score: np.ndarray,
+    y_true: np.ndarray,
+    protein_ids: list,
+    ligand_ids: list | None = None,
+    top_fracs=(0.01, 0.05, 0.10),
+) -> dict:
+    from collections import defaultdict
+    import numpy as np
+    import math
+
+    groups = defaultdict(list)
+    for i, pid in enumerate(protein_ids):
+        groups[str(pid)].append(i)
+
+    def dcg(rels):
+        rels = np.asarray(rels, dtype=np.float64)
+        return float(np.sum((2.0 ** rels - 1.0) / np.log2(np.arange(len(rels)) + 2.0)))
+
+    out = {
+        "n_groups": 0,
+        "top1_exact": 0.0,
+        "best_in_top1pct": 0.0,
+        "best_in_top5pct": 0.0,
+        "best_in_top10pct": 0.0,
+        "ndcg1": 0.0,
+        "ndcg5": 0.0,
+        "ndcg10": 0.0,
+    }
+
+    vals = {k: [] for k in out if k != "n_groups"}
+
+    for pid, idxs in groups.items():
+        if len(idxs) < 2:
+            continue
+
+        idxs = np.asarray(idxs, dtype=np.int64)
+        s = np.asarray(score[idxs], dtype=np.float64)
+        y = np.asarray(y_true[idxs], dtype=np.float64)
+
+        if np.all(~np.isfinite(y)) or np.all(~np.isfinite(s)):
+            continue
+
+        order_pred = np.argsort(-s)
+        order_true = np.argsort(-y)
+
+        true_best_local = int(order_true[0])
+        pred_best_local = int(order_pred[0])
+
+        vals["top1_exact"].append(float(pred_best_local == true_best_local))
+
+        n = len(idxs)
+        for frac, name in [
+            (0.01, "best_in_top1pct"),
+            (0.05, "best_in_top5pct"),
+            (0.10, "best_in_top10pct"),
+        ]:
+            k = max(1, int(math.ceil(n * frac)))
+            vals[name].append(float(true_best_local in set(order_pred[:k])))
+
+        # NDCG: yをそのまま使うと指数が巨大化するので group 内 min-shift
+        rel = y - np.nanmin(y)
+
+        for k, name in [(1, "ndcg1"), (5, "ndcg5"), (10, "ndcg10")]:
+            kk = min(k, n)
+            pred_rels = rel[order_pred[:kk]]
+            ideal_rels = rel[order_true[:kk]]
+            denom = dcg(ideal_rels)
+            vals[name].append(float(dcg(pred_rels) / denom) if denom > 0 else 0.0)
+
+    out["n_groups"] = int(len(vals["top1_exact"]))
+
+    for k, v in vals.items():
+        out[k] = float(np.mean(v)) if len(v) else 0.0
+
+    return out
 
 def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
     if y_pred.size == 0:
@@ -1168,7 +1264,7 @@ def save_json(path: str, obj: dict) -> None:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: PretrainedLigandEncoder, epoch: int, best: dict) -> None:
+def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: VQAtomGraphEncoder, epoch: int, best: dict) -> None:
     torch.save(
         {
             "epoch": epoch,
@@ -1919,7 +2015,6 @@ def main():
     ap.add_argument("--train_csv", type=str, default=None)
     ap.add_argument("--valid_csv", type=str, required=True)
     ap.add_argument("--final_eval_csv", type=str, default=None)
-    ap.add_argument("--test_csv", type=str, default=None)
     ap.add_argument("--train_size", type=int, default=None)
     ap.add_argument("--ligand_token_dropout", type=float, default=0.10)
     ap.add_argument("--attn_smooth_eps", type=float, default=0.0)
@@ -2222,21 +2317,6 @@ def main():
 
         print(f"[guide] loaded {len(guide_ds)} rows from {args.guide_csv} split={args.guide_split}")
 
-    test_loader = None
-    if args.test_csv:
-        test_ds = DTIDataset(
-            csv_path=args.test_csv,
-            y_thr=float(args.y_thr),
-            drop_missing_y=True,
-            lig_cls_id=lig_enc.cls_id,
-            y_reg_mean=train_y_mean,
-            y_reg_std=train_y_std,
-            ligand_input_type=args.ligand_input_type,
-            smiles_tokenizer=smiles_tokenizer,
-            smiles_col=args.smiles_col,
-        )
-        test_loader = make_loader(test_ds, shuffle=False)
-
     optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
     scheduler = None
     if optimizer is not None:
@@ -2270,23 +2350,13 @@ def main():
         v_r = eval_reg_metrics(yhatr_v, yr_v)
         print("[VALID]", v_m)
 
-        test_m, test_r = None, None
-        if test_loader is not None:
-            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
-            test_m = eval_metrics(yhat_t, yb_t)
-            test_r = eval_reg_metrics(yhatr_t, yr_t)
-            print("[TEST ]", test_m)
-
         save_json(
             os.path.join(args.out_dir, "eval_only.json"),
             {
                 "mode": "eval_only",
                 "valid": v_m,
                 "valid_reg": v_r,
-                "test": test_m,
-                "test_reg": test_r,
                 "valid_csv": args.valid_csv,
-                "test_csv": args.test_csv,
                 "dti_ckpt": args.dti_ckpt,
                 "train_y_reg_mean": train_y_mean,
                 "train_y_reg_std": train_y_std,
@@ -2351,13 +2421,15 @@ def main():
             epoch=ep,
         )
 
-        yhat_tr, yb_tr, yhatr_tr, yr_tr = predict(model, train_loader, device)
+        yhat_tr, yb_tr, yhatr_tr, yr_tr, yraw_tr, pid_tr, lid_tr = predict(model, train_loader, device)
         tr_m = eval_metrics(yhat_tr, yb_tr)
         tr_r = eval_reg_metrics(yhatr_tr, yr_tr)
+        tr_rank = eval_group_ranking_metrics(yhat_tr, yraw_tr, pid_tr, lid_tr)
 
-        yhat_v, yb_v, yhatr_v, yr_v = predict(model, valid_loader, device)
+        yhat_v, yb_v, yhatr_v, yr_v, yraw_v, pid_v, lid_v = predict(model, valid_loader, device)
         v_m = eval_metrics(yhat_v, yb_v)
         v_r = eval_reg_metrics(yhatr_v, yr_v)
+        v_rank = eval_group_ranking_metrics(yhat_v, yraw_v, pid_v, lid_v)
 
         if float(v_m[args.select_on]) > float(best[args.select_on]):
             best.update(
@@ -2381,17 +2453,12 @@ def main():
             best=best,
         )
 
-        test_m, test_r = None, None
-        if test_loader is not None:
-            yhat_t, yb_t, yhatr_t, yr_t = predict(model, test_loader, device)
-            test_m = eval_metrics(yhat_t, yb_t)
-            test_r = eval_reg_metrics(yhatr_t, yr_t)
-
         final_m, final_r = None, None
         if final_eval_loader is not None:
-            yhat_f, yb_f, yhatr_f, yr_f = predict(model, final_eval_loader, device)
+            yhat_f, yb_f, yhatr_f, yr_f, yraw_f, pid_f, lid_f = predict(model, final_eval_loader, device)
             final_m = eval_metrics(yhat_f, yb_f)
             final_r = eval_reg_metrics(yhatr_f, yr_f)
+            final_rank = eval_group_ranking_metrics(yhat_f, yraw_f, pid_f, lid_f)
 
         save_json(
             os.path.join(args.out_dir, f"epoch_{ep:03d}.json"),
@@ -2404,11 +2471,12 @@ def main():
                 "valid_reg_metrics": v_r,
                 "final_eval_metrics": final_m,
                 "final_eval_reg_metrics": final_r if final_eval_loader is not None else None,
-                "test_metrics": test_m,
-                "test_reg_metrics": test_r if test_loader is not None else None,
                 "pos_weight": pos_weight,
                 "train_y_reg_mean": train_y_mean,
                 "train_y_reg_std": train_y_std,
+                "train_rank_metrics": tr_rank,
+                "valid_rank_metrics": v_rank,
+                "final_eval_rank_metrics": final_rank if final_eval_loader is not None else None,
             },
         )
 
@@ -2429,6 +2497,12 @@ def main():
             f"RMSE={v_r['rmse']:.4f}",
             f"SP={v_r['spearman']:.4f}",
         )
+        print(
+            "[valid-rank]",
+            f"Top1Exact={v_rank['top1_exact']:.4f}",
+            f"Best@1%={v_rank['best_in_top1pct']:.4f}",
+            f"NDCG10={v_rank['ndcg10']:.4f}",
+        )
         if final_m is not None:
             print(
                 "[final]",
@@ -2439,7 +2513,13 @@ def main():
                 f"EF5={final_m['ef5']:.3f}",
                 f"EF10={final_m['ef10']:.3f}",
             )
-
+            print(
+                "[final-rank]",
+                f"Top1Exact={final_rank['top1_exact']:.4f}",
+                f"Best@1%={final_rank['best_in_top1pct']:.4f}",
+                f"Best@5%={final_rank['best_in_top5pct']:.4f}",
+                f"NDCG10={final_rank['ndcg10']:.4f}",
+            )
         def find_pos_neg_indices(batch):
             y = batch.y_bin.detach().cpu().numpy()
 
