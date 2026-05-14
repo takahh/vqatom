@@ -161,6 +161,7 @@ class Batch:
     edge_attr: Optional[torch.Tensor] = None
     contact_mask: Optional[torch.Tensor] = None
     atom_contact_pairs: Optional[list] = None
+    protein_group: Optional[torch.Tensor] = None
 
 class DTIDataset(Dataset):
     def __init__(
@@ -375,6 +376,15 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
     protein_id = [str(s.get("protein_id", "")) for s in samples]
     ligand_id = [str(s.get("ligand_id", "")) for s in samples]
 
+    pid_to_gid = {}
+    protein_group = []
+    for pid in protein_id:
+        if pid not in pid_to_gid:
+            pid_to_gid[pid] = len(pid_to_gid)
+        protein_group.append(pid_to_gid[pid])
+
+    protein_group = torch.tensor(protein_group, dtype=torch.long)
+
     return Batch(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
@@ -389,6 +399,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         y_raw=y_raw,
         protein_id=protein_id,
         ligand_id=ligand_id,
+        protein_group=protein_group,
     )
 
 # =========================================================
@@ -1020,6 +1031,48 @@ def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> dict[str, float] | di
         "r10": float(r10),
     }
 
+def pairwise_rank_loss(pred, y, group_ids, margin=0.0):
+    losses = []
+    for g in group_ids.unique():
+        m = group_ids == g
+        if m.sum() < 2:
+            continue
+        p = pred[m]
+        t = y[m]
+
+        diff_y = t[:, None] - t[None, :]
+        diff_p = p[:, None] - p[None, :]
+
+        pos = diff_y > 0.1  # 小さい差は無視
+        if pos.sum() == 0:
+            continue
+
+        loss = torch.relu(margin - diff_p[pos]).mean()
+        losses.append(loss)
+
+    if not losses:
+        return pred.new_tensor(0.0)
+    return torch.stack(losses).mean()
+
+def listwise_rank_loss(pred, y, group_ids, tau=1.0):
+    losses = []
+    for g in group_ids.unique():
+        m = group_ids == g
+        if m.sum() < 2:
+            continue
+
+        p = pred[m] / tau
+        t = y[m]
+
+        target = torch.softmax(t, dim=0)
+        logp = torch.log_softmax(p, dim=0)
+        losses.append(-(target * logp).sum())
+
+    if not losses:
+        return pred.new_tensor(0.0)
+    return torch.stack(losses).mean()
+
+
 def compute_atom_res_contact_loss_from_aux(
     aux: dict,
     atom_contact_pairs,
@@ -1098,6 +1151,10 @@ def train_one_epoch(
     guide_loader: Optional[DataLoader] = None,
     guide_every: int = 1,
     contact_topk: int = 3,
+    rank_lambda: float = 0.0,
+    rank_loss: str = "none",
+    rank_margin: float = 0.0,
+    rank_tau: float = 1.0,
 ) -> Dict[str, float]:
 
     model.train()
@@ -1111,6 +1168,7 @@ def train_one_epoch(
     losses_contact = []
     losses_cls = []
     losses_reg = []
+    losses_rank = []
 
     use_amp = (device.type == "cuda")
 
@@ -1157,6 +1215,47 @@ def train_one_epoch(
                     loss_reg = torch.tensor(0.0, device=device)
 
                 loss = loss_cls + float(reg_lambda) * loss_reg
+
+                # ranking loss
+                loss_rank = torch.tensor(0.0, device=device)
+
+                if float(rank_lambda) > 0.0 and rank_loss != "none" and batch.y_reg is not None:
+                    y_reg = batch.y_reg.to(device)
+                    group_ids = batch.protein_group.to(device)
+
+                    # affinity ranking なので yhat_reg を使う
+                    rank_score = yhat_reg if yhat_reg is not None else logit
+
+                    if rank_loss == "pairwise":
+                        loss_rank = pairwise_rank_loss(
+                            rank_score,
+                            y_reg,
+                            group_ids,
+                            margin=float(rank_margin),
+                        )
+                    elif rank_loss == "listwise":
+                        loss_rank = listwise_rank_loss(
+                            rank_score,
+                            y_reg,
+                            group_ids,
+                            tau=float(rank_tau),
+                        )
+                    elif rank_loss == "both":
+                        loss_pair = pairwise_rank_loss(
+                            rank_score,
+                            y_reg,
+                            group_ids,
+                            margin=float(rank_margin),
+                        )
+                        loss_list = listwise_rank_loss(
+                            rank_score,
+                            y_reg,
+                            group_ids,
+                            tau=float(rank_tau),
+                        )
+                        loss_rank = loss_pair + loss_list
+
+                loss = loss + float(rank_lambda) * loss_rank
         else:
             logit, yhat_reg, aux = model(
                                         p_ids,
@@ -1174,6 +1273,47 @@ def train_one_epoch(
                 loss_reg = torch.tensor(0.0, device=device)
 
             loss = loss_cls + float(reg_lambda) * loss_reg
+
+            # ranking loss
+            loss_rank = torch.tensor(0.0, device=device)
+
+            if float(rank_lambda) > 0.0 and rank_loss != "none" and batch.y_reg is not None:
+                y_reg = batch.y_reg.to(device)
+                group_ids = batch.protein_group.to(device)
+
+                # affinity ranking なので yhat_reg を使う
+                rank_score = yhat_reg if yhat_reg is not None else logit
+
+                if rank_loss == "pairwise":
+                    loss_rank = pairwise_rank_loss(
+                        rank_score,
+                        y_reg,
+                        group_ids,
+                        margin=float(rank_margin),
+                    )
+                elif rank_loss == "listwise":
+                    loss_rank = listwise_rank_loss(
+                        rank_score,
+                        y_reg,
+                        group_ids,
+                        tau=float(rank_tau),
+                    )
+                elif rank_loss == "both":
+                    loss_pair = pairwise_rank_loss(
+                        rank_score,
+                        y_reg,
+                        group_ids,
+                        margin=float(rank_margin),
+                    )
+                    loss_list = listwise_rank_loss(
+                        rank_score,
+                        y_reg,
+                        group_ids,
+                        tau=float(rank_tau),
+                    )
+                    loss_rank = loss_pair + loss_list
+
+            loss = loss + float(rank_lambda) * loss_rank
 
         # =========================
         # GUIDE CONTACT BATCH
@@ -1243,6 +1383,7 @@ def train_one_epoch(
         losses_contact.append(loss_contact.item())
         losses_cls.append(float(loss_cls.item()))
         losses_reg.append(float(loss_reg.item()))
+        losses_rank.append(float(loss_rank.item()))
 
         pbar.set_postfix(
             loss=f"{loss.item():.4f}",
@@ -1254,6 +1395,7 @@ def train_one_epoch(
         "loss_cls": float(np.mean(losses_cls)),
         "loss_reg": float(np.mean(losses_reg)),
         "loss_contact": float(np.mean(losses_contact)),
+        "loss_rank": float(np.mean(losses_rank)),
     }
 
 # =========================================================
@@ -2038,6 +2180,15 @@ def main():
         default="vqatom",
         choices=["vqatom", "smiles"],
     )
+    ap.add_argument("--rank_lambda", type=float, default=0.0)
+    ap.add_argument(
+        "--rank_loss",
+        type=str,
+        default="none",
+        choices=["none", "pairwise", "listwise", "both"],
+    )
+    ap.add_argument("--rank_margin", type=float, default=0.0)
+    ap.add_argument("--rank_tau", type=float, default=1.0)
     ap.add_argument("--smiles_vocab_path", type=str, default=None)
     ap.add_argument("--smiles_col", type=str, default="smiles")
     ap.add_argument("--esm_model", type=str, default="facebook/esm2_t33_650M_UR50D")
@@ -2419,6 +2570,10 @@ def main():
             guide_every=int(args.guide_every),
             contact_topk=int(args.contact_topk),
             epoch=ep,
+            rank_lambda=float(args.rank_lambda),
+            rank_loss=str(args.rank_loss),
+            rank_margin=float(args.rank_margin),
+            rank_tau=float(args.rank_tau),
         )
 
         yhat_tr, yb_tr, yhatr_tr, yr_tr, yraw_tr, pid_tr, lid_tr = predict(model, train_loader, device)
