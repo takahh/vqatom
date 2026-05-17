@@ -140,6 +140,47 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
             out[i, :x.numel()] = x
     return out
 
+class ContinuousGNNEncoder(nn.Module):
+    def __init__(self, atom_feat_dim, d_model=256, n_layers=3, dropout=0.1):
+        super().__init__()
+        self.pad_id = -1
+        self.cls_id = -1
+        self.conf = {"d_model": d_model}
+
+        self.in_proj = nn.Sequential(
+            nn.Linear(atom_feat_dim, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+        )
+
+        self.convs = nn.ModuleList()
+        for _ in range(n_layers):
+            mlp = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Linear(d_model, d_model),
+            )
+            self.convs.append(GINConv(mlp))
+
+        self.ln = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+
+    @property
+    def d_model(self):
+        return int(self.conf["d_model"])
+
+    def forward(self, l_ids=None, edge_index=None, edge_batch=None, atom_feat=None):
+        if atom_feat is None:
+            raise ValueError("continuous_gnn requires atom_feat")
+
+        x = self.in_proj(atom_feat)
+
+        for conv in self.convs:
+            x = x + self.drop(conv(x, edge_index))
+            x = self.ln(x)
+
+        l_dense, l_mask = to_dense_batch(x, edge_batch)
+        return l_dense, ~l_mask
 
 # =========================================================
 # Batch / dataset
@@ -162,6 +203,7 @@ class Batch:
     contact_mask: Optional[torch.Tensor] = None
     atom_contact_pairs: Optional[list] = None
     protein_group: Optional[torch.Tensor] = None
+    atom_feat: Optional[torch.Tensor] = None
 
 class DTIDataset(Dataset):
     def __init__(
@@ -269,7 +311,9 @@ class DTIDataset(Dataset):
         atom_contact_pairs = row.get("atom_contact_pairs", "")
         edge_index = json.loads(row["edge_index"])  # [[src...], [dst...]]
         edge_attr = json.loads(row.get("edge_attr", "[]"))
-
+        atom_feat = None
+        if "atom_feat" in row and str(row["atom_feat"]).strip():
+            atom_feat = json.loads(row["atom_feat"])
         item = {
             "protein_seq": row["seq"],
             "lig_ids": lig_ids,
@@ -282,6 +326,7 @@ class DTIDataset(Dataset):
             "ligand_id": row.get("ligand_id", row.get("compound_id", row.get("smiles", row.get("lig_text", "")))),
             "contact_mask": contact_mask,
             "atom_contact_pairs": atom_contact_pairs,
+            "atom_feat": atom_feat,
         }
         return item
 
@@ -344,6 +389,12 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         y_reg = None
     contact_tensors = []
     has_contact = all(len(str(s.get("contact_mask", "") or "")) > 0 for s in samples)
+    atom_feats = []
+
+    for b, s in enumerate(samples):
+        if s.get("atom_feat") is not None:
+            af = torch.tensor(s["atom_feat"], dtype=torch.float32)
+            atom_feats.append(af)
 
     if has_contact:
         for s in samples:
@@ -384,6 +435,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         protein_group.append(pid_to_gid[pid])
 
     protein_group = torch.tensor(protein_group, dtype=torch.long)
+    atom_feat = torch.cat(atom_feats, dim=0) if atom_feats else None
 
     return Batch(
         p_input_ids=p_input_ids,
@@ -400,6 +452,7 @@ def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
         protein_id=protein_id,
         ligand_id=ligand_id,
         protein_group=protein_group,
+        atom_feat=atom_feat,
     )
 
 # =========================================================
@@ -546,6 +599,7 @@ def visualize_one_qk_map(
             l_ids,
             edge_index=batch.edge_index.to(device),
             edge_batch=batch.edge_batch.to(device),
+            atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
             return_maps=True,
         )
 
@@ -793,6 +847,7 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
                                             l_ids,
                                             edge_index=batch.edge_index.to(device),
                                             edge_batch=batch.edge_batch.to(device),
+                                            atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                                         )
             else:
                 logit, yhat_reg, _ = model(
@@ -801,6 +856,7 @@ def predict(model: nn.Module, loader: DataLoader, device: torch.device):
                                         l_ids,
                                         edge_index=batch.edge_index.to(device),
                                         edge_batch=batch.edge_batch.to(device),
+                                        atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                                     )
 
             prob = torch.sigmoid(logit)
@@ -1205,6 +1261,7 @@ def train_one_epoch(
                                             l_ids,
                                             edge_index=batch.edge_index.to(device),
                                             edge_batch=batch.edge_batch.to(device),
+                                            atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                                             return_maps=False)
                 loss_cls = bce(logit, y_bin)
 
@@ -1263,6 +1320,7 @@ def train_one_epoch(
                                         l_ids,
                                         edge_index=batch.edge_index.to(device),
                                         edge_batch=batch.edge_batch.to(device),
+                                        atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                                         return_maps=False)
             loss_cls = bce(logit, y_bin)
 
@@ -1343,6 +1401,7 @@ def train_one_epoch(
                         gl_ids,
                         edge_index=g.edge_index.to(device),
                         edge_batch=g.edge_batch.to(device),
+                        atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                         return_maps=True
                     )
                     loss_contact = compute_atom_res_contact_loss_from_aux(
@@ -1357,6 +1416,7 @@ def train_one_epoch(
                     gl_ids,
                     edge_index=g.edge_index.to(device),
                     edge_batch=g.edge_batch.to(device),
+                    atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
                     return_maps=True,
                 )
                 loss_contact = compute_atom_res_contact_loss_from_aux(
@@ -1847,7 +1907,8 @@ class DualStreamDTIClassifier(nn.Module):
 
         return feat
 
-    def forward(self, p_input_ids, p_attn_mask, l_ids, edge_index=None, edge_batch=None, return_maps=False):
+    def forward(self, p_input_ids, p_attn_mask, l_ids, edge_index=None, edge_batch=None, atom_feat=None,
+                return_maps=False):
         aux = {}
 
         p_h_raw = self.prot(p_input_ids, p_attn_mask)
@@ -1863,6 +1924,7 @@ class DualStreamDTIClassifier(nn.Module):
             l_ids,
             edge_index=edge_index,
             edge_batch=edge_batch,
+            atom_feat=atom_feat,
         )
 
         l_tok = self.l_ln(l_tok)
@@ -2200,7 +2262,13 @@ def main():
     ap.add_argument("--dti_ckpt", type=str, default=None)
     ap.add_argument("--out_dir", type=str, default="./dti_out")
     ap.add_argument("--eval_only", action="store_true")
-
+    ap.add_argument(
+        "--ligand_encoder_type",
+        type=str,
+        default="vqatom",
+        choices=["vqatom", "continuous_gnn"],
+    )
+    ap.add_argument("--atom_feat_dim", type=int, default=13)
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -2272,14 +2340,32 @@ def main():
     cls_id = vocab_size
     vocab_size = vocab_size + 1
 
-    lig_enc = VQAtomGraphEncoder(
-        vocab_size=vocab_size,
-        pad_id=pad_id,
-        cls_id=cls_id,
-        d_model=256,  # or match your old ligand d_model
-        n_layers=3,
-        dropout=args.dropout,
-    ).to(device)
+    if args.ligand_encoder_type == "vqatom":
+        lig_enc = VQAtomGraphEncoder(
+            vocab_size=vocab_size,
+            pad_id=pad_id,
+            cls_id=cls_id,
+            d_model=256,
+            n_layers=3,
+            dropout=args.dropout,
+        ).to(device)
+
+        lig_enc.base_vocab = base_vocab
+        lig_enc.mask_id = mask_id
+        lig_enc.vocab_source = f"graph_vqatom:{args.vq_ckpt}"
+
+    else:
+        lig_enc = ContinuousGNNEncoder(
+            atom_feat_dim=args.atom_feat_dim,
+            d_model=256,
+            n_layers=3,
+            dropout=args.dropout,
+        ).to(device)
+
+        lig_enc.base_vocab = 0
+        lig_enc.vocab_size = 0
+        lig_enc.mask_id = -1
+        lig_enc.vocab_source = "continuous_gnn"
 
     lig_enc.base_vocab = base_vocab
     lig_enc.mask_id = mask_id
