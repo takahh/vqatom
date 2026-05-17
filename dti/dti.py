@@ -1401,8 +1401,8 @@ def train_one_epoch(
                         gl_ids,
                         edge_index=g.edge_index.to(device),
                         edge_batch=g.edge_batch.to(device),
-                        atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
-                        return_maps=True
+                        atom_feat=g.atom_feat.to(device) if g.atom_feat is not None else None,
+                        return_maps=True,
                     )
                     loss_contact = compute_atom_res_contact_loss_from_aux(
                         g_aux,
@@ -1416,7 +1416,7 @@ def train_one_epoch(
                     gl_ids,
                     edge_index=g.edge_index.to(device),
                     edge_batch=g.edge_batch.to(device),
-                    atom_feat=batch.atom_feat.to(device) if batch.atom_feat is not None else None,
+                    atom_feat=g.atom_feat.to(device) if g.atom_feat is not None else None,
                     return_maps=True,
                 )
                 loss_contact = compute_atom_res_contact_loss_from_aux(
