@@ -1085,7 +1085,8 @@ def pass3_join_tokens():
         r = csv.DictReader(fin)
         w = csv.writer(fout)
         w.writerow([
-            "seq", "smiles", "lig_tok", "edge_index", "aff_type", "aff_nm", "y",
+            "seq", "smiles", "lig_tok", "edge_index", "atom_feat",
+            "aff_type", "aff_nm", "y",
             "src_pdbid", "src_chain", "contact_mask", "contact_n"
         ])
         for row in tqdm(r, desc="pass3 join tokens"):
@@ -1095,12 +1096,14 @@ def pass3_join_tokens():
                 skipped += 1
                 continue
             edge_index = smiles_to_edge_index_json(smi)
+            atom_feat = smiles_to_atom_feat_json(smi)
 
             w.writerow([
                 row["seq"],
                 smi,
                 lig_tok,
                 edge_index,
+                atom_feat,
                 row["aff_type"],
                 row["aff_nm"],
                 row["y"],
@@ -1205,6 +1208,48 @@ def build_seq_to_cluster_map(cluster_tsv: Path, fasta_path: Path) -> Dict[str, s
         raise RuntimeError(f"{len(missing)} sequences missing from MMseqs cluster map")
     return seq_to_cluster
 
+def smiles_to_atom_feat_json(smiles: str) -> str:
+    import json
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"Bad SMILES for atom_feat: {smiles}")
+
+    feats = []
+    ring_info = mol.GetRingInfo()
+
+    for atom in mol.GetAtoms():
+        idx = atom.GetIdx()
+
+        z = atom.GetAtomicNum()
+        charge = atom.GetFormalCharge()
+        hyb = int(atom.GetHybridization())
+        arom = int(atom.GetIsAromatic())
+        ring = int(atom.IsInRing())
+        deg = int(atom.GetDegree())
+        hnum = int(atom.GetTotalNumHs())
+        valence = int(atom.GetTotalValence())
+        mass = float(atom.GetMass()) / 200.0
+
+        ring_size = 0
+        for r in ring_info.AtomRings():
+            if idx in r:
+                ring_size = len(r)
+                break
+
+        feats.append([
+            z,
+            charge,
+            hyb,
+            arom,
+            ring,
+            deg,
+            hnum,
+            valence,
+            ring_size,
+            mass,
+        ])
+
+    return json.dumps(feats, separators=(",", ":"))
 
 def save_seq_to_cluster_map(seq_to_cluster: Dict[str, str], path: Path) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -1228,7 +1273,8 @@ def write_split_csvs(rows: List[Dict[str, str]]) -> None:
         "test": TEST_CSV,
     }
     fieldnames = [
-        "seq", "smiles", "lig_tok", "edge_index", "aff_type", "aff_nm", "y",
+        "seq", "smiles", "lig_tok", "edge_index", "atom_feat",
+        "aff_type", "aff_nm", "y",
         "src_pdbid", "src_chain", "contact_mask", "contact_n"
     ]
     # split -> protein_cluster -> rows
