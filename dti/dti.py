@@ -2268,7 +2268,7 @@ def main():
         default="vqatom",
         choices=["vqatom", "continuous_gnn"],
     )
-    ap.add_argument("--atom_feat_dim", type=int, default=13)
+    ap.add_argument("--atom_feat_dim", type=int, default=10)
     ap.add_argument("--batch_size", type=int, default=16)
     ap.add_argument("--epochs", type=int, default=10)
     ap.add_argument("--lr", type=float, default=1e-4)
