@@ -15,7 +15,6 @@ from utils import (
     graph_split,
     feature_prop,
 )
-
 torch.use_deterministic_algorithms(True)
 torch.manual_seed(42)
 np.random.seed(42)
