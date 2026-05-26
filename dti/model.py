@@ -472,6 +472,8 @@ class PretrainedLigandEncoder(nn.Module):
             pad_id=None,
             mask_id=None,
             cls_id=None,
+            verbose_load=True,
+            debug_index_check=False,
     ):
         super().__init__()
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -482,22 +484,25 @@ class PretrainedLigandEncoder(nn.Module):
         self.state = ckpt["model"]
         self.conf = ckpt["config"]
 
-        # ---- vocab meta
-        if vq_ckpt_path is not None:
-            vm = load_vocab_meta_from_vq_ckpt(vq_ckpt_path)
+        if vq_ckpt is not None:
+            vm = load_vocab_meta_from_vq_ckpt(vq_ckpt)
             self.base_vocab = int(vm["base_vocab"])
             self.vocab_size = int(vm["vocab_size"])
             self.pad_id = int(vm["pad_id"])
             self.mask_id = int(vm["mask_id"])
-            self.vocab_source = f"vq_ckpt:{vq_ckpt_path}"
+            self.cls_id = int(self.vocab_size)
+            self.vocab_size += 1
+            self.vocab_source = f"vq_ckpt:{vq_ckpt}"
         else:
-            if "base_vocab" not in ckpt or "vocab_size" not in ckpt:
-                raise RuntimeError("Ligand MLM ckpt must contain base_vocab and vocab_size if --vq_ckpt is not provided")
-            self.base_vocab = int(ckpt["base_vocab"])
-            self.vocab_size = int(ckpt["vocab_size"])
-            self.pad_id = self.base_vocab + 0
-            self.mask_id = self.base_vocab + 1
-            self.vocab_source = f"mlm_ckpt:{ckpt_path}"
+            if base_vocab is None or vocab_size is None:
+                raise RuntimeError("Pass base_vocab/vocab_size explicitly for SMILES.")
+
+            self.base_vocab = int(base_vocab)
+            self.vocab_size = int(vocab_size)
+            self.pad_id = int(pad_id)
+            self.mask_id = int(mask_id)
+            self.cls_id = int(cls_id)
+            self.vocab_source = f"explicit_vocab:{ckpt_path}"
 
         d_model = int(self.conf["d_model"])
         nhead = int(self.conf["nhead"])
