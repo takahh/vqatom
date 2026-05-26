@@ -525,7 +525,7 @@ class VQAtomGraphEncoder(nn.Module):
     def d_model(self):
         return int(self.conf["d_model"])
 
-    def forward(self, l_ids, edge_index, edge_batch):
+    def forward(self, l_ids, edge_index, edge_batch, atom_feat=None, **kwargs):
         # remove CLS
         node_ids = []
         for b in range(l_ids.size(0)):
