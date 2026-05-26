@@ -38,6 +38,8 @@ from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from transformers import AutoTokenizer, EsmModel, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
+from dti.model import PretrainedLigandEncoder
+
 Y_THR = 7.0
 CLS_THR = 0.5
 
@@ -329,13 +331,6 @@ class DTIDataset(Dataset):
             "atom_feat": atom_feat,
         }
         return item
-
-
-def build_train_dataset_from_shards(shard_paths: List[str], y_thr: float) -> ConcatDataset:
-    ds_list = [DTIDataset(csv_path=p, y_thr=float(y_thr), drop_missing_y=True, lig_cls_id=lig_enc.cls_id ) for p in shard_paths]
-    if not ds_list:
-        raise ValueError("No train shards were loaded")
-    return ConcatDataset(ds_list)
 
 
 def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
@@ -2228,7 +2223,7 @@ def main():
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
     ap.add_argument("--sym_lambda", type=float, default=0.0)
     ap.add_argument("--lig_ckpt", type=str, default=None)
-    ap.add_argument("--vq_ckpt", type=str, required=True)
+    ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument(
         "--attn_activation",
@@ -2330,17 +2325,20 @@ def main():
         from smiles_mlm import SmilesCharTokenizer
         smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
 
-    vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
+    if args.ligand_input_type == "vqatom":
+        if args.vq_ckpt is None:
+            raise ValueError("--vq_ckpt is required when --ligand_input_type vqatom")
 
-    base_vocab = int(vm["base_vocab"])
-    vocab_size = int(vm["vocab_size"])
-    pad_id = int(vm["pad_id"])
-    mask_id = int(vm["mask_id"])
+        vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
 
-    cls_id = vocab_size
-    vocab_size = vocab_size + 1
+        base_vocab = int(vm["base_vocab"])
+        vocab_size = int(vm["vocab_size"])
+        pad_id = int(vm["pad_id"])
+        mask_id = int(vm["mask_id"])
 
-    if args.ligand_encoder_type == "vqatom":
+        cls_id = vocab_size
+        vocab_size = vocab_size + 1
+
         lig_enc = VQAtomGraphEncoder(
             vocab_size=vocab_size,
             pad_id=pad_id,
@@ -2351,25 +2349,33 @@ def main():
         ).to(device)
 
         lig_enc.base_vocab = base_vocab
+        lig_enc.vocab_size = vocab_size
+        lig_enc.pad_id = pad_id
         lig_enc.mask_id = mask_id
+        lig_enc.cls_id = cls_id
         lig_enc.vocab_source = f"graph_vqatom:{args.vq_ckpt}"
 
-    else:
-        lig_enc = ContinuousGNNEncoder(
-            atom_feat_dim=args.atom_feat_dim,
+    elif args.ligand_input_type == "smiles":
+        if smiles_tokenizer is None:
+            raise ValueError("smiles_tokenizer was not initialized")
+
+        lig_enc = PretrainedLigandEncoder(
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            mask_id=smiles_tokenizer.mask_id,
+            cls_id=smiles_tokenizer.cls_id,
             d_model=256,
             n_layers=3,
             dropout=args.dropout,
         ).to(device)
 
-        lig_enc.base_vocab = 0
-        lig_enc.vocab_size = 0
-        lig_enc.mask_id = -1
-        lig_enc.vocab_source = "continuous_gnn"
+        lig_enc.base_vocab = smiles_tokenizer.vocab_size
+        lig_enc.vocab_size = smiles_tokenizer.vocab_size
+        lig_enc.pad_id = smiles_tokenizer.pad_id
+        lig_enc.mask_id = smiles_tokenizer.mask_id
+        lig_enc.cls_id = smiles_tokenizer.cls_id
+        lig_enc.vocab_source = f"smiles:{args.smiles_vocab_path}"
 
-    lig_enc.base_vocab = base_vocab
-    lig_enc.mask_id = mask_id
-    lig_enc.vocab_source = f"graph_vqatom:{args.vq_ckpt}"
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
