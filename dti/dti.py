@@ -2064,14 +2064,14 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
-        pair_map = ligand_adj_smooth_pairmap(
-            pair_map=pair_map,
-            edge_index=edge_index,
-            edge_batch=edge_batch,
-            valid_h=valid_h,
-            alpha=0.3,
-        )
-
+        if self.ligand_input_type == "vqatom":
+            pair_map = ligand_adj_smooth_pairmap(
+                pair_map,
+                edge_index=edge_index,
+                edge_batch=edge_batch,
+                valid_h=valid_h,
+                alpha=0.5,
+            )
 
         pair_map = pair_map.mean(dim=1)  # (B,Ll,Lp)
         pair_map = torch.nan_to_num(pair_map, nan=0.0, posinf=0.0, neginf=0.0)
