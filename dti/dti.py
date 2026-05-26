@@ -38,7 +38,10 @@ from torch.utils.data import Dataset, DataLoader, ConcatDataset
 from transformers import AutoTokenizer, EsmModel, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
-from dti.model import PretrainedLigandEncoder
+try:
+    from model import PretrainedLigandEncoder
+except ImportError:
+    from dti.model import PretrainedLigandEncoder
 
 Y_THR = 7.0
 CLS_THR = 0.5
