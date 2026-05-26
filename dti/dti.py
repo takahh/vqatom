@@ -1763,10 +1763,12 @@ class DualStreamDTIClassifier(nn.Module):
         pair_gate_threshold: float = 0.5,
         topk_frac: float = 0.1,
         protein_only: bool = False,   # 追加
-        pl_lp_overlap: str = "both"
+        pl_lp_overlap: str = "both",
+        ligand_input_type: str = "vqatom",
     ):
         super().__init__()
         self.prot = protein_encoder
+        self.ligand_input_type = ligand_input_type
         self.lig = ligand_encoder
         self.pl_lp_overlap = pl_lp_overlap
         d_model = self.lig.d_model
@@ -2405,6 +2407,7 @@ def main():
         topk_frac=args.topk_frac,  # ← 追加
         protein_only=args.protein_only,   # 追加
         pl_lp_overlap=args.pl_lp_overlap,
+        ligand_input_type=args.ligand_input_type,
     ).to(device)
 
     if args.dti_ckpt is not None:
