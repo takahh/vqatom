@@ -2361,15 +2361,13 @@ def main():
     elif args.ligand_input_type == "smiles":
         if smiles_tokenizer is None:
             raise ValueError("smiles_tokenizer was not initialized")
+        if args.lig_ckpt is None:
+            raise ValueError("--lig_ckpt is required when --ligand_input_type smiles")
 
         lig_enc = PretrainedLigandEncoder(
-            vocab_size=smiles_tokenizer.vocab_size,
-            pad_id=smiles_tokenizer.pad_id,
-            mask_id=smiles_tokenizer.mask_id,
-            cls_id=smiles_tokenizer.cls_id,
-            d_model=256,
-            n_layers=3,
-            dropout=args.dropout,
+            ckpt_path=args.lig_ckpt,
+            device=device,
+            finetune=args.finetune_lig,
         ).to(device)
 
         lig_enc.base_vocab = smiles_tokenizer.vocab_size
