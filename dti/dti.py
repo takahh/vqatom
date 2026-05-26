@@ -2368,6 +2368,13 @@ def main():
             ckpt_path=args.lig_ckpt,
             device=device,
             finetune=args.finetune_lig,
+            base_vocab=smiles_tokenizer.vocab_size,
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            mask_id=smiles_tokenizer.mask_id,
+            cls_id=smiles_tokenizer.cls_id,
+            verbose_load=True,
+            debug_index_check=bool(args.lig_debug_index),
         ).to(device)
 
         lig_enc.base_vocab = smiles_tokenizer.vocab_size
