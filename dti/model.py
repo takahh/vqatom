@@ -550,7 +550,7 @@ class PretrainedLigandEncoder(nn.Module):
     def d_model(self) -> int:
         return int(self.conf["d_model"])
 
-    def forward(self, l_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, l_ids: torch.Tensor, **kwargs):
         if self.debug_index_check:
             with torch.no_grad():
                 li = l_ids.detach()
@@ -559,12 +559,16 @@ class PretrainedLigandEncoder(nn.Module):
                 if bad.numel() > 0:
                     b0 = bad[0].tolist()
                     v0 = int(li_cpu[b0[0], b0[1]].item())
-                    raise RuntimeError(f"Ligand token id out of range: id={v0}, num_embeddings={self.tok.num_embeddings}")
+                    raise RuntimeError(
+                        f"Ligand token id out of range: id={v0}, "
+                        f"num_embeddings={self.tok.num_embeddings}"
+                    )
 
-        x = self.tok(l_ids)                      # (B, Ll, D)
-        pad_mask = (l_ids == self.pad_id)        # True at PAD
-        h = self.enc(x, src_key_padding_mask=pad_mask)  # (B, Ll, D)
-        return h
+        x = self.tok(l_ids)
+        pad_mask = (l_ids == self.pad_id)
+        h = self.enc(x, src_key_padding_mask=pad_mask)
+
+        return h, pad_mask
 
 
 def masked_mean_by_attn(h: torch.Tensor, attn_mask: torch.Tensor) -> torch.Tensor:
