@@ -460,14 +460,18 @@ class PretrainedLigandEncoder(nn.Module):
     - encoder weights: shape-safe partial load
     - embedding tok.weight: overlap rows copied
     """
+
     def __init__(
-        self,
-        ckpt_path: str,
-        device: torch.device,
-        finetune: bool = False,
-        vq_ckpt_path: Optional[str] = None,
-        verbose_load: bool = True,
-        debug_index_check: bool = False,
+            self,
+            ckpt_path,
+            device,
+            finetune=False,
+            vq_ckpt=None,
+            base_vocab=None,
+            vocab_size=None,
+            pad_id=None,
+            mask_id=None,
+            cls_id=None,
     ):
         super().__init__()
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
