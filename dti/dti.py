@@ -477,16 +477,37 @@ def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = T
     cur = module.state_dict()
     loadable = {}
     skipped = []
+
     for k, v in state.items():
         if k not in cur:
             skipped.append((k, "missing_in_model"))
             continue
+
+        # tok.weight だけ 1 行ズレを補正
         if cur[k].shape != v.shape:
-            skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
-            continue
+            if (
+                k.endswith("tok.weight")
+                and v.ndim == 2
+                and cur[k].ndim == 2
+                and v.shape[1] == cur[k].shape[1]
+                and abs(v.shape[0] - cur[k].shape[0]) == 1
+            ):
+                if v.shape[0] + 1 == cur[k].shape[0]:
+                    new_v = cur[k].clone()
+                    new_v[:v.shape[0]] = v
+                    v = new_v
+                    print(f"[fix] padded {k}: {tuple(state[k].shape)} -> {tuple(v.shape)}")
+                else:
+                    v = v[:cur[k].shape[0]]
+                    print(f"[fix] truncated {k}: {tuple(state[k].shape)} -> {tuple(v.shape)}")
+            else:
+                skipped.append((k, f"shape {tuple(v.shape)} != {tuple(cur[k].shape)}"))
+                continue
+
         loadable[k] = v
 
     missing, unexpected = module.load_state_dict(loadable, strict=False)
+
     if verbose:
         if skipped:
             print("[load_shape_safe] skipped (up to 20):", skipped[:20])
@@ -494,7 +515,9 @@ def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = T
             print("[load_shape_safe] unexpected (up to 20):", unexpected[:20])
         if missing:
             print("[load_shape_safe] missing (up to 20):", missing[:20])
+
     return missing, unexpected, skipped
+
 
 from torch_geometric.nn import GINConv
 from torch_geometric.utils import to_dense_batch
