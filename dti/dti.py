@@ -2383,17 +2383,42 @@ def main():
     elif args.ligand_mode == "vqatom_pretrained":
         print("[lig] mode = vqatom_pretrained")
 
+        if args.vq_ckpt is None:
+            raise ValueError("--vq_ckpt required for vqatom_pretrained")
         if args.mlm_ckpt is None:
             raise ValueError("--mlm_ckpt required for vqatom_pretrained")
+
+        vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
+
+        base_vocab = int(vm["base_vocab"])
+        vocab_size0 = int(vm["vocab_size"])
+        pad_id = int(vm["pad_id"])
+        mask_id = int(vm["mask_id"])
+
+        cls_id = vocab_size0
+        vocab_size = vocab_size0 + 1
 
         lig_enc = PretrainedLigandEncoder(
             ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
+            base_vocab=base_vocab,
+            vocab_size=vocab_size,
+            pad_id=pad_id,
+            mask_id=mask_id,
+            cls_id=cls_id,
+            verbose_load=True,
+            debug_index_check=bool(args.lig_debug_index),
         ).to(device)
 
-        ligand_input_type = "vqatom"
+        lig_enc.base_vocab = base_vocab
+        lig_enc.vocab_size = vocab_size
+        lig_enc.pad_id = pad_id
+        lig_enc.mask_id = mask_id
+        lig_enc.cls_id = cls_id
+        lig_enc.vocab_source = f"vqatom_mlm:{args.mlm_ckpt}"
 
+        ligand_input_type = "vqatom"
 
     elif args.ligand_mode == "smiles":
         print("[lig] mode = smiles (scratch)")
