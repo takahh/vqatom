@@ -233,6 +233,7 @@ class DTIDataset(Dataset):
 
         self.lig_cls_id = lig_cls_id
         self.rows: List[Dict[str, object]] = []
+        self.ligand_input_type = ligand_input_type
 
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
@@ -1764,7 +1765,7 @@ class DualStreamDTIClassifier(nn.Module):
         topk_frac: float = 0.1,
         protein_only: bool = False,   # 追加
         pl_lp_overlap: str = "both",
-        ligand_input_type: str = "vqatom",
+        ligand_input_type: str = None,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -2227,7 +2228,7 @@ def main():
     ap.add_argument("--train_shard_size", type=int, default=1000)
     ap.add_argument("--train_num_shards_per_epoch", type=int, default=None)
     ap.add_argument("--sym_lambda", type=float, default=0.0)
-    ap.add_argument("--lig_ckpt", type=str, default=None)
+    ap.add_argument("--mlm_ckpt", type=str, default=None)
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument(
@@ -2237,10 +2238,16 @@ def main():
         choices=["softmax", "entmax15", "sigmoid"],
     )
     ap.add_argument(
-        "--ligand_input_type",
+        "--ligand_mode",
         type=str,
         default="vqatom",
-        choices=["vqatom", "smiles"],
+        choices=[
+            "continuous",
+            "vqatom",
+            "vqatom_pretrained",
+            "smiles",
+            "smiles_pretrained",
+        ],
     )
     ap.add_argument("--rank_lambda", type=float, default=0.0)
     ap.add_argument(
@@ -2307,6 +2314,7 @@ def main():
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
+
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2321,83 +2329,100 @@ def main():
 
     esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
     smiles_tokenizer = None
-    if args.ligand_input_type == "smiles":
-        if args.smiles_vocab_path is None:
-            raise ValueError(
-                "--smiles_vocab_path is required when --ligand_input_type smiles"
-            )
 
-        from smiles_mlm import SmilesCharTokenizer
-        smiles_tokenizer = SmilesCharTokenizer.from_json(args.smiles_vocab_path)
+    # =========================================================
+    # Ligand encoder build
+    # =========================================================
 
-    if args.ligand_input_type == "vqatom":
-        if args.vq_ckpt is None:
-            raise ValueError("--vq_ckpt is required when --ligand_input_type vqatom")
+    if args.ligand_mode == "continuous":
+        print("[lig] mode = continuous")
+
+        lig_enc = ContinuousGNNEncoder(
+            atom_feat_dim=args.atom_feat_dim,
+            d_model=args.d_model,
+            n_layers=args.lig_n_layers,
+            dropout=args.dropout,
+        ).to(device)
+
+        ligand_input_type = "vqatom"
+
+
+    # elif args.ligand_mode == "continuous_pretrained":
+    #
+    #     print("[lig] mode = continuous_pretrained")
+    #
+    #     if args.mlm_ckpt is None:
+    #         raise ValueError("--mlm_ckpt required for continuous_pretrained")
+    #
+    #     lig_enc = ContinuousGNNEncoder(
+    #         ckpt_path=args.mlm_ckpt,
+    #         device=device,
+    #         finetune=args.finetune_lig,
+    #     ).to(device)
+    #
+    #     ligand_input_type = "continuous"
+
+
+    elif args.ligand_mode == "vqatom":
+        print("[lig] mode = vqatom (scratch)")
 
         vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
 
-        base_vocab = int(vm["base_vocab"])
-        vocab_size = int(vm["vocab_size"])
-        pad_id = int(vm["pad_id"])
-        mask_id = int(vm["mask_id"])
-
-        cls_id = vocab_size
-        vocab_size = vocab_size + 1
-
         lig_enc = VQAtomGraphEncoder(
-            vocab_size=vocab_size,
-            pad_id=pad_id,
-            cls_id=cls_id,
-            d_model=256,
-            n_layers=3,
+            vocab_size=vm["vocab_size"],
+            pad_id=vm["pad_id"],
+            cls_id=0,
+            d_model=args.d_model,
+            n_layers=args.lig_n_layers,
             dropout=args.dropout,
         ).to(device)
 
-        lig_enc.base_vocab = base_vocab
-        lig_enc.vocab_size = vocab_size
-        lig_enc.pad_id = pad_id
-        lig_enc.mask_id = mask_id
-        lig_enc.cls_id = cls_id
-        lig_enc.vocab_source = f"graph_vqatom:{args.vq_ckpt}"
+        ligand_input_type = "vqatom"
 
-    elif args.ligand_input_type == "smiles":
-        if smiles_tokenizer is None:
-            raise ValueError("smiles_tokenizer was not initialized")
-        if args.lig_ckpt is None:
-            raise ValueError("--lig_ckpt is required when --ligand_input_type smiles")
+
+    elif args.ligand_mode == "vqatom_pretrained":
+        print("[lig] mode = vqatom_pretrained")
+
+        if args.mlm_ckpt is None:
+            raise ValueError("--mlm_ckpt required for vqatom_pretrained")
 
         lig_enc = PretrainedLigandEncoder(
-            ckpt_path=args.lig_ckpt,
+            ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
-            base_vocab=smiles_tokenizer.vocab_size,
-            vocab_size=smiles_tokenizer.vocab_size,
-            pad_id=smiles_tokenizer.pad_id,
-            mask_id=smiles_tokenizer.mask_id,
-            cls_id=smiles_tokenizer.cls_id,
-            verbose_load=True,
-            debug_index_check=bool(args.lig_debug_index),
         ).to(device)
 
-        lig_enc.base_vocab = smiles_tokenizer.vocab_size
-        lig_enc.vocab_size = smiles_tokenizer.vocab_size
-        lig_enc.pad_id = smiles_tokenizer.pad_id
-        lig_enc.mask_id = smiles_tokenizer.mask_id
-        lig_enc.cls_id = smiles_tokenizer.cls_id
-        lig_enc.vocab_source = f"smiles:{args.smiles_vocab_path}"
+        ligand_input_type = "vqatom"
 
-    elif args.ligand_encoder_type == "continuous_gnn":
-        lig_enc = ContinuousGNNEncoder(
-            atom_feat_dim=args.atom_feat_dim,
-            d_model=256,
-            n_layers=3,
-            dropout=args.dropout,
+
+    elif args.ligand_mode == "smiles":
+        print("[lig] mode = smiles (scratch)")
+
+        lig_enc = PretrainedLigandEncoder(
+            ckpt_path=None,
+            device=device,
+            finetune=args.finetune_lig,
         ).to(device)
 
-        lig_enc.base_vocab = 0
-        lig_enc.vocab_size = 0
-        lig_enc.mask_id = -1
-        lig_enc.vocab_source = "continuous_gnn"
+        ligand_input_type = "smiles"
+
+
+    elif args.ligand_mode == "smiles_pretrained":
+        print("[lig] mode = smiles_pretrained")
+
+        if args.mlm_ckpt is None:
+            raise ValueError("--mlm_ckpt required for smiles_pretrained")
+
+        lig_enc = PretrainedLigandEncoder(
+            ckpt_path=args.mlm_ckpt,
+            device=device,
+            finetune=args.finetune_lig,
+        ).to(device)
+
+        ligand_input_type = "smiles"
+
+    else:
+        raise ValueError(f"Unknown ligand_mode: {args.ligand_mode}")
 
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
@@ -2420,7 +2445,7 @@ def main():
         topk_frac=args.topk_frac,  # ← 追加
         protein_only=args.protein_only,   # 追加
         pl_lp_overlap=args.pl_lp_overlap,
-        ligand_input_type=args.ligand_input_type,
+        ligand_input_type=ligand_input_type,
     ).to(device)
 
     if args.dti_ckpt is not None:
@@ -2466,7 +2491,7 @@ def main():
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
                 lig_cls_id=lig_enc.cls_id,
-                ligand_input_type=args.ligand_input_type,
+                ligand_input_type=ligand_input_type,
                 smiles_tokenizer=smiles_tokenizer,
                 smiles_col=args.smiles_col,
             )
@@ -2478,7 +2503,7 @@ def main():
                 y_thr=float(args.y_thr),
                 drop_missing_y=True,
                 lig_cls_id=lig_enc.cls_id,
-                ligand_input_type=args.ligand_input_type,
+                ligand_input_type=ligand_input_type,
                 smiles_tokenizer=smiles_tokenizer,
                 smiles_col=args.smiles_col,
             )
@@ -2498,7 +2523,7 @@ def main():
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
                     lig_cls_id=lig_enc.cls_id,
-                    ligand_input_type=args.ligand_input_type,
+                    ligand_input_type=ligand_input_type,
                     smiles_tokenizer=smiles_tokenizer,
                     smiles_col=args.smiles_col,
                 )
@@ -2510,7 +2535,7 @@ def main():
                     y_thr=float(args.y_thr),
                     drop_missing_y=True,
                     lig_cls_id=lig_enc.cls_id,
-                    ligand_input_type=args.ligand_input_type,
+                    ligand_input_type=ligand_input_type,
                     smiles_tokenizer=smiles_tokenizer,
                     smiles_col=args.smiles_col,
                 )
@@ -2529,7 +2554,7 @@ def main():
         lig_cls_id=lig_enc.cls_id,
         y_reg_mean=train_y_mean,
         y_reg_std=train_y_std,
-        ligand_input_type=args.ligand_input_type,
+        ligand_input_type=ligand_input_type,
         smiles_tokenizer=smiles_tokenizer,
         smiles_col=args.smiles_col,
     )
@@ -2544,7 +2569,7 @@ def main():
             lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
-            ligand_input_type=args.ligand_input_type,
+            ligand_input_type=ligand_input_type,
             smiles_tokenizer=smiles_tokenizer,
             smiles_col=args.smiles_col,
         )
@@ -2563,7 +2588,7 @@ def main():
             lig_cls_id=lig_enc.cls_id,
             y_reg_mean=train_y_mean,
             y_reg_std=train_y_std,
-            ligand_input_type=args.ligand_input_type,
+            ligand_input_type=ligand_input_type,
             smiles_tokenizer=smiles_tokenizer,
             smiles_col=args.smiles_col,
         )
@@ -2657,7 +2682,7 @@ def main():
                     lig_cls_id=lig_enc.cls_id,
                     y_reg_mean=train_y_mean,
                     y_reg_std=train_y_std,
-                    ligand_input_type=args.ligand_input_type,
+                    ligand_input_type=ligand_input_type,
                     smiles_tokenizer=smiles_tokenizer,
                     smiles_col=args.smiles_col,
                 )
