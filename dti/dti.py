@@ -2153,7 +2153,10 @@ class DualStreamDTIClassifier(nn.Module):
 # =========================================================
 def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
     base_lr = float(args.lr)
-    lig_lr = base_lr * float(args.lig_lr_mult)
+
+    lig_lr = float(args.lig_lr) if args.lig_lr is not None else base_lr
+    cross_lr = float(args.cross_lr) if args.cross_lr is not None else base_lr
+    top_lr = float(args.protein_lr) if args.protein_lr is not None else base_lr
 
     lig_params = []
     interaction_params = []
@@ -2178,20 +2181,11 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
             interaction_params.append(p)
 
     param_groups = [
-        {
-            "params": lig_params,
-            "lr": lig_lr,
-            "name": "lig_pretrained",
-        },
-        {
-            "params": interaction_params,
-            "lr": base_lr,
-            "name": "interaction",
-        },
+        {"params": lig_params, "lr": lig_lr, "name": "ligand"},
+        {"params": interaction_params, "lr": cross_lr, "name": "cross"},
     ]
 
     esm = model.prot.esm
-    top_lr = base_lr * float(args.esm_lr_mult)
     decay = float(args.llrd_decay)
     min_mult = float(args.esm_min_lr_mult)
 
@@ -2291,6 +2285,9 @@ def main():
             "smiles_pretrained",
         ],
     )
+    ap.add_argument("--lig_lr", type=float, default=None)
+    ap.add_argument("--cross_lr", type=float, default=None)
+    ap.add_argument("--protein_lr", type=float, default=None)
     ap.add_argument("--rank_lambda", type=float, default=0.0)
     ap.add_argument(
         "--rank_loss",
