@@ -2155,20 +2155,39 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
     base_lr = float(args.lr)
     lig_lr = base_lr * float(args.lig_lr_mult)
 
-    lig_params = [p for p in model.lig.parameters() if p.requires_grad]
-    non_esm_params = []
+    lig_params = []
+    interaction_params = []
+
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
+
         if n.startswith("lig."):
-            continue
-        if n.startswith("prot.esm."):
-            continue
-        non_esm_params.append(p)
+            lig_params.append(p)
+
+        elif (
+                n.startswith("interaction.")
+                or n.startswith("cls_head.")
+                or n.startswith("reg_head.")
+                or n.startswith("pair_cnn.")
+                or n.startswith("pair_head.")
+                or n.startswith("p_proj.")
+                or n.startswith("p_ln.")
+                or n.startswith("l_ln.")
+        ):
+            interaction_params.append(p)
 
     param_groups = [
-        {"params": lig_params, "lr": lig_lr, "name": "lig"},
-        {"params": non_esm_params, "lr": base_lr, "name": "non_esm"},
+        {
+            "params": lig_params,
+            "lr": lig_lr,
+            "name": "lig_pretrained",
+        },
+        {
+            "params": interaction_params,
+            "lr": base_lr,
+            "name": "interaction",
+        },
     ]
 
     esm = model.prot.esm
