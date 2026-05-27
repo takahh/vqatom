@@ -2386,6 +2386,19 @@ def main():
         lig_enc.cls_id = smiles_tokenizer.cls_id
         lig_enc.vocab_source = f"smiles:{args.smiles_vocab_path}"
 
+    elif args.ligand_encoder_type == "continuous_gnn":
+        lig_enc = ContinuousGNNEncoder(
+            atom_feat_dim=args.atom_feat_dim,
+            d_model=256,
+            n_layers=3,
+            dropout=args.dropout,
+        ).to(device)
+
+        lig_enc.base_vocab = 0
+        lig_enc.vocab_size = 0
+        lig_enc.mask_id = -1
+        lig_enc.vocab_source = "continuous_gnn"
+
     prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
