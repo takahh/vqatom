@@ -2421,6 +2421,11 @@ def main():
         cls_id = vocab_size0
         vocab_size = vocab_size0 + 1
 
+        print("[vocab-debug] vq base_vocab", base_vocab)
+        print("[vocab-debug] vq vocab_size0", vocab_size0)
+        print("[vocab-debug] downstream vocab_size", vocab_size)
+        print("[vocab-debug] pad_id", pad_id, "mask_id", mask_id, "cls_id", cls_id)
+
         lig_enc = PretrainedLigandEncoder(
             ckpt_path=args.mlm_ckpt,
             device=device,
