@@ -238,7 +238,7 @@ class DTIDataset(Dataset):
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
 
-            if ligand_input_type == "vqatom":
+            if ligand_input_type in ("vqatom", "continuous"):
                 lig_text = (r.get("lig_tok") or "").strip()
             elif ligand_input_type == "smiles":
                 lig_text = (
@@ -249,7 +249,6 @@ class DTIDataset(Dataset):
                 ).strip()
             else:
                 raise ValueError(f"Unknown ligand_input_type: {ligand_input_type}")
-
             y_raw = r.get("y", "")
 
             if not seq or not lig_text:
@@ -307,7 +306,7 @@ class DTIDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        if self.ligand_input_type == "vqatom":
+        if self.ligand_input_type in ("vqatom", "continuous"):
             lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
         else:
             lig_ids = self.smiles_tokenizer.encode(row["lig_text"], add_cls=True)
