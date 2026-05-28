@@ -2353,7 +2353,7 @@ def main():
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
-    parser.add_argument("--d_model", type=int, default=256)
+    ap.add_argument("--d_model", type=int, default=256)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
