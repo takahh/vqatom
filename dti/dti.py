@@ -1488,20 +1488,30 @@ def save_json(path: str, obj: dict) -> None:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 
-def save_dti_checkpoint(path: str, model: nn.Module, args: argparse.Namespace, lig_enc: VQAtomGraphEncoder, epoch: int, best: dict) -> None:
+def save_dti_checkpoint(
+    path: str,
+    model: nn.Module,
+    args: argparse.Namespace,
+    lig_enc: nn.Module,
+    epoch: int,
+    best: dict,
+) -> None:
     torch.save(
         {
             "epoch": epoch,
             "model": model.state_dict(),
             "args": vars(args),
             "best": best,
-            "lig_config": lig_enc.conf,
-            "lig_vocab_source": lig_enc.vocab_source,
-            "lig_base_vocab": lig_enc.base_vocab,
-            "lig_vocab_size": lig_enc.vocab_size,
-            "lig_pad_id": lig_enc.pad_id,
-            "lig_mask_id": lig_enc.mask_id,
-            "lig_cls_id": lig_enc.cls_id,
+
+            "lig_config": getattr(lig_enc, "conf", None),
+            "lig_base_vocab": getattr(lig_enc, "base_vocab", None),
+            "lig_vocab_size": getattr(lig_enc, "vocab_size", None),
+            "lig_vocab_source": getattr(lig_enc, "vocab_source", None),
+            "lig_pad_id": getattr(lig_enc, "pad_id", None),
+            "lig_mask_id": getattr(lig_enc, "mask_id", None),
+            "lig_cls_id": getattr(lig_enc, "cls_id", None),
+
+            "lig_type": type(lig_enc).__name__,
         },
         path,
     )
