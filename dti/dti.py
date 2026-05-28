@@ -1232,6 +1232,7 @@ def train_one_epoch(
     rank_loss: str = "none",
     rank_margin: float = 0.0,
     rank_tau: float = 1.0,
+    cls_lambda: float = 0.0,
 ) -> Dict[str, float]:
 
     model.train()
@@ -1292,7 +1293,7 @@ def train_one_epoch(
                 else:
                     loss_reg = torch.tensor(0.0, device=device)
 
-                loss = loss_cls + float(reg_lambda) * loss_reg
+                loss = loss_cls * float(cls_lambda) + float(reg_lambda) * loss_reg
 
                 # ranking loss
                 loss_rank = torch.tensor(0.0, device=device)
@@ -1351,7 +1352,7 @@ def train_one_epoch(
             else:
                 loss_reg = torch.tensor(0.0, device=device)
 
-            loss = loss_cls + float(reg_lambda) * loss_reg
+            loss = loss_cls * float(cls_lambda) + float(reg_lambda) * loss_reg
 
             # ranking loss
             loss_rank = torch.tensor(0.0, device=device)
@@ -2276,6 +2277,7 @@ def main():
     ap.add_argument("--mlm_ckpt", type=str, default=None)
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--protein_only", action="store_true")
+    ap.add_argument("--bce_lambda", type=float, default=1.0)
     ap.add_argument(
         "--attn_activation",
         type=str,
@@ -2800,6 +2802,7 @@ def main():
             rank_loss=str(args.rank_loss),
             rank_margin=float(args.rank_margin),
             rank_tau=float(args.rank_tau),
+            cls_lambda=float(args.cls_lambda),
         )
 
         yhat_tr, yb_tr, yhatr_tr, yr_tr, yraw_tr, pid_tr, lid_tr = predict(model, train_loader, device)
