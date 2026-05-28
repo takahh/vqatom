@@ -2459,6 +2459,7 @@ def main():
         lig_enc = PretrainedLigandEncoder(
             ckpt_path=args.mlm_ckpt,
             device=device,
+            vq_ckpt=args.vq_ckpt,
             finetune=args.finetune_lig,
             base_vocab=base_vocab,
             vocab_size=vocab_size,
@@ -2500,6 +2501,7 @@ def main():
             ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
+            vq_ckpt=args.mlm_ckpt,
         ).to(device)
 
         ligand_input_type = "smiles"
