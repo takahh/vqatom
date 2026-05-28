@@ -2353,7 +2353,7 @@ def main():
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
-
+    parser.add_argument("--d_model", type=int, default=256)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2383,7 +2383,7 @@ def main():
             dropout=args.dropout,
         ).to(device)
 
-        ligand_input_type = "vqatom"
+        ligand_input_type = "continuous"
 
 
     # elif args.ligand_mode == "continuous_pretrained":
@@ -2406,11 +2406,15 @@ def main():
         print("[lig] mode = vqatom (scratch)")
 
         vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
+        vocab_size0 = int(vm["vocab_size"])
+        pad_id = int(vm["pad_id"])
+        cls_id = vocab_size0
+        vocab_size = vocab_size0 + 1
 
         lig_enc = VQAtomGraphEncoder(
-            vocab_size=vm["vocab_size"],
-            pad_id=vm["pad_id"],
-            cls_id=0,
+            vocab_size=vocab_size,
+            pad_id=pad_id,
+            cls_id=cls_id,
             d_model=args.d_model,
             n_layers=args.lig_n_layers,
             dropout=args.dropout,
