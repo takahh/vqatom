@@ -2278,6 +2278,7 @@ def main():
     ap.add_argument("--vq_ckpt", type=str, default=None)
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument("--bce_lambda", type=float, default=1.0)
+    ap.add_argument("--cls_lambda", type=float, default=0.0)
     ap.add_argument(
         "--attn_activation",
         type=str,
