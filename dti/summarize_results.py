@@ -59,6 +59,9 @@ def load_run(name, path):
             "valid_ef1": f(valid.get("ef1")),
             "final_ef1": f(final.get("ef1")),
 
+            "valid_ef10": f(valid.get("ef10")),
+            "final_ef10": f(final.get("ef10")),
+
             "valid_top1": f(valid_rank.get("top1_exact")),
             "final_top1": f(final_rank.get("top1_exact")),
 
@@ -96,6 +99,7 @@ for run, g in df.groupby("run"):
     print(f"final Best@1% : {row['final_best1']:.4f}")
     print(f"final Top1    : {row['final_top1']:.4f}")
     print(f"final EF1     : {row['final_ef1']:.4f}")
+    print(f"final EF10    : {row['final_ef10']:.4f}")
     print(f"final AUROC   : {row['final_auc']:.4f}")
 
 
@@ -111,6 +115,7 @@ print(summary[
         "final_best1",
         "final_top1",
         "final_ef1",
+        "final_ef10",
         "final_auc",
     ]
 ].to_string(index=False))
