@@ -2254,22 +2254,44 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
-class SimpleSmilesTokenizer:
-    def __init__(self, vocab_path):
-        with open(vocab_path, "r", encoding="utf-8") as f:
-            v = json.load(f)
-        self.stoi = v["stoi"]
-        self.pad_id = int(v["pad_id"])
-        self.mask_id = int(v["mask_id"])
-        self.cls_id = int(v["cls_id"])
-        self.unk_id = int(v["unk_id"])
-        self.vocab_size = int(v["vocab_size"])
+class ScratchSmilesTransformerEncoder(nn.Module):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=6, n_heads=8, dropout=0.1):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.base_vocab = vocab_size
+        self.pad_id = pad_id
+        self.cls_id = cls_id
+        self.mask_id = None
+        self.conf = {"d_model": d_model}
+        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.pos = nn.Embedding(512, d_model)
 
-    def encode(self, s, add_cls=True):
-        ids = [self.stoi.get(ch, self.unk_id) for ch in str(s).strip()]
-        if add_cls:
-            ids = [self.cls_id] + ids
-        return ids
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=4 * d_model,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+        self.ln = nn.LayerNorm(d_model)
+
+    @property
+    def d_model(self):
+        return int(self.conf["d_model"])
+
+    def forward(self, l_ids, **kwargs):
+        B, L = l_ids.shape
+        pos = torch.arange(L, device=l_ids.device).unsqueeze(0).expand(B, L)
+        pad = l_ids.eq(self.pad_id)
+
+        x = self.tok(l_ids) + self.pos(pos)
+        x = self.encoder(x, src_key_padding_mask=pad)
+        x = self.ln(x)
+        return x, pad
+
 
 class ScratchLigandEncoder(nn.Module):
     def __init__(self, vocab_size, pad_id, cls_id, d_model=256, dropout=0.1):
@@ -2292,6 +2314,45 @@ class ScratchLigandEncoder(nn.Module):
         x = self.drop(self.ln(self.tok(l_ids)))
         l_pad = l_ids.eq(self.pad_id)
         return x, l_pad
+
+
+class ScratchSmilesTransformerEncoder(nn.Module):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=4, n_heads=8, dropout=0.1):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.base_vocab = vocab_size
+        self.pad_id = pad_id
+        self.cls_id = cls_id
+        self.mask_id = None
+        self.conf = {"d_model": d_model}
+        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.pos = nn.Embedding(512, d_model)
+
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=4 * d_model,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+        self.ln = nn.LayerNorm(d_model)
+
+    @property
+    def d_model(self):
+        return int(self.conf["d_model"])
+
+    def forward(self, l_ids, **kwargs):
+        B, L = l_ids.shape
+        pos = torch.arange(L, device=l_ids.device).unsqueeze(0).expand(B, L)
+        pad = l_ids.eq(self.pad_id)
+
+        x = self.tok(l_ids) + self.pos(pos)
+        x = self.encoder(x, src_key_padding_mask=pad)
+        x = self.ln(x)
+        return x, pad
 
 
 # =========================================================
@@ -2524,12 +2585,14 @@ def main():
 
     elif args.ligand_mode == "smiles":
         print("[lig] mode = smiles (scratch)")
-        smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
-        lig_enc = ScratchLigandEncoder(
+        smiles_tokenizer = ScratchSmilesTransformerEncoder(args.smiles_vocab_path)
+        lig_enc = ScratchSmilesTransformerEncoder(
             vocab_size=smiles_tokenizer.vocab_size,
             pad_id=smiles_tokenizer.pad_id,
             cls_id=smiles_tokenizer.cls_id,
             d_model=256,
+            n_layers=6,
+            n_heads=8,
             dropout=args.dropout,
         )
         ligand_input_type = "smiles"
