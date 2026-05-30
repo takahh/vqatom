@@ -2254,6 +2254,28 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
+class ScratchLigandEncoder(nn.Module):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, dropout=0.1):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.base_vocab = vocab_size
+        self.pad_id = pad_id
+        self.cls_id = cls_id
+        self.mask_id = None
+        self.conf = {"d_model": d_model}
+        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.ln = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(dropout)
+
+    @property
+    def d_model(self):
+        return int(self.conf["d_model"])
+
+    def forward(self, l_ids, **kwargs):
+        x = self.drop(self.ln(self.tok(l_ids)))
+        l_pad = l_ids.eq(self.pad_id)
+        return x, l_pad
+
 
 # =========================================================
 # Main
@@ -2485,11 +2507,13 @@ def main():
     elif args.ligand_mode == "smiles":
         print("[lig] mode = smiles (scratch)")
 
-        lig_enc = PretrainedLigandEncoder(
-            ckpt_path=None,
-            device=device,
-            finetune=args.finetune_lig,
-        ).to(device)
+        lig_enc = ScratchLigandEncoder(
+            vocab_size=57,
+            pad_id=0,
+            cls_id=2,
+            d_model=256,
+            dropout=args.dropout,
+        )
 
         ligand_input_type = "smiles"
 

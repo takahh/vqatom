@@ -9,10 +9,10 @@ import matplotlib.pyplot as plt
 # =========================================================
 # Config
 # =========================================================
-json_dir = "/Users/taka/Downloads/vqatom_pre"
+json_dir = "/Users/taka/Downloads/vqa"
 files = glob.glob(os.path.join(json_dir, "*.json"))
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
-
+run_name = os.path.basename(os.path.normpath(json_dir))
 
 # =========================================================
 # Utils
@@ -64,7 +64,10 @@ def plot_metric(filename, title, ylabel, series, best_epoch=None, hline0=False):
 
     plt.xlabel("Epoch")
     plt.ylabel(ylabel)
-    plt.title(title)
+
+    # ← ここ
+    plt.title(f"{run_name} | {title}")
+
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
