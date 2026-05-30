@@ -2254,6 +2254,23 @@ def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> tor
 
     return torch.optim.AdamW(param_groups, weight_decay=float(args.weight_decay))
 
+class SimpleSmilesTokenizer:
+    def __init__(self, vocab_path):
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            v = json.load(f)
+        self.stoi = v["stoi"]
+        self.pad_id = int(v["pad_id"])
+        self.mask_id = int(v["mask_id"])
+        self.cls_id = int(v["cls_id"])
+        self.unk_id = int(v["unk_id"])
+        self.vocab_size = int(v["vocab_size"])
+
+    def encode(self, s, add_cls=True):
+        ids = [self.stoi.get(ch, self.unk_id) for ch in str(s).strip()]
+        if add_cls:
+            ids = [self.cls_id] + ids
+        return ids
+
 class ScratchLigandEncoder(nn.Module):
     def __init__(self, vocab_size, pad_id, cls_id, d_model=256, dropout=0.1):
         super().__init__()
@@ -2504,19 +2521,18 @@ def main():
 
         ligand_input_type = "vqatom"
 
+
     elif args.ligand_mode == "smiles":
         print("[lig] mode = smiles (scratch)")
-
+        smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
         lig_enc = ScratchLigandEncoder(
-            vocab_size=57,
-            pad_id=0,
-            cls_id=2,
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            cls_id=smiles_tokenizer.cls_id,
             d_model=256,
             dropout=args.dropout,
         )
-
         ligand_input_type = "smiles"
-
 
     elif args.ligand_mode == "smiles_pretrained":
         print("[lig] mode = smiles_pretrained")
