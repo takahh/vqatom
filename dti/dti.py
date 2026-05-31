@@ -2562,18 +2562,22 @@ def main():
 
 
     elif args.ligand_mode == "smiles":
-        print("[lig] mode = smiles (scratch)")
-        smiles_tokenizer = ScratchSmilesTransformerEncoder(args.smiles_vocab_path)
+        with open(args.smiles_vocab_path, "r") as f:
+            vocab = json.load(f)
+
+        vocab_size = len(vocab)
+        pad_id = vocab.get("[PAD]", vocab.get("<pad>", 0))
+        cls_id = vocab.get("[CLS]", vocab.get("<cls>", 1))
+
         lig_enc = ScratchSmilesTransformerEncoder(
-            vocab_size=smiles_tokenizer.vocab_size,
-            pad_id=smiles_tokenizer.pad_id,
-            cls_id=smiles_tokenizer.cls_id,
-            d_model=args.d_model,
-            n_layers=args.lig_n_layers,
-            n_heads=args.lig_n_heads,
+            vocab_size=vocab_size,
+            pad_id=pad_id,
+            cls_id=cls_id,
+            d_model=256,
+            n_layers=3,  # VQAtomと揃えるなら3
+            n_heads=8,
             dropout=args.dropout,
         )
-        ligand_input_type = "smiles"
 
     elif args.ligand_mode == "smiles_pretrained":
         print("[lig] mode = smiles_pretrained")
