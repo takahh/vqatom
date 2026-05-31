@@ -2331,6 +2331,21 @@ class ScratchSmilesTransformerEncoder(nn.Module):
         x = self.ln(x)
         return x, pad
 
+class SimpleSmilesTokenizer:
+    def __init__(self, vocab_path):
+        with open(vocab_path, "r") as f:
+            self.stoi = json.load(f)
+
+        self.pad_id = self.stoi.get("[PAD]", self.stoi.get("<pad>", 0))
+        self.cls_id = self.stoi.get("[CLS]", self.stoi.get("<cls>", 1))
+        self.unk_id = self.stoi.get("[UNK]", self.stoi.get("<unk>", self.pad_id))
+        self.vocab_size = len(self.stoi)
+
+    def encode(self, smiles, add_cls=True):
+        ids = [self.stoi.get(ch, self.unk_id) for ch in str(smiles)]
+        if add_cls:
+            ids = [self.cls_id] + ids
+        return ids
 
 # =========================================================
 # Main
@@ -2562,22 +2577,18 @@ def main():
 
 
     elif args.ligand_mode == "smiles":
-        with open(args.smiles_vocab_path, "r") as f:
-            vocab = json.load(f)
-
-        vocab_size = len(vocab)
-        pad_id = vocab.get("[PAD]", vocab.get("<pad>", 0))
-        cls_id = vocab.get("[CLS]", vocab.get("<cls>", 1))
+        smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
 
         lig_enc = ScratchSmilesTransformerEncoder(
-            vocab_size=vocab_size,
-            pad_id=pad_id,
-            cls_id=cls_id,
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            cls_id=smiles_tokenizer.cls_id,
             d_model=256,
-            n_layers=3,  # VQAtomと揃えるなら3
+            n_layers=3,
             n_heads=8,
             dropout=args.dropout,
         ).to(device)
+
         ligand_input_type = "smiles"
 
     elif args.ligand_mode == "smiles_pretrained":
