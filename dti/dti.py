@@ -2577,7 +2577,8 @@ def main():
             n_layers=3,  # VQAtomと揃えるなら3
             n_heads=8,
             dropout=args.dropout,
-        )
+        ).to(device)
+        ligand_input_type = "smiles"
 
     elif args.ligand_mode == "smiles_pretrained":
         print("[lig] mode = smiles_pretrained")
