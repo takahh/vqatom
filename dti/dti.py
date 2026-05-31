@@ -146,7 +146,7 @@ def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     return out
 
 class ContinuousGNNEncoder(nn.Module):
-    def __init__(self, atom_feat_dim, d_model=256, n_layers=3, dropout=0.1):
+    def __init__(self, atom_feat_dim, d_model=256, n_layers=6, dropout=0.1):
         super().__init__()
         self.pad_id = -1
         self.cls_id = -1
@@ -522,7 +522,7 @@ from torch_geometric.nn import GINConv
 from torch_geometric.utils import to_dense_batch
 
 class VQAtomGraphEncoder(nn.Module):
-    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=3, dropout=0.1):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=6, dropout=0.1):
         super().__init__()
         self.vocab_size = vocab_size
         self.pad_id = pad_id
@@ -2293,31 +2293,8 @@ class ScratchSmilesTransformerEncoder(nn.Module):
         return x, pad
 
 
-class ScratchLigandEncoder(nn.Module):
-    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, dropout=0.1):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.base_vocab = vocab_size
-        self.pad_id = pad_id
-        self.cls_id = cls_id
-        self.mask_id = None
-        self.conf = {"d_model": d_model}
-        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
-        self.ln = nn.LayerNorm(d_model)
-        self.drop = nn.Dropout(dropout)
-
-    @property
-    def d_model(self):
-        return int(self.conf["d_model"])
-
-    def forward(self, l_ids, **kwargs):
-        x = self.drop(self.ln(self.tok(l_ids)))
-        l_pad = l_ids.eq(self.pad_id)
-        return x, l_pad
-
-
 class ScratchSmilesTransformerEncoder(nn.Module):
-    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=4, n_heads=8, dropout=0.1):
+    def __init__(self, vocab_size, pad_id, cls_id, d_model=256, n_layers=6, n_heads=8, dropout=0.1):
         super().__init__()
         self.vocab_size = vocab_size
         self.base_vocab = vocab_size
@@ -2466,7 +2443,8 @@ def main():
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
     ap.add_argument("--d_model", type=int, default=256)
-    ap.add_argument("--lig_n_layers", type=int, default=3)
+    ap.add_argument("--lig_n_layers", type=int, default=6)
+    ap.add_argument("--lig_n_heads", type=int, default=8)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2590,9 +2568,9 @@ def main():
             vocab_size=smiles_tokenizer.vocab_size,
             pad_id=smiles_tokenizer.pad_id,
             cls_id=smiles_tokenizer.cls_id,
-            d_model=256,
-            n_layers=6,
-            n_heads=8,
+            d_model=args.d_model,
+            n_layers=args.lig_n_layers,
+            n_heads=args.lig_n_heads,
             dropout=args.dropout,
         )
         ligand_input_type = "smiles"
