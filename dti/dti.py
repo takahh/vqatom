@@ -2383,6 +2383,7 @@ def main():
         default="vqatom",
         choices=[
             "continuous",
+            "continuous_pretrained",
             "vqatom",
             "vqatom_pretrained",
             "smiles",
@@ -2417,6 +2418,11 @@ def main():
         type=str,
         default="vqatom",
         choices=["vqatom", "continuous_gnn"],
+    )
+    ap.add_argument(
+        "--continuous_ckpt",
+        type=str,
+        default=None,
     )
     ap.add_argument("--atom_feat_dim", type=int, default=10)
     ap.add_argument("--batch_size", type=int, default=16)
@@ -2491,21 +2497,21 @@ def main():
 
         ligand_input_type = "continuous"
 
+    elif args.ligand_mode == "continuous_pretrained":
+        print("[lig] mode = continuous (pretrained)")
 
-    # elif args.ligand_mode == "continuous_pretrained":
-    #
-    #     print("[lig] mode = continuous_pretrained")
-    #
-    #     if args.mlm_ckpt is None:
-    #         raise ValueError("--mlm_ckpt required for continuous_pretrained")
-    #
-    #     lig_enc = ContinuousGNNEncoder(
-    #         ckpt_path=args.mlm_ckpt,
-    #         device=device,
-    #         finetune=args.finetune_lig,
-    #     ).to(device)
-    #
-    #     ligand_input_type = "continuous"
+        lig_enc = ContinuousGNNEncoder(
+            atom_feat_dim=args.atom_feat_dim,
+            d_model=args.d_model,
+            n_layers=args.lig_n_layers,
+            dropout=args.dropout,
+        )
+
+        ckpt = torch.load(args.continuous_ckpt, map_location="cpu")
+        state = ckpt["model"] if "model" in ckpt else ckpt
+        load_state_dict_shape_safe(lig_enc, state)
+
+        ligand_input_type = "continuous"
 
 
     elif args.ligand_mode == "vqatom":
