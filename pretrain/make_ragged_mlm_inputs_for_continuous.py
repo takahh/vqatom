@@ -7,7 +7,7 @@ import tarfile
 import io
 import tempfile
 from typing import List, Tuple
-
+from rdkit import Chem
 import numpy as np
 import torch
 
@@ -236,9 +236,52 @@ with tarfile.open(path0, "r:gz") as tar:
         offsets = torch.from_numpy(offsets_np)
         # --- continuous atom features for MAE
         atom_feats_list = []
+        edge_index_list = []
+        edge_offsets = [0]
+
         for i in range(n_mols):
             L = int(lengths[i])
+            smi = smiles[i]
+
+            mol = Chem.MolFromSmiles(smi, sanitize=False)
+            if mol is None:
+                raise RuntimeError(f"RDKit failed: batch={b} mol={i} smiles={smi}")
+
+            mol = Chem.RemoveHs(mol, sanitize=False)
+
+            L = int(lengths[i])
+
+            if mol.GetNumAtoms() != L:
+                raise RuntimeError(
+                    f"atom count mismatch: batch={b} mol={i} "
+                    f"rdkit={mol.GetNumAtoms()} attr={L} smiles={smi}"
+                )
+
+            z_attr = attr3[i, :L, 0].astype(np.int64)
+            z_rdkit = np.array([atom.GetAtomicNum() for atom in mol.GetAtoms()], dtype=np.int64)
+
+            if not np.array_equal(z_attr, z_rdkit):
+                raise RuntimeError(
+                    f"atom order mismatch: batch={b} mol={i} smiles={smi}\n"
+                    f"attr ={z_attr.tolist()}\n"
+                    f"rdkit={z_rdkit.tolist()}"
+                )
             atom_feats_list.append(torch.from_numpy(attr3[i, :L, :]).float())
+
+            edges = []
+            for bond in mol.GetBonds():
+                u = bond.GetBeginAtomIdx()
+                v = bond.GetEndAtomIdx()
+                edges.append((u, v))
+                edges.append((v, u))
+
+            if edges:
+                edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+            else:
+                edge_index = torch.empty((2, 0), dtype=torch.long)
+
+            edge_index_list.append(edge_index)
+            edge_offsets.append(edge_offsets[-1] + edge_index.shape[1])
 
         atom_feats_flat = torch.cat(atom_feats_list, dim=0)  # (sum(lengths), 79)
 
@@ -262,6 +305,10 @@ with tarfile.open(path0, "r:gz") as tar:
                 "neg_in_slice": int(neg_in_slice),
                 "atom_feats_flat": atom_feats_flat,
                 "feat_dim": int(ATTR_DIM),
+                "edge_index_flat": torch.cat(edge_index_list, dim=1),
+                "edge_offsets": torch.tensor(edge_offsets, dtype=torch.long),
+                "edge_index_format": "local_per_molecule",
+                "atom_order_checked": True,
             },
             out_path,
         )
