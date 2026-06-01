@@ -518,70 +518,6 @@ def load_state_dict_shape_safe(module: nn.Module, state: dict, verbose: bool = T
     return missing, unexpected, skipped
 
 
-def load_gnn_pretrain_shape_safe(module: nn.Module, ckpt_path: str, verbose: bool = True):
-    """
-    Load only the ligand GNN-compatible weights from a pretraining checkpoint.
-    This is intentionally tolerant because MLM checkpoints often wrap keys as
-    model.*, encoder.*, module.*, lig.*, etc.
-    """
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-
-    if isinstance(ckpt, dict):
-        state = (
-            ckpt.get("model")
-            or ckpt.get("state_dict")
-            or ckpt.get("model_state_dict")
-            or ckpt
-        )
-    else:
-        state = ckpt
-
-    if not isinstance(state, dict):
-        raise RuntimeError(f"Unsupported checkpoint format: {ckpt_path}")
-
-    prefixes = [
-        "module.",
-        "model.",
-        "encoder.",
-        "lig.",
-        "lig_enc.",
-        "lig_encoder.",
-        "ligand_encoder.",
-    ]
-
-    candidates = []
-    candidates.append(state)
-
-    # one-prefix strip
-    for pref in prefixes:
-        stripped = {k[len(pref):]: v for k, v in state.items() if isinstance(k, str) and k.startswith(pref)}
-        if stripped:
-            candidates.append(stripped)
-
-    # two-prefix strip, e.g. module.encoder.tok.weight
-    for pref1 in prefixes:
-        for pref2 in prefixes:
-            pref = pref1 + pref2
-            stripped = {k[len(pref):]: v for k, v in state.items() if isinstance(k, str) and k.startswith(pref)}
-            if stripped:
-                candidates.append(stripped)
-
-    best = None
-    best_score = -1
-    model_keys = set(module.state_dict().keys())
-    for cand in candidates:
-        score = sum(1 for k in cand.keys() if k in model_keys)
-        if score > best_score:
-            best_score = score
-            best = cand
-
-    if verbose:
-        print(f"[gnn-pretrain] {ckpt_path}")
-        print(f"[gnn-pretrain] matched_keys={best_score}/{len(model_keys)}")
-
-    return load_state_dict_shape_safe(module, best, verbose=verbose)
-
-
 from torch_geometric.nn import GINConv
 from torch_geometric.utils import to_dense_batch
 
@@ -2528,17 +2464,9 @@ def main():
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
     ap.add_argument("--d_model", type=int, default=256)
-    ap.add_argument("--lig_n_layers", type=int, default=3)
+    ap.add_argument("--lig_n_layers", type=int, default=6)
     ap.add_argument("--lig_n_heads", type=int, default=8)
-    # aliases to match the GNN MLM/pretrain command
-    ap.add_argument("--gnn_layers", type=int, default=3)
-    ap.add_argument("--hidden_dim", type=int, default=256)
-    ap.add_argument("--num_workers", type=int, default=2)
     args = ap.parse_args()
-
-    # Keep DTI ligand-self GNN hyperparameters aligned with GNN pretraining.
-    args.lig_n_layers = int(args.gnn_layers)
-    args.d_model = int(args.hidden_dim)
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
     print("DEBUG use_train_valid_csv:", args.use_train_valid_csv)
@@ -2570,10 +2498,7 @@ def main():
         ligand_input_type = "continuous"
 
     elif args.ligand_mode == "continuous_pretrained":
-        print("[lig] mode = continuous_pretrained (GNN ligand self)")
-
-        if args.continuous_ckpt is None:
-            raise ValueError("--continuous_ckpt required for continuous_pretrained")
+        print("[lig] mode = continuous (pretrained)")
 
         lig_enc = ContinuousGNNEncoder(
             atom_feat_dim=args.atom_feat_dim,
@@ -2582,11 +2507,10 @@ def main():
             dropout=args.dropout,
         )
 
-        print("[lig-gnn] hidden_dim", args.d_model, "gnn_layers", args.lig_n_layers)
-        load_gnn_pretrain_shape_safe(lig_enc, args.continuous_ckpt, verbose=True)
-        lig_enc = lig_enc.to(device)
+        ckpt = torch.load(args.continuous_ckpt, map_location="cpu")
+        state = ckpt["model"] if "model" in ckpt else ckpt
+        load_state_dict_shape_safe(lig_enc, state)
 
-        lig_enc.vocab_source = f"continuous_gnn_pretrain:{args.continuous_ckpt}"
         ligand_input_type = "continuous"
 
 
@@ -2612,7 +2536,7 @@ def main():
 
 
     elif args.ligand_mode == "vqatom_pretrained":
-        print("[lig] mode = vqatom_pretrained (GNN ligand self)")
+        print("[lig] mode = vqatom_pretrained")
 
         if args.vq_ckpt is None:
             raise ValueError("--vq_ckpt required for vqatom_pretrained")
@@ -2626,8 +2550,6 @@ def main():
         pad_id = int(vm["pad_id"])
         mask_id = int(vm["mask_id"])
 
-        # DTI still uses an explicit CLS token in l_ids, but the GNN encoder removes it
-        # before message passing. The actual graph nodes are atom tokens only.
         cls_id = vocab_size0
         vocab_size = vocab_size0 + 1
 
@@ -2635,28 +2557,30 @@ def main():
         print("[vocab-debug] vq vocab_size0", vocab_size0)
         print("[vocab-debug] downstream vocab_size", vocab_size)
         print("[vocab-debug] pad_id", pad_id, "mask_id", mask_id, "cls_id", cls_id)
-        print("[lig-gnn] hidden_dim", args.d_model, "gnn_layers", args.lig_n_layers)
 
-        lig_enc = VQAtomGraphEncoder(
+        lig_enc = PretrainedLigandEncoder(
+            ckpt_path=args.mlm_ckpt,
+            device=device,
+            vq_ckpt=args.vq_ckpt,
+            finetune=args.finetune_lig,
+            base_vocab=base_vocab,
             vocab_size=vocab_size,
             pad_id=pad_id,
+            mask_id=mask_id,
             cls_id=cls_id,
-            d_model=args.d_model,
-            n_layers=args.lig_n_layers,
-            dropout=args.dropout,
-        )
-
-        load_gnn_pretrain_shape_safe(lig_enc, args.mlm_ckpt, verbose=True)
-        lig_enc = lig_enc.to(device)
+            verbose_load=True,
+            debug_index_check=bool(args.lig_debug_index),
+        ).to(device)
 
         lig_enc.base_vocab = base_vocab
         lig_enc.vocab_size = vocab_size
         lig_enc.pad_id = pad_id
         lig_enc.mask_id = mask_id
         lig_enc.cls_id = cls_id
-        lig_enc.vocab_source = f"vqatom_gnn_mlm:{args.mlm_ckpt}"
+        lig_enc.vocab_source = f"vqatom_mlm:{args.mlm_ckpt}"
 
         ligand_input_type = "vqatom"
+
 
     elif args.ligand_mode == "smiles":
         smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
@@ -2728,8 +2652,8 @@ def main():
             ds,
             batch_size=args.batch_size,
             shuffle=shuffle,
-            num_workers=int(args.num_workers),
-            pin_memory=(device.type == "cuda"),
+            num_workers=0,
+            pin_memory=False,
             collate_fn=lambda xs: collate_fn(
                 xs,
                 esm_tokenizer=esm_tokenizer,
@@ -2864,8 +2788,8 @@ def main():
             guide_ds,
             batch_size=int(args.guide_batch_size),
             shuffle=True,
-            num_workers=int(args.num_workers),
-            pin_memory=(device.type == "cuda"),
+            num_workers=0,
+            pin_memory=False,
             collate_fn=lambda xs: collate_fn(
                 xs,
                 esm_tokenizer=esm_tokenizer,
