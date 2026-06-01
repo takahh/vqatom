@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pretrain_vqa_gnn_mlm.py
+pretrain_vqa_gnn_mlm_clean.py
 
 GNN version of VQ-Atom token MLM pretraining.
 
@@ -334,45 +334,51 @@ class VQAtomGNNMLM(nn.Module):
         self,
         vocab_size: int,
         edge_dim: int = 0,
-        d_model: int = 256,
-        layers: int = 5,
+        hidden_dim: int = 256,
+        gnn_layers: int = 3,
+        aggr: str = "sum",
         dropout: float = 0.1,
         use_graph_context: bool = False,
     ):
         super().__init__()
         self.vocab_size = int(vocab_size)
         self.edge_dim = int(edge_dim)
-        self.d_model = int(d_model)
+        self.hidden_dim = int(hidden_dim)
+        self.gnn_layers = int(gnn_layers)
+        self.aggr = str(aggr)
         self.use_graph_context = bool(use_graph_context)
 
-        self.tok = nn.Embedding(vocab_size, d_model)
+        if self.aggr not in {"sum", "mean", "max"}:
+            raise ValueError(f"aggr must be one of sum/mean/max, got: {self.aggr}")
+
+        self.tok = nn.Embedding(vocab_size, hidden_dim)
 
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList()
-        for _ in range(layers):
+        for _ in range(gnn_layers):
             mlp = nn.Sequential(
-                nn.Linear(d_model, 2 * d_model),
+                nn.Linear(hidden_dim, 2 * hidden_dim),
                 nn.GELU(),
-                nn.Linear(2 * d_model, d_model),
+                nn.Linear(2 * hidden_dim, hidden_dim),
             )
             if self.edge_dim > 0:
-                self.convs.append(GINEConv(mlp, edge_dim=self.edge_dim))
+                self.convs.append(GINEConv(mlp, edge_dim=self.edge_dim, aggr=self.aggr))
             else:
-                self.convs.append(GINConv(mlp))
-            self.norms.append(nn.LayerNorm(d_model))
+                self.convs.append(GINConv(mlp, aggr=self.aggr))
+            self.norms.append(nn.LayerNorm(hidden_dim))
 
         if self.use_graph_context:
-            self.graph_proj = nn.Linear(d_model, d_model)
+            self.graph_proj = nn.Linear(hidden_dim, hidden_dim)
         else:
             self.graph_proj = None
 
         self.dropout = nn.Dropout(dropout)
         self.lm_head = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model, vocab_size),
+            nn.Linear(hidden_dim, vocab_size),
         )
 
     def forward(
@@ -501,8 +507,9 @@ def main() -> None:
     ap.add_argument("--reset_lr", action="store_true", help="When resuming, set lr from current schedule")
 
     # model
-    ap.add_argument("--d_model", type=int, default=256)
-    ap.add_argument("--layers", type=int, default=5)
+    ap.add_argument("--gnn_layers", type=int, default=3)
+    ap.add_argument("--hidden_dim", type=int, default=256)
+    ap.add_argument("--aggr", type=str, default="sum", choices=["sum", "mean", "max"])
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--use_graph_context", action="store_true")
 
@@ -595,11 +602,16 @@ def main() -> None:
     model = VQAtomGNNMLM(
         vocab_size=vocab_size,
         edge_dim=edge_dim,
-        d_model=args.d_model,
-        layers=args.layers,
+        hidden_dim=args.hidden_dim,
+        gnn_layers=args.gnn_layers,
+        aggr=args.aggr,
         dropout=args.dropout,
         use_graph_context=args.use_graph_context,
     ).to(device)
+    print(
+        f"model: GNN layers={args.gnn_layers} hidden_dim={args.hidden_dim} "
+        f"aggr={args.aggr} dropout={args.dropout} use_graph_context={args.use_graph_context}"
+    )
 
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
