@@ -121,6 +121,20 @@ def normalize_edge_index(edge_index: torch.Tensor) -> torch.Tensor:
     raise RuntimeError(f"edge_index must have shape (2,E) or (E,2), got {tuple(edge_index.shape)}")
 
 
+def get_edge_index_format(d: Dict[str, Any]) -> str:
+    """
+    Supported formats:
+      - global: edge_index stores global atom indices over the flattened file.
+      - local_per_molecule: edge_index stores local atom indices for each molecule,
+        concatenated according to edge_offsets. In this case DO NOT subtract atom offset.
+    """
+    fmt = str(d.get("edge_index_format", "global"))
+    if fmt not in {"global", "local_per_molecule"}:
+        print(f"[warn] unknown edge_index_format={fmt!r}; treating as global")
+        fmt = "global"
+    return fmt
+
+
 def mask_continuous_nodes(
     x: torch.Tensor,
     mask_prob: float = 0.30,
@@ -139,7 +153,12 @@ def mask_continuous_nodes(
     elif mask_mode == "zero":
         x_masked[mask_sel] = 0.0
     elif mask_mode == "noise":
-        x_masked[mask_sel] = torch.randn_like(x_masked[mask_sel], generator=generator)
+        x_masked[mask_sel] = torch.randn(
+            x_masked[mask_sel].shape,
+            device=x_masked.device,
+            dtype=x_masked.dtype,
+            generator=generator,
+        )
     else:
         raise ValueError(f"Unknown mask_mode: {mask_mode}")
 
@@ -207,12 +226,21 @@ class ContinuousRaggedMolGraphDataset(Dataset):
 
             ekey = find_key(d, EDGE_INDEX_KEYS, self.edge_index_key_arg, "edge_index")
             edge_index = normalize_edge_index(d[ekey])
+            edge_index_format = get_edge_index_format(d)
+
             max_node = int(offsets[-1].item())
-            if edge_index.numel() > 0 and (int(edge_index.min()) < 0 or int(edge_index.max()) >= max_node):
-                raise RuntimeError(
-                    f"edge_index in {fp} appears not to use global atom indices in [0, {max_node}). "
-                    "Check AtomFeat/Adj correspondence."
-                )
+            if edge_index.numel() > 0 and int(edge_index.min()) < 0:
+                raise RuntimeError(f"edge_index in {fp} contains negative indices.")
+
+            # For global format, values must be flattened atom indices.
+            # For local_per_molecule format, values are local atom indices and can be
+            # much smaller than offsets[-1], so the global max check is not valid here.
+            if edge_index_format == "global":
+                if edge_index.numel() > 0 and int(edge_index.max()) >= max_node:
+                    raise RuntimeError(
+                        f"edge_index in {fp} appears not to use global atom indices in [0, {max_node}). "
+                        "Check AtomFeat/Adj correspondence."
+                    )
 
             eokey = find_optional_key(d, EDGE_OFFSET_KEYS, self.edge_offsets_key_arg)
             eattr_key = find_optional_key(d, EDGE_ATTR_KEYS, self.edge_attr_key_arg)
@@ -239,6 +267,7 @@ class ContinuousRaggedMolGraphDataset(Dataset):
                 "offsets": offsets,
                 "feature_key": fkey,
                 "edge_index_key": ekey,
+                "edge_index_format": edge_index_format,
                 "edge_offsets_key": eokey,
                 "edge_attr_key": eattr_key,
             })
@@ -296,14 +325,27 @@ class ContinuousRaggedMolGraphDataset(Dataset):
             x = (x - self.feature_mean) / self.feature_std
 
         edge_index_all = normalize_edge_index(d[meta["edge_index_key"]])
+        edge_index_format = str(meta.get("edge_index_format", "global"))
 
         if meta["edge_offsets_key"] is not None:
             eo = d[meta["edge_offsets_key"]].to(torch.int64)
             es = int(eo[mi].item())
             ee = int(eo[mi + 1].item())
-            edge_index = edge_index_all[:, es:ee].clone() - s
+
+            if edge_index_format == "local_per_molecule":
+                # Already local to this molecule. Do NOT subtract atom offset.
+                edge_index = edge_index_all[:, es:ee].clone()
+            else:
+                # Global flattened atom indices. Convert to local molecule indices.
+                edge_index = edge_index_all[:, es:ee].clone() - s
             edge_slice = slice(es, ee)
         else:
+            if edge_index_format == "local_per_molecule":
+                raise RuntimeError(
+                    "edge_index_format='local_per_molecule' requires edge_offsets/edge_ptr "
+                    "so per-molecule edges can be sliced."
+                )
+
             src = edge_index_all[0]
             dst = edge_index_all[1]
             keep = (src >= s) & (src < e) & (dst >= s) & (dst < e)
@@ -311,7 +353,11 @@ class ContinuousRaggedMolGraphDataset(Dataset):
             edge_slice = keep
 
         if edge_index.numel() > 0 and (int(edge_index.min()) < 0 or int(edge_index.max()) >= n):
-            raise RuntimeError("Local edge_index is out of range after slicing. Check offsets/edge_index.")
+            raise RuntimeError(
+                f"Local edge_index is out of range after slicing: "
+                f"mol={mi} n={n} min={int(edge_index.min())} max={int(edge_index.max())} "
+                f"format={edge_index_format}. Check offsets/edge_index."
+            )
 
         edge_attr = None
         if meta["edge_attr_key"] is not None:
