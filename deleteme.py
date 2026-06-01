@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 # =========================================================
 # Config
 # =========================================================
-json_dir = "/Users/taka/Downloads/vqa"
+json_dir = "/Users/taka/Downloads/smiles"
 files = glob.glob(os.path.join(json_dir, "*.json"))
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
 run_name = os.path.basename(os.path.normpath(json_dir))
