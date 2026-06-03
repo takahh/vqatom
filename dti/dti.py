@@ -70,14 +70,13 @@ def read_csv_rows(path: str) -> List[Dict[str, str]]:
         raise ValueError(f"No rows found in {path}")
     return rows
 
-def read_csv_rows_filter_split(path: str, split_name: str) -> List[Dict[str, str]]:
+def read_csv_rows_filter_split(path: str) -> List[Dict[str, str]]:
     rows = read_csv_rows(path)
     out = []
     for r in rows:
-        if (r.get("split") or "").strip() == split_name:
-            out.append(r)
+        out.append(r)
     if not out:
-        raise ValueError(f"No rows with split={split_name} in {path}")
+        raise ValueError(f"No rows with in {path}")
     return out
 
 def read_csv_random_rows(path: str, n_rows: int, seed: int) -> List[Dict[str, str]]:
@@ -2459,7 +2458,7 @@ def main():
     ap.add_argument("--reg_lambda", type=float, default=0.1)
     ap.add_argument("--qk_norm", action="store_true")
     ap.add_argument("--guide_csv", type=str, default=None)
-    ap.add_argument("--guide_split", type=str, default="guide_train")
+    ap.add_argument("--guide_split", type=str, default=None)
     ap.add_argument("--guide_batch_size", type=int, default=8)
     ap.add_argument("--guide_every", type=int, default=1)
     ap.add_argument("--contact_topk", type=int, default=3)
@@ -2768,7 +2767,7 @@ def main():
 
     guide_loader = None
     if args.guide_csv is not None and float(args.contact_lambda) > 0.0:
-        guide_rows = read_csv_rows_filter_split(args.guide_csv, args.guide_split)
+        guide_rows = read_csv_rows_filter_split(args.guide_csv)
         if len(guide_rows) > 1000:
             rng = random.Random(args.seed)
             guide_rows = rng.sample(guide_rows, 1000)
