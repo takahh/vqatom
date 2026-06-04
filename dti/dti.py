@@ -2607,15 +2607,14 @@ def main():
             ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
-            base_vocab=smiles_tokenizer.vocab_size,
-            vocab_size=smiles_tokenizer.vocab_size,
-            pad_id=smiles_tokenizer.pad_id,
-            mask_id=smiles_tokenizer.mask_id,
-            cls_id=smiles_tokenizer.cls_id,
+            base_vocab=57,
+            vocab_size=57,
+            pad_id=0,
+            mask_id=1,
+            cls_id=2,
             verbose_load=True,
             debug_index_check=bool(args.lig_debug_index),
         )
-
         ligand_input_type = "smiles"
     else:
         raise ValueError(f"Unknown ligand_mode: {args.ligand_mode}")
