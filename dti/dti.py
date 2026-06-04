@@ -2606,7 +2606,8 @@ def main():
             ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
-            vq_ckpt=args.mlm_ckpt,
+            vq_ckpt=None,  # ★ここ
+            verbose_load=True,
         ).to(device)
 
         ligand_input_type = "smiles"
