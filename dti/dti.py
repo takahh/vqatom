@@ -2602,16 +2602,22 @@ def main():
         if args.mlm_ckpt is None:
             raise ValueError("--mlm_ckpt required for smiles_pretrained")
 
+        smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
+
         lig_enc = PretrainedLigandEncoder(
             ckpt_path=args.mlm_ckpt,
             device=device,
             finetune=args.finetune_lig,
-            vq_ckpt=None,  # ★ここ
+            base_vocab=smiles_tokenizer.vocab_size,
+            vocab_size=smiles_tokenizer.vocab_size,
+            pad_id=smiles_tokenizer.pad_id,
+            mask_id=smiles_tokenizer.mask_id,
+            cls_id=smiles_tokenizer.cls_id,
             verbose_load=True,
-        ).to(device)
+            debug_index_check=bool(args.lig_debug_index),
+        )
 
         ligand_input_type = "smiles"
-
     else:
         raise ValueError(f"Unknown ligand_mode: {args.ligand_mode}")
 
