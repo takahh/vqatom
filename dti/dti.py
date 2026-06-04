@@ -1798,6 +1798,7 @@ class DualStreamDTIClassifier(nn.Module):
         protein_only: bool = False,   # 追加
         pl_lp_overlap: str = "both",
         ligand_input_type: str = None,
+        interaction_mode: str = "pairmap",
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1814,6 +1815,7 @@ class DualStreamDTIClassifier(nn.Module):
         self.use_reg_head = bool(use_reg_head)
         self.protein_only = bool(protein_only)
         self.p_proj = None
+        self.interaction_mode = interaction_mode
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
@@ -2000,6 +2002,27 @@ class DualStreamDTIClassifier(nn.Module):
 
         valid = (~l_pad).unsqueeze(-1) & (~p_pad).unsqueeze(-2)  # (B,Ll,Lp)
         valid_h = valid.unsqueeze(1)  # (B,1,Ll,Lp)
+
+        if self.interaction_mode == "simple_pool":
+            p_mean = self._masked_mean(p_ctx, p_pad)
+            l_mean = self._masked_mean(l_ctx, l_pad)
+            p_max = self._masked_max(p_ctx, p_pad)
+            l_max = self._masked_max(l_ctx, l_pad)
+
+            feat = torch.cat([p_mean, p_max, l_mean, l_max], dim=-1)
+
+            logit = self.cls_head(feat).squeeze(-1)
+
+            if self.use_reg_head:
+                yhat_reg = self.reg_head(feat).squeeze(-1)
+            else:
+                yhat_reg = None
+
+            aux = aux if return_maps else {}
+            aux["p_pad"] = p_pad
+            aux["l_pad"] = l_pad
+
+            return logit, yhat_reg, aux
 
         if self.pl_lp_overlap == "lp":
             # ligand atom ごとに protein 軸で正規化
@@ -2371,6 +2394,12 @@ def main():
     ap.add_argument("--bce_lambda", type=float, default=1.0)
     ap.add_argument("--cls_lambda", type=float, default=0.0)
     ap.add_argument(
+        "--interaction_mode",
+        type=str,
+        default="pairmap",
+        choices=["pairmap", "simple_pool"],
+    )
+    ap.add_argument(
         "--attn_activation",
         type=str,
         default="softmax",
@@ -2641,6 +2670,7 @@ def main():
         protein_only=args.protein_only,   # 追加
         pl_lp_overlap=args.pl_lp_overlap,
         ligand_input_type=ligand_input_type,
+        interaction_mode=args.interaction_mode,
     ).to(device)
 
     if args.dti_ckpt is not None:

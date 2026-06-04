@@ -5,11 +5,15 @@ BASE = "/Users/taka/Documents/VQ-Atom_DTI_results"
 
 RUNS = {}
 
-for seed in range(5):
-    RUNS[f"smiles_seed_{seed}"] = os.path.join(BASE, f"smiles_seed_{seed}")
+# models = ["smiles", "smiles_pre", "vq_pre", "continu_pre"]
+models = ["smiles", "smiles_pre", "vq_pre", "vq", "continu", "continu_pre"]
 
-for seed in range(5):
-    RUNS[f"vq_pre_seed_{seed}"] = os.path.join(BASE, f"vq_pre_seed_{seed}")
+for model in models:
+    for seed in range(5):
+        RUNS[f"{model}_seed_{seed}"] = os.path.join(BASE, f"{model}_seed_{seed}")
+
+# for seed in range(5):
+#     RUNS[f"vq_pre_seed_{seed}"] = os.path.join(BASE, f"vq_pre_seed_{seed}")
 
 
 def epoch_from_name(path):
@@ -107,7 +111,10 @@ for run, g in df.groupby("run"):
         continue
 
     idx = g2["valid_ndcg10"].idxmax()
-    row = g.loc[idx]
+
+    row = g.loc[idx].copy()
+    row["best_epoch"] = int(row["epoch"])
+
     results.append(row)
 
     print(f"\n--- {run} ---")
@@ -159,6 +166,7 @@ metrics = [
     "final_ef5",
     "final_ef10",
     "final_auc",
+    "best_epoch",
 ]
 
 for method, g in summary.groupby("method"):
