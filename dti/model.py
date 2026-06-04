@@ -494,6 +494,7 @@ class PretrainedLigandEncoder(nn.Module):
             self.vocab_size += 1
             self.vocab_source = f"vq_ckpt:{vq_ckpt}"
         else:
+            vm = None
             if base_vocab is None or vocab_size is None:
                 raise RuntimeError("Pass base_vocab/vocab_size explicitly for SMILES.")
 
