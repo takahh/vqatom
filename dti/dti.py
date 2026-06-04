@@ -2603,7 +2603,7 @@ def main():
             raise ValueError("--mlm_ckpt required for smiles_pretrained")
 
         smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
-
+        print(smiles_tokenizer.stoi)
         lig_enc = PretrainedLigandEncoder(
             ckpt_path=args.mlm_ckpt,
             device=device,
