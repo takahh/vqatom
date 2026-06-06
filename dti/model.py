@@ -536,8 +536,8 @@ class PretrainedLigandEncoder(nn.Module):
         self.enc = nn.TransformerEncoder(enc_layer, num_layers=layers)
 
         self.debug_index_check = bool(debug_index_check)
-
-        load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
+        if self.state:
+            load_state_dict_shape_safe(self, self.state, verbose=verbose_load)
 
         mlm_tok_key = "tok.weight"
         if mlm_tok_key in self.state:
