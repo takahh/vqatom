@@ -2543,22 +2543,37 @@ def main():
 
 
     elif args.ligand_mode == "vqatom":
-        print("[lig] mode = vqatom (scratch)")
+        print("[lig] mode = vqatom (transformer scratch)")
 
         vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)
+        base_vocab = int(vm["base_vocab"])
         vocab_size0 = int(vm["vocab_size"])
         pad_id = int(vm["pad_id"])
+        mask_id = int(vm["mask_id"])
+
         cls_id = vocab_size0
         vocab_size = vocab_size0 + 1
 
-        lig_enc = VQAtomGraphEncoder(
+        lig_enc = PretrainedLigandEncoder(
+            ckpt_path=None,  # scratch
+            device=device,
+            vq_ckpt=args.vq_ckpt,
+            finetune=True,
+            base_vocab=base_vocab,
             vocab_size=vocab_size,
             pad_id=pad_id,
+            mask_id=mask_id,
             cls_id=cls_id,
-            d_model=args.d_model,
-            n_layers=args.lig_n_layers,
-            dropout=args.dropout,
+            verbose_load=False,
+            debug_index_check=bool(args.lig_debug_index),
         ).to(device)
+
+        lig_enc.base_vocab = base_vocab
+        lig_enc.vocab_size = vocab_size
+        lig_enc.pad_id = pad_id
+        lig_enc.mask_id = mask_id
+        lig_enc.cls_id = cls_id
+        lig_enc.vocab_source = "vqatom_transformer_scratch"
 
         ligand_input_type = "vqatom"
 
