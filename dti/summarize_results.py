@@ -6,7 +6,7 @@ BASE = "/Users/taka/Documents/VQ-Atom_DTI_results"
 RUNS = {}
 
 # models = ["smiles", "smiles_pre", "vq_pre", "continu_pre"]
-models = ["smiles", "smiles_pre", "vq_pre", "vq", "continu", "continu_pre"]
+models = ["smiles", "smiles_pre", "vq_pre", "vq", "continu", "continu_pre", "continu_pre_simple_cross", "vq_pre_simple_cross"]
 
 for model in models:
     for seed in range(5):
