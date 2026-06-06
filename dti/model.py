@@ -495,9 +495,7 @@ class PretrainedLigandEncoder(nn.Module):
                 "dim_ff": 1024,
                 "dropout": 0.1,
             }
-        if not (isinstance(ckpt, dict) and "model" in ckpt and "config" in ckpt):
-            raise RuntimeError("Ligand checkpoint must be a dict containing at least keys: 'model', 'config'")
-
+            
         if vq_ckpt is not None:
             vm = load_vocab_meta_from_vq_ckpt(vq_ckpt)
             self.base_vocab = int(vm["base_vocab"])
