@@ -476,13 +476,27 @@ class PretrainedLigandEncoder(nn.Module):
             debug_index_check=False,
     ):
         super().__init__()
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        if ckpt_path is None or str(ckpt_path).lower() in ("", "none", "null"):
+            ckpt = None
+        else:
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
+        if ckpt is not None:
+            if not (isinstance(ckpt, dict) and "model" in ckpt and "config" in ckpt):
+                raise RuntimeError("Ligand checkpoint must be a dict containing at least keys: 'model', 'config'")
+            self.state = ckpt["model"]
+            self.conf = ckpt["config"]
+        else:
+            self.state = {}
+            self.conf = {
+                "d_model": 256,
+                "nhead": 8,
+                "layers": 6,
+                "dim_ff": 1024,
+                "dropout": 0.1,
+            }
         if not (isinstance(ckpt, dict) and "model" in ckpt and "config" in ckpt):
             raise RuntimeError("Ligand checkpoint must be a dict containing at least keys: 'model', 'config'")
-
-        self.state = ckpt["model"]
-        self.conf = ckpt["config"]
 
         if vq_ckpt is not None:
             vm = load_vocab_meta_from_vq_ckpt(vq_ckpt)
