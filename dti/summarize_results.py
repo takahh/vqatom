@@ -6,7 +6,8 @@ BASE = "/Users/taka/Documents/VQ-Atom_DTI_results"
 RUNS = {}
 
 # models = ["smiles", "smiles_pre", "vq_pre", "continu_pre"]
-models = ["smiles", "smiles_pre", "vq_pre", "vq", "continu", "continu_pre", "continu_pre_simple_cross", "vq_pre_simple_cross"]
+models = ["smiles", "smiles_pre", "vq_pre", "vq", "continu", "continu_pre", "continu_pre_simple_cross", "vq_pre_simple_cross",
+          "continu_pre_simple_cross", "cont_simple_cross", "vq_pre_simple_cross", "vq_simple_cross"]
 
 for model in models:
     for seed in range(5):
@@ -133,6 +134,45 @@ for run, g in df.groupby("run"):
 
 summary = pd.DataFrame(results)
 
+import matplotlib.pyplot as plt
+
+# plot target
+plot_methods = {
+    "vq_pre": {"label": "VQ-Atom+Pretrain", "linestyle": "-"},
+    "continu_pre": {"label": "Continuous+Pretrain", "linestyle": "--"},
+}
+
+fig, ax = plt.subplots(figsize=(6.5, 4.2))
+
+for method, style in plot_methods.items():
+    for seed in range(5):
+        run_name = f"{method}_seed_{seed}"
+        g = df[df["run"] == run_name].copy()
+        if g.empty:
+            print(f"[WARN] missing run: {run_name}")
+            continue
+
+        g = g.sort_values("epoch")
+        ax.plot(
+            g["epoch"],
+            g["valid_ndcg10"],
+            linestyle=style["linestyle"],
+            linewidth=1.6,
+            alpha=0.75,
+            label=style["label"] if seed == 0 else None,
+        )
+
+ax.set_xlabel("Epoch")
+ax.set_ylabel("Validation NDCG@10")
+ax.set_title("Convergence of VQ-Atom and continuous representations")
+ax.legend(frameon=False)
+ax.grid(True, alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("ndcg10_convergence_vq_vs_continuous.pdf", bbox_inches="tight")
+plt.savefig("ndcg10_convergence_vq_vs_continuous.png", dpi=300, bbox_inches="tight")
+plt.show()
+
 print("\n===== SIDE-BY-SIDE =====")
 print(summary[
     [
@@ -173,3 +213,55 @@ for method, g in summary.groupby("method"):
     print(f"\n--- {method} ---")
     for m in metrics:
         print(f"{m:15s}: {g[m].mean():.4f} ± {g[m].std(ddof=1):.4f}")
+
+# =========================
+# Figure: NDCG@10 ablation
+# Simple Cross vs Full Cross
+# =========================
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+def mean_metric(method, metric):
+    g = summary[summary["method"] == method]
+    if g.empty:
+        print(f"[WARN] missing method: {method}")
+        return np.nan
+    return g[metric].mean()
+
+methods = [
+    ("Continuous", "cont_simple_cross", "continu"),
+    ("Continuous+Pretrain", "continu_pre_simple_cross", "continu_pre"),
+    ("VQ-Atom", "vq_simple_cross", "vq"),
+    ("VQ-Atom+Pretrain", "vq_pre_simple_cross", "vq_pre"),
+]
+
+labels = [m[0] for m in methods]
+simple_vals = [mean_metric(m[1], "final_ndcg10") for m in methods]
+full_vals   = [mean_metric(m[2], "final_ndcg10") for m in methods]
+
+x = np.arange(len(labels))
+width = 0.38
+
+fig, ax = plt.subplots(figsize=(6.6, 4.2))
+
+ax.bar(x - width/2, simple_vals, width, label="Simple Cross")
+ax.bar(x + width/2, full_vals, width, label="Full Cross")
+
+ax.set_ylabel("Final NDCG@10")
+ax.set_xticks(x)
+ax.set_xticklabels(labels, rotation=20, ha="right")
+ax.set_ylim(0.25, 0.70)
+ax.legend(frameon=False)
+ax.grid(axis="y", alpha=0.3)
+
+for i, (s, f) in enumerate(zip(simple_vals, full_vals)):
+    if not np.isnan(s):
+        ax.text(x[i] - width/2, s + 0.01, f"{s:.3f}", ha="center", va="bottom", fontsize=8)
+    if not np.isnan(f):
+        ax.text(x[i] + width/2, f + 0.01, f"{f:.3f}", ha="center", va="bottom", fontsize=8)
+
+plt.tight_layout()
+plt.savefig("ndcg10_cross_ablation_bar.pdf", bbox_inches="tight")
+plt.savefig("ndcg10_cross_ablation_bar.png", dpi=300, bbox_inches="tight")
+plt.show()
