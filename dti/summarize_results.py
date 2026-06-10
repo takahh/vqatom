@@ -218,6 +218,12 @@ for method, g in summary.groupby("method"):
 # Figure: NDCG@10 ablation
 # Simple Cross vs Full Cross
 # =========================
+def std_metric(method, metric):
+    g = summary[summary["method"] == method]
+    if g.empty:
+        print(f"[WARN] missing method: {method}")
+        return np.nan
+    return g[metric].std(ddof=1)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -236,32 +242,185 @@ methods = [
     ("VQ-Atom+Pretrain", "vq_pre_simple_cross", "vq_pre"),
 ]
 
-labels = [m[0] for m in methods]
+labels = [
+    "Continuous\n(No MLM)",
+    "Continuous\n(+MLM)",
+    "VQ-Atom\n(No MLM)",
+    "VQ-Atom\n(+MLM)",
+]
+
+
 simple_vals = [mean_metric(m[1], "final_ndcg10") for m in methods]
 full_vals   = [mean_metric(m[2], "final_ndcg10") for m in methods]
+
+simple_stds = [std_metric(m[1], "final_ndcg10") for m in methods]
+full_stds   = [std_metric(m[2], "final_ndcg10") for m in methods]
 
 x = np.arange(len(labels))
 width = 0.38
 
-fig, ax = plt.subplots(figsize=(6.6, 4.2))
+fig, ax = plt.subplots(figsize=(7.2, 4.2))
 
-ax.bar(x - width/2, simple_vals, width, label="Simple Cross")
-ax.bar(x + width/2, full_vals, width, label="Full Cross")
 
+ax.bar(
+    x - width/2,
+    simple_vals,
+    width,
+    yerr=simple_stds,
+    capsize=4,
+    label="Simple Cross",
+)
+
+ax.bar(
+    x + width/2,
+    full_vals,
+    width,
+    yerr=full_stds,
+    capsize=4,
+    label="Full Cross",
+)
 ax.set_ylabel("Final NDCG@10")
 ax.set_xticks(x)
-ax.set_xticklabels(labels, rotation=20, ha="right")
-ax.set_ylim(0.25, 0.70)
+ax.set_xticklabels(labels)
+ax.set_ylim(0, 0.8)
 ax.legend(frameon=False)
 ax.grid(axis="y", alpha=0.3)
 
-for i, (s, f) in enumerate(zip(simple_vals, full_vals)):
+for i, (s, f, ss, fs) in enumerate(zip(simple_vals, full_vals, simple_stds, full_stds)):
     if not np.isnan(s):
-        ax.text(x[i] - width/2, s + 0.01, f"{s:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.text(
+            x[i] - width/2,
+            s + ss + 0.015,
+            f"{s:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
     if not np.isnan(f):
-        ax.text(x[i] + width/2, f + 0.01, f"{f:.3f}", ha="center", va="bottom", fontsize=8)
-
+        ax.text(
+            x[i] + width/2,
+            f + fs + 0.015,
+            f"{f:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 plt.tight_layout()
 plt.savefig("ndcg10_cross_ablation_bar.pdf", bbox_inches="tight")
 plt.savefig("ndcg10_cross_ablation_bar.png", dpi=300, bbox_inches="tight")
 plt.show()
+
+
+# =========================
+# Figure: AUROC ablation
+# Simple Cross vs Full Cross
+# =========================
+
+simple_auc = [mean_metric(m[1], "final_auc") for m in methods]
+full_auc   = [mean_metric(m[2], "final_auc") for m in methods]
+
+x = np.arange(len(labels))
+width = 0.38
+
+fig, ax = plt.subplots(figsize=(7.2, 4.2))
+
+ax.bar(x - width/2, simple_auc, width, label="Simple Cross")
+ax.bar(x + width/2, full_auc, width, label="Full Cross")
+
+ax.set_ylabel("Final AUROC")
+ax.set_xticks(x)
+ax.set_xticklabels(labels)
+ax.set_ylim(0, 0.85)
+
+ax.legend(frameon=False)
+ax.grid(axis="y", alpha=0.3)
+
+for i, (s, f) in enumerate(zip(simple_auc, full_auc)):
+    if not np.isnan(s):
+        ax.text(
+            x[i] - width/2,
+            s + 0.008,
+            f"{s:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+    if not np.isnan(f):
+        ax.text(
+            x[i] + width/2,
+            f + 0.008,
+            f"{f:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+plt.tight_layout()
+plt.savefig("auroc_cross_ablation_bar.pdf", bbox_inches="tight")
+plt.savefig("auroc_cross_ablation_bar.png", dpi=300, bbox_inches="tight")
+plt.show()
+
+
+# =========================
+# Plot: vq_simple_cross_seed_3
+# Validation / Final NDCG@10
+# =========================
+
+target_run = "vq_simple_cross_seed_4"
+
+g = df[df["run"] == target_run].copy()
+g = g.sort_values("epoch")
+
+if g.empty:
+    print(f"[WARN] missing run: {target_run}")
+else:
+    plt.figure(figsize=(6.5, 4.2))
+
+    plt.plot(
+        g["epoch"],
+        g["valid_ndcg10"],
+        marker="o",
+        linewidth=1.8,
+        label="Valid NDCG@10",
+    )
+
+    plt.plot(
+        g["epoch"],
+        g["final_ndcg10"],
+        marker="o",
+        linewidth=1.8,
+        linestyle="--",
+        label="Test/Final NDCG@10",
+    )
+
+    best_idx = g["valid_ndcg10"].idxmax()
+    best_row = g.loc[best_idx]
+
+    plt.axvline(
+        best_row["epoch"],
+        linestyle=":",
+        linewidth=1.5,
+        label=f"Best valid epoch = {int(best_row['epoch'])}",
+    )
+
+    plt.xlabel("Epoch")
+    plt.ylabel("NDCG@10")
+    plt.title("NDCG@10 curve: vq_simple_cross_seed_3")
+    plt.grid(True, alpha=0.3)
+    plt.legend(frameon=False)
+    plt.tight_layout()
+
+    plt.savefig("vq_simple_cross_seed_3_ndcg10_curve.pdf", bbox_inches="tight")
+    plt.savefig("vq_simple_cross_seed_3_ndcg10_curve.png", dpi=300, bbox_inches="tight")
+    plt.show()
+
+    print(best_row[[
+        "run",
+        "epoch",
+        "valid_ndcg10",
+        "final_ndcg10",
+        "final_ef1",
+        "final_ef5",
+        "final_ef10",
+        "final_auc",
+    ]])
