@@ -1645,6 +1645,31 @@ class CrossAttention(nn.Module):
             }
         return out
 
+
+class VQAminoProteinEncoder(nn.Module):
+    def __init__(self, vocab_size, pad_id, d_model=256, n_layers=3, n_heads=8, dropout=0.1):
+        super().__init__()
+        self.hidden_size = d_model
+        self.pad_id = int(pad_id)
+        self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=4 * d_model,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
+        self.ln = nn.LayerNorm(d_model)
+
+    def forward(self, p_input_ids, p_attn_mask):
+        x = self.tok(p_input_ids)
+        pad = p_attn_mask == 0
+        x = self.encoder(x, src_key_padding_mask=pad)
+        return self.ln(x)
+
+
 class FFN(nn.Module):
     def __init__(self, d_model, dropout=0.1, mult=4):
         super().__init__()
@@ -1970,9 +1995,10 @@ class DualStreamDTIClassifier(nn.Module):
         p_pad = self._apply_token_dropout(p_pad, self.protein_token_dropout)
         l_pad = self._apply_token_dropout(l_pad, self.ligand_token_dropout)
 
-        eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
-        p_tok_ids = p_input_ids[:, 1:]
-        p_pad = p_pad | (p_tok_ids == eos_id)
+        if hasattr(self.prot, "esm"):
+            eos_id = getattr(self.prot.esm.config, "eos_token_id", 2)
+            p_tok_ids = p_input_ids[:, 1:]
+            p_pad = p_pad | (p_tok_ids == eos_id)
 
         # Option Cでは pair_ctx が必要
         p_ctx, l_ctx, inter_aux = self.interaction(
@@ -2494,6 +2520,16 @@ def main():
     ap.add_argument("--d_model", type=int, default=256)
     ap.add_argument("--lig_n_layers", type=int, default=6)
     ap.add_argument("--lig_n_heads", type=int, default=8)
+    ap.add_argument("--protein_input_type", type=str, default="esm",
+                    choices=["esm", "vqamino", "aa"])
+    ap.add_argument("--vqamino_col", type=str, default="vqamino_token_id_list")
+    ap.add_argument("--vqamino_vocab_size", type=int, default=10754)
+    ap.add_argument("--vqamino_pad_id", type=int, default=10752)
+    ap.add_argument("--vqamino_cls_id", type=int, default=10753)
+
+    ap.add_argument("--protein_d_model", type=int, default=256)
+    ap.add_argument("--protein_n_layers", type=int, default=3)
+    ap.add_argument("--protein_n_heads", type=int, default=None)
     args = ap.parse_args()
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
@@ -2662,8 +2698,32 @@ def main():
         ligand_input_type = "smiles"
     else:
         raise ValueError(f"Unknown ligand_mode: {args.ligand_mode}")
+    esm_tokenizer = None
 
-    prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+    if args.protein_input_type == "esm":
+        esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
+        prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+
+    elif args.protein_input_type == "vqamino":
+        prot_enc = VQAminoProteinEncoder(
+            vocab_size=args.vqamino_vocab_size,
+            pad_id=args.vqamino_pad_id,
+            d_model=args.protein_d_model,
+            n_layers=args.protein_n_layers,
+            n_heads=args.protein_n_heads or args.n_heads,
+            dropout=args.dropout,
+        ).to(device)
+
+    else:
+        prot_enc = VQAminoProteinEncoder(
+            vocab_size=AA_VOCAB_SIZE,
+            pad_id=AA_PAD_ID,
+            d_model=args.protein_d_model,
+            n_layers=args.protein_n_layers,
+            n_heads=args.protein_n_heads or args.n_heads,
+            dropout=args.dropout,
+        ).to(device)
+    # prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
 
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
@@ -2708,7 +2768,10 @@ def main():
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
-            ),
+                protein_input_type=args.protein_input_type,
+                protein_pad_id=(AA_PAD_ID if args.protein_input_type == "aa" else args.vqamino_pad_id),
+                protein_cls_id=(AA_CLS_ID if args.protein_input_type == "aa" else args.vqamino_cls_id),
+            )
         )
 
     # -------------------------------------------------
@@ -2734,6 +2797,8 @@ def main():
                 ligand_input_type=ligand_input_type,
                 smiles_tokenizer=smiles_tokenizer,
                 smiles_col=args.smiles_col,
+                protein_input_type=args.protein_input_type,
+                vqamino_col=args.vqamino_col,
             )
         else:
             all_rows = read_csv_rows(args.train_csv)
@@ -2746,6 +2811,8 @@ def main():
                 ligand_input_type=ligand_input_type,
                 smiles_tokenizer=smiles_tokenizer,
                 smiles_col=args.smiles_col,
+                protein_input_type=args.protein_input_type,
+                vqamino_col=args.vqamino_col,
             )
 
         fixed_train_loader = make_loader(fixed_train_ds, shuffle=True)
@@ -2766,6 +2833,8 @@ def main():
                     ligand_input_type=ligand_input_type,
                     smiles_tokenizer=smiles_tokenizer,
                     smiles_col=args.smiles_col,
+                    protein_input_type=args.protein_input_type,
+                    vqamino_col=args.vqamino_col,
                 )
             else:
                 all_rows = read_csv_rows(args.train_csv)
@@ -2778,6 +2847,8 @@ def main():
                     ligand_input_type=ligand_input_type,
                     smiles_tokenizer=smiles_tokenizer,
                     smiles_col=args.smiles_col,
+                    protein_input_type=args.protein_input_type,
+                    vqamino_col=args.vqamino_col,
                 )
             train_y_mean = float(tmp_train_ds.y_reg_mean)
             train_y_std = float(tmp_train_ds.y_reg_std)
@@ -2797,6 +2868,8 @@ def main():
         ligand_input_type=ligand_input_type,
         smiles_tokenizer=smiles_tokenizer,
         smiles_col=args.smiles_col,
+        protein_input_type=args.protein_input_type,
+        vqamino_col=args.vqamino_col,
     )
     valid_loader = make_loader(valid_ds, shuffle=False)
 
@@ -2812,6 +2885,8 @@ def main():
             ligand_input_type=ligand_input_type,
             smiles_tokenizer=smiles_tokenizer,
             smiles_col=args.smiles_col,
+            protein_input_type=args.protein_input_type,
+            vqamino_col=args.vqamino_col,
         )
         final_eval_loader = make_loader(final_eval_ds, shuffle=False)
 
@@ -2831,6 +2906,8 @@ def main():
             ligand_input_type=ligand_input_type,
             smiles_tokenizer=smiles_tokenizer,
             smiles_col=args.smiles_col,
+            protein_input_type=args.protein_input_type,
+            vqamino_col=args.vqamino_col,
         )
 
         guide_loader = DataLoader(
@@ -2844,7 +2921,10 @@ def main():
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
-            ),
+                protein_input_type=args.protein_input_type,
+                protein_pad_id=(AA_PAD_ID if args.protein_input_type == "aa" else args.vqamino_pad_id),
+                protein_cls_id=(AA_CLS_ID if args.protein_input_type == "aa" else args.vqamino_cls_id),
+            )
         )
 
         print(f"[guide] loaded {len(guide_ds)} rows from {args.guide_csv} split={args.guide_split}")
