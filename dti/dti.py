@@ -2756,10 +2756,20 @@ def main():
     esm_tokenizer = None
 
     if args.protein_input_type == "esm":
-        esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
-        prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+        esm_tokenizer = AutoTokenizer.from_pretrained(
+            args.esm_model,
+            do_lower_case=False,
+        )
+
+        prot_enc = ESMProteinEncoder(
+            args.esm_model,
+            device=device,
+            finetune=args.finetune_esm,
+        )
 
     elif args.protein_input_type == "vqamino":
+        esm_tokenizer = None
+
         prot_enc = VQAminoProteinEncoder(
             vocab_size=args.vqamino_vocab_size,
             pad_id=args.vqamino_pad_id,
@@ -2770,15 +2780,9 @@ def main():
         ).to(device)
 
     else:
-        prot_enc = VQAminoProteinEncoder(
-            vocab_size=AA_VOCAB_SIZE,
-            pad_id=AA_PAD_ID,
-            d_model=args.protein_d_model,
-            n_layers=args.protein_n_layers,
-            n_heads=args.protein_n_heads or args.n_heads,
-            dropout=args.dropout,
-        ).to(device)
-    # prot_enc = ESMProteinEncoder(args.esm_model, device=device, finetune=args.finetune_esm)
+        raise ValueError(
+            f"unknown protein_input_type={args.protein_input_type}"
+        )
 
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
@@ -2824,8 +2828,8 @@ def main():
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
                 protein_input_type=args.protein_input_type,
-                protein_pad_id=(AA_PAD_ID if args.protein_input_type == "aa" else args.vqamino_pad_id),
-                protein_cls_id=(AA_CLS_ID if args.protein_input_type == "aa" else args.vqamino_cls_id),
+                protein_pad_id=args.vqamino_pad_id,
+                protein_cls_id=args.vqamino_cls_id,
             )
         )
 
@@ -2977,8 +2981,8 @@ def main():
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
                 protein_input_type=args.protein_input_type,
-                protein_pad_id=(AA_PAD_ID if args.protein_input_type == "aa" else args.vqamino_pad_id),
-                protein_cls_id=(AA_CLS_ID if args.protein_input_type == "aa" else args.vqamino_cls_id),
+                protein_pad_id=args.vqamino_pad_id,
+                protein_cls_id=args.vqamino_cls_id,
             )
         )
 
