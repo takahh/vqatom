@@ -133,6 +133,13 @@ def parse_lig_tokens(s: str) -> List[int]:
         return []
     return [int(x) for x in s.split()]
 
+def parse_vqamino_tokens(s: str) -> List[int]:
+    s = str(s).strip().replace(",", " ")
+    if not s:
+        return []
+    if s.startswith("["):
+        return [int(x) for x in json.loads(s)]
+    return [int(x) for x in s.split()]
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -222,6 +229,8 @@ class DTIDataset(Dataset):
         ligand_input_type: str = "vqatom",
         smiles_tokenizer=None,
         smiles_col: str = "smiles",
+        protein_input_type: str = "esm",
+        vqamino_col: str = "vqamino_token_id_list",
     ):
         if rows is not None:
             raw_rows = rows
@@ -233,10 +242,17 @@ class DTIDataset(Dataset):
         self.lig_cls_id = lig_cls_id
         self.rows: List[Dict[str, object]] = []
         self.ligand_input_type = ligand_input_type
+        self.protein_input_type = protein_input_type
+        self.vqamino_col = vqamino_col
 
         for r in raw_rows:
             seq = (r.get("seq") or "").strip()
-
+            if protein_input_type == "vqamino":
+                prot_tok_text = (r.get(vqamino_col) or "").strip()
+                if not prot_tok_text:
+                    continue
+            else:
+                prot_tok_text = ""
             if ligand_input_type in ("vqatom", "continuous"):
                 lig_text = (r.get("lig_tok") or "").strip()
             elif ligand_input_type == "smiles":
@@ -265,6 +281,7 @@ class DTIDataset(Dataset):
             rr["lig_text"] = lig_text
             rr["y"] = y
             rr["y_bin"] = 1.0 if y >= float(y_thr) else 0.0
+            rr["protein_token_text"] = prot_tok_text
             self.rows.append(rr)
 
         if not self.rows:
@@ -331,23 +348,46 @@ class DTIDataset(Dataset):
             "contact_mask": contact_mask,
             "atom_contact_pairs": atom_contact_pairs,
             "atom_feat": atom_feat,
+            "protein_token_ids": parse_vqamino_tokens(row.get("protein_token_text", "")),
         }
         return item
 
 
-def collate_fn(samples, esm_tokenizer, lig_pad, lig_cls):
-    p_seqs = [s["protein_seq"] for s in samples]
+def collate_fn(
+    samples,
+    esm_tokenizer,
+    lig_pad,
+    lig_cls,
+    protein_input_type="esm",
+    protein_pad_id=0,
+    protein_cls_id=None,
+    protein_max_len=1024,
+):
     l_ids_list = [s["lig_ids"] for s in samples]
 
-    tok = esm_tokenizer(
-        p_seqs,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=1024,
-    )
-    p_input_ids = tok["input_ids"]
-    p_attn_mask = tok["attention_mask"]
+    if protein_input_type == "vqamino":
+        p_ids_list = []
+        for s in samples:
+            ids = list(s["protein_token_ids"])
+            if protein_cls_id is not None:
+                ids = [protein_cls_id] + ids
+            ids = ids[:protein_max_len]
+            p_ids_list.append(torch.tensor(ids, dtype=torch.long))
+
+        p_input_ids = pad_1d(p_ids_list, protein_pad_id)
+        p_attn_mask = (p_input_ids != protein_pad_id).long()
+
+    else:
+        p_seqs = [s["protein_seq"] for s in samples]
+        tok = esm_tokenizer(
+            p_seqs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=1024,
+        )
+        p_input_ids = tok["input_ids"]
+        p_attn_mask = tok["attention_mask"]
 
     max_l = max(len(x) for x in l_ids_list)
     l_ids = torch.full((len(samples), max_l), lig_pad, dtype=torch.long)
@@ -2542,8 +2582,23 @@ def main():
     seed_all(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
-    smiles_tokenizer = None
+    if args.protein_input_type == "vqamino":
+        esm_tokenizer = None
+        prot_enc = VQAminoProteinEncoder(
+            vocab_size=args.vqamino_vocab_size,
+            pad_id=args.vqamino_pad_id,
+            d_model=args.protein_d_model,
+            n_layers=args.protein_n_layers,
+            n_heads=args.protein_n_heads,
+            dropout=args.dropout,
+        ).to(device)
+    else:
+        esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model, do_lower_case=False)
+        prot_enc = ESMProteinEncoder(
+            args.esm_model,
+            device=device,
+            finetune=args.finetune_esm,
+        )
 
     # =========================================================
     # Ligand encoder build
