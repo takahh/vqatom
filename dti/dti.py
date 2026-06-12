@@ -2574,7 +2574,7 @@ def main():
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
     print("DEBUG use_train_valid_csv:", args.use_train_valid_csv)
-
+    smiles_tokenizer = None
     if not args.eval_only and not args.train_csv and not args.train_shard_dir:
         raise ValueError("Provide --train_csv or --train_shard_dir unless --eval_only is set.")
 
