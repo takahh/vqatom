@@ -2250,6 +2250,16 @@ class DualStreamDTIClassifier(nn.Module):
 # Optimizer
 # =========================================================
 def build_optimizer_with_llrd(model: nn.Module, args: argparse.Namespace) -> torch.optim.Optimizer:
+
+    if not hasattr(model.prot, "esm"):
+        params = [p for p in model.parameters() if p.requires_grad]
+
+        return torch.optim.AdamW(
+            params,
+            lr=args.cross_lr,
+            weight_decay=args.weight_decay,
+        )
+
     base_lr = float(args.lr)
 
     lig_lr = float(args.lig_lr) if args.lig_lr is not None else base_lr
@@ -2989,6 +2999,7 @@ def main():
         print(f"[guide] loaded {len(guide_ds)} rows from {args.guide_csv} split={args.guide_split}")
 
     optimizer = build_optimizer_with_llrd(model, args) if not args.eval_only else None
+
     scheduler = None
     if optimizer is not None:
         if args.use_train_valid_csv:
