@@ -1687,11 +1687,21 @@ class CrossAttention(nn.Module):
 
 
 class VQAminoProteinEncoder(nn.Module):
-    def __init__(self, vocab_size, pad_id, d_model=256, n_layers=3, n_heads=8, dropout=0.1):
+    def __init__(
+        self,
+        vocab_size,
+        pad_id,
+        d_model=256,
+        n_layers=3,
+        n_heads=8,
+        dropout=0.1,
+        max_len=2048,
+    ):
         super().__init__()
         self.hidden_size = d_model
         self.pad_id = int(pad_id)
         self.tok = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.pos_emb = nn.Embedding(max_len, d_model)
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
@@ -1704,7 +1714,10 @@ class VQAminoProteinEncoder(nn.Module):
         self.ln = nn.LayerNorm(d_model)
 
     def forward(self, p_input_ids, p_attn_mask):
+        B, L = p_input_ids.shape
         x = self.tok(p_input_ids)
+        pos = torch.arange(L, device=p_input_ids.device).unsqueeze(0).expand(B, L)
+        x = x + self.pos_emb(pos)
         pad = p_attn_mask == 0
         x = self.encoder(x, src_key_padding_mask=pad)
         return self.ln(x)
