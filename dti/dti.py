@@ -474,6 +474,29 @@ def collate_fn(
     protein_group = torch.tensor(protein_group, dtype=torch.long)
     atom_feat = torch.cat(atom_feats, dim=0) if atom_feats else None
 
+    if random.random() < 0.001:
+        print("========== PAD DEBUG ==========")
+        print("p_input_ids shape:", p_input_ids.shape)
+        print("p_attn_mask shape:", p_attn_mask.shape)
+
+        print("first ids:")
+        print(p_input_ids[0][:30].tolist())
+
+        print("first mask:")
+        print(p_attn_mask[0][:30].tolist())
+
+        print("real token count:",
+              int((p_input_ids[0] != protein_pad_id).sum()))
+
+        print("mask count:",
+              int(p_attn_mask[0].sum()))
+
+        print("last ids:")
+        print(p_input_ids[0][-30:].tolist())
+
+        print("last mask:")
+        print(p_attn_mask[0][-30:].tolist())
+
     return Batch(
         p_input_ids=p_input_ids,
         p_attn_mask=p_attn_mask,
