@@ -22,7 +22,7 @@ Notes:
 from __future__ import annotations
 
 from glob import glob
-import os
+import time
 import json
 import math
 import random
@@ -3099,9 +3099,25 @@ def main():
         )
         return
 
+    # =========================================================
+    # Cost logging
+    # =========================================================
+    n_params = sum(p.numel() for p in model.parameters())
+    n_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    print(f"[model] params={n_params:,}")
+    print(f"[model] trainable_params={n_trainable_params:,}")
+
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+
     best = {"ap": -1e9, "auroc": -1e9, "f1": -1e9, "epoch": -1}
 
     for ep in range(1, args.epochs + 1):
+        epoch_t0 = time.time()
+
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats()
         qk_save_dir = os.path.join(args.out_dir, "qk_maps")
 
         if args.use_train_valid_csv:
@@ -3200,10 +3216,28 @@ def main():
             final_r = eval_reg_metrics(yhatr_f, yr_f)
             final_rank = eval_group_ranking_metrics(yhat_f, yraw_f, pid_f, lid_f)
 
+        epoch_time_sec = time.time() - epoch_t0
+
+        if device.type == "cuda":
+            peak_vram_gb = torch.cuda.max_memory_allocated() / 1024**3
+            peak_vram_reserved_gb = torch.cuda.max_memory_reserved() / 1024**3
+        else:
+            peak_vram_gb = 0.0
+            peak_vram_reserved_gb = 0.0
+
+        cost_metrics = {
+            "params": int(n_params),
+            "trainable_params": int(n_trainable_params),
+            "peak_vram_gb": float(peak_vram_gb),
+            "peak_vram_reserved_gb": float(peak_vram_reserved_gb),
+            "epoch_time_sec": float(epoch_time_sec),
+        }
+
         save_json(
             os.path.join(args.out_dir, f"epoch_{ep:03d}.json"),
             {
                 "epoch": ep,
+                "cost_metrics": cost_metrics,
                 "train_stat": tr_stat,
                 "train_metrics": tr_m,
                 "train_reg_metrics": tr_r,
