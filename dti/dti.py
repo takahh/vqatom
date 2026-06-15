@@ -3256,6 +3256,14 @@ def main():
 
         print(f"\n===== Epoch {ep} =====")
         print(
+            "[cost]",
+            f"Params={n_params:,}",
+            f"Trainable={n_trainable_params:,}",
+            f"PeakVRAM={peak_vram_gb:.2f}GB",
+            f"Reserved={peak_vram_reserved_gb:.2f}GB",
+            f"EpochTime={epoch_time_sec:.1f}s",
+        )
+        print(
             "[train]",
             f"AUC={tr_m['auroc']:.4f}",
             f"AP={tr_m['ap']:.4f}",
