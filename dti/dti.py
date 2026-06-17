@@ -1061,6 +1061,50 @@ def eval_reg_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]
         "spearman": spearman,
     }
 
+def infer_vqamino_meta_from_csv(csv_path: str) -> dict:
+    rows = read_csv_rows(csv_path)
+    r = rows[0]
+
+    def get_int(name, default=None):
+        v = str(r.get(name, "") or "").strip()
+        if v == "":
+            return default
+        return int(float(v))
+
+    vocab_size = get_int("vqamino_vocab_size")
+    global_vocab_size = get_int("vqamino_global_vocab_size")
+    pad_id = get_int("vqamino_pad_id")
+    mask_id = get_int("vqamino_mask_id")
+    codebook_size = get_int("vqamino_codebook_size")
+    num_partitions = get_int("vqamino_num_partitions")
+    residues_per_token = get_int("vqamino_residues_per_token")
+
+    if vocab_size is None:
+        if mask_id is not None:
+            vocab_size = mask_id + 1
+        elif pad_id is not None:
+            vocab_size = pad_id + 2
+        elif global_vocab_size is not None:
+            vocab_size = global_vocab_size + 2
+        else:
+            raise ValueError("Cannot infer vqamino vocab_size from CSV")
+
+    if pad_id is None:
+        if global_vocab_size is not None:
+            pad_id = global_vocab_size
+        else:
+            pad_id = vocab_size - 2
+
+    return {
+        "vqamino_vocab_size": vocab_size,
+        "vqamino_global_vocab_size": global_vocab_size,
+        "vqamino_pad_id": pad_id,
+        "vqamino_mask_id": mask_id,
+        "vqamino_codebook_size": codebook_size,
+        "vqamino_num_partitions": num_partitions,
+        "vqamino_residues_per_token": residues_per_token,
+    }
+
 def eval_metrics(y_pred: np.ndarray, y_bin: np.ndarray) -> dict[str, float] | dict[str | Any, float | Any] | tuple[
     dict[str | Any, float | Any], str, str]:
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
@@ -2634,6 +2678,31 @@ def main():
     ap.add_argument("--protein_n_layers", type=int, default=3)
     ap.add_argument("--protein_n_heads", type=int, default=None)
     args = ap.parse_args()
+    if args.protein_input_type == "vqamino":
+        meta_csv = args.train_csv or args.valid_csv or args.test_csv
+        if meta_csv is not None:
+            meta = infer_vqamino_meta_from_csv(meta_csv)
+
+            args.vqamino_vocab_size = meta["vqamino_vocab_size"]
+            args.vqamino_pad_id = meta["vqamino_pad_id"]
+
+            # CLSを使うなら mask_id + 1 にする
+            if meta["vqamino_mask_id"] is not None:
+                args.vqamino_cls_id = meta["vqamino_mask_id"] + 1
+            else:
+                args.vqamino_cls_id = args.vqamino_vocab_size
+
+            # CLSぶん embedding を1個増やす
+            args.vqamino_vocab_size = max(
+                args.vqamino_vocab_size,
+                args.vqamino_cls_id + 1,
+            )
+
+            print("[vqamino-meta]", meta)
+            print(
+                f"[vqamino-final] vocab_size={args.vqamino_vocab_size} "
+                f"pad_id={args.vqamino_pad_id} cls_id={args.vqamino_cls_id}"
+            )
     print("DEBUG train_csv:", args.train_csv)
     print("DEBUG train_size:", args.train_size)
     print("DEBUG use_train_valid_csv:", args.use_train_valid_csv)
@@ -2885,14 +2954,15 @@ def main():
             shuffle=shuffle,
             num_workers=0,
             pin_memory=False,
-            collate_fn=lambda xs: collate_fn(
-                xs,
+            collate_fn=lambda samples: collate_fn(
+                samples,
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
                 protein_input_type=args.protein_input_type,
                 protein_pad_id=args.vqamino_pad_id,
                 protein_cls_id=args.vqamino_cls_id,
+                protein_max_len=args.protein_max_len,
             )
         )
 
@@ -3038,14 +3108,15 @@ def main():
             shuffle=True,
             num_workers=0,
             pin_memory=False,
-            collate_fn=lambda xs: collate_fn(
-                xs,
+            collate_fn=lambda samples: collate_fn(
+                samples,
                 esm_tokenizer=esm_tokenizer,
                 lig_pad=lig_enc.pad_id,
                 lig_cls=lig_enc.cls_id,
                 protein_input_type=args.protein_input_type,
                 protein_pad_id=args.vqamino_pad_id,
                 protein_cls_id=args.vqamino_cls_id,
+                protein_max_len=args.protein_max_len,
             )
         )
 
