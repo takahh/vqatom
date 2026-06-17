@@ -2566,6 +2566,7 @@ def main():
     ap.add_argument("--protein_only", action="store_true")
     ap.add_argument("--bce_lambda", type=float, default=1.0)
     ap.add_argument("--cls_lambda", type=float, default=0.0)
+    ap.add_argument("--protein_max_len", type=int, default=1024)
     ap.add_argument(
         "--interaction_mode",
         type=str,
