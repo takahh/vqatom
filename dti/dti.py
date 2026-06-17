@@ -1781,23 +1781,6 @@ class VQAminoProteinEncoder(nn.Module):
         self.ln = nn.LayerNorm(d_model)
 
     def forward(self, p_input_ids, p_attn_mask):
-        if random.random() < 0.001:
-            print("encoder input shape", p_input_ids.shape)
-
-            print(
-                "token0 count",
-                (p_input_ids == 0).sum().item()
-            )
-
-            print(
-                "pad count",
-                (p_attn_mask == 0).sum().item()
-            )
-
-            print(
-                "real count",
-                (p_attn_mask == 1).sum().item()
-            )
         B, L = p_input_ids.shape
         x = self.tok(p_input_ids)
         pos = torch.arange(L, device=p_input_ids.device).unsqueeze(0).expand(B, L)
