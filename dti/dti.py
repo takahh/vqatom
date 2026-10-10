@@ -2840,7 +2840,7 @@ def main():
             pad_id=smiles_tokenizer.pad_id,
             cls_id=smiles_tokenizer.cls_id,
             d_model=256,
-            n_layers=3,
+            n_layers=6,
             n_heads=8,
             dropout=args.dropout,
         ).to(device)
@@ -3408,3 +3408,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
