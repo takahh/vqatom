@@ -9,7 +9,12 @@ import matplotlib.pyplot as plt
 # =========================================================
 # Config
 # =========================================================
-json_dir = "/Users/taka/Downloads/"
+base_dir = "/Users/taka"
+
+runs = [
+    "Downloads",
+]
+json_dir = "/Users/taka/vqamino_r5_L16_seed0"
 files = glob.glob(os.path.join(json_dir, "*.json"))
 files = glob.glob(os.path.join(json_dir, "epoch_*.json"))
 run_name = os.path.basename(os.path.normpath(json_dir))
@@ -74,7 +79,7 @@ def plot_metric(filename, title, ylabel, series, best_epoch=None, hline0=False):
 
     save_path = os.path.join(json_dir, filename)
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"saved to: {save_path}")
+    # print(f"saved to: {save_path}")
     plt.show()
 
 
@@ -287,7 +292,7 @@ if not epochs:
 # =========================================================
 # Best epoch
 # =========================================================
-best_i = max(range(len(epochs)), key=lambda i: safe_float(valid_auc[i]))
+best_i = max(range(len(epochs)), key=lambda i: safe_float(valid_ndcg10[i]))
 best_epoch = epochs[best_i]
 
 best_final_i = max(range(len(epochs)), key=lambda i: safe_float(final_auc[i]))
@@ -296,64 +301,43 @@ best_final_i = max(range(len(epochs)), key=lambda i: safe_float(final_auc[i]))
 # =========================================================
 # Print summary
 # =========================================================
-print("===== BEST BY VALID AUROC =====")
-print(f"best epoch       : {epochs[best_i]}")
-print(f"valid AUROC      : {safe_float(valid_auc[best_i]):.6f}")
-print(f"final AUROC      : {safe_float(final_auc[best_i]):.6f}")
-print(f"train AUROC      : {safe_float(train_auc[best_i]):.6f}")
+print(
+    "Epoch\tValidNDCG10\tTestNDCG10\tTop1\tBest1\tBest5\tAUROC"
+)
 
-print(f"valid AP         : {safe_float(valid_ap[best_i]):.6f}")
-print(f"final AP         : {safe_float(final_ap[best_i]):.6f}")
+for i in range(len(epochs)):
+    print(
+        f"{epochs[i]}\t"
+        f"{valid_ndcg10[i]:.4f}\t"
+        f"{final_ndcg10[i]:.4f}\t"
+        f"{final_top1_exact[i]:.4f}\t"
+        f"{final_best1[i]:.4f}\t"
+        f"{final_best5[i]:.4f}\t"
+        f"{final_auc[i]:.4f}"
+    )
+print("\n===== BEST BY VALID NDCG10 =====")
+print(f"Epoch           : {epochs[best_i]}")
 
-print(f"valid EF1        : {safe_float(valid_ef1[best_i]):.6f}")
-print(f"final EF1        : {safe_float(final_ef1[best_i]):.6f}")
+print(f"Test NDCG10     : {final_ndcg10[best_i]:.4f}")
+print(f"Test NDCG5      : {final_ndcg5[best_i]:.4f}")
+print(f"Test NDCG1      : {final_ndcg1[best_i]:.4f}")
 
-print(f"valid r1 old     : {safe_float(valid_r1[best_i]):.6f}")
-print(f"final r1 old     : {safe_float(final_r1[best_i]):.6f}")
+print(f"Test Top1Exact  : {final_top1_exact[best_i]:.4f}")
+print(f"Test Best@1%    : {final_best1[best_i]:.4f}")
+print(f"Test Best@5%    : {final_best5[best_i]:.4f}")
+print(f"Test Best@10%   : {final_best10[best_i]:.4f}")
 
-print(f"valid Top1Exact  : {safe_float(valid_top1_exact[best_i]):.6f}")
-print(f"final Top1Exact  : {safe_float(final_top1_exact[best_i]):.6f}")
+print(f"Test AUROC      : {final_auc[best_i]:.4f}")
+print(f"Test AP         : {final_ap[best_i]:.4f}")
+print(f"Test F1         : {final_f1[best_i]:.4f}")
 
-print(f"valid Best@1%    : {safe_float(valid_best1[best_i]):.6f}")
-print(f"final Best@1%    : {safe_float(final_best1[best_i]):.6f}")
-print(f"valid Best@5%    : {safe_float(valid_best5[best_i]):.6f}")
-print(f"final Best@5%    : {safe_float(final_best5[best_i]):.6f}")
-print(f"valid Best@10%   : {safe_float(valid_best10[best_i]):.6f}")
-print(f"final Best@10%   : {safe_float(final_best10[best_i]):.6f}")
+print(f"Test EF1        : {final_ef1[best_i]:.4f}")
+print(f"Test EF5        : {final_ef5[best_i]:.4f}")
+print(f"Test EF10       : {final_ef10[best_i]:.4f}")
 
-print(f"valid NDCG1      : {safe_float(valid_ndcg1[best_i]):.6f}")
-print(f"final NDCG1      : {safe_float(final_ndcg1[best_i]):.6f}")
-print(f"valid NDCG5      : {safe_float(valid_ndcg5[best_i]):.6f}")
-print(f"final NDCG5      : {safe_float(final_ndcg5[best_i]):.6f}")
-print(f"valid NDCG10     : {safe_float(valid_ndcg10[best_i]):.6f}")
-print(f"final NDCG10     : {safe_float(final_ndcg10[best_i]):.6f}")
-
-print(f"valid groups     : {safe_float(valid_n_groups[best_i]):.0f}")
-print(f"final groups     : {safe_float(final_n_groups[best_i]):.0f}")
-
-print(f"valid RMSE       : {safe_float(valid_rmse[best_i]):.6f}")
-print(f"final RMSE       : {safe_float(final_rmse[best_i]):.6f}")
-print(f"valid Spearman   : {safe_float(valid_spearman[best_i]):.6f}")
-print(f"final Spearman   : {safe_float(final_spearman[best_i]):.6f}")
-print(f"valid Pearson    : {safe_float(valid_pearson[best_i]):.6f}")
-print(f"final Pearson    : {safe_float(final_pearson[best_i]):.6f}")
-
-print(f"loss total       : {safe_float(loss_total[best_i]):.6f}")
-print(f"loss cls         : {safe_float(loss_cls[best_i]):.6f}")
-print(f"loss reg         : {safe_float(loss_reg[best_i]):.6f}")
-print(f"loss contact     : {safe_float(loss_contact[best_i]):.6f}")
-print(f"contact gap      : {safe_float(contact_gap[best_i]):.6f}")
-
-print("\n===== BEST FINAL AUROC debug only =====")
-print(f"epoch            : {epochs[best_final_i]}")
-print(f"final AUROC      : {safe_float(final_auc[best_final_i]):.6f}")
-print(f"valid AUROC      : {safe_float(valid_auc[best_final_i]):.6f}")
-print(f"train AUROC      : {safe_float(train_auc[best_final_i]):.6f}")
-print(f"final Top1Exact  : {safe_float(final_top1_exact[best_final_i]):.6f}")
-print(f"final Best@1%    : {safe_float(final_best1[best_final_i]):.6f}")
-print(f"final NDCG10     : {safe_float(final_ndcg10[best_final_i]):.6f}")
-
-
+print(f"Test RMSE       : {final_rmse[best_i]:.4f}")
+print(f"Test Spearman   : {final_spearman[best_i]:.4f}")
+print(f"Test Pearson    : {final_pearson[best_i]:.4f}")
 # =========================================================
 # Plots: classification
 # =========================================================
