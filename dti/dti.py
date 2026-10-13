@@ -988,6 +988,9 @@ def eval_group_ranking_metrics(
         "ndcg1": 0.0,
         "ndcg5": 0.0,
         "ndcg10": 0.0,
+        "adjusted_ndcg1": 0.0,
+        "adjusted_ndcg5": 0.0,
+        "adjusted_ndcg10": 0.0,
     }
 
     vals = {k: [] for k in out if k != "n_groups"}
@@ -1029,6 +1032,13 @@ def eval_group_ranking_metrics(
             ideal_rels = rel[order_true[:kk]]
             denom = dcg(ideal_rels)
             vals[name].append(float(dcg(pred_rels) / denom) if denom > 0 else 0.0)
+            # Reverse of the ideal ranking is the zero baseline, ideal is one.
+            # Keep the same group-wise min-shift and DCG gain as legacy NDCG.
+            worst_rels = rel[np.argsort(y, kind="stable")[:kk]]
+            worst_dcg = dcg(worst_rels)
+            span = denom - worst_dcg
+            adjusted = ((dcg(pred_rels) - worst_dcg) / span) if span > 1e-12 else 0.0
+            vals[f"adjusted_{name}"].append(float(np.clip(adjusted, 0.0, 1.0)))
 
     out["n_groups"] = int(len(vals["top1_exact"]))
 
@@ -3356,6 +3366,7 @@ def main():
                 f"Best@1%={final_rank['best_in_top1pct']:.4f}",
                 f"Best@5%={final_rank['best_in_top5pct']:.4f}",
                 f"NDCG10={final_rank['ndcg10']:.4f}",
+                f"AdjustedNDCG10={final_rank['adjusted_ndcg10']:.4f}",
             )
         def find_pos_neg_indices(batch):
             y = batch.y_bin.detach().cpu().numpy()
@@ -3408,4 +3419,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
