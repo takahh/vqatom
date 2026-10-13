@@ -7,6 +7,52 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+def analyze_split(df, name):
+    # Partners are unique SMILES / protein sequences, not row counts.
+    prot_partners = df.groupby('seq')['smiles'].nunique()
+    lig_partners = df.groupby('smiles')['seq'].nunique()
+    labels = (pd.to_numeric(df['y']) >= 12.1).astype(int)
+    annotated = df.assign(_label=labels)
+    lig_classes = annotated.groupby('smiles')['_label'].nunique()
+    prot_classes = annotated.groupby('seq')['_label'].nunique()
+    ligand_one_class = lig_classes.eq(1)
+    ligand_one_partner = lig_partners.eq(1)
+    result = {
+        'split': name, 'rows': len(df), 'positive_rate': float(labels.mean()),
+        'proteins': len(prot_partners),
+        'protein_one_partner_n': int(prot_partners.eq(1).sum()),
+        'protein_one_partner_pct': float(prot_partners.eq(1).mean()*100),
+        'protein_one_class_n': int(prot_classes.eq(1).sum()),
+        'protein_one_class_pct': float(prot_classes.eq(1).mean()*100),
+        'ligands': len(lig_partners),
+        'ligand_one_partner_n': int(ligand_one_partner.sum()),
+        'ligand_one_partner_pct': float(ligand_one_partner.mean()*100),
+        'ligand_one_class_n': int(ligand_one_class.sum()),
+        'ligand_one_class_pct': float(ligand_one_class.mean()*100),
+        'ligand_one_class_multiple_partners_n': int((ligand_one_class & ~ligand_one_partner).sum()),
+        'mean_protein_partners': float(prot_partners.mean()),
+        'mean_ligand_partners': float(lig_partners.mean()),
+    }
+    return result
+
+def save_analysis(df, folder):
+    records = [analyze_split(df, 'combined')]
+    for name in ('train','valid','test'):
+        records.append(analyze_split(df.loc[df['_original_split']==name], 'cleaned_original_'+name))
+    for i in (2,3):
+        mapping_file=folder/f'split_{i}'/'cluster_assignment.csv'
+        if not mapping_file.exists(): continue
+        mapping=pd.read_csv(mapping_file, dtype=str)
+        if mapping['protein_cluster'].duplicated().any(): raise ValueError('Duplicate cluster assignments')
+        split_map=dict(zip(mapping['protein_cluster'],mapping['split']))
+        assigned=df['_cluster'].map(split_map)
+        if assigned.isna().any(): raise ValueError('Missing cluster assignments')
+        for name in ('train','valid','test'):
+            records.append(analyze_split(df.loc[assigned==name], f'split_{i}_'+name))
+    pd.DataFrame(records).to_csv(folder/'split_entity_analysis.csv',index=False)
+    print('[analysis] saved:',folder/'split_entity_analysis.csv',flush=True)
+    for r in records:
+        print(f"[analysis] {r['split']}: protein_one_partner={r['protein_one_partner_pct']:.2f}% ligand_one_partner={r['ligand_one_partner_pct']:.2f}% ligand_one_class={r['ligand_one_class_pct']:.2f}%",flush=True)
 
 def main():
  p=argparse.ArgumentParser()
@@ -21,7 +67,37 @@ def main():
   df=pd.read_csv(path,keep_default_na=False,dtype=str);df['_original_split']=name;frames.append(df)
  df=pd.concat(frames,ignore_index=True)
  if df[['seq','smiles']].eq('').any().any():raise ValueError('Empty seq or smiles')
- if df.duplicated(['seq','smiles']).any():raise ValueError('Duplicate (seq,smiles) pairs in input; investigate before splitting')
+ # Deduplicate pairs BEFORE clustering/splitting. Drop label-discordant pairs,
+ # and collapse concordant repeated measurements to a single median-y row.
+ df['_y_numeric']=pd.to_numeric(df['y'],errors='coerce')
+ if df['_y_numeric'].isna().any(): raise ValueError('Non-numeric y values found')
+ df['_label']=(df['_y_numeric']>=12.1).astype('int8')
+ grouped=df.groupby(['seq','smiles'],sort=False,dropna=False)
+ counts=grouped.size()
+ label_counts=grouped['_label'].nunique()
+ conflict_keys=label_counts[label_counts>1].index
+ repeated_keys=counts[counts>1].index
+ audit=[]
+ for (seq,smiles),part in grouped:
+  if len(part)>1:
+   audit.append({'seq':seq,'smiles':smiles,'n_rows':len(part),
+                 'y_values':';'.join(part['y'].astype(str)),
+                 'labels':';'.join(map(str,sorted(part['_label'].unique()))),
+                 'decision':'drop_conflicting_labels' if part['_label'].nunique()>1 else 'median_y'})
+ pd.DataFrame(audit,columns=['seq','smiles','n_rows','y_values','labels','decision']).to_csv(a.out/'duplicate_pair_audit.csv',index=False)
+ # One representative record per pair, with its y replaced by the median.
+ # For repeated pairs spanning original splits, retain first occurrence's origin
+ # only for descriptive statistics; original CSVs themselves remain unchanged.
+ df=grouped.head(1).copy()
+ median_y=grouped['_y_numeric'].median()
+ pair_idx=pd.MultiIndex.from_frame(df[['seq','smiles']])
+ df['y']=[format(v,'.12g') for v in median_y.reindex(pair_idx).to_numpy()]
+ bad_pairs=set(conflict_keys)
+ mask=[(seq,smiles) not in bad_pairs for seq,smiles in zip(df['seq'],df['smiles'])]
+ df=df.loc[mask].copy()
+ df.drop(columns=['_y_numeric','_label'],inplace=True)
+ print(f'[dedup] repeated_pairs={len(repeated_keys)} discordant_pairs_removed={len(conflict_keys)} remaining_rows={len(df)}',flush=True)
+ if df.duplicated(['seq','smiles']).any(): raise AssertionError('Deduplication failed')
  seqs=sorted(df.seq.unique());fasta=a.out/'protein_unique_seqs.fasta'
  with fasta.open('w') as f:
   for i,s in enumerate(seqs):f.write(f'>seq_{i}\n{s}\n')
@@ -69,9 +145,11 @@ def main():
   mapping=dict(zip(keys,best));new=df['_cluster'].map(mapping).to_numpy();folder=a.out/f'split_{iteration+2}';folder.mkdir(exist_ok=True)
   for j,name in enumerate(['train','valid','test']):
    subset=df.loc[new==j].drop(columns=['_original_split','_cluster']);subset.to_csv(folder/f'{name}.csv',index=False)
+  pd.DataFrame({'protein_cluster':keys,'split':[['train','valid','test'][int(v)] for v in best]}).to_csv(folder/'cluster_assignment.csv',index=False)
   sets=[{keys[i] for i in np.flatnonzero(best==j)} for j in range(3)]
   assert not any(sets[i]&sets[j] for i in range(3) for j in range(i+1,3))
   test_keys=sets[2];used_tests.append(test_keys)
   print(f'[split {iteration+2}] score={best_score:.5f} rows={[int((new==j).sum()) for j in range(3)]} rates={[round(float((pd.to_numeric(df.loc[new==j,"y"])>=12.1).mean()),4) for j in range(3)]} original_test_cluster_overlap={len(test_keys & original_test)} previous_test_overlaps={[len(test_keys & prev) for prev in used_tests[:-1]]}',flush=True)
+ save_analysis(df,a.out)
  print('[done] output:',a.out.resolve())
 if __name__=='__main__':main()
