@@ -54,6 +54,60 @@ def save_analysis(df, folder):
     for r in records:
         print(f"[analysis] {r['split']}: protein_one_partner={r['protein_one_partner_pct']:.2f}% ligand_one_partner={r['ligand_one_partner_pct']:.2f}% ligand_one_class={r['ligand_one_class_pct']:.2f}%",flush=True)
 
+def audit_cluster_coldness(df, folder):
+    """Audit MMseqs40 cluster disjointness and test-set overlap across all three splits."""
+    names = ('train', 'valid', 'test')
+    assignments = {'original': df['_original_split'].astype(str)}
+    for i in (2, 3):
+        path = folder / f'split_{i}' / 'cluster_assignment.csv'
+        m = pd.read_csv(path, dtype=str, keep_default_na=False)
+        if m['protein_cluster'].duplicated().any():
+            raise ValueError(f'Duplicate cluster assignment in {path}')
+        mapping = dict(zip(m['protein_cluster'], m['split']))
+        assignments[f'split_{i}'] = df['_cluster'].map(mapping)
+        if assignments[f'split_{i}'].isna().any():
+            raise ValueError(f'Missing cluster assignment for split_{i}')
+
+    sets_by_run = {}
+    report = []
+    for run, assignment in assignments.items():
+        sets = {name: set(df.loc[assignment == name, '_cluster']) for name in names}
+        sets_by_run[run] = sets
+        for left, right in (('train', 'valid'), ('train', 'test'), ('valid', 'test')):
+            overlap = sets[left] & sets[right]
+            report.append({'run': run, 'comparison': f'{left}_vs_{right}',
+                           'left_clusters': len(sets[left]), 'right_clusters': len(sets[right]),
+                           'overlap_clusters': len(overlap),
+                           'overlap_cluster_ids': ';'.join(sorted(overlap))})
+            print(f'[coldness] {run} {left}/{right}: {len(overlap)} overlapping MMseqs40 clusters', flush=True)
+            if run != 'original' and overlap:
+                raise AssertionError(f'ProteinCold violation: {run} {left}/{right}')
+    pd.DataFrame(report).to_csv(folder / 'protein_cold_validation.csv', index=False)
+
+    overlap_report = []
+    for left, right in (('original', 'split_2'), ('original', 'split_3'), ('split_2', 'split_3')):
+        a, b = sets_by_run[left]['test'], sets_by_run[right]['test']
+        common = a & b
+        left_rows = int(((assignments[left] == 'test') & df['_cluster'].isin(common)).sum())
+        right_rows = int(((assignments[right] == 'test') & df['_cluster'].isin(common)).sum())
+        record = {
+            'test_a': left, 'test_b': right,
+            'test_a_clusters': len(a), 'test_b_clusters': len(b),
+            'shared_clusters': len(common),
+            'shared_pct_of_a': round(100 * len(common) / len(a), 4) if a else 0,
+            'shared_pct_of_b': round(100 * len(common) / len(b), 4) if b else 0,
+            'jaccard_pct': round(100 * len(common) / len(a | b), 4) if a | b else 0,
+            'shared_rows_in_a_test': left_rows, 'shared_rows_in_b_test': right_rows,
+            'shared_cluster_ids': ';'.join(sorted(common)),
+        }
+        overlap_report.append(record)
+        print(f'[test overlap] {left}/{right}: {len(common)} shared clusters '
+              f'({record["shared_pct_of_a"]:.2f}% of {left}, '
+              f'{record["shared_pct_of_b"]:.2f}% of {right}); '
+              f'Jaccard={record["jaccard_pct"]:.2f}%', flush=True)
+    pd.DataFrame(overlap_report).to_csv(folder / 'test_cluster_overlap.csv', index=False)
+    print('[audit] saved protein_cold_validation.csv and test_cluster_overlap.csv', flush=True)
+
 def main():
  p=argparse.ArgumentParser()
  p.add_argument('--train',type=Path,required=True);p.add_argument('--valid',type=Path,required=True);p.add_argument('--test',type=Path,required=True)
@@ -151,5 +205,6 @@ def main():
   test_keys=sets[2];used_tests.append(test_keys)
   print(f'[split {iteration+2}] score={best_score:.5f} rows={[int((new==j).sum()) for j in range(3)]} rates={[round(float((pd.to_numeric(df.loc[new==j,"y"])>=12.1).mean()),4) for j in range(3)]} original_test_cluster_overlap={len(test_keys & original_test)} previous_test_overlaps={[len(test_keys & prev) for prev in used_tests[:-1]]}',flush=True)
  save_analysis(df,a.out)
+ audit_cluster_coldness(df,a.out)
  print('[done] output:',a.out.resolve())
 if __name__=='__main__':main()
