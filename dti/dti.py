@@ -253,7 +253,7 @@ class DTIDataset(Dataset):
                     continue
             else:
                 prot_tok_text = ""
-            if ligand_input_type in ("vqatom", "continuous"):
+            if ligand_input_type in ("vqatom", "continuous", "morgan"):
                 lig_text = (r.get("lig_tok") or "").strip()
             elif ligand_input_type == "smiles":
                 lig_text = (
@@ -322,7 +322,7 @@ class DTIDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        if self.ligand_input_type in ("vqatom", "continuous"):
+        if self.ligand_input_type in ("vqatom", "continuous", "morgan"):
             lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
         else:
             lig_ids = self.smiles_tokenizer.encode(row["lig_text"], add_cls=True)
@@ -2276,7 +2276,7 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
-        if self.ligand_input_type == "vqatom":
+        if self.ligand_input_type in ("vqatom", "morgan"):
             pair_map = ligand_adj_smooth_pairmap(
                 pair_map,
                 edge_index=edge_index,
@@ -2583,8 +2583,11 @@ def main():
             "vqatom_pretrained",
             "smiles",
             "smiles_pretrained",
+            "morgan",
         ],
     )
+    ap.add_argument("--morgan_vocab_path", type=str, default=None,
+                    help="morgan_vocab.csv generated from the training split")
     ap.add_argument("--lig_lr", type=float, default=None)
     ap.add_argument("--cross_lr", type=float, default=None)
     ap.add_argument("--protein_lr", type=float, default=None)
@@ -2841,6 +2844,32 @@ def main():
 
         ligand_input_type = "vqatom"
 
+
+    elif args.ligand_mode == "morgan":
+        print("[lig] mode = morgan (atom-wise radius-2, GIN scratch)")
+        if not args.morgan_vocab_path:
+            raise ValueError("--morgan_vocab_path is required for morgan mode")
+        with open(args.morgan_vocab_path, newline="", encoding="utf-8") as f:
+            vocab_rows = list(csv.DictReader(f))
+        if not vocab_rows or not all("mapped_id" in r for r in vocab_rows):
+            raise ValueError("Morgan vocabulary requires a mapped_id column")
+        mapped = [int(r["mapped_id"]) for r in vocab_rows]
+        if sorted(mapped) != list(range(1, len(mapped) + 1)):
+            raise ValueError("Morgan mapped IDs must be consecutive from 1")
+        # PAD=0, CLS=vocab+1. IDs 1..vocab are atom tokens.
+        morgan_pad = 0
+        morgan_cls = len(mapped) + 1
+        lig_enc = VQAtomGraphEncoder(
+            vocab_size=morgan_cls + 1,
+            pad_id=morgan_pad,
+            cls_id=morgan_cls,
+            d_model=args.d_model,
+            n_layers=args.lig_n_layers,
+            dropout=args.dropout,
+        ).to(device)
+        lig_enc.vocab_source = f"morgan:{args.morgan_vocab_path}"
+        ligand_input_type = "morgan"
+        print(f"[morgan] atom_vocab={len(mapped)} PAD=0 CLS={morgan_cls}")
 
     elif args.ligand_mode == "smiles":
         smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
