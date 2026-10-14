@@ -17,6 +17,7 @@ export FTP_PASS
   exit 1
 }
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
+FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}"
 : "${FTP_PASS:?Set FTP_PASS in the environment before running}"
 
 BASE="/vqatom"
@@ -138,9 +139,9 @@ fi
 wait "$PID_JSON"
 if [[ -n "$PID_QK" ]]; then
   wait "$PID_QK"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
 else
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
 fi
 
 echo "Completed: $RUN"
