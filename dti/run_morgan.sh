@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SEED="${SEED:-0}"
-SPLIT="${SPLIT:-1}"
-EPOCHS="${EPOCHS:-40}"
+SEED=0
+SPLIT=1
+EPOCHS=40
 
 # FTP password prompt (hidden input)
 FTP_USER="chicappa.jp-wakou"
