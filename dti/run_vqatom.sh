@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SEED=0
-SPLIT=1
+SEED="${SEED:-0}"
+SPLIT="${SPLIT:-1}"
 EPOCHS=20
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"

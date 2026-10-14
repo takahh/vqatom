@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SEED=0
-SPLIT=1
+SEED="${SEED:-0}"
+SPLIT="${SPLIT:-1}"
 EPOCHS=5
+
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
