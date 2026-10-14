@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create two ligand-cold KIBA splits from existing train/valid/test CSVs.
+"""Create three ligand-cold KIBA splits from existing train/valid/test CSVs.
 Requires: pandas numpy rdkit. Group by canonical isomeric SMILES.
 """
 import argparse
@@ -94,66 +94,3 @@ def main():
     total=len(df); global_rate=positives.sum()/total
     rng=np.random.default_rng(a.seed)
     used_tests=[]
-    assignments={'original':df._original_split.copy()}
-    summary=raw_summary+[analyze(df,'combined')]
-    for name in NAMES:
-        summary.append(analyze(df.loc[df._original_split==name],'cleaned_original_'+name))
-    for iteration in (2,3):
-        best=None; best_score=float('inf')
-        for _ in range(a.candidates):
-            perm=rng.permutation(len(keys)); assign=np.zeros(len(keys),dtype=np.int8)
-            targets=[int(total*.1),int(total*.1)]; sizes=[0,0]
-            for ix in perm:
-                choices=[j for j in range(2) if sizes[j]<targets[j]]
-                if choices:
-                    j=choices[int(rng.integers(len(choices)))]; assign[ix]=j+1;sizes[j]+=int(counts[ix])
-            if not (assign==1).any() or not (assign==2).any():continue
-            sz=np.array([counts[assign==j].sum() for j in range(3)],dtype=float)
-            if (sz==0).any():continue
-            rates=np.array([positives[assign==j].sum()/sz[j] for j in range(3)])
-            row_pen=((sz/total-np.array([.8,.1,.1]))**2).sum()*70
-            rate_pen=((rates-global_rate)**2).sum()*4
-            test_mask=assign==2
-            overlap_pen=sum(int(counts[i]) for i in np.flatnonzero(test_mask) if keys[i] in original_test)/sz[2]
-            new_pen=sum(sum(int(counts[i]) for i in np.flatnonzero(test_mask) if keys[i] in prev)/sz[2] for prev in used_tests)
-            score=row_pen+rate_pen+2*overlap_pen+2*new_pen
-            if score<best_score:best_score=score;best=assign.copy()
-        if best is None:raise RuntimeError('No valid split candidate')
-        split_map=dict(zip(keys,[NAMES[int(j)] for j in best]))
-        assignment=df._ligand.map(split_map)
-        assignments[f'split_{iteration}']=assignment
-        folder=a.out/f'split_{iteration}';folder.mkdir(exist_ok=True)
-        for name in NAMES:
-            subset=df.loc[assignment==name].drop(columns=['_original_split','_ligand'])
-            subset.to_csv(folder/f'{name}.csv',index=False)
-            summary.append(analyze(df.loc[assignment==name],f'split_{iteration}_{name}'))
-        pd.DataFrame({'canonical_smiles':keys,'split':[NAMES[int(j)] for j in best]}).to_csv(folder/'ligand_assignment.csv',index=False)
-        test_set={keys[i] for i in np.flatnonzero(best==2)}
-        print(f'[split {iteration}] score={best_score:.5f} rows={[int((assignment==n).sum()) for n in NAMES]} positive_rates={[round(float((pd.to_numeric(df.loc[assignment==n,"y"])>=12.1).mean()),4) for n in NAMES]} test_overlap_original={len(test_set & original_test)} test_overlap_prior={[len(test_set & prev) for prev in used_tests]}',flush=True)
-        used_tests.append(test_set)
-    pd.DataFrame(summary).to_csv(a.out/'split_entity_analysis.csv',index=False)
-    for r in summary:
-        print(f"[analysis] {r['split']}: ligands={r['ligands']} positive_only={r['ligand_positive_only_n']} ({r['ligand_positive_only_pct']:.2f}%) negative_only={r['ligand_negative_only_n']} ({r['ligand_negative_only_pct']:.2f}%) mixed={r['ligand_mixed_n']} ({r['ligand_mixed_pct']:.2f}%)", flush=True)
-    sets_by_run={}; report=[]
-    for run,assignment in assignments.items():
-        sets=original_sets if run=='original' else {name:set(df.loc[assignment==name,'_ligand']) for name in NAMES}
-        sets_by_run[run]=sets
-        for left,right in [('train','valid'),('train','test'),('valid','test')]:
-            common=sets[left]&sets[right]
-            report.append(dict(run=run,comparison=f'{left}_vs_{right}',overlap_ligands=len(common),overlap_ids=';'.join(sorted(common))))
-            print(f'[coldness] {run} {left}/{right}: {len(common)} overlapping ligands',flush=True)
-            if run!='original' and common:raise AssertionError('LigandCold violation')
-    pd.DataFrame(report).to_csv(a.out/'ligand_cold_validation.csv',index=False)
-    overlap=[]
-    for left,right in [('original','split_2'),('original','split_3'),('split_2','split_3')]:
-        aa=sets_by_run[left]['test'];bb=sets_by_run[right]['test'];common=aa&bb
-        overlap.append(dict(test_a=left,test_b=right,test_a_ligands=len(aa),test_b_ligands=len(bb),shared_ligands=len(common),
-                            shared_pct_of_a=100*len(common)/len(aa) if aa else 0,shared_pct_of_b=100*len(common)/len(bb) if bb else 0,
-                            jaccard_pct=100*len(common)/len(aa|bb) if aa|bb else 0,
-                            shared_rows_in_a_test=int(((assignments[left]=='test')&df._ligand.isin(common)).sum()) if left!='original' else int(original_test_ligands.isin(common).sum()),
-                            shared_rows_in_b_test=int(((assignments[right]=='test')&df._ligand.isin(common)).sum()),
-                            shared_ligand_ids=';'.join(sorted(common))))
-    pd.DataFrame(overlap).to_csv(a.out/'test_ligand_overlap.csv',index=False)
-    print('[done]',a.out.resolve(),flush=True)
-
-if __name__=='__main__':main()
