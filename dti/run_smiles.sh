@@ -74,6 +74,7 @@ python dti.py \
   --pl_lp_overlap both \
   --protein_lr 5e-6 \
   --protein_token_dropout 0.1 \
+  --smiles_vocab_path /vqatom/data/smiles_vocab.json \
   --rank_lambda 0.05 \
   --rank_loss pairwise \
   --rank_margin 0.0 \
