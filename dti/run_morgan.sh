@@ -83,8 +83,8 @@ print(f"[Morgan] Dense ID range validated: 1..{n}; confirm CSVs use this vocabul
 ' "$VOCAB" "$TRAIN" "$VALID" "$TEST"
 
 cd "$DTI"
-[[ -f dti_morgan.py ]] || { echo 'ERROR: dti_morgan.py missing' >&2; exit 1; }
-python dti_morgan.py \
+[[ -f dti.py ]] || { echo 'ERROR: dti.py missing' >&2; exit 1; }
+python dti.py \
   --attn_activation sigmoid \
   --attn_temp 0.7 \
   --batch_size 16 \
