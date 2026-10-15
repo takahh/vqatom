@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from utils import CBDICT
