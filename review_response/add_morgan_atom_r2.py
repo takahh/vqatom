@@ -25,7 +25,7 @@ def atom_morgan_ids(smiles, generator):
 
 
 def convert_split(root, split, generator):
-    folder = root / f"split_{split}"
+    folder = root
     frames, ids_by_part = {}, {}
     for part in ('train', 'valid', 'test'):
         path = folder / f"{part}_split{split}.csv"
