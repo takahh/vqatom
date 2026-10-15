@@ -198,7 +198,7 @@ def main():
   if best is None:raise RuntimeError('No valid candidate')
   mapping=dict(zip(keys,best));new=df['_cluster'].map(mapping).to_numpy();folder=a.out/f'split_{iteration+2}';folder.mkdir(exist_ok=True)
   for j,name in enumerate(['train','valid','test']):
-   subset=df.loc[new==j].drop(columns=['_original_split','_cluster']);subset.to_csv(folder/f'{name}.csv',index=False)
+   subset=df.loc[new==j].drop(columns=['_original_split','_cluster']);subset.to_csv(a.out/f'{name}_morgan_split{iteration+2}.csv',index=False)
   pd.DataFrame({'protein_cluster':keys,'split':[['train','valid','test'][int(v)] for v in best]}).to_csv(folder/'cluster_assignment.csv',index=False)
   sets=[{keys[i] for i in np.flatnonzero(best==j)} for j in range(3)]
   assert not any(sets[i]&sets[j] for i in range(3) for j in range(i+1,3))
