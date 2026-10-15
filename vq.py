@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
 from utils import CBDICT
@@ -1104,7 +1105,7 @@ class EuclideanCodebook(nn.Module):
         X,
         labels,
         row_block: int = 8192,
-        device: str | torch.device | None = None,
+        device: 'str | torch.device | None' = None,
     ) -> float:
         """
         Compute Silhouette score in (mini)blocks, on GPU if available.

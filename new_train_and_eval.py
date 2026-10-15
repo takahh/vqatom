@@ -1,3 +1,4 @@
+from __future__ import annotations
 from torch.utils.data import Dataset, DataLoader
 import glob
 import numpy as np
