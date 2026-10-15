@@ -208,7 +208,7 @@ def main():
         folder.mkdir(exist_ok=True)
         for code, name in enumerate(NAMES):
             part = df.loc[kept & (pcode == code)]
-            part[keep_cols].to_csv(folder / f'{name}.csv', index=False)
+            part[keep_cols].to_csv(folder / f'kiba_double_cold_split_{run}_{name}.csv', index=False)
             summaries.append(summary(part, f'split_{run}_{name}', args.threshold))
         df.loc[~kept, keep_cols].to_csv(folder / 'excluded_cross_partition.csv', index=False)
         pd.DataFrame({'seq': proteins, 'component': protein_components,

@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Convert train/valid/test for split_2 and split_3 to atom-wise radius-2 Morgan IDs."""
+"""Add raw and globally indexed atom-wise radius-2 Morgan IDs to KIBA CSVs.
+
+Input:  train.csv, valid.csv, test.csv under --root
+Output: train_morgan.csv, valid_morgan.csv, test_morgan.csv,
+        morgan_vocab_global.csv
+
+Existing lig_tok (VQAtom) is preserved. Vocabulary is shared across all
+three input files. For strict ligand-cold/double-cold experiments, map
+Morgan IDs absent from that split's training set to UNK at split time.
+"""
 import argparse
 from pathlib import Path
+
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
@@ -20,55 +30,66 @@ def atom_morgan_ids(smiles, generator):
             if radius == 2:
                 by_center[center].append(int(identifier))
     if any(len(ids) != 1 for ids in by_center):
-        raise ValueError(f"Radius-2 identifiers missing or ambiguous: {[len(x) for x in by_center]}, SMILES={smiles}")
+        raise ValueError(f"Radius-2 identifiers missing or ambiguous: {[len(x) for x in by_center]}; SMILES={smiles}")
     return [ids[0] for ids in by_center]
-
-
-def convert_split(root, split, generator):
-    folder = root
-    frames, ids_by_part = {}, {}
-    for part in ('train', 'valid', 'test'):
-        path = folder / f"{part}_split{split}.csv"
-        print(f"[{split}/{part}] reading {path}", flush=True)
-        df = pd.read_csv(path, dtype={'lig_tok': 'string'})
-        if 'smiles' not in df.columns:
-            raise ValueError(f"Missing smiles column in {path}")
-        rows = []
-        for i, smiles in enumerate(df['smiles']):
-            try:
-                rows.append(atom_morgan_ids(smiles, generator))
-            except Exception as exc:
-                raise ValueError(f"{path}, row {i+2}: {exc}") from exc
-        frames[part], ids_by_part[part] = df, rows
-        print(f"[{split}/{part}] rows={len(df):,}, atoms={sum(map(len, rows)):,}, unique={len({x for row in rows for x in row}):,}", flush=True)
-
-    vocab = sorted({v for row in ids_by_part['train'] for v in row})
-    mapping = {v: i + 1 for i, v in enumerate(vocab)}
-    for part, rows in ids_by_part.items():
-        unseen = {v for row in rows for v in row if v not in mapping}
-        if unseen:
-            raise ValueError(f"split_{split}/{part}: {len(unseen)} Morgan IDs absent from training vocabulary; no files written for this split")
-
-    pd.DataFrame({'original_id': vocab, 'mapped_id': range(1, len(vocab) + 1)}).to_csv(folder / f'morgan_vocab_split{split}.csv', index=False)
-    for part, df in frames.items():
-        rows = ids_by_part[part]
-        df['morgan_atom_r2'] = [' '.join(map(str, row)) for row in rows]
-        df['lig_tok'] = [' '.join(str(mapping[v]) for v in row) for row in rows]
-        output = folder / f'{part}_split{split}_morgan.csv'
-        df.to_csv(output, index=False)
-        print(f'[saved] {output}', flush=True)
-    print(f'[split_{split}] vocab={len(vocab):,}; PAD=0, token IDs=1..{len(vocab)}', flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, default=Path('/Users/taka/Desktop/kiba_extra_splits'))
-    parser.add_argument('--splits', type=int, nargs='+', default=[2, 3])
+    parser.add_argument('--root', type=Path, default=Path.home() / 'Downloads')
     args = parser.parse_args()
-    generator = rdFingerprintGenerator.GetMorganGenerator(radius=2, includeRedundantEnvironments=True, countSimulation=False)
-    for split in args.splits:
-        convert_split(args.root, split, generator)
-    print('Done.', flush=True)
+    root = args.root.expanduser()
+    parts = ('train', 'valid', 'test')
+
+    generator = rdFingerprintGenerator.GetMorganGenerator(
+        radius=2, includeRedundantEnvironments=True, countSimulation=False
+    )
+
+    frames = {}
+    cache = {}
+    for part in parts:
+        path = root / f'{part}.csv'
+        print(f'[read] {path}', flush=True)
+        df = pd.read_csv(path, dtype={'lig_tok': 'string'})
+        if 'smiles' not in df.columns:
+            raise ValueError(f'Missing smiles column: {path}')
+        if df['smiles'].isna().any():
+            raise ValueError(f'Missing SMILES in {path}')
+        frames[part] = df
+        for smiles in df['smiles'].unique():
+            if smiles not in cache:
+                cache[smiles] = atom_morgan_ids(smiles, generator)
+        print(f'[{part}] rows={len(df):,}; unique ligands so far={len(cache):,}', flush=True)
+
+    vocab = sorted({v for ids in cache.values() for v in ids})
+    # PAD=0; reserve UNK=1; known environments start at 2.
+    mapping = {v: i + 2 for i, v in enumerate(vocab)}
+    vocab_path = root / 'morgan_vocab_global.csv'
+    pd.DataFrame({
+        'original_id': [-1] + vocab,
+        'mapped_id': [1] + list(range(2, len(vocab) + 2)),
+    }).to_csv(vocab_path, index=False)
+    print(f'[vocab] {vocab_path}; known={len(vocab):,}; PAD=0, UNK=1', flush=True)
+
+    for part, df in frames.items():
+        df['morgan_atom_r2'] = df['smiles'].map(
+            lambda s: ' '.join(map(str, cache[s]))
+        )
+        df['morgan_atom_r2_token'] = df['smiles'].map(
+            lambda s: ' '.join(str(mapping[v]) for v in cache[s])
+        )
+        for i, (smiles, raw, tokens) in enumerate(zip(
+            df['smiles'], df['morgan_atom_r2'], df['morgan_atom_r2_token']
+        )):
+            n = len(cache[smiles])
+            if len(raw.split()) != n or len(tokens.split()) != n:
+                raise AssertionError(f'{part} row {i}: atom/token count mismatch')
+        output = root / f'{part}_morgan.csv'
+        df.to_csv(output, index=False)
+        print(f'[saved] {output}; rows={len(df):,}', flush=True)
+
+    print('Done. Existing lig_tok was preserved.', flush=True)
+
 
 if __name__ == '__main__':
     main()
