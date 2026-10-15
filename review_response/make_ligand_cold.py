@@ -125,7 +125,7 @@ def main():
         folder=a.out/f'split_{iteration}';folder.mkdir(exist_ok=True)
         for name in NAMES:
             subset=df.loc[assignment==name].drop(columns=['_original_split','_ligand'])
-            subset.to_csv(folder/f'{name}.csv',index=False)
+            subset.to_csv(folder/f'kiba_ligand_cold_split_{iteration}_{name}.csv',index=False)
             summary.append(analyze(df.loc[assignment==name],f'split_{iteration}_{name}'))
         pd.DataFrame({'canonical_smiles':keys,'split':[NAMES[int(j)] for j in best]}).to_csv(folder/'ligand_assignment.csv',index=False)
         test_set={keys[i] for i in np.flatnonzero(best==2)}
