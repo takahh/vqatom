@@ -42,18 +42,24 @@ if ! command -v lftp >/dev/null 2>&1; then
 fi
 mkdir -p "$DATA" "$BASE/data"
 fetch_file() {
-  local remote="$1" local_name="$2"
-  if [[ -s "$local_name" ]]; then
+  local remote="$1" local_name="$2" force="${3:-0}"
+  if [[ "$force" != "1" && -s "$local_name" ]]; then
     echo "[FTP SKIP] $local_name"
     return
   fi
   echo "[FTP GET] $remote"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; get \"$remote\" -o \"$local_name\"; bye"
+  local tmp="${local_name}.download.$$"
+  rm -f "$tmp"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; get \"$remote\" -o \"$tmp\"; bye"
+  [[ -s "$tmp" ]] || { echo "ERROR: Download failed: $remote" >&2; rm -f "$tmp"; exit 1; }
+  mv -f "$tmp" "$local_name"
   [[ -s "$local_name" ]] || { echo "ERROR: Missing $local_name" >&2; exit 1; }
 }
+# Refresh dataset CSVs by default; set FORCE_REFRESH_CSV=0 to reuse cached copies.
+FORCE_REFRESH_CSV="${FORCE_REFRESH_CSV:-1}"
 for kind in train valid test; do
   name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
-  fetch_file "$REMOTE/$name" "$DATA/$name"
+  fetch_file "$REMOTE/$name" "$DATA/$name" "$FORCE_REFRESH_CSV"
 done
 CKPT="$BASE/data/continuous_mae_ep01.pt"
 fetch_file "$FTP_REMOTE_DIR/continuous_mae_ep01.pt" "$CKPT"
