@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DATASET="${DATASET:-kiba}"
+COLD_TYPE="${COLD_TYPE:-protein_cold}"
 SEED="${SEED:-0}"
 SPLIT="${SPLIT:-1}"
+Y_THR="${Y_THR:-12.1}"
+case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
+case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
 EPOCHS=40
 
 # FTP password prompt (hidden input)
@@ -17,17 +22,18 @@ export FTP_PASS
   exit 1
 }
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
-FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}"
+REMOTE="$FTP_REMOTE_DIR/$DATASET/$COLD_TYPE/split_$SPLIT"
+FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"
 : "${FTP_PASS:?Set FTP_PASS in the environment before running}"
 
 BASE="/vqatom"
-DATA="$BASE/data"
+DATA="$BASE/data/${DATASET}/${COLD_TYPE}/split_${SPLIT}"
 DTI="$BASE/dti"
 TRAIN="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_train.csv"
 VALID="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_valid.csv"
 TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test.csv"
-VOCAB="$DATA/morgan_vocab.csv"
-RUN="morgan_split${SPLIT}_seed${SEED}"
+VOCAB="$BASE/data/${DATASET}_morgan_vocab.csv"
+RUN="${DATASET}_${COLD_TYPE}_morgan_split${SPLIT}_seed${SEED}"
 OUT_DIR="$DTI/$RUN"
 
 if [[ ! -d "$BASE/.git" ]]; then
@@ -42,7 +48,7 @@ if ! command -v lftp >/dev/null 2>&1; then
   apt-get update
   apt-get install -y lftp
 fi
-mkdir -p "$DATA"
+mkdir -p "$DATA" "$BASE/data"
 
 fetch_file() {
   local remote="$1" local_name="$2"
@@ -51,7 +57,7 @@ fetch_file() {
     return
   fi
   echo "[FTP GET] $remote"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; get \"$remote\" -o \"$local_name\"; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; get \"$remote\" -o \"$local_name\"; bye"
   [[ -s "$local_name" ]] || { echo "ERROR: Missing $local_name" >&2; exit 1; }
 }
 
@@ -59,7 +65,12 @@ for kind in train valid test; do
   name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
   fetch_file "$REMOTE/$name" "$DATA/$name"
 done
-fetch_file "$FTP_REMOTE_DIR/morgan_vocab.csv" "$VOCAB"
+if [[ "$DATASET" == "metz" ]]; then
+  VOCAB_REMOTE="$FTP_REMOTE_DIR/metz/metz_morgan_vocab.csv"
+else
+  VOCAB_REMOTE="${MORGAN_VOCAB_REMOTE:-$FTP_REMOTE_DIR/morgan_vocab.csv}"
+fi
+fetch_file "$VOCAB_REMOTE" "$VOCAB"
 
 # Inline Morgan input verification; no external Python script or heredoc.
 python -c '
@@ -75,10 +86,10 @@ if {int(row["mapped_id"]) for row in vocab_rows} != set(range(1, n + 1)):
 for path in paths:
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
-        if "lig_tok" not in (reader.fieldnames or []):
+        if "morgan_atom_r2_token" not in (reader.fieldnames or []):
             raise SystemExit(f"{path}: missing lig_tok")
         for line, row in enumerate(reader, 2):
-            ids = [int(x) for x in (row.get("lig_tok") or "").replace(",", " ").split()]
+            ids = [int(x) for x in (row.get("morgan_atom_r2_token") or "").replace(",", " ").split()]
             if not ids or any(x < 1 or x > n for x in ids):
                 raise SystemExit(f"{path}:{line}: invalid Morgan IDs (expected 1..{n})")
 print(f"[Morgan] Dense ID range validated: 1..{n}; confirm CSVs use this vocabulary")
@@ -120,7 +131,7 @@ python dti.py \
   --use_train_valid_csv \
   --valid_csv "$VALID" \
   --weight_decay 0.05 \
-  --y_thr 12.1
+  --y_thr "$Y_THR"
 
 shopt -s nullglob
 json_files=( "$RUN"/*.json )
@@ -140,9 +151,9 @@ fi
 wait "$PID_JSON"
 if [[ -n "$PID_QK" ]]; then
   wait "$PID_QK"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
 else
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
 fi
 
 echo "Completed: $RUN"

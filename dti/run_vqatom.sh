@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+DATASET="${DATASET:-kiba}"
+COLD_TYPE="${COLD_TYPE:-protein_cold}"
 SEED="${SEED:-0}"
 SPLIT="${SPLIT:-1}"
+Y_THR="${Y_THR:-12.1}"
+case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
+case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
 EPOCHS=20
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
-FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}"
+REMOTE="$FTP_REMOTE_DIR/$DATASET/$COLD_TYPE/split_$SPLIT"
+FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"
 BASE="/vqatom"
-DATA="$BASE/data"
+DATA="$BASE/data/${DATASET}/${COLD_TYPE}/split_${SPLIT}"
 DTI="$BASE/dti"
-TRAIN="$DATA/train_split${SPLIT}.csv"
-VALID="$DATA/valid_split${SPLIT}.csv"
-TEST="$DATA/test_split${SPLIT}.csv"
-RUN="vqatom_split${SPLIT}_seed${SEED}"
+TRAIN="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_train.csv"
+VALID="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_valid.csv"
+TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test.csv"
+RUN="${DATASET}_${COLD_TYPE}_vqatom_split${SPLIT}_seed${SEED}"
 OUT_DIR="$DTI/$RUN"
 
 if [[ -z "${FTP_PASS:-}" ]]; then
@@ -34,7 +40,7 @@ if ! command -v lftp >/dev/null 2>&1; then
   apt-get update
   apt-get install -y lftp
 fi
-mkdir -p "$DATA"
+mkdir -p "$DATA" "$BASE/data"
 fetch_file() {
   local remote="$1" local_name="$2"
   if [[ -s "$local_name" ]]; then
@@ -45,10 +51,11 @@ fetch_file() {
   lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; get \"$remote\" -o \"$local_name\"; bye"
   [[ -s "$local_name" ]] || { echo "ERROR: Missing $local_name" >&2; exit 1; }
 }
-for name in "train_split${SPLIT}.csv" "valid_split${SPLIT}.csv" "test_split${SPLIT}.csv"; do
-  fetch_file "$FTP_REMOTE_DIR/$name" "$DATA/$name"
+for kind in train valid test; do
+  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
+  fetch_file "$REMOTE/$name" "$DATA/$name"
 done
-CKPT="$DATA/model_epoch_3.pt"
+CKPT="$BASE/data/model_epoch_3.pt"
 fetch_file "$FTP_REMOTE_DIR/model_epoch_3.pt" "$CKPT"
 cd "$DTI"
 [[ -f dti.py ]] || { echo 'ERROR: dti.py missing' >&2; exit 1; }
@@ -85,7 +92,7 @@ python dti.py \
   --use_train_valid_csv \
   --valid_csv "$VALID" \
   --weight_decay 0.05 \
-  --y_thr 12.1 \
+  --y_thr "$Y_THR" \
   --vq_ckpt "$CKPT"
 
 shopt -s nullglob
