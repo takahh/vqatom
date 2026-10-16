@@ -23,12 +23,7 @@ TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test.csv"
 RUN="${DATASET}_${COLD_TYPE}_vqatom_split${SPLIT}_seed${SEED}"
 OUT_DIR="$DTI/$RUN"
 
-if [[ -z "${FTP_PASS:-}" ]]; then
-  read -r -s -p "FTP Password: " FTP_PASS </dev/tty
-  echo
-fi
-[[ -n "$FTP_PASS" ]] || { echo "ERROR: FTP password empty" >&2; exit 1; }
-
+: "${FTP_PASS:?FTP_PASS environment variable is required}"
 if [[ ! -d "$BASE/.git" ]]; then
   git clone https://github.com/takahh/vqatom.git "$BASE"
 else

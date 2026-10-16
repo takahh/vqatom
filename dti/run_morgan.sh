@@ -14,11 +14,8 @@ EPOCHS="${EPOCHS:-40}"
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 
-: "${FTP_PASS:?Set FTP_PASS before running}""
-[[ -n "$FTP_PASS" ]] || {
-  echo "ERROR: FTP password is empty" >&2
-  exit 1
-}
+: "${FTP_PASS:?FTP_PASS environment variable is required}"
+
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
 REMOTE="$FTP_REMOTE_DIR/$DATASET/$COLD_TYPE/split_$SPLIT"
 FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"
