@@ -8,7 +8,7 @@ SPLIT="${SPLIT:-1}"
 Y_THR="${Y_THR:-12.1}"
 case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
 case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
-EPOCHS="${EPOCHS:-20}"
+EPOCHS="${EPOCHS:-40}"
 
 # FTP password prompt (hidden input)
 FTP_USER="chicappa.jp-wakou"
@@ -63,13 +63,16 @@ fetch_file() {
 
 for kind in train valid test; do
   name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
-  fetch_file "$REMOTE/$name" "$DATA/$name"
+  local_csv="$DATA/$name"
+  if [[ -s "$local_csv" ]] && ! head -n 1 "$local_csv" | grep -q 'morgan_atom_r2_token'; then
+    echo "[STALE CSV] Missing Morgan column; re-downloading $local_csv"
+    rm -f "$local_csv"
+  fi
+  fetch_file "$REMOTE/$name" "$local_csv"
 done
-if [[ "$DATASET" == "metz" ]]; then
-  VOCAB_REMOTE="$FTP_REMOTE_DIR/metz/metz_morgan_vocab.csv"
-else
-  VOCAB_REMOTE="${MORGAN_VOCAB_REMOTE:-$FTP_REMOTE_DIR/morgan_vocab.csv}"
-fi
+VOCAB_REMOTE="${MORGAN_VOCAB_REMOTE:-$FTP_REMOTE_DIR/$DATASET/${DATASET}_morgan_vocab.csv}"
+# Always refresh the small vocabulary file to match the server version.
+rm -f "$VOCAB"
 fetch_file "$VOCAB_REMOTE" "$VOCAB"
 
 # Inline Morgan input verification; no external Python script or heredoc.
@@ -87,7 +90,7 @@ for path in paths:
     with open(path, newline="") as f:
         reader = csv.DictReader(f)
         if "morgan_atom_r2_token" not in (reader.fieldnames or []):
-            raise SystemExit(f"{path}: missing lig_tok")
+            raise SystemExit(f"{path}: missing morgan_atom_r2_token")
         for line, row in enumerate(reader, 2):
             ids = [int(x) for x in (row.get("morgan_atom_r2_token") or "").replace(",", " ").split()]
             if not ids or any(x < 1 or x > n for x in ids):
