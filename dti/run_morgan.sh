@@ -90,6 +90,7 @@ for path in paths:
                 raise SystemExit(f"{path}:{line}: invalid Morgan IDs (expected 1..{n})")
 print(f"[Morgan] Dense ID range validated: 1..{n}; confirm CSVs use this vocabulary")
 ' "$VOCAB" "$TRAIN" "$VALID" "$TEST"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "$DTI"
 [[ -f dti.py ]] || { echo 'ERROR: dti.py missing' >&2; exit 1; }
