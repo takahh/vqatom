@@ -97,7 +97,7 @@ cd "$DTI"
 python dti.py \
   --attn_activation sigmoid \
   --attn_temp 0.7 \
-  --batch_size 16 \
+  --batch_size 8 \
   --cls_lambda 0.05 \
   --contact_lambda 0 \
   --cross_lr 1e-4 \
