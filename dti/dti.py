@@ -253,7 +253,12 @@ class DTIDataset(Dataset):
                     continue
             else:
                 prot_tok_text = ""
-            if ligand_input_type in ("vqatom", "continuous", "morgan"):
+            if ligand_input_type == "morgan":
+                lig_text = (r.get("morgan_atom_r2_token") or "").strip()
+            elif ligand_input_type == "continuous":
+                # Continuous GNN uses atom_feat, not VQ-Atom token IDs.
+                lig_text = (r.get("atom_feat") or "").strip()
+            elif ligand_input_type == "vqatom":
                 lig_text = (r.get("lig_tok") or "").strip()
             elif ligand_input_type == "smiles":
                 lig_text = (
@@ -322,7 +327,12 @@ class DTIDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.rows[idx]
-        if self.ligand_input_type in ("vqatom", "continuous", "morgan"):
+        if self.ligand_input_type == "continuous":
+            # Dummy atom slots preserve graph batching without depending on lig_tok.
+            # Actual ligand features come from atom_feat in ContinuousGNNEncoder.
+            atom_features = json.loads(row["lig_text"])
+            lig_ids = [self.lig_cls_id] + [0] * len(atom_features)
+        elif self.ligand_input_type in ("vqatom", "morgan"):
             lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
         else:
             lig_ids = self.smiles_tokenizer.encode(row["lig_text"], add_cls=True)
