@@ -8,7 +8,7 @@ SPLIT="${SPLIT:-1}"
 Y_THR="${Y_THR:-12.1}"
 case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
 case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
-EPOCHS=40
+EPOCHS="${EPOCHS:-40}"
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
