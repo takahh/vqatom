@@ -56,7 +56,7 @@ for kind in train valid test; do
   name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
   fetch_file "$REMOTE/$name" "$DATA/$name" "$FORCE_REFRESH_CSV"
 done
-CKPT="$BASE/data/model_epoch_3.pt"
+CKPT="$BASE/model_epoch_3.pt"
 fetch_file "$FTP_REMOTE_DIR/model_epoch_3.pt" "$CKPT"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
