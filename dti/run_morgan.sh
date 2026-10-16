@@ -14,9 +14,7 @@ EPOCHS="${EPOCHS:-40}"
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 
-read -r -s -p "FTP Password: " FTP_PASS </dev/tty
-echo
-export FTP_PASS
+FTP_PASS="${FTP_PASS}"
 [[ -n "$FTP_PASS" ]] || {
   echo "ERROR: FTP password is empty" >&2
   exit 1
