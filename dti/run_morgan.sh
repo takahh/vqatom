@@ -10,16 +10,14 @@ case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
 case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
 EPOCHS="${EPOCHS:-40}"
 
-# FTP password prompt (hidden input)
+# FTP password is supplied through the environment.
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
-
 : "${FTP_PASS:?FTP_PASS environment variable is required}"
 
 FTP_REMOTE_DIR="${FTP_REMOTE_DIR:-dti_data}"
 REMOTE="$FTP_REMOTE_DIR/$DATASET/$COLD_TYPE/split_$SPLIT"
 FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"
-: "${FTP_PASS:?Set FTP_PASS in the environment before running}"
 
 BASE="/vqatom"
 DATA="$BASE/data/${DATASET}/${COLD_TYPE}/split_${SPLIT}"
@@ -149,9 +147,9 @@ fi
 wait "$PID_JSON"
 if [[ -n "$PID_QK" ]]; then
   wait "$PID_QK"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
 else
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
 fi
 
 echo "Completed: $RUN"
