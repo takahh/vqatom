@@ -51,19 +51,21 @@ fetch_file() {
   [[ -s "$local_name" ]] || { echo "ERROR: Missing $local_name" >&2; exit 1; }
 }
 # Refresh dataset CSVs by default; set FORCE_REFRESH_CSV=0 to reuse cached copies.
-FORCE_REFRESH_CSV="${FORCE_REFRESH_CSV:-1}"
+FORCE_REFRESH_CSV="${FORCE_REFRESH_CSV:-0}"
 for kind in train valid test; do
   name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
   fetch_file "$REMOTE/$name" "$DATA/$name" "$FORCE_REFRESH_CSV"
 done
 CKPT="$BASE/data/continuous_mae_ep01.pt"
 fetch_file "$FTP_REMOTE_DIR/continuous_mae_ep01.pt" "$CKPT"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 cd "$DTI"
 [[ -f dti.py ]] || { echo 'ERROR: dti.py missing' >&2; exit 1; }
 python dti.py \
   --attn_activation sigmoid \
   --attn_temp 0.7 \
-  --batch_size 16 \
+  --batch_size 8 \
   --cls_lambda 0.05 \
   --contact_lambda 0 \
   --cross_lr 1e-4 \
@@ -113,8 +115,8 @@ fi
 wait "$PID_JSON"
 if [[ -n "$PID_QK" ]]; then
   wait "$PID_QK"
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\" & put \"$QK_ARCHIVE\" -o \"$QK_ARCHIVE\" & wait; bye"
 else
-  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; mkdir -p \"$FTP_RESULTS_DIR\"; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
+  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; set xfer:clobber on; cd \"$FTP_RESULTS_DIR\"; put \"$JSON_ARCHIVE\" -o \"$JSON_ARCHIVE\"; bye"
 fi
 echo "Completed: $RUN"
