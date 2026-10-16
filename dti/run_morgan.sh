@@ -23,9 +23,9 @@ FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}"
 BASE="/vqatom"
 DATA="$BASE/data"
 DTI="$BASE/dti"
-TRAIN="$DATA/train_split${SPLIT}.csv"
-VALID="$DATA/valid_split${SPLIT}.csv"
-TEST="$DATA/test_split${SPLIT}.csv"
+TRAIN="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_train.csv"
+VALID="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_valid.csv"
+TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test.csv"
 VOCAB="$DATA/morgan_vocab.csv"
 RUN="morgan_split${SPLIT}_seed${SEED}"
 OUT_DIR="$DTI/$RUN"
@@ -55,8 +55,9 @@ fetch_file() {
   [[ -s "$local_name" ]] || { echo "ERROR: Missing $local_name" >&2; exit 1; }
 }
 
-for name in "train_split${SPLIT}.csv" "valid_split${SPLIT}.csv" "test_split${SPLIT}.csv"; do
-  fetch_file "$FTP_REMOTE_DIR/$name" "$DATA/$name"
+for kind in train valid test; do
+  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
+  fetch_file "$REMOTE/$name" "$DATA/$name"
 done
 fetch_file "$FTP_REMOTE_DIR/morgan_vocab.csv" "$VOCAB"
 
