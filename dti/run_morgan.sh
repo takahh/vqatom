@@ -14,7 +14,7 @@ EPOCHS="${EPOCHS:-40}"
 FTP_USER="chicappa.jp-wakou"
 FTP_HOST="ftp.lolipop.jp"
 
-FTP_PASS="${FTP_PASS}"
+: "${FTP_PASS:?Set FTP_PASS before running}""
 [[ -n "$FTP_PASS" ]] || {
   echo "ERROR: FTP password is empty" >&2
   exit 1
