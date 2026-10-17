@@ -35,6 +35,25 @@ Protein sequence ──► ESM-2 ──────────────► D
 ```
 
 For the mathematical and architectural explanation, see [Section 4](#4-discretization-implementation-details) and [Section 6](#6-dti-model-and-benchmarking-details).
+## Data Availability
+
+The datasets used for the VQ-Atom DTI benchmarks are available on Hugging Face:
+
+**[VQ-Atom DTI Dataset](https://huggingface.co/datasets/takahh/vqatom_data)**
+
+The repository provides KIBA and Metz datasets with protein-cold, ligand-cold, and double-cold train/validation/test splits.
+
+The same data splits are used across the compared ligand representation methods to ensure consistent evaluation.
+
+### Download
+
+```bash
+pip install -U huggingface_hub
+
+hf download takahh/vqatom_data \
+  --repo-type dataset \
+  --local-dir data
+```
 
 ## 2. Quick start: end-to-end workflow
 
