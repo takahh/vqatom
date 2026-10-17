@@ -1,10 +1,153 @@
-# VQ-Atom: Molecular Atom Discretization
+# VQ-Atom: Discretization and Drug–Target Interaction Benchmarking
+
+VQ-Atom learns discrete, context-dependent atom tokens from molecular graphs. This guide starts with an overview of the architecture, followed by a practical end-to-end workflow, a file reference, and the detailed implementation and benchmark methodology.
+
+## Contents
+
+1. [Model overview](#1-model-overview)
+2. [Quick start: end-to-end workflow](#2-quick-start-end-to-end-workflow)
+3. [Repository and file guide](#3-repository-and-file-guide)
+4. [Discretization: implementation details](#4-discretization-implementation-details)
+5. [Dataset preparation: implementation details](#5-dataset-preparation-implementation-details)
+6. [DTI model and benchmarking details](#6-dti-model-and-benchmarking-details)
+
+---
+
+## 1. Model overview
+
+The workflow has three connected stages: **(1) train or load the VQ-Atom quantizer, (2) assign atom token IDs and prepare protein–ligand pairs, and (3) train and evaluate a DTI model**. The DTI benchmark also supports continuous atom features, SMILES, and atom-wise radius-2 Morgan tokens as alternative ligand representations.
+
+```text
+SMILES ──► molecular graph ──► three-layer GINE ──► atom vectors
+              │                                      │
+              └── intrinsic atom keys ──► codebooks ─┤
+                                                     ▼
+                                            local code indices
+                                                     │
+                                             codebook offsets
+                                                     ▼
+                                             global atom IDs
+                                                     │
+Protein sequence ──► ESM-2 ──────────────► DTI interaction model
+                                                     │
+                                                     ▼
+                                            prediction / metrics
+```
+
+For the mathematical and architectural explanation, see [Section 4](#4-discretization-implementation-details) and [Section 6](#6-dti-model-and-benchmarking-details).
+
+## 2. Quick start: end-to-end workflow
+
+> **Reproduction status:** These are source-derived command templates, **not a verified one-command installation**. The preparation script contains machine-specific paths; VQ tokenization requires a compatible checkpoint and `vqatom_module`; the single-SMILES utility has a documented return-value mismatch that must be fixed before running. The launchers also rely on external FTP storage. Adjust the environment and inputs first.
+
+### Step 0 — Prerequisites
+
+- Clone the repository and install the dependencies required by the chosen stage (PyTorch, PyTorch Geometric, Transformers, RDKit, pandas, Biopython, and MMseqs2 as applicable).
+- Prepare the pretrained VQ-Atom checkpoint and its exact codebook/key mapping.
+- Provide GraphDTA KIBA input files (`ligands_can.txt`, `proteins.txt`, `Y`) for the supplied data-generation script.
+- Edit the absolute input/output paths in `make_train_data_etc.py`, and configure `vqatom_module.encode_smiles_to_atom_tokens` to use the same VQ-Atom model and vocabulary mapping.
+
+### Step 1 — Discretize a single molecule and inspect its IDs
+
+From the repository root, after fixing the inference interface described below:
+
+```bash
+python infer_one_smiles.py \
+  --ckpt path/to/compatible_checkpoint.pt \
+  --smiles 'CCO' \
+  --device 0 \
+  --hidden_dim <TRAINED_DIM> \
+  --codebook_size <TRAINED_SETTING>
+```
+
+The quantizer assigns a **local index within a key-specific codebook**; adding the codebook offset produces the **global atom token ID** used downstream. `infer_one_smiles.py` currently expects three return values while `new_train_and_eval.evaluate()` returns four ID-related values in the supplied version; reconcile them before treating this invocation as executable.
+
+### Step 2 — Generate ligand token IDs and split CSVs
+
+The root-level script includes unique-SMILES extraction, VQ-Atom tokenization, graph annotations, MMseqs2 clustering, and protein-cold train/validation/test partitioning:
+
+```bash
+python make_train_data_etc.py
+```
+
+It currently uses constants rather than CLI flags. The generated `lig_tok` column contains VQ-Atom token IDs. For DTI training, place or rename the generated CSVs to match the expected structure:
+
+```text
+data/kiba/protein_cold/split_1/
+  kiba_protein_cold_split_1_train.csv
+  kiba_protein_cold_split_1_valid.csv
+  kiba_protein_cold_split_1_test.csv
+```
+
+The supplied root script primarily creates **protein-cold** data. Ligand-cold and double-cold datasets require separately prepared split files and leakage checks. The source's split seed and the DTI model's training seed are independent.
+
+### Step 3 — Train the DTI model using the generated IDs
+
+Minimal local-input template, executed from the repository root:
+
+```bash
+cd dti
+python dti.py \
+  --ligand_mode vqatom \
+  --train_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_train.csv \
+  --valid_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_valid.csv \
+  --final_eval_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_test.csv \
+  --use_train_valid_csv \
+  --vq_ckpt ../data/model_epoch_3.pt \
+  --y_thr 12.1 \
+  --select_on auroc \
+  --epochs 20 \
+  --seed 0 \
+  --out_dir ./kiba_protein_cold_vqatom_split1_seed0
+```
+
+This is **not** the full experimental configuration. For matched benchmark settings, inspect the four `run_*.sh` launchers. Their defaults are VQ-Atom **20**, continuous **40**, SMILES **5**, and Morgan **40** epochs. The scripts expect external FTP credentials and dataset artifacts; do not commit credentials.
+
+### Step 4 — Inspect metrics
+
+From the repository root:
+
+```bash
+python dti/plot_metrics.py \
+  --json_dir dti/kiba_protein_cold_vqatom_split1_seed0
+```
+
+This creates `auc_curve.png` and `loss_curve.png` from per-epoch JSON logs. Use **validation AUROC** for checkpoint selection, not test AUROC.
+
+## 3. Repository and file guide
+
+| Location | Purpose |
+| --- | --- |
+| `train_teacher.py` | VQ-Atom training entry point |
+| `models.py` | Atom embedding and three-hop GINE encoder |
+| `vq.py` | Vector quantization and codebook operations |
+| `new_train_and_eval.py` | Discretization training/evaluation logic |
+| `utils.py`, `make_cbdict.py` | Key-specific codebook sizes |
+| `infer_one_smiles.py` | Single-molecule token inference |
+| `make_train_data_etc.py` | Dataset creation; located at repository root |
+| `dti/dti.py` | DTI training and evaluation |
+| `dti/model.py` | Ligand encoder imported by DTI script |
+| `dti/smiles_mlm.py` | SMILES tokenizer and MLM utilities |
+| `dti/run_vqatom.sh` | VQ-Atom benchmark launcher |
+| `dti/run_continuous.sh` | Continuous baseline launcher |
+| `dti/run_smiles.sh` | SMILES baseline launcher |
+| `dti/run_morgan.sh` | Morgan baseline launcher |
+| `dti/overlap_check.py` | Protein-cluster, sequence and pair overlap checks |
+| `dti/get_data_statistics_for_neurips.py` | Dataset statistics |
+| `dti/plot_metrics.py` | Epoch-level AUROC and loss plots |
+| `dti/summarize_results.py` | Aggregate run metrics; paths currently hard-coded |
+
+The `run_*.sh` names are canonical names suggested for the uploaded timestamped scripts; verify filenames in your checkout. Some utilities still contain absolute local paths and require configuration before use.
+
+---
+
+## 4. Discretization: implementation details
 
 VQ-Atom converts **context-dependent atom representations** into **discrete token IDs**. Unlike an atom-type lookup, each token reflects both an atom's intrinsic chemical attributes and its surrounding molecular graph.
 
-This README describes the discretization pipeline in the accompanying implementation. It does not describe downstream drug–target interaction prediction.
+This part describes the discretization pipeline in the accompanying implementation. Downstream drug–target interaction prediction is covered in Part III.
 
-## Pipeline
+### Pipeline
 
 ```text
 SMILES
@@ -36,13 +179,13 @@ Project + layer norm + L2 norm           │
              Global atom token ID
 ```
 
-## 1. From SMILES to a molecular graph
+### From SMILES to a molecular graph
 
 Each molecule is represented as a graph: atoms are nodes and chemical bonds are edges. The graph-construction pipeline supplies an adjacency matrix and an atom-feature matrix. The one-molecule inference utility expects **79 input attributes per atom** and supports padding to **100 atoms** by default. These are implementation defaults, not fundamental limits of vector quantization.
 
 The feature matrix contains both intrinsic atomic information and descriptors of the local chemical environment. Bond types are also embedded for graph message passing.
 
-## 2. Intrinsic keys select codebooks
+### Intrinsic keys select codebooks
 
 Before quantization, each atom is assigned a **key** based on six intrinsic attributes:
 
@@ -59,13 +202,13 @@ The implementation represents a key as an underscore-separated string, such as `
 
 **Crucially, the key does not include the full neighboring environment.** Degree, ring size, functional-group indicators and other contextual features are instead supplied to the graph encoder. Thus atoms sharing a key can still receive different discrete IDs because their molecular environments differ.
 
-## 3. Graph encoding
+### Graph encoding
 
 The encoder (`EquivariantThreeHopGINE` in `models.py`) embeds the atom attributes, then applies **three GINE graph-convolution layers** with bond embeddings. It combines the initial node state and the outputs of all three layers, projects them to the quantization dimension, applies layer normalization, and L2-normalizes the resulting vectors.
 
 For atom `i`, denote the resulting continuous vector by `z_i`.
 
-## 4. Vector quantization
+### Vector quantization
 
 Each intrinsic key `k` has its own collection of learned code vectors (a **codebook**):
 
@@ -83,7 +226,7 @@ Conceptually, this assigns a continuous representation to a learned representati
 
 The implementation includes codebook initialization and training mechanisms in `vq.py`, including K-means-based initialization and quantization-related losses. Exact assignments depend on the trained checkpoint and quantizer configuration.
 
-## 5. Local indices versus global token IDs
+### Local indices versus global token IDs
 
 Local code indices are only unique **within their codebook**. To obtain a token vocabulary shared across all atom keys, the inference utility assigns an offset to each codebook:
 
@@ -93,7 +236,7 @@ $$
 
 Offsets are cumulative codebook sizes in the checkpoint's codebook iteration order. Therefore, a token ID must be interpreted together with the **same codebook configuration and ordering** used to generate it.
 
-### Illustrative example (not a measured model output)
+#### Illustrative example (not a measured model output)
 
 Suppose a carbon atom has key `6_0_3_1_1_0`. Its graph representation is assigned local code index `17`. If this key's codebook begins at global offset `5000`, then its final token ID is `5017`.
 
@@ -107,51 +250,20 @@ Global token ID:  5017
 
 Two atoms with the same key can select different local codes; atoms with different keys can have the same local index but different global IDs.
 
-## 6. Training and inference
-
-The training entry point is `train_teacher.py`, which constructs `EquivariantThreeHopGINE` and invokes the training workflow in `new_train_and_eval.py`. The codebook-size mapping `CBDICT` is defined in `utils.py`; `make_cbdict.py` provides a helper to propose per-key sizes from observed frequencies. Quantization logic is implemented in `vq.py`.
-
-For a single molecule, the supplied inference utility is `infer_one_smiles.py`. After preparing a **compatible checkpoint** and the graph preprocessing module (`smiles_to_npy.py`), the command has the following form:
-
-```bash
-python infer_one_smiles.py \
-  --ckpt path/to/compatible_checkpoint.pt \
-  --smiles 'CCO' \
-  --device 0 \
-  --hidden_dim <TRAINED_DIM> \
-  --codebook_size <TRAINED_SETTING>
-```
-
-Replace the bracketed placeholders with the values used during training. The script prints the SMILES, global token IDs, key IDs, local code IDs, and the size of the key mapping. The checkpoint architecture, feature layout, and codebook settings must match the training run.
-
-**Implementation note:** The supplied files contain different inference return conventions: `new_train_and_eval.evaluate()` currently returns four ID-related values, while `infer_one_smiles.py` unpacks a legacy three-value form. Reconcile these interfaces before treating the example command as an end-to-end verified invocation.
-
-## 7. What the tokens mean
+### What the tokens mean
 
 - A token identifies a **learned quantization cell** for an atom within a particular intrinsic-attribute group.
 - Its assignment can depend on the atom's **graph neighborhood**, not merely its elemental identity.
 - Token numbers are **categorical identifiers**, not physical measurements or ordinal chemical descriptors.
 - Token IDs are only directly comparable when generated with a **consistent checkpoint and vocabulary mapping**.
 
-## Relevant files
+---
 
-| File | Role |
-| --- | --- |
-| `models.py` | Atom embeddings, three-hop GINE encoder, quantizer integration |
-| `vq.py` | Codebooks, initialization, vector quantization, associated losses |
-| `new_train_and_eval.py` | Graph conversion, intrinsic-key grouping, training/evaluation |
-| `train_teacher.py` | Training entry point |
-| `utils.py` | Codebook-size dictionary (`CBDICT`) |
-| `make_cbdict.py` | Frequency-based codebook-size proposal utility |
-| `infer_one_smiles.py` | Single-SMILES inference and global ID conversion |
-| `args.py` | Command-line training parameters |
-
-
-# VQ-Atom: DTI Dataset Preparation
+## 5. Dataset preparation: implementation details
 
 This document describes the dataset-generation pipeline implemented in the repository-root script `make_train_data_etc.py`. The supplied script is primarily a **KIBA / GraphDTA to VQ-Atom DTI CSV** pipeline, ending with a protein-cold split. It contains optional structural annotation utilities; it is **not** a generic command-line generator for all datasets and cold-split types.
 
-## 1. Processing flow
+### Processing flow
 
 ```text
 GraphDTA KIBA inputs
@@ -180,7 +292,7 @@ GraphDTA KIBA inputs
 
 The script's `main()` calls `pass1_from_graphdta_processed()`, `pass2_make_smiles_token_map_parallel()`, `pass3_join_tokens()`, and `stage4_protein_cold_split()` in that order.
 
-## 2. Inputs and dependencies
+### Inputs and dependencies
 
 The default paths are **machine-specific constants** near the beginning of `make_train_data_etc.py`:
 
@@ -194,7 +306,7 @@ Change these before running. Expected GraphDTA KIBA inputs include `ligands_can.
 
 **Important:** `vqatom_module` and the matching VQ-Atom checkpoint must be available and configured in the user's environment. The supplied file alone does not make token generation fully standalone.
 
-## 3. Configuration
+### Configuration
 
 Selected settings from the supplied script:
 
@@ -212,7 +324,7 @@ Selected settings from the supplied script:
 
 The script includes additional component pruning, filtering, and balancing logic. The 80/10/10 values are **targets**: cluster/group constraints can prevent exact row-level proportions.
 
-## 4. Molecular and protein preprocessing
+### Molecular and protein preprocessing
 
 **Ligands:** SMILES are parsed and canonicalized using RDKit, and unique SMILES are tokenized via `encode_smiles_to_atom_tokens`. Molecular graph edges are exported as directed atom-pair indices. Atom features are also serialized for downstream graph-based ligand modes.
 
@@ -220,7 +332,7 @@ The script includes additional component pruning, filtering, and balancing logic
 
 **Optional structure information:** the script contains mmCIF/PDB parsing and protein–ligand contact logic. Contact annotations depend on the availability and suitability of the corresponding structures; do not assume every row has a valid structure or contact mask.
 
-## 5. Intermediate outputs
+### Intermediate outputs
 
 The configured output directory contains intermediate products such as:
 
@@ -240,7 +352,7 @@ test.csv
 
 The script also creates MMseqs2 intermediate directories and other caches as needed. These files allow intermediate stages to be inspected independently.
 
-## 6. Final CSV format
+### Final CSV format
 
 The final split writer emits these columns:
 
@@ -261,28 +373,7 @@ The final split writer emits these columns:
 
 The downstream DTI scripts additionally support `morgan_atom_r2_token` and a SMILES vocabulary. **These are not among the final CSV columns emitted by this script's `write_split_csvs()` function**; prepare them with the corresponding preprocessing utilities before Morgan or SMILES experiments.
 
-## 7. Running the preparation script
-
-After updating the hard-coded paths, installing dependencies, configuring MMseqs2, and making `vqatom_module` available:
-
-```bash
-python make_train_data_etc.py
-```
-
-The script is currently configured through Python constants, not command-line flags. It runs the stages sequentially; execution may be expensive because it processes and tokenizes many molecular records.
-
-For the DTI launchers, copy or rename the final CSVs into the expected dataset/split directory, for example:
-
-```text
-data/kiba/protein_cold/split_1/
-  kiba_protein_cold_split_1_train.csv
-  kiba_protein_cold_split_1_valid.csv
-  kiba_protein_cold_split_1_test.csv
-```
-
-The split-generation seed (`SPLIT_SEED`) and DTI training seed (`SEED`) are separate concepts. Keep both in the experiment metadata.
-
-## 8. Leakage checks and alternate splits
+### Leakage checks and alternate splits
 
 The supplied `dti/overlap_check.py` checks protein-cluster, exact protein sequence, and exact protein–ligand pair overlap among train/valid/test sets. Run an appropriate overlap audit after creating each split.
 
@@ -290,7 +381,7 @@ The supplied `dti/overlap_check.py` checks protein-cluster, exact protein sequen
 
 **Ligand-cold and double-cold:** the DTI launchers accept these split names, but the supplied data-generation script does not establish their complete construction. Document and distribute the corresponding split generators separately. For ligand-cold, ensure ligand entities are separated; for double-cold, verify both protein and ligand separation according to the declared entity or cluster definitions.
 
-## 9. Reproducibility checklist
+### Reproducibility checklist
 
 - Record the GraphDTA source/version and input checksums.
 - Record RDKit, Biopython, MMseqs2, and Python versions.
@@ -300,16 +391,19 @@ The supplied `dti/overlap_check.py` checks protein-cluster, exact protein sequen
 - Save dataset statistics and split sizes after filtering.
 - Publish the exact generated CSVs or a complete, executable generation recipe when licensing permits.
 
-See [`README_DTI.md`](README_DTI.md) for the training and evaluation workflow when both READMEs are placed in the same directory.
+See [Part III: DTI benchmarking](#part-iii-dti-benchmarking) for training and evaluation.
 
+---
 
-# VQ-Atom: Drug–Target Interaction (DTI) Benchmark
+---
+
+## 6. DTI model and benchmarking details
 
 This document describes the DTI experiments implemented in `dti/`, including ligand-representation comparisons, protein encoding, training, and evaluation. The experiments compare **VQ-Atom**, **continuous atom representations**, **SMILES**, and **atom-wise radius-2 Morgan tokens** under a shared DTI training framework.
 
 > **Scope:** This is an implementation guide, not a claim that all experimental results or checkpoints are included in the repository. The commands below assume the run scripts are placed in `dti/` and that the required data and checkpoints have been prepared.
 
-## 1. Overview
+### Overview
 
 ```text
 Ligand (SMILES)                       Protein (amino-acid sequence)
@@ -332,29 +426,7 @@ The main current training script is `dti/dti.py` (corresponding to the supplied 
 
 For the current classification experiments, labels are defined by `y_bin = 1` when `y >= y_thr` and `0` otherwise. **The supplied run scripts default to `Y_THR=12.1` for both KIBA and Metz**; confirm that the target scale and threshold are appropriate for each dataset before running.
 
-## 2. Repository layout
-
-```text
-vqatom/
-├── make_train_data_etc.py        # Dataset preparation (repository root)
-├── dti/
-│   ├── dti.py                    # Current DTI training and evaluation
-│   ├── model.py                  # Additional / legacy model implementation
-│   ├── smiles_mlm.py             # SMILES tokenizer and MLM training utilities
-│   ├── run_vqatom.sh             # VQ-Atom experiment launcher
-│   ├── run_continuous.sh         # Continuous-representation launcher
-│   ├── run_smiles.sh             # SMILES launcher
-│   ├── run_morgan.sh             # Morgan launcher
-│   ├── overlap_check.py          # Split overlap audit
-│   ├── get_data_statistics_for_neurips.py
-│   ├── plot_metrics.py           # Per-epoch plots
-│   └── summarize_results.py      # Aggregate experiment summaries
-└── data/                         # Generated inputs (see below)
-```
-
-The launcher names above are suggested canonical names for the supplied timestamped `.sh` files. Rename them in the repository if necessary. `model.py` is not interchangeable with `dti.py`; the supplied `dti.py` imports `PretrainedLigandEncoder` from `model.py`.
-
-## 3. Data and input format
+### Data and input format
 
 The training commands expect separate train, validation, and test CSV files. Relevant columns depend on the ligand mode:
 
@@ -368,7 +440,7 @@ The training commands expect separate train, validation, and test CSV files. Rel
 | `atom_feat` | Atom-level features for graph-based modes |
 | `morgan_atom_r2_token` | Atom-wise Morgan radius-2 dense IDs for Morgan mode |
 
-Other optional fields can carry structural/contact annotations. See `dti.py` for the precise mode-specific requirements.
+Other optional fields can carry structural/contact annotations. See `dti/dti.py` for the precise mode-specific requirements.
 
 The launchers expect the following layout:
 
@@ -384,7 +456,7 @@ data/
 
 Each dataset/split combination must have matching CSVs and preprocessing artifacts. The current launchers fetch data from a separately configured FTP server; **those files are not automatically provided by cloning this repository**. For public reproduction, replace the private data-transfer step with locally prepared files or an accessible dataset distribution.
 
-## 4. Compared ligand representations
+### Compared ligand representations
 
 | Mode | `--ligand_mode` | Additional input |
 | --- | --- | --- |
@@ -397,52 +469,7 @@ VQ-Atom uses discrete atom identifiers learned from molecular contexts. Continuo
 
 The SMILES tokenizer and masked-language-model utilities are in `dti/smiles_mlm.py`. Its vocabulary must match the tokenizer used by the DTI run. The Morgan launcher validates that its vocabulary uses dense mapped IDs `1..N` and that all three CSVs contain valid IDs.
 
-## 5. Training
-
-The four launcher scripts share these environment variables:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `DATASET` | `kiba` | `kiba` or `metz` |
-| `COLD_TYPE` | `protein_cold` | `protein_cold`, `ligand_cold`, or `double_cold` |
-| `SPLIT` | `1` | Split number |
-| `SEED` | `0` | Training random seed |
-| `Y_THR` | `12.1` | Threshold for binary labels |
-| `EPOCHS` | Mode-specific | Training epochs |
-| `FTP_PASS` | Required by supplied launchers | Password for the external data-transfer server |
-
-The supplied scripts use these epoch defaults:
-
-| Representation | Epochs |
-| --- | ---: |
-| VQ-Atom | 20 |
-| Continuous | 40 |
-| SMILES | 5 |
-| Morgan | 40 |
-
-Example with a **locally prepared dataset**, invoking the training entry point directly from the repository root:
-
-```bash
-cd dti
-python dti.py \
-  --ligand_mode vqatom \
-  --train_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_train.csv \
-  --valid_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_valid.csv \
-  --final_eval_csv ../data/kiba/protein_cold/split_1/kiba_protein_cold_split_1_test.csv \
-  --use_train_valid_csv \
-  --vq_ckpt ../data/model_epoch_3.pt \
-  --y_thr 12.1 \
-  --select_on auroc \
-  --epochs 20 \
-  --seed 0 \
-  --out_dir ./kiba_protein_cold_vqatom_split1_seed0
-```
-
-This is a **minimal invocation template**, not an exact reproduction of all launcher hyperparameters. For the experimental configuration, consult the corresponding `run_*.sh` file. VQ-Atom needs a compatible `model_epoch_3.pt` checkpoint; the continuous launcher also downloads `continuous_mae_ep01.pt`, although its supplied `dti.py` invocation selects `continuous` rather than explicitly passing that checkpoint. Verify the intended pretraining behavior before describing it as pretrained.
-
-The supplied launchers clone/update the repository under `/vqatom`, install packages, retrieve inputs using `lftp`, execute `dti.py`, and archive the JSON metrics and optional attention maps. They are tailored to a particular Linux/GPU environment and should be adapted before public use. **Do not commit FTP passwords or other credentials.**
-
-## 6. Split strategies and evaluation
+### Split strategies and evaluation
 
 The experiment interface recognizes:
 
@@ -460,7 +487,7 @@ The exact construction and leakage criteria must be documented alongside each pu
 
 `get_data_statistics_for_neurips.py` summarizes sample counts, unique proteins/ligands, positive rates, and per-entity distributions. It also currently uses local hard-coded paths and `Y_THR=12.1`.
 
-## 7. Inspecting results
+### Inspecting results
 
 The launcher outputs are named like:
 
@@ -482,7 +509,7 @@ This produces `auc_curve.png` and `loss_curve.png` in the specified run director
 
 `dti/summarize_results.py` reads `epoch_*.json` from a configured set of run directories and summarizes metrics including AUROC, enrichment factors, and ranking metrics. **Its paths and run names are currently hard-coded**; update them before using it with newly generated runs.
 
-## 8. Reproducibility notes
+### Reproducibility notes
 
 - Keep dataset versions, split definitions, seeds, label thresholds, and model checkpoints fixed when comparing ligand representations.
 - Reuse the exact SMILES/Morgan vocabulary mapping associated with each experiment; token IDs are not portable between unrelated vocabularies.
@@ -490,7 +517,3 @@ This produces `auc_curve.png` and `loss_curve.png` in the specified run director
 - Preserve validation-based checkpoint selection and report variation across seeds and splits.
 - Record software versions, model initialization, GPU hardware, and all training flags for published comparisons.
 - Avoid relying on private FTP paths or local absolute paths for a public reproduction package.
-
-## 9. Related documentation
-
-See the repository's molecular-discretization README for the VQ-Atom token-generation pipeline. Dataset preparation is described separately in [`README_DATA_PREPARATION.md`](README_DATA_PREPARATION.md) when both documents are stored in the same directory.
