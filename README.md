@@ -88,7 +88,7 @@ The implementation includes codebook initialization and training mechanisms in `
 Local code indices are only unique **within their codebook**. To obtain a token vocabulary shared across all atom keys, the inference utility assigns an offset to each codebook:
 
 $$
-\operatorname{token}_i = \operatorname{offset}(k_i) + j_i.
+\mathrm{token}_i = \mathrm{offset}(k_i) + j_i.
 $$
 
 Offsets are cumulative codebook sizes in the checkpoint's codebook iteration order. Therefore, a token ID must be interpreted together with the **same codebook configuration and ordering** used to generate it.
