@@ -5,11 +5,12 @@ VQ-Atom learns discrete, context-dependent atom tokens from molecular graphs. Th
 ## Contents
 
 1. [Model overview](#1-model-overview)
-2. [Quick start: end-to-end workflow](#2-quick-start-end-to-end-workflow)
-3. [Repository and file guide](#3-repository-and-file-guide)
-4. [Discretization: implementation details](#4-discretization-implementation-details)
-5. [Dataset preparation: implementation details](#5-dataset-preparation-implementation-details)
-6. [DTI model and benchmarking details](#6-dti-model-and-benchmarking-details)
+2. [Installation and dependencies](#2-installation-and-dependencies)
+3. [Quick start: end-to-end workflow](#3-quick-start-end-to-end-workflow)
+4. [Repository and file guide](#4-repository-and-file-guide)
+5. [Discretization: implementation details](#5-discretization-implementation-details)
+6. [Dataset preparation: implementation details](#6-dataset-preparation-implementation-details)
+7. [DTI model and benchmarking details](#7-dti-model-and-benchmarking-details)
 
 ---
 
@@ -34,7 +35,7 @@ Protein sequence ──► ESM-2 ──────────────► D
                                             prediction / metrics
 ```
 
-For the mathematical and architectural explanation, see [Section 4](#4-discretization-implementation-details) and [Section 6](#6-dti-model-and-benchmarking-details).
+For the mathematical and architectural explanation, see [Section 5](#5-discretization-implementation-details) and [Section 7](#7-dti-model-and-benchmarking-details).
 ## Data Availability
 
 The datasets used for the VQ-Atom DTI benchmarks are available on Hugging Face:
@@ -55,13 +56,85 @@ hf download takahh/vqatom_data \
   --local-dir data
 ```
 
-## 2. Quick start: end-to-end workflow
+## 2. Installation and dependencies
+
+> **Environment record (18 October 2026):** Package versions below were reported from an active GPU environment. This is a recorded environment, not a verified clean installation or a guarantee that all benchmark runs used identical versions. RDKit and Biopython were not present in the supplied `pip freeze` output; their versions remain unverified. MMseqs2 is a separate executable.
+
+### System prerequisites
+
+- Linux or macOS, Python 3, and a compatible PyTorch installation. A CUDA-capable GPU is strongly recommended for ESM-2 and DTI training.
+- Git for cloning the repository.
+- **MMseqs2** for the protein clustering/split-generation stage (not required merely to read prepared CSVs).
+- Access to the matching VQ-Atom checkpoint and codebook/key-to-ID mapping for token inference.
+
+### Clone and create an isolated environment
+
+```bash
+git clone https://github.com/takahh/vqatom.git
+cd vqatom
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+### Install Python packages
+
+The reported environment uses **PyTorch 2.14.1+cu132**, **PyTorch Geometric 2.8.1**, **Transformers 5.20.1**, **Accelerate 1.15.0**, **NumPy 2.5.4**, **pandas 3.0.6**, and **scikit-learn 1.9.1**. The exact CUDA-specific PyTorch wheel may require a compatible package index; verify availability and follow the [official PyTorch instructions](https://pytorch.org/get-started/locally/) rather than assuming a standard PyPI installation will resolve `+cu132`.
+
+Once the matching PyTorch installation is available, install the other pinned packages:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The requirements file pins directly relevant packages observed in the reported environment, but **does not constitute a complete lockfile**. Install RDKit and Biopython separately for preprocessing, after checking compatible versions, and record their versions. For PyTorch Geometric compatibility see the [PyG installation guide](https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html).
+
+### Non-Python tool for dataset generation
+
+Install MMseqs2 using its [official installation instructions](https://github.com/soedinglab/MMseqs2) and verify it is on the path:
+
+```bash
+mmseqs --version
+```
+
+MMseqs2 is only needed for workflows that regenerate protein-clustered splits. Users of the published precomputed datasets may skip that step.
+
+### Check the environment and record exact versions
+
+```bash
+python -m pip check
+python -m pip freeze > installed_versions.txt
+python - <<'PYTHON'
+import sys
+import torch
+import torch_geometric
+import transformers
+import rdkit
+print('Python:', sys.version.split()[0])
+print('PyTorch:', torch.__version__)
+print('CUDA runtime:', torch.version.cuda)
+print('CUDA available:', torch.cuda.is_available())
+print('PyTorch Geometric:', torch_geometric.__version__)
+print('Transformers:', transformers.__version__)
+print('RDKit:', rdkit.__version__)
+PYTHON
+```
+
+For the paper's reproducibility package, confirm the versions on the machines used for the reported experiments and publish a validated environment lockfile. Record GPU model, CUDA/driver versions, and the relevant checkpoint hashes as well.
+
+### External artifacts and current limitations
+
+The dataset can be downloaded from [Hugging Face](https://huggingface.co/datasets/takahh/vqatom_data) as described above. Some provided benchmark shell scripts still download inputs from a separately configured FTP server; they will not run unchanged on a clean checkout without replacing that step with local dataset paths. The dataset-generation script contains absolute local paths, and single-molecule inference has a documented interface mismatch. See the Quick start and the detailed notes below before attempting a complete reproduction.
+
+---
+
+## 3. Quick start: end-to-end workflow
 
 > **Reproduction status:** These are source-derived command templates, **not a verified one-command installation**. The preparation script contains machine-specific paths; VQ tokenization requires a compatible checkpoint and `vqatom_module`; the single-SMILES utility has a documented return-value mismatch that must be fixed before running. The launchers also rely on external FTP storage. Adjust the environment and inputs first.
 
 ### Step 0 — Prerequisites
 
-- Clone the repository and install the dependencies required by the chosen stage (PyTorch, PyTorch Geometric, Transformers, RDKit, pandas, Biopython, and MMseqs2 as applicable).
+- Follow [Installation and dependencies](#2-installation-and-dependencies), including the system-specific PyTorch setup and the companion `requirements.txt`.
 - Prepare the pretrained VQ-Atom checkpoint and its exact codebook/key mapping.
 - Provide GraphDTA KIBA input files (`ligands_can.txt`, `proteins.txt`, `Y`) for the supplied data-generation script.
 - Edit the absolute input/output paths in `make_train_data_etc.py`, and configure `vqatom_module.encode_smiles_to_atom_tokens` to use the same VQ-Atom model and vocabulary mapping.
@@ -133,7 +206,7 @@ python dti/plot_metrics.py \
 
 This creates `auc_curve.png` and `loss_curve.png` from per-epoch JSON logs. Use **validation AUROC** for checkpoint selection, not test AUROC.
 
-## 3. Repository and file guide
+## 4. Repository and file guide
 
 | Location | Purpose |
 | --- | --- |
@@ -160,7 +233,7 @@ The `run_*.sh` names are canonical names suggested for the uploaded timestamped 
 
 ---
 
-## 4. Discretization: implementation details
+## 5. Discretization: implementation details
 
 VQ-Atom converts **context-dependent atom representations** into **discrete token IDs**. Unlike an atom-type lookup, each token reflects both an atom's intrinsic chemical attributes and its surrounding molecular graph.
 
@@ -278,7 +351,7 @@ Two atoms with the same key can select different local codes; atoms with differe
 
 ---
 
-## 5. Dataset preparation: implementation details
+## 6. Dataset preparation: implementation details
 
 This document describes the dataset-generation pipeline implemented in the repository-root script `make_train_data_etc.py`. The supplied script is primarily a **KIBA / GraphDTA to VQ-Atom DTI CSV** pipeline, ending with a protein-cold split. It contains optional structural annotation utilities; it is **not** a generic command-line generator for all datasets and cold-split types.
 
@@ -416,7 +489,7 @@ See [Part III: DTI benchmarking](#part-iii-dti-benchmarking) for training and ev
 
 ---
 
-## 6. DTI model and benchmarking details
+## 7. DTI model and benchmarking details
 
 This document describes the DTI experiments implemented in `dti/`, including ligand-representation comparisons, protein encoding, training, and evaluation. The experiments compare **VQ-Atom**, **continuous atom representations**, **SMILES**, and **atom-wise radius-2 Morgan tokens** under a shared DTI training framework.
 
