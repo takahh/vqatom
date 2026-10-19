@@ -7,6 +7,8 @@ Use --monitor-only to resume after Mac restarts.
 """
 import argparse
 import concurrent.futures
+import csv
+import re
 import getpass
 import json
 import os
@@ -22,6 +24,7 @@ import launch_experiments_fast as base
 HERE = Path(__file__).resolve().parent
 STATE = HERE / 'detached_jobs.json'
 BAD_HOSTS = HERE / 'failed_vast_hosts.json'
+FAILED_CSV = HERE / 'detached_start_failures.csv'
 LOCK = threading.Lock()
 # Reserved physical hosts for this launch, including already-running instances.
 RESERVED_HOSTS = set()
@@ -155,6 +158,76 @@ def wait_ready_with_auth_diagnostics(instance_id, seconds):
     raise TimeoutError(f'Instance {instance_id} not SSH-ready in {seconds}s; {last_error}')
 
 
+def training_started(instance_id):
+    # Require actual positive tqdm train progress.
+    rc, out, err = remote_check(instance_id, r'''python3 - <<'PYREMOTE'
+import os, re
+p = '/tmp/dti_run.log'
+if os.path.isfile('/tmp/dti_success'):
+    print('STARTED')
+elif os.path.isfile('/tmp/dti_failed'):
+    print('FAILED')
+elif not os.path.isfile(p):
+    print('WAITING')
+else:
+    with open(p, 'rb') as f:
+        f.seek(max(0, os.path.getsize(p) - 262144))
+        data = f.read().decode('utf-8', 'replace')
+    steps = [int(m.group(1)) for m in re.finditer(r'train:\s*\d+%[^\r\n]*?\|\s*(\d+)/\d+', data)]
+    print('STARTED' if any(x > 0 for x in steps) else 'WAITING')
+PYREMOTE''', timeout=40)
+    if rc:
+        raise RuntimeError(f'SSH probe failed: {err[-200:]}')
+    return out.strip().splitlines()[-1] if out.strip() else 'WAITING'
+
+
+def verify_owned_and_destroy(name, instance_id):
+    # Require exact ID and label match.
+    matches = [i for i in instances() if str(i.get('id')) == str(instance_id)]
+    if not matches:
+        base.log(f'[CLEANUP] {name}: instance {instance_id} already absent')
+        return
+    if len(matches) != 1 or str(matches[0].get('label')) != name:
+        raise RuntimeError(f'unsafe destroy: instance {instance_id} label mismatch')
+    base.cli('destroy', 'instance', instance_id, '-y', '--raw', timeout=90)
+    if any(str(i.get('id')) == str(instance_id) for i in instances()):
+        raise RuntimeError(f'instance {instance_id} still listed after destroy')
+    base.log(f'[START TIMEOUT DESTROYED] {name}: instance={instance_id}')
+
+
+def await_training_start(name, instance_id, created_at, args):
+    deadline = created_at + args.training_start_timeout
+    while True:
+        try:
+            result = training_started(instance_id)
+            if result == 'STARTED' and time.time() <= deadline:
+                base.log(f'[TRAINING CONFIRMED] {name}: instance={instance_id}')
+                return
+            if result == 'FAILED':
+                raise RuntimeError('remote runner failed before training began')
+        except RuntimeError as exc:
+            if 'remote runner failed' in str(exc):
+                raise
+            base.log(f'[START CHECK] {name}: {exc}')
+        if time.time() >= deadline:
+            raise TimeoutError(f'no positive train progress within {args.training_start_timeout}s of creation')
+        time.sleep(min(args.start_check_seconds, max(1, deadline - time.time())))
+
+
+def write_failed_csv(tasks):
+    names = {f'{d}_{c}_{m}_split{sp}_seed{sd}' for d,c,m,sp,sd in tasks}
+    rows = [(name, j) for name, j in state_read().items()
+            if name in names and j.get('status') in ('start_failed', 'manual_required', 'launch_failed')]
+    with FAILED_CSV.open('w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['task', 'status', 'attempt', 'instance_id', 'reason'])
+        for name, j in sorted(rows):
+            w.writerow([name, j.get('status'), j.get('attempt'), j.get('id'), j.get('error', '')])
+    base.log(f'[FAILED TASKS] {len(rows)}; CSV: {FAILED_CSV}')
+    for name, j in sorted(rows):
+        base.log(f'  {name} | attempt={j.get("attempt")} | {j.get("status")} | {j.get("error", "")}')
+
+
 def launch(task, args, password, excluded, attempt=1):
     dataset, cold, model, split, seed = task
     name = f'{dataset}_{cold}_{model}_split{split}_seed{seed}'
@@ -172,9 +245,10 @@ def launch(task, args, password, excluded, attempt=1):
         if not res.get('success') or not res.get('new_contract'):
             raise RuntimeError(f'create failed: {res}')
         instance_id = int(res['new_contract'])
-        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time(), 'attempt': attempt, 'offer_id': offer.get('id'), 'host_key': host_key(offer)})
+        created_at = time.time()
+        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': created_at, 'attempt': attempt, 'offer_id': offer.get('id'), 'host_key': host_key(offer)})
         base.log(f'[CREATED] {name}: {instance_id}')
-        conn = wait_ready_with_auth_diagnostics(instance_id, args.startup_timeout)
+        conn = wait_ready_with_auth_diagnostics(instance_id, min(args.startup_timeout, max(1, int(created_at + args.training_start_timeout - time.time()))))
         script = HERE / f'run_{model}.sh'
         up = subprocess.run(base.ssh_cmd(conn, 'umask 077; cat > /tmp/dti_run.sh; chmod 700 /tmp/dti_run.sh'),
                             input=script.read_bytes(), capture_output=True, timeout=90)
@@ -237,104 +311,50 @@ def launch(task, args, password, excluded, attempt=1):
             'nohup setsid bash /tmp/dti_runner.sh </dev/null >/tmp/dti_run.log 2>&1 & echo STARTED', 45)
         if rc or 'STARTED' not in out:
             raise RuntimeError(f'detached start failed: {out} {err}')
-        state_put(name, {'status': 'running', 'started_at': time.time(), 'attempt': attempt})
-        base.log(f'[DETACHED] {name}: instance={instance_id}')
+        state_put(name, {'status': 'starting', 'started_at': time.time(), 'attempt': attempt})
+        base.log(f'[DETACHED] {name}: instance={instance_id}; waiting for real train progress')
+        await_training_start(name, instance_id, created_at, args)
+        state_put(name, {'status': 'running', 'training_confirmed_at': time.time()})
         return True
     except Exception as exc:
-        # Blacklist host only for infrastructure/SSH startup failures, not training or FTP failures.
-        if offer is not None and instance_id is not None and (
-            'not SSH-ready' in str(exc) or 'script upload:' in str(exc) or
-            'runner upload:' in str(exc) or 'detached start failed:' in str(exc)
-        ):
-            bad_host_record(offer, exc)
-        base.log(f'[FAILED TO LAUNCH] {name}: {exc}; instance={instance_id} retained')
-        state_put(name, {'status': 'launch_failed', 'error': str(exc),
+        reason = str(exc)
+        base.log(f'[START FAILURE] {name} attempt={attempt}: {reason}')
+        if offer is not None and instance_id is not None and ('SSH' in reason or 'not SSH-ready' in reason or 'train progress within' in reason):
+            bad_host_record(offer, reason)
+        status = 'launch_failed' if instance_id is None else 'start_failed'
+        if instance_id is not None:
+            try:
+                # A lost SSH reply is not proof that training did not start.
+                # Recheck immediately before destroying whenever SSH is available.
+                try:
+                    if training_started(instance_id) == 'STARTED':
+                        state_put(name, {'status': 'running', 'training_confirmed_at': time.time()})
+                        base.log(f'[RECOVERED] {name}: train progress confirmed during cleanup')
+                        return True
+                except Exception:
+                    pass
+                verify_owned_and_destroy(name, instance_id)
+            except Exception as cleanup_exc:
+                status = 'manual_required'
+                reason += f'; cleanup not verified: {cleanup_exc}'
+        state_put(name, {'status': status, 'error': reason,
                          'attempt': attempt, 'failed_at': time.time(),
                          'id': instance_id, 'offer_id': offer.get('id') if offer else None,
                          'host_key': host_key(offer) if offer else None})
         return False
 
 
-def retry_failed_launches(tasks, args, password, excluded):
-    """Retry each launch failure at most once after the configured delay.
-
-    A machine with an ambiguous/known instance is NEVER blindly replaced:
-    first reconcile its label, then destroy only an instance that has not
-    confirmed a detached start. If cleanup cannot be verified, leave it for
-    manual inspection and do not rent a second machine.
-    """
-    names = {f'{d}_{c}_{m}_split{sp}_seed{sd}': (d,c,m,sp,sd)
-             for d,c,m,sp,sd in tasks}
-    failed = [(name, job) for name, job in state_read().items()
-              if name in names and job.get('status') == 'launch_failed'
-              and job.get('attempt') == 1]
-    if not failed:
-        return
-    base.log(f'[RETRY QUEUED] {len(failed)} launch failures; once after {args.retry_delay_seconds}s')
-    # All retries are in one wave. Sleep only until the latest needed due time.
-    due = max(float(job.get('failed_at', time.time())) + args.retry_delay_seconds
-              for _, job in failed)
-    while time.time() < due:
-        time.sleep(min(10, max(0.1, due-time.time())))
-
-    def retry_one(name):
-        job = state_read().get(name, {})
-        if job.get('status') != 'launch_failed' or job.get('attempt') != 1:
-            return
-        iid = job.get('id')
-        try:
-            matches = [i for i in instances() if i.get('label') == name]
-            ids = {int(i['id']) for i in matches if i.get('id') is not None}
-            if iid is not None:
-                ids.add(int(iid))
-            # A response may have been lost despite successful creation.
-            # Never delete any instance if there is ambiguity or duplicates.
-            if len(ids) > 1:
-                raise RuntimeError(f'multiple instances for label: {sorted(ids)}')
-            if ids:
-                old_id = next(iter(ids))
-                if not matches:
-                    # Old instance no longer appears in the account listing.
-                    base.log(f'[RETRY CLEAN] {name}: old {old_id} already absent')
-                else:
-                    # launch() only sets launch_failed before DETACHED confirmation.
-                    # An ambiguous detached-start SSH response must be checked.
-                    try:
-                        rc, out, _ = remote_check(old_id,
-                            'if test -e /tmp/dti_success || test -e /tmp/dti_failed || '
-                            'pgrep -f "[d]ti.py|[d]ti_runner.sh" >/dev/null; then echo STARTED; '
-                            'else echo NOT_STARTED; fi', timeout=35)
-                    except Exception:
-                        rc, out = 255, ''
-                    if rc == 0 and out.strip() == 'STARTED':
-                        raise RuntimeError(f'old instance {old_id} may be training; not destroying')
-                    # If SSH is unavailable, no detached start was confirmed,
-                    # but destroying a machine can still lose work. Require
-                    # explicit operator intervention rather than assume idle.
-                    if rc != 0:
-                        # Safe to replace only if startup never reached a remote
-                        # script/runner stage (SSH readiness timed out or create
-                        # returned an ambiguous/empty response).
-                        reason = str(job.get('error', ''))
-                        safe_prestart = ('not SSH-ready' in reason or
-                                         'Expected JSON from vastai' in reason or
-                                         'create failed:' in reason)
-                        if not safe_prestart:
-                            raise RuntimeError(f'old instance {old_id} SSH inaccessible; manual cleanup required')
-                        base.log(f'[RETRY CLEAN] {name}: pre-start instance {old_id} never SSH-ready')
-                    base.cli('destroy', 'instance', old_id, '-y', '--raw', timeout=90)
-                    if any(int(i.get('id', -1)) == old_id for i in instances()):
-                        raise RuntimeError(f'old instance {old_id} still listed after destroy')
-                    base.log(f'[RETRY CLEAN] {name}: destroyed unused instance {old_id}')
-            state_put(name, {'status': 'retrying', 'attempt': 2, 'id': None})
-            base.log(f'[RETRY 2/2] {name}: selecting a different offer')
-            launch(names[name], args, password, excluded, attempt=2)
-        except Exception as exc:
-            state_put(name, {'status': 'manual_required', 'error': str(exc)})
-            base.log(f'[MANUAL REQUIRED] {name}: {exc}')
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
-        list(pool.map(retry_one, [name for name, _ in failed]))
+def launch_with_retry(task, args, password, excluded):
+    name = f'{task[0]}_{task[1]}_{task[2]}_split{task[3]}_seed{task[4]}'
+    if launch(task, args, password, excluded, attempt=1):
+        return True
+    if not args.retry_launch_once:
+        return False
+    if state_read().get(name, {}).get('status') == 'manual_required':
+        base.log(f'[RETRY BLOCKED] {name}: previous instance cleanup uncertain')
+        return False
+    base.log(f'[RETRY 2/2] {name}: renting a different physical host')
+    return launch(task, args, password, excluded, attempt=2)
 
 
 def show_manual_summary(tasks):
@@ -353,7 +373,7 @@ def monitor(args):
     base.log('[MONITOR] checking remote success markers; Ctrl+C stops monitoring, not training')
     while True:
         jobs = state_read()
-        active = [(name, job) for name, job in jobs.items() if job.get('status') in ('running', 'created')]
+        active = [(name, job) for name, job in jobs.items() if job.get('status') in ('running', 'created', 'starting')]
         if not active:
             base.log('[MONITOR] no active tracked jobs')
             return
@@ -402,6 +422,8 @@ def main():
     p.add_argument('--disk', type=int, default=35)
     p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
     p.add_argument('--startup-timeout', type=int, default=1200)
+    p.add_argument('--training-start-timeout', type=int, default=600, help='Seconds from instance creation until positive train progress')
+    p.add_argument('--start-check-seconds', type=int, default=20)
     p.add_argument('--execute', action='store_true')
     p.add_argument('--auto-destroy', action='store_true')
     p.add_argument('--monitor-only', action='store_true')
@@ -430,7 +452,7 @@ def main():
     if args.monitor_only:
         monitor(args)
         return
-    if args.epochs < 1 or args.max_parallel < 1 or args.min_price > args.max_price:
+    if args.epochs < 1 or args.max_parallel < 1 or args.min_price > args.max_price or args.training_start_timeout < 1 or args.start_check_seconds < 1:
         p.error('Invalid concurrency or price range')
     colds = [s.strip() for s in args.cold_types.split(',')]
     models = [s.strip() for s in args.models.split(',')]
@@ -472,11 +494,10 @@ def main():
     base.log(f'[HOST RESERVATIONS] {len(RESERVED_HOSTS)} existing physical hosts excluded')
     base.log(f'[HOST BLACKLIST] {len(bad_hosts_read())} known failed hosts excluded')
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
-        result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
+        result = list(pool.map(lambda t: launch_with_retry(t, args, password, excluded), tasks))
     base.log(f'[LAUNCH FINISHED] {sum(result)}/{len(result)} started')
-    if args.retry_launch_once:
-        retry_failed_launches(tasks, args, password, excluded)
     show_manual_summary(tasks)
+    write_failed_csv(tasks)
     if args.auto_destroy:
         monitor(args)
 
