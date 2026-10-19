@@ -41,22 +41,32 @@ def offer_price(offer):
 
 
 def find_offer(args, excluded):
-    query = (f'num_gpus=1 gpu_ram>={args.min_vram} '
-             f'disk_space>={args.disk} reliability>={args.min_reliability} '
-             'verified=true rentable=true direct_port_count>=1')
-    offers = cli('search', 'offers', query, '--raw', '--limit', '100', '--storage', args.disk)
+    # Apply price limits server-side: filtering only the first 100 cheapest
+    # unrestricted offers can incorrectly yield zero eligible results.
+    query = (f'rentable=true verified=true '
+             f'reliability>={args.min_reliability} '
+             f'gpu_ram>={args.min_vram} num_gpus=1 '
+             f'dph>={args.min_price} dph<={args.max_price}')
+    offers = cli('search', 'offers', query, '--raw', '--limit', '1000')
     if isinstance(offers, dict):
         offers = offers.get('offers', offers.get('results', []))
-    candidates = [o for o in offers if isinstance(o, dict) and str(o.get('id')) not in excluded
-                  and offer_price(o) is not None and args.min_price <= offer_price(o) <= args.max_price]
-    # Cheapest eligible offer first; performance breaks ties.
+    if not isinstance(offers, list):
+        raise RuntimeError(f'Unexpected Vast.ai offers response: {type(offers).__name__}')
+    candidates = [o for o in offers if isinstance(o, dict)
+                  and str(o.get('id')) not in excluded
+                  and offer_price(o) is not None
+                  and args.min_price <= offer_price(o) <= args.max_price
+                  and float(o.get('disk_space') or o.get('disk_space_total') or args.disk) >= args.disk]
     candidates.sort(key=lambda o: (
         offer_price(o),
         -float(o.get('dlperf') or 0),
         -float(o.get('total_flops') or 0),
     ))
     if not candidates:
-        raise RuntimeError('No offers within VRAM/price/reliability constraints')
+        raise RuntimeError(
+            f'No offers after filtering: Vast returned {len(offers)} offers '
+            f'for query={query!r}; {len(excluded)} offer IDs excluded. '
+            'Check current availability and disk requirements.')
     return candidates[0]
 
 
@@ -229,3 +239,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
