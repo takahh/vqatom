@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Vast.ai detached DTI launcher. Requires launch_experiments_fast.py in same folder.
 
-Remote training survives SSH disconnection. Mac monitor deletes ONLY confirmed-success
-instances; use --monitor-only to resume after Mac restarts.
+Remote training survives SSH disconnection. Mac monitor deletes ONLY after
+training exits 0 AND uploaded archives are read back and SHA-256 verified.
+Use --monitor-only to resume after Mac restarts.
 """
 import argparse
 import concurrent.futures
@@ -87,7 +88,31 @@ def launch(task, args, password, excluded):
             '  PY3=$(command -v python3) || exit 127',
             '  ln -sf "$PY3" /usr/local/bin/python', 'fi',
             'python --version',
-            'bash /tmp/dti_run.sh', ''
+            'bash /tmp/dti_run.sh',
+            '# Independently verify uploaded archives by downloading and hashing.',
+            'RUN_NAME="${DATASET}_${COLD_TYPE}_' + model + '_split${SPLIT}_seed${SEED}"',
+            'FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"',
+            'FTP_USER="chicappa.jp-wakou"',
+            'FTP_HOST="ftp.lolipop.jp"',
+            'cd /vqatom/dti',
+            'verify_archive() {',
+            '  local name="$1" local_copy="$2"',
+            '  test -s "$name" || { echo "[VERIFY FAILED] local archive missing: $name"; return 1; }',
+            '  rm -f "$local_copy"',
+            '  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; get \"$FTP_RESULTS_DIR/$name\" -o \"$local_copy\"; bye"',
+            '  test -s "$local_copy" || { echo "[VERIFY FAILED] FTP download missing: $name"; return 1; }',
+            '  local a b',
+            '  a=$(sha256sum "$name"); a=${a%% *}',
+            '  b=$(sha256sum "$local_copy"); b=${b%% *}',
+            '  test "$a" = "$b" || { echo "[VERIFY FAILED] checksum mismatch: $name"; return 1; }',
+            '  echo "[FTP VERIFIED] $name sha256=$a"',
+            '  rm -f "$local_copy"',
+            '}',
+            'verify_archive "${RUN_NAME}.tar.gz" "/tmp/${RUN_NAME}.verify.tar.gz"',
+            'if test -f "${RUN_NAME}_qkmaps.tar.gz"; then',
+            '  verify_archive "${RUN_NAME}_qkmaps.tar.gz" "/tmp/${RUN_NAME}_qkmaps.verify.tar.gz"',
+            'fi',
+            'echo "[TRAINING AND FTP VERIFIED] $RUN_NAME"', ''
         ])
         up = subprocess.run(base.ssh_cmd(conn, 'umask 077; cat > /tmp/dti_runner.sh; chmod 700 /tmp/dti_runner.sh'),
                             input=runner, text=True, capture_output=True, timeout=60)
@@ -128,7 +153,7 @@ def monitor(args):
                     base.log(f'[CHECK RETRY] {name}: SSH exit={rc}')
                     continue
                 if out.startswith('SUCCESS'):
-                    base.log(f'[SUCCESS] {name}: FTP upload script exited 0')
+                    base.log(f'[SUCCESS] {name}: training exited 0 and FTP archives SHA-256 verified')
                     if args.auto_destroy:
                         base.cli('destroy', 'instance', instance_id, '-y', '--raw', timeout=90)
                         state_put(name, {'status': 'destroyed', 'finished_at': time.time()})
