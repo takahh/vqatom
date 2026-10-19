@@ -84,6 +84,8 @@ def launch(task, args, password, excluded):
             'trap \'rc=$?; rm -f /tmp/dti_runner.sh; if (( rc == 0 )); then touch /tmp/dti_success; else echo "$rc" > /tmp/dti_failed; fi\' EXIT',
             f'export FTP_PASS={shlex.quote(password)}',
             f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} SPLIT={split} SEED={seed}',
+            f'export EPOCHS={args.epochs}',
+            f'export FTP_RESULTS_DIR={shlex.quote(args.ftp_results_dir)}',
             'if ! command -v python >/dev/null 2>&1; then',
             '  PY3=$(command -v python3) || exit 127',
             '  ln -sf "$PY3" /usr/local/bin/python', 'fi',
@@ -181,6 +183,8 @@ def main():
     p.add_argument('--min-reliability', type=float, default=.97)
     p.add_argument('--max-parallel', type=int, default=25)
     p.add_argument('--max-tasks', type=int)
+    p.add_argument('--epochs', type=int, default=1, help='Epochs for each job; default 1 for pilot')
+    p.add_argument('--ftp-results-dir', default='dti_results_test_ep1', help='Separate FTP root for pilot artifacts')
     p.add_argument('--disk', type=int, default=35)
     p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
     p.add_argument('--startup-timeout', type=int, default=1200)
@@ -192,7 +196,7 @@ def main():
     if args.monitor_only:
         monitor(args)
         return
-    if args.max_parallel < 1 or args.min_price > args.max_price:
+    if args.epochs < 1 or args.max_parallel < 1 or args.min_price > args.max_price:
         p.error('Invalid concurrency or price range')
     colds = [s.strip() for s in args.cold_types.split(',')]
     models = [s.strip() for s in args.models.split(',')]
