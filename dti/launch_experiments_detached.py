@@ -23,6 +23,8 @@ HERE = Path(__file__).resolve().parent
 STATE = HERE / 'detached_jobs.json'
 BAD_HOSTS = HERE / 'failed_vast_hosts.json'
 LOCK = threading.Lock()
+# Reserved physical hosts for this launch, including already-running instances.
+RESERVED_HOSTS = set()
 
 
 def state_read():
@@ -69,15 +71,27 @@ def bad_host_record(offer, reason):
 
 
 def choose_offer(args, excluded):
-    # Query up to 100 offers; reject blacklisted physical hosts, not only offer IDs.
+    # Physical host uniqueness, including other active account instances.
+    # Reject offers without a stable host ID rather than silently bypassing safety.
+    blacklist = bad_hosts_read()
     for _ in range(100):
         offer = base.find_offer(args, excluded)
+        excluded.add(str(offer['id']))
         key = host_key(offer)
-        if key and key in bad_hosts_read():
-            excluded.add(str(offer['id']))
+        if not key:
+            base.log(f'[SKIP UNKNOWN HOST] offer={offer.get("id")}')
             continue
+        if key in blacklist or key in RESERVED_HOSTS:
+            continue
+        if not offer.get('verified'):
+            continue
+        if float(offer.get('reliability') or 0) < args.min_reliability:
+            continue
+        if int(offer.get('num_gpus') or 0) != 1:
+            continue
+        RESERVED_HOSTS.add(key)
         return offer
-    raise RuntimeError('No eligible non-blacklisted offers among search results')
+    raise RuntimeError('No eligible offers with a distinct, verified, reliable physical host')
 
 
 def instances():
@@ -101,7 +115,6 @@ def launch(task, args, password, excluded, attempt=1):
     try:
         with LOCK:
             offer = choose_offer(args, excluded)
-            excluded.add(str(offer['id']))
         base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
             return True
@@ -347,7 +360,25 @@ def main():
     p.add_argument('--poll-seconds', type=int, default=60)
     p.add_argument('--retry-delay-seconds', type=int, default=600, help='Wait after failed launch before one retry; default 600')
     p.add_argument('--retry-launch-once', action='store_true', help='Retry failed starts once on a different offer')
+    p.add_argument('--block-machine-id', action='append', default=[], help='Permanently exclude a physical machine ID (repeatable)')
     args = p.parse_args()
+    # Always exclude the confirmed pathological host, even without a CLI flag.
+    if '39567' not in args.block_machine_id:
+        args.block_machine_id.append('39567')
+    if args.block_machine_id:
+        with LOCK:
+            data = bad_hosts_read()
+            for mid in args.block_machine_id:
+                if not str(mid).isdigit():
+                    p.error(f'Invalid machine ID: {mid}')
+                data[f'machine_id:{mid}'] = {
+                    'reason': 'Manually excluded: observed severe training slowdown',
+                    'at': time.time(),
+                }
+            temp = BAD_HOSTS.with_suffix('.tmp')
+            temp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+            temp.replace(BAD_HOSTS)
+        base.log(f'[MANUAL HOST BLOCK] machine IDs: {", ".join(args.block_machine_id)}')
     if args.monitor_only:
         monitor(args)
         return
@@ -385,6 +416,12 @@ def main():
     if not password:
         p.error('FTP password required')
     excluded = set()
+    # Protect existing KIBA and METZ instances: don't rent on their physical hosts.
+    for inst in instances():
+        key = host_key(inst)
+        if key:
+            RESERVED_HOSTS.add(key)
+    base.log(f'[HOST RESERVATIONS] {len(RESERVED_HOSTS)} existing physical hosts excluded')
     base.log(f'[HOST BLACKLIST] {len(bad_hosts_read())} known failed hosts excluded')
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
