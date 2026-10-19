@@ -21,6 +21,7 @@ import launch_experiments_fast as base
 
 HERE = Path(__file__).resolve().parent
 STATE = HERE / 'detached_jobs.json'
+BAD_HOSTS = HERE / 'failed_vast_hosts.json'
 LOCK = threading.Lock()
 
 
@@ -37,6 +38,46 @@ def state_put(name, entry):
         temp = STATE.with_suffix('.tmp')
         temp.write_text(json.dumps(jobs, indent=2, ensure_ascii=False))
         temp.replace(STATE)
+
+
+def host_key(offer):
+    """Stable physical host identifier when Vast exposes one."""
+    for key in ('machine_id', 'host_id'):
+        if offer.get(key) is not None:
+            return f'{key}:{offer[key]}'
+    return None
+
+
+def bad_hosts_read():
+    if not BAD_HOSTS.exists():
+        return {}
+    return json.loads(BAD_HOSTS.read_text())
+
+
+def bad_host_record(offer, reason):
+    key = host_key(offer)
+    if not key:
+        base.log(f'[HOST UNKNOWN] offer={offer.get("id")}; cannot blacklist physical host')
+        return
+    with LOCK:
+        data = bad_hosts_read()
+        data[key] = {'offer_id': offer.get('id'), 'reason': str(reason), 'at': time.time()}
+        temp = BAD_HOSTS.with_suffix('.tmp')
+        temp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        temp.replace(BAD_HOSTS)
+    base.log(f'[HOST BLACKLISTED] {key}: {reason}')
+
+
+def choose_offer(args, excluded):
+    # Query up to 100 offers; reject blacklisted physical hosts, not only offer IDs.
+    for _ in range(100):
+        offer = base.find_offer(args, excluded)
+        key = host_key(offer)
+        if key and key in bad_hosts_read():
+            excluded.add(str(offer['id']))
+            continue
+        return offer
+    raise RuntimeError('No eligible non-blacklisted offers among search results')
 
 
 def instances():
@@ -56,9 +97,10 @@ def launch(task, args, password, excluded, attempt=1):
     dataset, cold, model, split, seed = task
     name = f'{dataset}_{cold}_{model}_split{split}_seed{seed}'
     instance_id = None
+    offer = None
     try:
         with LOCK:
-            offer = base.find_offer(args, excluded)
+            offer = choose_offer(args, excluded)
             excluded.add(str(offer['id']))
         base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
@@ -69,7 +111,7 @@ def launch(task, args, password, excluded, attempt=1):
         if not res.get('success') or not res.get('new_contract'):
             raise RuntimeError(f'create failed: {res}')
         instance_id = int(res['new_contract'])
-        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time(), 'attempt': attempt})
+        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time(), 'attempt': attempt, 'offer_id': offer.get('id'), 'host_key': host_key(offer)})
         base.log(f'[CREATED] {name}: {instance_id}')
         conn = base.wait_ready(instance_id, args.startup_timeout)
         script = HERE / f'run_{model}.sh'
@@ -95,10 +137,10 @@ def launch(task, args, password, excluded, attempt=1):
             '  export DEBIAN_FRONTEND=noninteractive',
             '  apt-get update -qq && apt-get install -y -qq lftp',
             'fi',
-            '# Ensure the FTP target exists before the proven run_*.sh upload step.',
+            '# Check the existing FTP target without creating it.',
             'FTP_TARGET="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"',
-            'lftp -u "chicappa.jp-wakou","$FTP_PASS" "ftp.lolipop.jp" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; mkdir -p \"$FTP_TARGET\"; cd \"$FTP_TARGET\"; bye"',
-            'echo "[FTP DIRECTORY READY] $FTP_TARGET"',
+            'lftp -u "chicappa.jp-wakou","$FTP_PASS" "ftp.lolipop.jp" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; cd \"$FTP_TARGET\"; bye"',
+            'echo "[FTP DIRECTORY EXISTS] $FTP_TARGET"',
             'bash /tmp/dti_run.sh',
             '# Independently verify uploaded archives by downloading and hashing.',
             'RUN_NAME="${DATASET}_${COLD_TYPE}_' + model + '_split${SPLIT}_seed${SEED}"',
@@ -110,7 +152,7 @@ def launch(task, args, password, excluded, attempt=1):
             '  local name="$1" local_copy="$2"',
             '  test -s "$name" || { echo "[VERIFY FAILED] local archive missing: $name"; return 1; }',
             '  rm -f "$local_copy"',
-            '  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; get \"$FTP_RESULTS_DIR/$name\" -o \"$local_copy\"; bye"',
+            '  lftp -u "$FTP_USER","$FTP_PASS" "$FTP_HOST" -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; cd \"$FTP_RESULTS_DIR\"; get \"$name\" -o \"$local_copy\"; bye"',
             '  test -s "$local_copy" || { echo "[VERIFY FAILED] FTP download missing: $name"; return 1; }',
             '  local a b',
             '  a=$(sha256sum "$name"); a=${a%% *}',
@@ -138,10 +180,17 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[DETACHED] {name}: instance={instance_id}')
         return True
     except Exception as exc:
+        # Blacklist host only for infrastructure/SSH startup failures, not training or FTP failures.
+        if offer is not None and instance_id is not None and (
+            'not SSH-ready' in str(exc) or 'script upload:' in str(exc) or
+            'runner upload:' in str(exc) or 'detached start failed:' in str(exc)
+        ):
+            bad_host_record(offer, exc)
         base.log(f'[FAILED TO LAUNCH] {name}: {exc}; instance={instance_id} retained')
         state_put(name, {'status': 'launch_failed', 'error': str(exc),
                          'attempt': attempt, 'failed_at': time.time(),
-                         'id': instance_id})
+                         'id': instance_id, 'offer_id': offer.get('id') if offer else None,
+                         'host_key': host_key(offer) if offer else None})
         return False
 
 
@@ -288,7 +337,7 @@ def main():
     p.add_argument('--max-parallel', type=int, default=25)
     p.add_argument('--max-tasks', type=int)
     p.add_argument('--epochs', type=int, default=1, help='Epochs for each job; default 1 for pilot')
-    p.add_argument('--ftp-results-dir', default='dti_results_test_ep1', help='Separate FTP root for pilot artifacts')
+    p.add_argument('--ftp-results-dir', default='dti_results', help='Existing FTP root (dti_results/<dataset>)')
     p.add_argument('--disk', type=int, default=35)
     p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
     p.add_argument('--startup-timeout', type=int, default=1200)
@@ -336,6 +385,7 @@ def main():
     if not password:
         p.error('FTP password required')
     excluded = set()
+    base.log(f'[HOST BLACKLIST] {len(bad_hosts_read())} known failed hosts excluded')
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
     base.log(f'[LAUNCH FINISHED] {sum(result)}/{len(result)} started')
