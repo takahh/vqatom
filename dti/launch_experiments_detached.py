@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 STATE = HERE / 'detached_jobs.json'
 BAD_HOSTS = HERE / 'failed_vast_hosts.json'
 LOCK = threading.Lock()
-# Reserved physical hosts selected within this launch only.
+# Reserved physical hosts for this launch, including already-running instances.
 RESERVED_HOSTS = set()
 
 
@@ -71,7 +71,7 @@ def bad_host_record(offer, reason):
 
 
 def choose_offer(args, excluded):
-    # Physical host uniqueness among new tasks in this launch only.
+    # Physical host uniqueness, including other active account instances.
     # Reject offers without a stable host ID rather than silently bypassing safety.
     blacklist = bad_hosts_read()
     for _ in range(100):
@@ -83,7 +83,7 @@ def choose_offer(args, excluded):
             continue
         if key in blacklist or key in RESERVED_HOSTS:
             continue
-        if not offer.get('verified'):
+        if offer.get('verification') != 'verified' and offer.get('verified') is not True:
             continue
         if float(offer.get('reliability') or 0) < args.min_reliability:
             continue
@@ -107,6 +107,54 @@ def remote_check(instance_id, command, timeout=45):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
+
+def wait_ready_with_auth_diagnostics(instance_id, seconds):
+    """Fail early on persistent publickey rejection, but allow SSH key propagation.
+
+    Does not change or destroy the instance. Retry cleanup handles pre-start
+    instances only, after reconciling their IDs and labels with Vast.
+    """
+    start = time.monotonic()
+    deadline = start + seconds
+    auth_failures = 0
+    last_error = ''
+    while time.monotonic() < deadline:
+        data = base.cli('show', 'instance', instance_id, '--raw')
+        if isinstance(data, list):
+            data = data[0] if data else {}
+        state = data.get('actual_status')
+        if state in ('exited', 'offline', 'unknown', 'stopped'):
+            raise RuntimeError(f'Instance {instance_id} state: {state}')
+        if state == 'running':
+            try:
+                conn = base.ssh_args(instance_id)
+                p = subprocess.run(base.ssh_cmd(conn, 'true'), capture_output=True,
+                                   text=True, timeout=30)
+                if p.returncode == 0:
+                    return conn
+                last_error = p.stderr.strip()[-400:]
+                if 'Permission denied (publickey)' in last_error:
+                    auth_failures += 1
+                else:
+                    auth_failures = 0
+                # Give the host 90 seconds for initial key propagation.
+                # Repeated publickey refusal thereafter is treated as a
+                # pre-start infrastructure failure, not a training failure.
+                if auth_failures >= 3 and time.monotonic() - start >= 90:
+                    raise TimeoutError(
+                        f'Instance {instance_id} not SSH-ready: persistent '
+                        f'publickey rejection ({auth_failures} attempts); {last_error}'
+                    )
+            except subprocess.TimeoutExpired:
+                last_error = 'SSH connection timeout'
+                auth_failures = 0
+            except RuntimeError as exc:
+                last_error = str(exc)
+                auth_failures = 0
+        time.sleep(min(15, max(0, deadline - time.monotonic())))
+    raise TimeoutError(f'Instance {instance_id} not SSH-ready in {seconds}s; {last_error}')
+
+
 def launch(task, args, password, excluded, attempt=1):
     dataset, cold, model, split, seed = task
     name = f'{dataset}_{cold}_{model}_split{split}_seed{seed}'
@@ -126,7 +174,7 @@ def launch(task, args, password, excluded, attempt=1):
         instance_id = int(res['new_contract'])
         state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time(), 'attempt': attempt, 'offer_id': offer.get('id'), 'host_key': host_key(offer)})
         base.log(f'[CREATED] {name}: {instance_id}')
-        conn = base.wait_ready(instance_id, args.startup_timeout)
+        conn = wait_ready_with_auth_diagnostics(instance_id, args.startup_timeout)
         script = HERE / f'run_{model}.sh'
         up = subprocess.run(base.ssh_cmd(conn, 'umask 077; cat > /tmp/dti_run.sh; chmod 700 /tmp/dti_run.sh'),
                             input=script.read_bytes(), capture_output=True, timeout=90)
@@ -193,10 +241,6 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[DETACHED] {name}: instance={instance_id}')
         return True
     except Exception as exc:
-        # If rental was not created, free its physical-host reservation.
-        if offer is not None and instance_id is None:
-            with LOCK:
-                RESERVED_HOSTS.discard(host_key(offer))
         # Blacklist host only for infrastructure/SSH startup failures, not training or FTP failures.
         if offer is not None and instance_id is not None and (
             'not SSH-ready' in str(exc) or 'script upload:' in str(exc) or
@@ -375,10 +419,10 @@ def main():
             for mid in args.block_machine_id:
                 if not str(mid).isdigit():
                     p.error(f'Invalid machine ID: {mid}')
-                data[f'machine_id:{mid}'] = {
+                data.setdefault(f'machine_id:{mid}', {
                     'reason': 'Manually excluded: observed severe training slowdown',
                     'at': time.time(),
-                }
+                })
             temp = BAD_HOSTS.with_suffix('.tmp')
             temp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
             temp.replace(BAD_HOSTS)
@@ -420,9 +464,12 @@ def main():
     if not password:
         p.error('FTP password required')
     excluded = set()
-    # Existing KIBA and METZ hosts are eligible. Only hosts selected in this
-    # launch are reserved, and blacklisted hosts remain excluded.
-    base.log('[HOST RESERVATIONS] existing hosts allowed; distinct hosts within batch')
+    # Protect existing KIBA and METZ instances: don't rent on their physical hosts.
+    for inst in instances():
+        key = host_key(inst)
+        if key:
+            RESERVED_HOSTS.add(key)
+    base.log(f'[HOST RESERVATIONS] {len(RESERVED_HOSTS)} existing physical hosts excluded')
     base.log(f'[HOST BLACKLIST] {len(bad_hosts_read())} known failed hosts excluded')
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
