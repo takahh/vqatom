@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 STATE = HERE / 'detached_jobs.json'
 BAD_HOSTS = HERE / 'failed_vast_hosts.json'
 LOCK = threading.Lock()
-# Reserved physical hosts for this launch, including already-running instances.
+# Reserved physical hosts selected within this launch only.
 RESERVED_HOSTS = set()
 
 
@@ -71,7 +71,7 @@ def bad_host_record(offer, reason):
 
 
 def choose_offer(args, excluded):
-    # Physical host uniqueness, including other active account instances.
+    # Physical host uniqueness among new tasks in this launch only.
     # Reject offers without a stable host ID rather than silently bypassing safety.
     blacklist = bad_hosts_read()
     for _ in range(100):
@@ -193,6 +193,10 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[DETACHED] {name}: instance={instance_id}')
         return True
     except Exception as exc:
+        # If rental was not created, free its physical-host reservation.
+        if offer is not None and instance_id is None:
+            with LOCK:
+                RESERVED_HOSTS.discard(host_key(offer))
         # Blacklist host only for infrastructure/SSH startup failures, not training or FTP failures.
         if offer is not None and instance_id is not None and (
             'not SSH-ready' in str(exc) or 'script upload:' in str(exc) or
@@ -416,12 +420,9 @@ def main():
     if not password:
         p.error('FTP password required')
     excluded = set()
-    # Protect existing KIBA and METZ instances: don't rent on their physical hosts.
-    for inst in instances():
-        key = host_key(inst)
-        if key:
-            RESERVED_HOSTS.add(key)
-    base.log(f'[HOST RESERVATIONS] {len(RESERVED_HOSTS)} existing physical hosts excluded')
+    # Existing KIBA and METZ hosts are eligible. Only hosts selected in this
+    # launch are reserved, and blacklisted hosts remain excluded.
+    base.log('[HOST RESERVATIONS] existing hosts allowed; distinct hosts within batch')
     base.log(f'[HOST BLACKLIST] {len(bad_hosts_read())} known failed hosts excluded')
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
