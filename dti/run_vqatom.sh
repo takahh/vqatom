@@ -5,7 +5,12 @@ DATASET="${DATASET:-kiba}"
 COLD_TYPE="${COLD_TYPE:-protein_cold}"
 SEED="${SEED:-0}"
 SPLIT="${SPLIT:-1}"
-Y_THR="${Y_THR:-12.1}"
+# Dataset-specific binary affinity threshold (can be overridden with Y_THR).
+if [[ "$DATASET" == "metz" ]]; then
+  Y_THR="${Y_THR:-6.0}"
+else
+  Y_THR="${Y_THR:-12.1}"
+fi
 case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
 case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold|scaffold_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
 EPOCHS="${EPOCHS:-20}"
