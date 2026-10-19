@@ -134,6 +134,12 @@ def run_task(task, args, password, excluded):
                    f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} '
                    f'SPLIT={split} SEED={seed}\n'
                    'set -o pipefail\n'
+                   'if ! command -v python >/dev/null 2>&1; then\n'
+                   '  PY3=$(command -v python3) || { echo "ERROR: python3 not found" >&2; exit 127; }\n'
+                   '  mkdir -p /usr/local/bin\n'
+                   '  ln -s "$PY3" /usr/local/bin/python\n'
+                   'fi\n'
+                   'python --version\n'
                    'bash /tmp/dti_run.sh 2>&1 | tee /tmp/dti_run.log\n'
                    'exit ${PIPESTATUS[0]}\n')
         log(f'[START] {name}: instance={instance_id}')
@@ -220,6 +226,7 @@ def main():
     log(f'Finished: {sum(results)}/{len(tasks)} tasks successful')
     if not all(results):
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
