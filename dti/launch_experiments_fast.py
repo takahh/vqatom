@@ -57,7 +57,9 @@ def find_offer(args, excluded):
                   and offer_price(o) is not None
                   and args.min_price <= offer_price(o) <= args.max_price
                   and float(o.get('disk_space') or o.get('disk_space_total') or args.disk) >= args.disk]
+
     candidates.sort(key=lambda o: (
+        -int(float(o.get('cpu_cores_effective') or 0) >= 32),
         offer_price(o),
         -float(o.get('dlperf') or 0),
         -float(o.get('total_flops') or 0),
