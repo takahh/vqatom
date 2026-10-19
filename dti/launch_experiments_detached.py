@@ -52,7 +52,7 @@ def remote_check(instance_id, command, timeout=45):
     return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-def launch(task, args, password, excluded):
+def launch(task, args, password, excluded, attempt=1):
     dataset, cold, model, split, seed = task
     name = f'{dataset}_{cold}_{model}_split{split}_seed{seed}'
     instance_id = None
@@ -69,7 +69,7 @@ def launch(task, args, password, excluded):
         if not res.get('success') or not res.get('new_contract'):
             raise RuntimeError(f'create failed: {res}')
         instance_id = int(res['new_contract'])
-        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time()})
+        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time(), 'attempt': attempt})
         base.log(f'[CREATED] {name}: {instance_id}')
         conn = base.wait_ready(instance_id, args.startup_timeout)
         script = HERE / f'run_{model}.sh'
@@ -134,14 +134,109 @@ def launch(task, args, password, excluded):
             'nohup setsid bash /tmp/dti_runner.sh </dev/null >/tmp/dti_run.log 2>&1 & echo STARTED', 45)
         if rc or 'STARTED' not in out:
             raise RuntimeError(f'detached start failed: {out} {err}')
-        state_put(name, {'status': 'running', 'started_at': time.time()})
+        state_put(name, {'status': 'running', 'started_at': time.time(), 'attempt': attempt})
         base.log(f'[DETACHED] {name}: instance={instance_id}')
         return True
     except Exception as exc:
         base.log(f'[FAILED TO LAUNCH] {name}: {exc}; instance={instance_id} retained')
-        if instance_id:
-            state_put(name, {'status': 'launch_failed', 'error': str(exc)})
+        state_put(name, {'status': 'launch_failed', 'error': str(exc),
+                         'attempt': attempt, 'failed_at': time.time(),
+                         'id': instance_id})
         return False
+
+
+def retry_failed_launches(tasks, args, password, excluded):
+    """Retry each launch failure at most once after the configured delay.
+
+    A machine with an ambiguous/known instance is NEVER blindly replaced:
+    first reconcile its label, then destroy only an instance that has not
+    confirmed a detached start. If cleanup cannot be verified, leave it for
+    manual inspection and do not rent a second machine.
+    """
+    names = {f'{d}_{c}_{m}_split{sp}_seed{sd}': (d,c,m,sp,sd)
+             for d,c,m,sp,sd in tasks}
+    failed = [(name, job) for name, job in state_read().items()
+              if name in names and job.get('status') == 'launch_failed'
+              and job.get('attempt') == 1]
+    if not failed:
+        return
+    base.log(f'[RETRY QUEUED] {len(failed)} launch failures; once after {args.retry_delay_seconds}s')
+    # All retries are in one wave. Sleep only until the latest needed due time.
+    due = max(float(job.get('failed_at', time.time())) + args.retry_delay_seconds
+              for _, job in failed)
+    while time.time() < due:
+        time.sleep(min(10, max(0.1, due-time.time())))
+
+    def retry_one(name):
+        job = state_read().get(name, {})
+        if job.get('status') != 'launch_failed' or job.get('attempt') != 1:
+            return
+        iid = job.get('id')
+        try:
+            matches = [i for i in instances() if i.get('label') == name]
+            ids = {int(i['id']) for i in matches if i.get('id') is not None}
+            if iid is not None:
+                ids.add(int(iid))
+            # A response may have been lost despite successful creation.
+            # Never delete any instance if there is ambiguity or duplicates.
+            if len(ids) > 1:
+                raise RuntimeError(f'multiple instances for label: {sorted(ids)}')
+            if ids:
+                old_id = next(iter(ids))
+                if not matches:
+                    # Old instance no longer appears in the account listing.
+                    base.log(f'[RETRY CLEAN] {name}: old {old_id} already absent')
+                else:
+                    # launch() only sets launch_failed before DETACHED confirmation.
+                    # An ambiguous detached-start SSH response must be checked.
+                    try:
+                        rc, out, _ = remote_check(old_id,
+                            'if test -e /tmp/dti_success || test -e /tmp/dti_failed || '
+                            'pgrep -f "[d]ti.py|[d]ti_runner.sh" >/dev/null; then echo STARTED; '
+                            'else echo NOT_STARTED; fi', timeout=35)
+                    except Exception:
+                        rc, out = 255, ''
+                    if rc == 0 and out.strip() == 'STARTED':
+                        raise RuntimeError(f'old instance {old_id} may be training; not destroying')
+                    # If SSH is unavailable, no detached start was confirmed,
+                    # but destroying a machine can still lose work. Require
+                    # explicit operator intervention rather than assume idle.
+                    if rc != 0:
+                        # Safe to replace only if startup never reached a remote
+                        # script/runner stage (SSH readiness timed out or create
+                        # returned an ambiguous/empty response).
+                        reason = str(job.get('error', ''))
+                        safe_prestart = ('not SSH-ready' in reason or
+                                         'Expected JSON from vastai' in reason or
+                                         'create failed:' in reason)
+                        if not safe_prestart:
+                            raise RuntimeError(f'old instance {old_id} SSH inaccessible; manual cleanup required')
+                        base.log(f'[RETRY CLEAN] {name}: pre-start instance {old_id} never SSH-ready')
+                    base.cli('destroy', 'instance', old_id, '-y', '--raw', timeout=90)
+                    if any(int(i.get('id', -1)) == old_id for i in instances()):
+                        raise RuntimeError(f'old instance {old_id} still listed after destroy')
+                    base.log(f'[RETRY CLEAN] {name}: destroyed unused instance {old_id}')
+            state_put(name, {'status': 'retrying', 'attempt': 2, 'id': None})
+            base.log(f'[RETRY 2/2] {name}: selecting a different offer')
+            launch(names[name], args, password, excluded, attempt=2)
+        except Exception as exc:
+            state_put(name, {'status': 'manual_required', 'error': str(exc)})
+            base.log(f'[MANUAL REQUIRED] {name}: {exc}')
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
+        list(pool.map(retry_one, [name for name, _ in failed]))
+
+
+def show_manual_summary(tasks):
+    names = {f'{d}_{c}_{m}_split{sp}_seed{sd}' for d,c,m,sp,sd in tasks}
+    pending = [(n, j) for n, j in state_read().items()
+               if n in names and j.get('status') in ('launch_failed', 'manual_required', 'created')]
+    if pending:
+        base.log(f'[MANUAL LAUNCH LIST] {len(pending)} task(s):')
+        for n, j in pending:
+            base.log(f'  {n} | instance={j.get("id")} | status={j.get("status")} | {j.get("error", "")}')
+    else:
+        base.log('[MANUAL LAUNCH LIST] none')
 
 
 def monitor(args):
@@ -201,6 +296,8 @@ def main():
     p.add_argument('--auto-destroy', action='store_true')
     p.add_argument('--monitor-only', action='store_true')
     p.add_argument('--poll-seconds', type=int, default=60)
+    p.add_argument('--retry-delay-seconds', type=int, default=600, help='Wait after failed launch before one retry; default 600')
+    p.add_argument('--retry-launch-once', action='store_true', help='Retry failed starts once on a different offer')
     args = p.parse_args()
     if args.monitor_only:
         monitor(args)
@@ -242,6 +339,9 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
     base.log(f'[LAUNCH FINISHED] {sum(result)}/{len(result)} started')
+    if args.retry_launch_once:
+        retry_failed_launches(tasks, args, password, excluded)
+    show_manual_summary(tasks)
     if args.auto_destroy:
         monitor(args)
 
