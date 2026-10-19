@@ -48,14 +48,12 @@ def find_offer(args, excluded):
     if isinstance(offers, dict):
         offers = offers.get('offers', offers.get('results', []))
     candidates = [o for o in offers if isinstance(o, dict) and str(o.get('id')) not in excluded
-                  and offer_price(o) is not None and offer_price(o) <= args.max_price]
-    # Time-first ranking: prioritize Vast's DL performance estimate, then GPU compute.
-    # Do not prioritize the lowest hourly price when deadline is tight.
+                  and offer_price(o) is not None and args.min_price <= offer_price(o) <= args.max_price]
+    # Cheapest eligible offer first; performance breaks ties.
     candidates.sort(key=lambda o: (
+        offer_price(o),
         -float(o.get('dlperf') or 0),
         -float(o.get('total_flops') or 0),
-        -float(o.get('gpu_ram') or 0),
-        offer_price(o),
     ))
     if not candidates:
         raise RuntimeError('No offers within VRAM/price/reliability constraints')
@@ -176,6 +174,7 @@ def main():
     p.add_argument('--models', default='vqatom,continuous,morgan,smiles')
     p.add_argument('--splits', default='1,2,3')
     p.add_argument('--seeds', default='0,1,2')
+    p.add_argument('--min-price', type=float, default=0.80, help='Minimum GPU hourly price in USD (default 0.80)')
     p.add_argument('--max-price', type=float, default=1.50)
     p.add_argument('--min-vram', type=float, default=40, help='Minimum GPU VRAM in GB (default 40)')
     p.add_argument('--min-reliability', type=float, default=0.97)
@@ -196,7 +195,7 @@ def main():
         p.error('Unknown model')
     splits = [int(s) for s in args.splits.split(',')]
     seeds = [int(s) for s in args.seeds.split(',')]
-    if args.max_parallel < 1 or args.max_price <= 0 or args.disk < 10 or (args.max_tasks is not None and args.max_tasks < 1):
+    if args.max_parallel < 1 or args.min_price < 0 or args.max_price < args.min_price or args.disk < 10 or (args.max_tasks is not None and args.max_tasks < 1):
         p.error('Invalid parallelism, max-price, or disk')
     for model in models:
         if not (HERE / f'run_{model}.sh').is_file():
@@ -204,9 +203,9 @@ def main():
     tasks = [(args.dataset, cold, m, sp, sd) for cold in cold_types for m in models for sp in splits for sd in seeds]
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
-    log(f'{len(tasks)} tasks, max parallel={args.max_parallel}, max ${args.max_price}/hr per GPU, '
+    log(f'{len(tasks)} tasks, max parallel={args.max_parallel}, GPU price range ${args.min_price:.2f}-${args.max_price:.2f}/hr, '
         f'max concurrent GPU rental ${args.max_price * args.max_parallel:.2f}/hr (excluding storage/fees)')
-    log(f'GPU selection: VRAM >= {args.min_vram:g} GB; highest dlperf first (then total_flops)')
+    log(f'GPU selection: VRAM >= {args.min_vram:g} GB; lowest price first (then dlperf)')
     log('MODE:', 'EXECUTE' if args.execute else 'DRY-RUN (no instances created)')
     if args.execute:
         if not sys.stdin.isatty():
@@ -226,6 +225,7 @@ def main():
     log(f'Finished: {sum(results)}/{len(tasks)} tasks successful')
     if not all(results):
         sys.exit(1)
+
 
 if __name__ == '__main__':
     main()
