@@ -1,230 +1,211 @@
 #!/usr/bin/env python3
-"""Launch one Vast.ai SSH instance per DTI task. Dry-run by default."""
+"""Vast.ai detached DTI launcher. Requires launch_experiments_fast.py in same folder.
+
+Remote training survives SSH disconnection. Mac monitor deletes ONLY confirmed-success
+instances; use --monitor-only to resume after Mac restarts.
+"""
 import argparse
 import concurrent.futures
 import getpass
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import subprocess
 import sys
 import threading
 import time
-from urllib.parse import urlsplit
+
+import launch_experiments_fast as base
 
 HERE = Path(__file__).resolve().parent
-PRINT_LOCK = threading.Lock()
+STATE = HERE / 'detached_jobs.json'
+LOCK = threading.Lock()
 
 
-def log(*args):
-    with PRINT_LOCK:
-        print(*args, flush=True)
+def state_read():
+    if not STATE.exists():
+        return {}
+    return json.loads(STATE.read_text())
 
 
-def cli(*args, timeout=90):
-    p = subprocess.run(['vastai', *map(str, args)], text=True, capture_output=True, timeout=timeout)
-    if p.returncode:
-        raise RuntimeError(f"vastai {' '.join(map(str,args))}: {p.stderr or p.stdout}")
-    try:
-        return json.loads(p.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f'Expected JSON from vastai: {p.stdout[:600]}')
+def state_put(name, entry):
+    with LOCK:
+        jobs = state_read()
+        jobs[name] = {**jobs.get(name, {}), **entry}
+        temp = STATE.with_suffix('.tmp')
+        temp.write_text(json.dumps(jobs, indent=2, ensure_ascii=False))
+        temp.replace(STATE)
 
 
-def offer_price(offer):
-    for field in ('dph_total', 'dph'):
-        if offer.get(field) is not None:
-            return float(offer[field])
-    return None
+def instances():
+    data = base.cli('show', 'instances', '--raw')
+    if isinstance(data, dict):
+        data = data.get('instances', data.get('results', []))
+    return data if isinstance(data, list) else []
 
 
-def find_offer(args, excluded):
-    query = (f'num_gpus=1 gpu_ram>={args.min_vram} '
-             f'disk_space>={args.disk} reliability>={args.min_reliability} '
-             'verified=true rentable=true direct_port_count>=1')
-    offers = cli('search', 'offers', query, '--raw', '--limit', '100', '--storage', args.disk)
-    if isinstance(offers, dict):
-        offers = offers.get('offers', offers.get('results', []))
-    candidates = [o for o in offers if isinstance(o, dict) and str(o.get('id')) not in excluded
-                  and offer_price(o) is not None and args.min_price <= offer_price(o) <= args.max_price]
-    # Cheapest eligible offer first; performance breaks ties.
-    candidates.sort(key=lambda o: (
-        offer_price(o),
-        -float(o.get('dlperf') or 0),
-        -float(o.get('total_flops') or 0),
-    ))
-    if not candidates:
-        raise RuntimeError('No offers within VRAM/price/reliability constraints')
-    return candidates[0]
+def remote_check(instance_id, command, timeout=45):
+    conn = base.ssh_args(instance_id)
+    p = subprocess.run(base.ssh_cmd(conn, command), text=True, capture_output=True, timeout=timeout)
+    return p.returncode, p.stdout.strip(), p.stderr.strip()
 
 
-def ssh_args(instance_id, timeout=60):
-    p = subprocess.run(['vastai', 'ssh-url', str(instance_id)], capture_output=True, text=True, timeout=timeout)
-    if p.returncode:
-        raise RuntimeError(p.stderr or p.stdout)
-    output = p.stdout.strip()
-    match = re.search(r'ssh://[^\s\'"]+', output)
-    if match:
-        url = urlsplit(match.group(0))
-        return ['-p', str(url.port or 22), f'{url.username or "root"}@{url.hostname}']
-    match = re.search(r'ssh\s+-p\s+(\d+)\s+([^\s]+@[^\s]+)', output)
-    if match:
-        return ['-p', match.group(1), match.group(2)]
-    raise RuntimeError(f'Cannot parse SSH URL: {output}')
-
-
-def ssh_cmd(connection, remote_cmd):
-    port, target = connection[1], connection[2]
-    return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-            '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30',
-            '-o', 'ServerAliveCountMax=6', '-p', port, target, remote_cmd]
-
-
-def wait_ready(instance_id, seconds):
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        data = cli('show', 'instance', instance_id, '--raw')
-        if isinstance(data, list):
-            data = data[0] if data else {}
-        state = data.get('actual_status')
-        if state == 'running':
-            try:
-                connection = ssh_args(instance_id)
-                test = subprocess.run(ssh_cmd(connection, 'true'), capture_output=True, timeout=30)
-                if test.returncode == 0:
-                    return connection
-            except (RuntimeError, subprocess.TimeoutExpired):
-                pass
-        if state in ('exited', 'offline', 'unknown', 'stopped'):
-            raise RuntimeError(f'Instance {instance_id} state: {state}')
-        time.sleep(15)
-    raise TimeoutError(f'Instance {instance_id} not SSH-ready in {seconds}s')
-
-
-def run_task(task, args, password, excluded):
+def launch(task, args, password, excluded):
     dataset, cold, model, split, seed = task
     name = f'{dataset}_{cold}_{model}_split{split}_seed{seed}'
     instance_id = None
     try:
-        with PRINT_LOCK:
-            offer = find_offer(args, excluded)
+        with LOCK:
+            offer = base.find_offer(args, excluded)
             excluded.add(str(offer['id']))
-        log(f'[OFFER] {name}: offer={offer["id"]}, GPU={offer.get("gpu_name")}, dlperf={offer.get("dlperf", "n/a")}, $/hr={offer_price(offer):.3f}')
+        base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
             return True
-        response = cli('create', 'instance', offer['id'], '--image', args.image,
+        res = base.cli('create', 'instance', offer['id'], '--image', args.image,
                        '--disk', args.disk, '--ssh', '--direct', '--label', name,
                        '--cancel-unavail', '--raw', timeout=120)
-        if not response.get('success') or not response.get('new_contract'):
-            raise RuntimeError(f'Instance creation failed: {response}')
-        instance_id = int(response['new_contract'])
-        log(f'[CREATED] {name}: instance={instance_id}')
-        connection = wait_ready(instance_id, args.startup_timeout)
+        if not res.get('success') or not res.get('new_contract'):
+            raise RuntimeError(f'create failed: {res}')
+        instance_id = int(res['new_contract'])
+        state_put(name, {'id': instance_id, 'status': 'created', 'created_at': time.time()})
+        base.log(f'[CREATED] {name}: {instance_id}')
+        conn = base.wait_ready(instance_id, args.startup_timeout)
         script = HERE / f'run_{model}.sh'
-        upload = subprocess.run(ssh_cmd(connection, 'cat > /tmp/dti_run.sh && chmod 700 /tmp/dti_run.sh'),
-                                input=script.read_bytes(), capture_output=True, timeout=60)
-        if upload.returncode:
-            raise RuntimeError(f'Script upload failed: {upload.stderr.decode(errors="replace")}')
-        # Secret travels only through SSH stdin, not command-line arguments or disk files.
-        wrapper = (f'export FTP_PASS={shlex.quote(password)}\n'
-                   f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} '
-                   f'SPLIT={split} SEED={seed}\n'
-                   'set -o pipefail\n'
-                   'if ! command -v python >/dev/null 2>&1; then\n'
-                   '  PY3=$(command -v python3) || { echo "ERROR: python3 not found" >&2; exit 127; }\n'
-                   '  mkdir -p /usr/local/bin\n'
-                   '  ln -s "$PY3" /usr/local/bin/python\n'
-                   'fi\n'
-                   'python --version\n'
-                   'bash /tmp/dti_run.sh 2>&1 | tee /tmp/dti_run.log\n'
-                   'exit ${PIPESTATUS[0]}\n')
-        log(f'[START] {name}: instance={instance_id}')
-        logs = HERE / 'experiment_logs'
-        logs.mkdir(exist_ok=True)
-        with (logs / f'{name}.log').open('w') as f:
-            proc = subprocess.Popen(ssh_cmd(connection, 'bash -s'), stdin=subprocess.PIPE,
-                                    stdout=f, stderr=subprocess.STDOUT, text=True)
-            try:
-                proc.communicate(wrapper, timeout=args.task_timeout_hours * 3600)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.communicate()
-                raise RuntimeError('Task timed out; instance preserved for investigation')
-        if proc.returncode:
-            raise RuntimeError(f'SSH/training exited {proc.returncode}; inspect experiment_logs/{name}.log')
-        log(f'[SUCCESS] {name}: FTP upload command completed')
-        if args.auto_destroy:
-            cli('destroy', 'instance', instance_id, '-y', '--raw', timeout=90)
-            log(f'[DESTROYED] {name}: instance={instance_id}')
-        else:
-            log(f'[PRESERVED] {name}: instance={instance_id} (auto-destroy disabled)')
+        up = subprocess.run(base.ssh_cmd(conn, 'umask 077; cat > /tmp/dti_run.sh; chmod 700 /tmp/dti_run.sh'),
+                            input=script.read_bytes(), capture_output=True, timeout=90)
+        if up.returncode:
+            raise RuntimeError(f'script upload: {up.stderr.decode(errors="replace")}')
+        # Secret sent only over SSH stdin. Runner is root-readable on the rented VM,
+        # deleted by its EXIT trap. Do not share the VM with untrusted users.
+        runner = '\n'.join([
+            '#!/usr/bin/env bash', 'set -Eeuo pipefail', 'umask 077',
+            'trap \'rc=$?; rm -f /tmp/dti_runner.sh; if (( rc == 0 )); then touch /tmp/dti_success; else echo "$rc" > /tmp/dti_failed; fi\' EXIT',
+            f'export FTP_PASS={shlex.quote(password)}',
+            f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} SPLIT={split} SEED={seed}',
+            'if ! command -v python >/dev/null 2>&1; then',
+            '  PY3=$(command -v python3) || exit 127',
+            '  ln -sf "$PY3" /usr/local/bin/python', 'fi',
+            'python --version',
+            'bash /tmp/dti_run.sh', ''
+        ])
+        up = subprocess.run(base.ssh_cmd(conn, 'umask 077; cat > /tmp/dti_runner.sh; chmod 700 /tmp/dti_runner.sh'),
+                            input=runner, text=True, capture_output=True, timeout=60)
+        if up.returncode:
+            raise RuntimeError(f'runner upload: {up.stderr}')
+        # setsid+nohup + stdin /dev/null fully detach from SSH session.
+        rc, out, err = remote_check(instance_id,
+            'nohup setsid bash /tmp/dti_runner.sh </dev/null >/tmp/dti_run.log 2>&1 & echo STARTED', 45)
+        if rc or 'STARTED' not in out:
+            raise RuntimeError(f'detached start failed: {out} {err}')
+        state_put(name, {'status': 'running', 'started_at': time.time()})
+        base.log(f'[DETACHED] {name}: instance={instance_id}')
         return True
     except Exception as exc:
-        log(f'[FAILED] {name}: {exc}' + (f' | instance={instance_id} retained' if instance_id else ''))
+        base.log(f'[FAILED TO LAUNCH] {name}: {exc}; instance={instance_id} retained')
+        if instance_id:
+            state_put(name, {'status': 'launch_failed', 'error': str(exc)})
         return False
+
+
+def monitor(args):
+    base.log('[MONITOR] checking remote success markers; Ctrl+C stops monitoring, not training')
+    while True:
+        jobs = state_read()
+        active = [(name, job) for name, job in jobs.items() if job.get('status') in ('running', 'created')]
+        if not active:
+            base.log('[MONITOR] no active tracked jobs')
+            return
+        for name, job in active:
+            instance_id = job['id']
+            try:
+                rc, out, err = remote_check(instance_id,
+                    'if test -f /tmp/dti_success; then echo SUCCESS; '
+                    'elif test -f /tmp/dti_failed; then echo FAILED:$(cat /tmp/dti_failed); '
+                    'elif test -f /tmp/dti_run.log; then echo RUNNING; '
+                    'else echo WAITING; fi', timeout=35)
+                if rc:
+                    base.log(f'[CHECK RETRY] {name}: SSH exit={rc}')
+                    continue
+                if out.startswith('SUCCESS'):
+                    base.log(f'[SUCCESS] {name}: FTP upload script exited 0')
+                    if args.auto_destroy:
+                        base.cli('destroy', 'instance', instance_id, '-y', '--raw', timeout=90)
+                        state_put(name, {'status': 'destroyed', 'finished_at': time.time()})
+                        base.log(f'[DESTROYED] {name}: {instance_id}')
+                    else:
+                        state_put(name, {'status': 'success_retained'})
+                elif out.startswith('FAILED'):
+                    state_put(name, {'status': 'failed', 'error': out})
+                    base.log(f'[FAILED] {name}: {out}; instance={instance_id} RETAINED')
+            except Exception as exc:
+                base.log(f'[MONITOR RETRY] {name}: {exc}')
+        time.sleep(args.poll_seconds)
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--dataset', choices=['kiba', 'metz'], default='metz')
-    p.add_argument('--cold-type', choices=['protein_cold', 'ligand_cold', 'double_cold', 'scaffold_cold'], default=None, help='Single cold type (overrides --cold-types)')
-    p.add_argument('--cold-types', default='protein_cold,ligand_cold,scaffold_cold', help='Comma-separated cold types')
+    p.add_argument('--cold-types', default='protein_cold,ligand_cold,scaffold_cold')
     p.add_argument('--models', default='vqatom,continuous,morgan,smiles')
     p.add_argument('--splits', default='1,2,3')
     p.add_argument('--seeds', default='0,1,2')
-    p.add_argument('--min-price', type=float, default=0.80, help='Minimum GPU hourly price in USD (default 0.80)')
-    p.add_argument('--max-price', type=float, default=1.50)
-    p.add_argument('--min-vram', type=float, default=40, help='Minimum GPU VRAM in GB (default 40)')
-    p.add_argument('--min-reliability', type=float, default=0.97)
-    p.add_argument('--max-parallel', type=int, default=108)
-    p.add_argument('--max-tasks', type=int, default=None, help='Limit total tasks (e.g. 5 for initial test)')
+    p.add_argument('--min-price', type=float, default=.8)
+    p.add_argument('--max-price', type=float, default=1.5)
+    p.add_argument('--min-vram', type=float, default=40)
+    p.add_argument('--min-reliability', type=float, default=.97)
+    p.add_argument('--max-parallel', type=int, default=25)
+    p.add_argument('--max-tasks', type=int)
     p.add_argument('--disk', type=int, default=35)
     p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
     p.add_argument('--startup-timeout', type=int, default=1200)
-    p.add_argument('--task-timeout-hours', type=float, default=24)
-    p.add_argument('--execute', action='store_true', help='Actually rent GPUs (default is dry-run)')
-    p.add_argument('--auto-destroy', action='store_true', help='Destroy instance only after successful training and FTP upload')
+    p.add_argument('--execute', action='store_true')
+    p.add_argument('--auto-destroy', action='store_true')
+    p.add_argument('--monitor-only', action='store_true')
+    p.add_argument('--poll-seconds', type=int, default=60)
     args = p.parse_args()
-    cold_types = [args.cold_type] if args.cold_type else [s.strip() for s in args.cold_types.split(',')]
-    if not cold_types or any(c not in ('protein_cold', 'ligand_cold', 'double_cold', 'scaffold_cold') for c in cold_types):
-        p.error('Unknown cold type')
+    if args.monitor_only:
+        monitor(args)
+        return
+    if args.max_parallel < 1 or args.min_price > args.max_price:
+        p.error('Invalid concurrency or price range')
+    colds = [s.strip() for s in args.cold_types.split(',')]
     models = [s.strip() for s in args.models.split(',')]
-    if not models or any(m not in ('vqatom', 'continuous', 'morgan', 'smiles') for m in models):
+    if any(c not in ('protein_cold','ligand_cold','double_cold','scaffold_cold') for c in colds):
+        p.error('Unknown cold type')
+    if any(m not in ('vqatom','continuous','morgan','smiles') for m in models):
         p.error('Unknown model')
-    splits = [int(s) for s in args.splits.split(',')]
-    seeds = [int(s) for s in args.seeds.split(',')]
-    if args.max_parallel < 1 or args.min_price < 0 or args.max_price < args.min_price or args.disk < 10 or (args.max_tasks is not None and args.max_tasks < 1):
-        p.error('Invalid parallelism, max-price, or disk')
-    for model in models:
-        if not (HERE / f'run_{model}.sh').is_file():
-            p.error(f'Missing {HERE / f"run_{model}.sh"}')
-    tasks = [(args.dataset, cold, m, sp, sd) for cold in cold_types for m in models for sp in splits for sd in seeds]
+    for m in models:
+        if not (HERE / f'run_{m}.sh').is_file():
+            p.error(f'Missing run_{m}.sh in {HERE}')
+    tasks = [(args.dataset, c, m, int(sp), int(sd))
+             for c in colds for m in models for sp in args.splits.split(',') for sd in args.seeds.split(',')]
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
-    log(f'{len(tasks)} tasks, max parallel={args.max_parallel}, GPU price range ${args.min_price:.2f}-${args.max_price:.2f}/hr, '
-        f'max concurrent GPU rental ${args.max_price * args.max_parallel:.2f}/hr (excluding storage/fees)')
-    log(f'GPU selection: VRAM >= {args.min_vram:g} GB; lowest price first (then dlperf)')
-    log('MODE:', 'EXECUTE' if args.execute else 'DRY-RUN (no instances created)')
-    if args.execute:
-        if not sys.stdin.isatty():
-            p.error('--execute requires interactive terminal for explicit confirmation')
-        answer = input(f'Type RENT {len(tasks)} to authorize paid rentals: ')
-        if answer != f'RENT {len(tasks)}':
-            p.error('Cancelled')
-        password = os.environ.get('FTP_PASS') or getpass.getpass('FTP password: ')
-        if not password:
-            p.error('FTP password required')
-    else:
-        password = ''
+    # Avoid duplicating active or previously launched jobs. Check Vast.ai account too.
+    existing = state_read()
+    running_labels = {str(i.get('label') or '') for i in instances()}
+    original = len(tasks)
+    tasks = [t for t in tasks if (name := f'{t[0]}_{t[1]}_{t[2]}_split{t[3]}_seed{t[4]}')
+             not in existing and name not in running_labels]
+    base.log(f'{len(tasks)} new tasks (skipped {original-len(tasks)} tracked/running); '
+             f'concurrency={args.max_parallel}, ${args.min_price:.2f}-${args.max_price:.2f}/GPU-hour')
+    if not args.execute:
+        base.log('DRY RUN; no rental. Add --execute --auto-destroy for launch.')
+        return
+    if not sys.stdin.isatty():
+        p.error('Interactive confirmation required')
+    if input(f'Type RENT {len(tasks)}: ') != f'RENT {len(tasks)}':
+        p.error('Cancelled')
+    password = os.environ.get('FTP_PASS') or getpass.getpass('FTP password: ')
+    if not password:
+        p.error('FTP password required')
     excluded = set()
-    # Search/create tasks are serialized inside the lock to avoid reusing an offer.
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
-        results = list(pool.map(lambda t: run_task(t, args, password, excluded), tasks))
-    log(f'Finished: {sum(results)}/{len(tasks)} tasks successful')
-    if not all(results):
-        sys.exit(1)
+        result = list(pool.map(lambda t: launch(t, args, password, excluded), tasks))
+    base.log(f'[LAUNCH FINISHED] {sum(result)}/{len(result)} started')
+    if args.auto_destroy:
+        monitor(args)
 
 
 if __name__ == '__main__':
