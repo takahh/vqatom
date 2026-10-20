@@ -159,7 +159,7 @@ def wait_ready_with_auth_diagnostics(instance_id, seconds):
 
 
 def training_started(instance_id):
-    # Require actual positive tqdm train progress.
+    """Detect actual train steps; separately recognize a live dti.py process."""
     rc, out, err = remote_check(instance_id, r'''python3 - <<'PYREMOTE'
 import os, re
 p = '/tmp/dti_run.log'
@@ -167,14 +167,30 @@ if os.path.isfile('/tmp/dti_success'):
     print('STARTED')
 elif os.path.isfile('/tmp/dti_failed'):
     print('FAILED')
-elif not os.path.isfile(p):
-    print('WAITING')
 else:
-    with open(p, 'rb') as f:
-        f.seek(max(0, os.path.getsize(p) - 262144))
-        data = f.read().decode('utf-8', 'replace')
-    steps = [int(m.group(1)) for m in re.finditer(r'train:\s*\d+%[^\r\n]*?\|\s*(\d+)/\d+', data)]
-    print('STARTED' if any(x > 0 for x in steps) else 'WAITING')
+    data = ''
+    if os.path.isfile(p):
+        with open(p, 'rb') as f:
+            f.seek(max(0, os.path.getsize(p) - 1048576))
+            data = f.read().decode('utf-8', 'replace')
+    # tqdm writes carriage-return separated updates and may omit percentage.
+    progress = re.search(r'train:[^\r\n]*?\|\s*([1-9]\d*)/\d+', data)
+    if progress:
+        print('STARTED')
+    else:
+        live = False
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit():
+                continue
+            try:
+                raw = open('/proc/' + pid + '/cmdline', 'rb').read()
+                parts = [x.decode('utf-8', 'replace') for x in raw.split(b'\0') if x]
+                if any(x.endswith('/dti.py') or x == 'dti.py' for x in parts):
+                    live = True
+                    break
+            except (OSError, PermissionError):
+                pass
+        print('PROCESS_RUNNING' if live else 'WAITING')
 PYREMOTE''', timeout=40)
     if rc:
         raise RuntimeError(f'SSH probe failed: {err[-200:]}')
@@ -216,9 +232,14 @@ def verify_owned_and_destroy(name, instance_id):
 
 def await_training_start(name, instance_id, created_at, args):
     deadline = created_at + args.training_start_timeout
+    process_seen = False
     while True:
         try:
             result = training_started(instance_id)
+            if result == 'PROCESS_RUNNING':
+                if not process_seen:
+                    base.log(f'[DTI PROCESS RUNNING] {name}: instance={instance_id}; awaiting train steps')
+                process_seen = True
             if result == 'STARTED' and time.time() <= deadline:
                 base.log(f'[TRAINING CONFIRMED] {name}: instance={instance_id}')
                 return
@@ -229,6 +250,9 @@ def await_training_start(name, instance_id, created_at, args):
                 raise
             base.log(f'[START CHECK] {name}: {exc}')
         if time.time() >= deadline:
+            if process_seen and training_started(instance_id) == 'PROCESS_RUNNING':
+                base.log(f'[PROCESS CONFIRMED, PROGRESS UNVERIFIED] {name}: instance={instance_id}; retaining for monitoring')
+                return
             raise TimeoutError(f'no positive train progress within {args.training_start_timeout}s of creation')
         time.sleep(min(args.start_check_seconds, max(1, deadline - time.time())))
 
