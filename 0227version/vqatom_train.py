@@ -1,10 +1,503 @@
 from __future__ import annotations
+
+"""Single-file consolidation of the six uploaded VQAtom modules.
+
+This is a structural merge, not an algorithmic fix.
+Fixes: missing training codebook lookup, proportional codebook budget, and EMA buffer key consistency.
+Full training and checkpoint compatibility have not been tested.
+Original source sections are identified below.
+"""
+
+
+# ==============================================================================
+# ORIGINAL MODULE: args.py
+# ==============================================================================
+import argparse
+
+def get_args():
+    parser = argparse.ArgumentParser(description="PyTorch DGL implementation")
+    parser.add_argument("--device", type=int, default=7, help="CUDA device, -1 means CPU")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--epoch_at_mode_shift", type=int, default=0, help="Epoch at mode shift")
+    parser.add_argument(
+        "--log_level",
+        type=int,
+        default=20,
+        help="Logger levels for run {10: DEBUG, 20: INFO, 30: WARNING}",
+    )
+    parser.add_argument(
+        "--console_log",
+        action="store_true",
+        help="Set to True to display log info in console",
+    )
+    parser.add_argument(
+        "--output_path", type=str, default="outputs", help="Path to save outputs"
+    )
+    parser.add_argument(
+        "--num_exp", type=int, default=1, help="Repeat how many experiments"
+    )
+    parser.add_argument(
+        "--exp_setting",
+        type=str,
+        default="tran",
+        help="Experiment setting, one of [tran, ind]",
+    )
+    # ss_max_total_latent_count
+    parser.add_argument(
+        "--ss_max_total_latent_count", type=int, default=20000, help="max count of latent used in SS calc."
+    )
+    parser.add_argument(
+        "--eval_interval", type=int, default=1, help="Evaluate once per how many epochs"
+    )
+    parser.add_argument(
+        "--save_results",
+        action="store_false",
+        help="Set to True to save the loss curves, trained model, and min-cut loss for the transductive setting",
+    )
+    # --------------
+    # Dataset
+    # --------------
+    parser.add_argument("--train_size", type=int, default=5939)
+    parser.add_argument("--val_size", type=int, default=1484)
+    parser.add_argument("--test_size", type=int, default=1484)
+    # parser.add_argument("--train_size", type=int, default=59397)
+    # parser.add_argument("--val_size", type=int, default=14849)
+    # parser.add_argument("--test_size", type=int, default=14849)
+    parser.add_argument("--get_umap_data", action="store_true", help="Enable UMAP data processing")
+    parser.add_argument("--use_checkpoint", action="store_true", help="Enable loading saved model")
+    parser.add_argument("--percent", type=float, default=1)
+    parser.add_argument("--dataset", type=str, default="cora", help="Dataset")
+    parser.add_argument("--data_path", type=str, default="./data", help="Path to data")
+    parser.add_argument(
+        "--labelrate_train",
+        type=int,
+        # default=30,
+        default=None,
+        help="How many labeled data per class as train set",
+    )
+    parser.add_argument(
+        "--labelrate_val",
+        type=int,
+        # default=20,
+        default=None,
+        help="How many labeled data per class in valid set",
+    )
+    parser.add_argument(
+        "--split_idx",
+        type=int,
+        default=0,
+        help="For Non-Homo datasets only, one of [0,1,2,3,4]",
+    )
+    # --------------
+    # VQ
+    # --------------
+    parser.add_argument("--codebook_size", type=int, default=1500, help="Codebook size of VQGraph")
+    parser.add_argument("--lamb_edge",  type=float, default=0.003)  # default=0.03)
+    parser.add_argument("--lamb_node", type=float, default=0.00008)  # default=0.001)
+    parser.add_argument("--lamb_div_ele",  type=float, default=0.002)  # default=0.03)
+    parser.add_argument("--dynamic_threshold", action="store_true", help="Use dynamic threshold in loss")
+
+    # --------------
+    # Model
+    # --------------
+    parser.add_argument(
+        "--model_config_path",
+        type=str,
+        default="./train.conf.yaml",
+        help="Path to model configeration",
+    )
+    parser.add_argument("--teacher", type=str, default="SAGE", help="Teacher model")
+    parser.add_argument("--train_or_infer", type=str, default="train", help="Train or just infer")
+    parser.add_argument(
+        "--num_layers", type=int, default=2, help="Model number of layers"
+    )
+    parser.add_argument(
+        "--hidden_dim", type=int, default=64, help="Model hidden layer dimensions"
+    )
+    parser.add_argument("--dropout_ratio", type=float, default=0)
+    parser.add_argument(
+        "--norm_type", type=str, default="none", help="One of [none, batch, layer]"
+    )
+
+    """SAGE Specific"""
+    parser.add_argument("--batch_size", type=int, default=10000)
+    parser.add_argument(
+        "--fan_out",
+        type=str,
+        default="4,4",
+        help="Number of samples for each layer in SAGE. Length = num_layers",
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=1, help="Number of workers for sampler"
+    )
+
+    parser.add_argument(
+        "--chunk_size", type=int, default=200
+    )
+    parser.add_argument(
+        "--chunk_size2", type=int, default=1000
+    )
+    """Optimization"""
+    parser.add_argument("--accumulation_steps", type=int, default=2) # default=0.0001)
+    parser.add_argument("--learning_rate", type=float, default=0.0003) # default=0.0001)
+    parser.add_argument("--weight_decay", type=float, default=0.0005)
+    parser.add_argument("--cosine_epochs", type=float, default=200)
+    parser.add_argument(
+        "--max_epoch", type=int, default=5, help="Evaluate once per how many epochs"
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=50,
+        help="Early stop is the score on validation set does not improve for how many epochs",
+    )
+
+    """Ablation"""
+    parser.add_argument(
+        "--feature_noise",
+        type=float,
+        default=0,
+        help="add white noise to features for analysis, value in [0, 1] for noise level",
+    )
+    parser.add_argument(
+        "--split_rate",
+        type=float,
+        default=0.2,
+        help="Rate for graph split, see comment of graph_split for more details",
+    )
+    parser.add_argument(
+        "--compute_min_cut",
+        action="store_true",
+        help="Set to True to compute and store the min-cut loss",
+    )
+    parser.add_argument(
+        "--feature_aug_k",
+        type=int,
+        default=0,
+        help="Augment node futures by aggregating feature_aug_k-hop neighbor features",
+    )
+
+    args = parser.parse_args()
+    return args
+
+
+# ==============================================================================
+# ORIGINAL MODULE: utils.py
+# ==============================================================================
+import numpy as np
+import torch
+import logging
+import pytz
+import random
+import os
+import yaml
+import shutil
+from datetime import datetime
+from ogb.nodeproppred import Evaluator
+from dgl import function as fn
+
+CPF_data = ["cora", "citeseer", "pubmed", "a-computer", "a-photo"]
+OGB_data = ["ogbn-arxiv", "ogbn-products"]
+NonHom_data = ["pokec", "penn94"]
+BGNN_data = ["house_class", "vk_class"]
+CORE_ELEMENTS = {"5", "6", "7", "8", "14", "15", "16"}
+CBDICT = {
+    '1_0_1_0_0_0': 34,   # N=991
+    '5_-1_4_0_0_0': 1,   # N=15
+    '5_-1_4_0_1_0': 2,   # N=43
+    '5_0_3_0_0_0': 11,   # N=305
+    '5_0_3_0_1_0': 8,   # N=240
+    '6_-1_2_0_0_0': 1,   # N=13
+    '6_0_2_0_0_0': 511,   # N=15330
+    '6_0_2_0_1_0': 3,   # N=88
+    '6_0_3_0_0_0': 7687,   # N=230602
+    '6_0_3_0_1_0': 3068,   # N=92016
+    '6_0_3_1_1_0': 75098,   # N=2252928
+    '6_0_4_0_0_0': 26727,   # N=801795
+    '6_0_4_0_1_0': 20629,   # N=618852
+    '6_1_3_0_0_0': 1,   # N=9
+    '6_1_3_1_1_0': 1,   # N=1
+    '7_-1_3_0_0_0': 14,   # N=403
+    '7_-1_3_0_1_0': 1,   # N=6
+    '7_-1_3_1_1_0': 1,   # N=17
+    '7_-1_4_0_0_0': 1,   # N=2
+    '7_0_2_0_0_0': 310,   # N=9273
+    '7_0_3_0_0_0': 5858,   # N=175723
+    '7_0_3_0_1_0': 2597,   # N=77907
+    '7_0_3_1_1_0': 8356,   # N=250669
+    '7_0_4_0_0_0': 1043,   # N=31290
+    '7_0_4_0_1_0': 1333,   # N=39981
+    '7_1_2_0_0_0': 14,   # N=393
+    '7_1_3_0_0_0': 236,   # N=7074
+    '7_1_3_0_1_0': 8,   # N=216
+    '7_1_3_1_1_0': 80,   # N=2393
+    '7_1_4_0_0_0': 92,   # N=2755
+    '7_1_4_0_1_0': 51,   # N=1516
+    '8_-1_3_0_0_0': 280,   # N=8390
+    '8_-1_4_0_0_0': 42,   # N=1237
+    '8_0_3_0_0_0': 15342,   # N=460250
+    '8_0_3_0_1_0': 676,   # N=20278
+    '8_0_3_1_1_0': 705,   # N=21138
+    '8_0_4_0_0_0': 2287,   # N=68608
+    '8_0_4_0_1_0': 789,   # N=23651
+    '8_1_3_0_1_0': 1,   # N=8
+    '8_1_3_1_1_0': 1,   # N=8
+    '9_0_4_0_0_0': 2589,   # N=77656
+    '14_0_4_0_0_0': 8,   # N=221
+    '14_0_4_0_1_0': 1,   # N=13
+    '15_0_3_0_0_0': 1,   # N=1
+    '15_0_3_1_1_0': 1,   # N=6
+    '15_0_4_0_0_0': 137,   # N=4110
+    '15_0_4_0_1_0': 9,   # N=257
+    '15_0_6_0_0_0': 1,   # N=7
+    '15_0_6_0_1_0': 1,   # N=1
+    '15_1_4_0_0_0': 2,   # N=54
+    '15_1_4_0_1_0': 1,   # N=2
+    '16_-1_3_0_0_0': 1,   # N=11
+    '16_-1_4_0_0_0': 1,   # N=3
+    '16_0_3_0_0_0': 105,   # N=3144
+    '16_0_3_0_1_0': 1,   # N=6
+    '16_0_3_1_1_0': 714,   # N=21413
+    '16_0_4_0_0_0': 1157,   # N=34689
+    '16_0_4_0_1_0': 225,   # N=6737
+    '16_0_6_0_0_0': 1,   # N=3
+    '16_0_6_0_1_0': 1,   # N=1
+    '16_0_7_0_0_0': 2,   # N=37
+    '16_1_3_0_0_0': 1,   # N=1
+    '16_1_3_1_1_0': 2,   # N=31
+    '16_1_4_0_0_0': 17,   # N=509
+    '16_1_4_0_1_0': 5,   # N=141
+    '17_0_4_0_0_0': 1415,   # N=42438
+    '34_0_3_0_0_0': 1,   # N=7
+    '34_0_3_1_1_0': 3,   # N=90
+    '34_0_4_0_0_0': 5,   # N=130
+    '34_0_4_0_1_0': 1,   # N=18
+    '34_1_3_1_1_0': 1,   # N=3
+    '34_1_4_0_0_0': 1,   # N=1
+    '35_0_4_0_0_0': 296,   # N=8852
+    '53_0_4_0_0_0': 48,   # N=1427
+    '53_1_4_0_0_0': 1,   # N=1
+    '53_1_4_0_1_0': 1,   # N=6
+}
+
+
+def allocate_codebook_budget(base_counts, budget):
+    """Distribute a global code budget proportionally across intrinsic-key groups.
+
+    Every known group receives at least one center. The total is exactly budget.
+    The original CBDICT weights are preserved only as allocation weights.
+    """
+    if not isinstance(budget, int) or budget < len(base_counts):
+        raise ValueError(f"codebook_size must be >= {len(base_counts)} (number of groups); got {budget}")
+    if any(int(v) <= 0 for v in base_counts.values()):
+        raise ValueError("CBDICT must contain positive counts")
+    keys = list(base_counts)
+    remaining = budget - len(keys)
+    total = sum(int(v) for v in base_counts.values())
+    shares = [remaining * int(base_counts[k]) / total for k in keys]
+    allocations = [1 + int(x) for x in shares]
+    leftover = budget - sum(allocations)
+    order = sorted(range(len(keys)), key=lambda i: (-(shares[i] - int(shares[i])), i))
+    for i in order[:leftover]:
+        allocations[i] += 1
+    result = dict(zip(keys, allocations))
+    assert sum(result.values()) == budget
+    return result
+
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def get_training_config(config_path, model_name, dataset):
+    with open(config_path, "r") as conf:
+        full_config = yaml.load(conf, Loader=yaml.FullLoader)
+    dataset_specific_config = full_config["global"]
+    model_specific_config = full_config[dataset][model_name]
+
+    if model_specific_config is not None:
+        specific_config = dict(dataset_specific_config, **model_specific_config)
+    else:
+        specific_config = dataset_specific_config
+
+    specific_config["model_name"] = model_name
+    return specific_config
+
+
+def check_writable(path, overwrite=True):
+    if not os.path.exists(path):
+        os.makedirs(path)
+    elif overwrite:
+        shutil.rmtree(path)
+        os.makedirs(path)
+    else:
+        pass
+
+
+def check_readable(path):
+    if not os.path.exists(path):
+        raise ValueError(f"No such file or directory! {path}")
+
+
+def timetz(*args):
+    tz = pytz.timezone("US/Pacific")
+    return datetime.now(tz).timetuple()
+
+def get_logger(filename, console_log=False, log_level=logging.INFO):
+    logger = logging.getLogger(f"logger_{filename}")  # unique per file
+    logger.propagate = False
+    logger.setLevel(log_level)
+
+    # Add handlers only once
+    if not logger.handlers:
+        file_handler = logging.FileHandler(filename, mode="a")
+        formatter = logging.Formatter("%(asctime)s: %(message)s", datefmt="%b%d %H-%M-%S")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+        if console_log:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
+
+    return logger
+
+
+
+def idx_split(idx, ratio, seed=0, train_or_infer=None):
+    """
+    randomly split idx into two portions with ratio% elements and (1 - ratio)% elements
+    """
+    set_seed(seed)
+    n = len(idx)   # idx starts from 40
+    cut = int(n * ratio)  # n 8000, cut 1600, ratio 0.2
+    # print(f"n {n}, cut {cut}, ratio {ratio}") # n 8000, cut 1600, ratio 0.2
+    if train_or_infer == "train":
+        idx_idx_shuffle = torch.randperm(n)
+        idx1_idx, idx2_idx = idx_idx_shuffle[:cut], idx_idx_shuffle[cut:]
+    elif train_or_infer == "infer":
+        idx_idx_list = list(range(n))
+        idx1_idx, idx2_idx = idx_idx_list[:cut], idx_idx_list[cut:]
+    idx1, idx2 = idx[idx1_idx], idx[idx2_idx]
+    # assert((torch.cat([idx1, idx2]).sort()[0] == idx.sort()[0]).all())
+    return idx1, idx2  # idx1 is test_ind
+
+
+def graph_split(idx_train, idx_val, idx_test, rate, seed, train_or_infer):
+    """
+    Args:
+        The original setting was transductive. Full graph is observed, and idx_train takes up a small portion.
+        Split the graph by further divide idx_test into [idx_test_tran, idx_test_ind].
+        rate = idx_test_ind : idx_test (how much test to hide for the inductive evaluation)
+
+        Ex. Ogbn-products
+        loaded     : train : val : test = 8 : 2 : 90, rate = 0.2
+        after split: train : val : test_tran : test_ind = 8 : 2 : 72 : 18
+
+    Return:
+        Indices start with 'obs_' correspond to the node indices within the observed subgraph,
+        where as indices start directly with 'idx_' correspond to the node indices in the original graph
+    """
+    idx_test_ind, idx_test_tran = idx_split(idx_test, rate, seed, train_or_infer)
+
+    idx_obs = torch.cat([idx_train, idx_val])
+    N1, N2 = idx_train.shape[0], idx_val.shape[0]
+    obs_idx_all = torch.arange(idx_obs.shape[0])
+    obs_idx_train = obs_idx_all[:N1]
+    obs_idx_val = obs_idx_all[N1 : N1 + N2]
+    obs_idx_test = idx_test
+
+    # print(f"obs_idx_train {obs_idx_train}")
+    # print(f"obs_idx_train {obs_idx_train.shape}")
+    # print(f"obs_idx_val {obs_idx_val}")
+    # print(f"obs_idx_val {obs_idx_val.shape}")
+    # print(f"obs_idx_test {obs_idx_test}")
+    # print(f"obs_idx_test {obs_idx_test.shape}")
+    # print(f"idx_test_ind {idx_test_ind}")
+    # print(f"idx_test_ind {idx_test_ind.shape}")
+    idx_test_ind = torch.tensor(list(range(N1 + N2 + N2, N1 + N2 + N2 + N2 + 1)))
+    return obs_idx_train, obs_idx_val, obs_idx_test, obs_idx_all, idx_test_ind
+
+
+def get_evaluator(dataset):
+    if dataset in CPF_data + NonHom_data + BGNN_data:
+
+        def evaluator(out, labels):
+            pred = out.argmax(1)
+            return pred.eq(labels).float().mean().item()
+
+    elif dataset in OGB_data:
+        ogb_evaluator = Evaluator(dataset)
+
+        def evaluator(out, labels):
+            pred = out.argmax(1, keepdim=True)
+            input_dict = {"y_true": labels.unsqueeze(1), "y_pred": pred}
+            return ogb_evaluator.eval(input_dict)["acc"]
+
+    else:
+        raise ValueError("Unknown dataset")
+
+    return evaluator
+
+
+def get_evaluator(dataset):
+    def evaluator(out, labels):
+        pred = out.argmax(1)
+        return pred.eq(labels).float().mean().item()
+
+    return evaluator
+
+
+def compute_min_cut_loss(g, out):
+    out = out.to("cpu")
+    g = g.to("cpu")
+    S = out.exp()
+    A = g.adj().to_dense()
+    D = g.in_degrees().float().diag()
+    print(S.device, A.device, D.device)
+    min_cut = (
+        torch.matmul(torch.matmul(S.transpose(1, 0), A), S).trace()
+        / torch.matmul(torch.matmul(S.transpose(1, 0), D), S).trace()
+    )
+    return min_cut.item()
+
+
+def feature_prop(feats, g, k):
+    """
+    Augment node feature by propagating the node features within k-hop neighborhood.
+    The propagation is done in the SGC fashion, i.e. hop by hop and symmetrically normalized by node degrees.
+    """
+    assert feats.shape[0] == g.num_nodes()
+
+    degs = g.in_degrees().float().clamp(min=1)
+    norm = torch.pow(degs, -0.5).unsqueeze(1)
+
+    # compute (D^-1/2 A D^-1/2)^k X
+    for _ in range(k):
+        feats = feats * norm
+        g.ndata["h"] = feats
+        g.update_all(fn.copy_u("h", "m"), fn.sum("m", "h"))
+        feats = g.ndata.pop("h")
+        feats = feats * norm
+
+    return feats
+
+
+
+# ==============================================================================
+# ORIGINAL MODULE: vq.py
+# ==============================================================================
 import torch.distributed as distributed
 from einops import rearrange, repeat, pack, unpack
-from utils import CBDICT
 from torch import nn, einsum
 
-from args import get_args
 
 
 def exists(val):
@@ -889,7 +1382,11 @@ class EuclideanCodebook(nn.Module):
         self.train_or_infer = args.train_or_infer
         self.use_checkpoint = args.use_checkpoint
 
-        self.cb_dict = CBDICT  # {element_key(str or int): K_e}
+        # Interpret --codebook_size as the TOTAL initial number of centers.
+        # CBDICT supplies only relative weights, not absolute center counts.
+        self.cb_dict = allocate_codebook_budget(CBDICT, int(codebook_size))
+        print(f"[CODEBOOK-BUDGET] requested={codebook_size} "
+              f"allocated={sum(self.cb_dict.values())} groups={len(self.cb_dict)}")
 
         assert not (
             use_ddp and num_codebooks > 1 and kmeans_init
@@ -2117,6 +2614,17 @@ class EuclideanCodebook(nn.Module):
             code = code_param.squeeze(0) if code_param.ndim == 3 else code_param
             return safe, code_param, code
 
+        def _get_safe_and_code(skey: str):
+            """Training/init lookup: require a codebook already initialized for this key.
+
+            Never create a random codebook silently: init_embed_ must initialize it.
+            """
+            safe, code_param, code = _get_safe_and_code_existing_only(skey)
+            if safe is None:
+                raise KeyError(f"[codebook] missing initialized key {skey!r}; "
+                               "check init_embed_ and CBDICT group coverage")
+            return safe, code_param, code
+
         # ------------------------------------------------------------------
         # 3) infer: IDs only (no EMA, no split, no revive, no prune)
         #    returns: (key_id_full, cluster_id_full, global_id_full, id2safe)
@@ -2433,8 +2941,8 @@ class EuclideanCodebook(nn.Module):
                 self.cb_dict[skey] = int(K_e)
 
                 # buffers (registered)
-                cs = _get_buf(f"cluster_size_{safe}", (K_e,), torch.float32, dev)
-                ea = _get_buf(f"embed_avg_{safe}", (K_e, D_e), torch.float32, dev)
+                cs = _get_buf(f"cluster_size_{skey}", (K_e,), torch.float32, dev)
+                ea = _get_buf(f"embed_avg_{skey}", (K_e, D_e), torch.float32, dev)
                 ue = _get_buf(f"usage_ema_{safe}", (K_e,), torch.float32, dev)
                 cd = _get_buf(f"split_cd_{safe}", (K_e,), torch.long, dev)
                 ever = _get_buf(f"ever_used_{safe}", (K_e,), torch.uint8, dev)
@@ -3560,3 +4068,2102 @@ class VectorQuantize(nn.Module):
         total_loss = self.commitment_weight * commit_loss + ent_loss
         logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
+
+
+# ==============================================================================
+# ORIGINAL MODULE: models.py
+# ==============================================================================
+import torch.nn as nn
+import torch
+
+
+class BondWeightLayer(nn.Module):
+    def __init__(self, bond_types=4, hidden_dim=64):
+        super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+        )
+
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
+
+        nn.init.xavier_uniform_(self.bond_embedding.weight)  # Xavier for embeddings
+        for layer in self.edge_mlp:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)
+                nn.init.zeros_(layer.bias)
+
+    def forward(self, edge_types):
+        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        edge_weight = edge_weight.squeeze()  # Compute edge weight
+        return edge_weight
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_uniform_(m.weight, nonlinearity='leaky_relu')
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+
+import torch.nn.functional as F
+from torch_geometric.nn import GINEConv
+
+import torch.nn as nn
+
+
+class BondWeightLayer(nn.Module):
+    def __init__(self, bond_types=4, hidden_dim=64):
+        import torch
+        super().__init__()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.bond_embedding = nn.Embedding(bond_types, hidden_dim)  # Learnable bond representation
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()  # Output weight in range (0,1)
+        )
+        self.edge_mlp = self.edge_mlp.to(device)  # Move edge MLP to correct device
+
+    def forward(self, edge_types):
+        bond_feats = self.bond_embedding(edge_types)  # Convert bond type to learnable vector
+        edge_weight = self.edge_mlp(bond_feats).squeeze()  # Compute edge weight
+        return edge_weight
+
+import torch
+
+def _zeros_like(x, device=None, dtype=None):
+    return torch.zeros((), device=device or getattr(x, "device", None), dtype=dtype or getattr(x, "dtype", None))
+
+import torch
+def _normalize_quantize_output(qo, logger, device=None, dtype=None):
+    """
+    Normalize quantizer outputs to 7-tuple:
+      (loss, embed, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss)
+
+    Assumption (ALWAYS):
+      qo == (total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss))
+
+    Rules:
+      - Never detach.
+      - Never wrap existing tensors into new tensors.
+      - Only convert python/np scalars/None to tensors.
+    """
+
+    def _infer_device_dtype(*xs):
+        nonlocal device, dtype
+        if device is None or dtype is None:
+            for x in xs:
+                if torch.is_tensor(x):
+                    if device is None:
+                        device = x.device
+                    if dtype is None:
+                        dtype = x.dtype
+                    return
+        if device is None:
+            device = "cpu"
+        if dtype is None:
+            dtype = torch.float32
+
+    def _scalar_to_tensor(x):
+        if torch.is_tensor(x):
+            return x
+        if x is None:
+            _infer_device_dtype()
+            return torch.zeros((), device=device, dtype=dtype)
+        _infer_device_dtype()
+        return torch.as_tensor(x, device=device, dtype=dtype)
+
+    # ---------------------------
+    # only supported shape:
+    # (loss, (commit, cb, rep, cb_rep))
+    # ---------------------------
+    if not (isinstance(qo, (tuple, list)) and len(qo) == 2 and isinstance(qo[1], (tuple, list))):
+        raise TypeError(f"Expected (loss, (commit, cb, rep, cb_rep)) but got {type(qo)}: {qo}")
+
+    loss, inner = qo
+    if len(inner) != 5:
+        raise TypeError(f"Expected inner tuple length 5: (commit, cb, rep, cb_rep, ent), got {len(inner)}: {inner}")
+
+    commit, cb, rep, cb_rep, ent = inner[0], inner[1], inner[2], inner[3], inner[4]
+
+    # total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
+    logger.info(f"end of model forward, loss {loss},　commit {commit}, ent {ent}")
+    _infer_device_dtype(loss, commit, cb, rep, cb_rep, ent)
+
+    embed = None  # qoにはembedが無い前提
+    sil = None    # qoにはsilが無い前提（0で埋める）
+
+    return (
+        _scalar_to_tensor(loss),
+        embed,
+        _scalar_to_tensor(commit),
+        _scalar_to_tensor(cb),
+        _scalar_to_tensor(sil),      # silhouette_loss = 0
+        _scalar_to_tensor(rep),
+        _scalar_to_tensor(cb_rep),
+        _scalar_to_tensor(ent),
+    )
+
+import torch.nn as nn
+import torch
+import torch.nn as nn
+
+class AtomEmbedding(nn.Module):
+    def __init__(self):
+        super(AtomEmbedding, self).__init__()
+
+        # ---- 埋め込み定義（離散 0-30 部分）----
+        self.degree_embed   = nn.Embedding(num_embeddings=7,   embedding_dim=4)   # 0..6
+        self.ring_embed     = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # ring flag+1 など
+        self.charge_embed   = nn.Embedding(num_embeddings=8,   embedding_dim=4)   # 0..7 にクリップ
+        self.aromatic_embed = nn.Embedding(num_embeddings=2,   embedding_dim=4)   # 0/1
+        self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
+        self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
+
+        ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
+        self.register_buffer(
+            "element_lut",
+            self._build_element_lut(ELEMENTS)
+        )
+        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
+
+        # 0/1 フラグ系は全部 2 クラス想定
+        def flag_emb():
+            return nn.Embedding(num_embeddings=2, embedding_dim=2)
+
+        # 官能基フラグ 18 個 (7-24)
+        self.func_embed_0  = flag_emb()
+        self.func_embed_1  = flag_emb()
+        self.func_embed_2  = flag_emb()
+        self.func_embed_3  = flag_emb()
+        self.func_embed_4  = flag_emb()
+        self.func_embed_5  = flag_emb()
+        self.func_embed_6  = flag_emb()
+        self.func_embed_7  = flag_emb()
+        self.func_embed_8  = flag_emb()
+        self.func_embed_9  = flag_emb()
+        self.func_embed_10 = flag_emb()
+        self.func_embed_11 = flag_emb()
+        self.func_embed_12 = flag_emb()
+        self.func_embed_13 = flag_emb()
+        self.func_embed_14 = flag_emb()
+        self.func_embed_15 = flag_emb()
+        self.func_embed_16 = flag_emb()
+        self.func_embed_17 = flag_emb()
+
+        # H-bond Donor / Acceptor (25, 26)
+        self.h_don_embed   = flag_emb()
+        self.h_acc_embed   = flag_emb()
+
+        # ring size / aromatic neighbors / fused-id (27, 28, 29)
+        # ringSize のユニーク値: ['0', '3', '4', '5', '6', '7', '8'] → 7種類
+        self.ringsize_embed  = nn.Embedding(num_embeddings=7, embedding_dim=4)
+        self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
+        self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
+
+        # NEW: het27 (30) 用の embedding (0..26 → 27クラス)
+        self.het27_embed = nn.Embedding(num_embeddings=27, embedding_dim=4)
+
+        # 官能基フラグ 18 個 (各 2 次元) → 36 次元を 4 次元に圧縮
+        self.func_reduce = nn.Linear(18 * 2, 4)
+
+        # ringSize の元の値 → index の対応（0,3,4,5,6,7,8 → 0..6）
+        uniq = ['0', '3', '4', '5', '6', '7', '8']
+        uniq_int = sorted(int(x) for x in uniq)  # [0,3,4,5,6,7,8]
+        mapping = {v: i for i, v in enumerate(uniq_int)}
+        self.register_buffer(
+            "ring_values_tensor",
+            torch.tensor(uniq_int, dtype=torch.long)
+        )
+        self.ring_value_to_index = mapping
+
+        # ---- bond_env_raw (31-78, 48 dims) 用の射影 ----
+        # 48 次元 → 16 次元に圧縮して concat
+        self.bond_env_proj = nn.Linear(48, 16)
+
+        # ---- 離散部分（x0..x6 + flags4 + x25,x26 + x27,x28,x29,x30）を 52→48 に圧縮 ----
+        #   x0..x6: 7*4 = 28
+        #   flags4: 4
+        #   x25,x26: 2+2 = 4
+        #   x27,x28,x29,x30: 4*4 = 16
+        #   合計 = 28 + 4 + 4 + 16 = 52
+        self.disc_proj = nn.Linear(52, 48)
+
+        # このクラスの最終出力次元:
+        #   離散部 (disc_proj 後) : 48
+        #   bond_env_proj         : 16
+        #   合計 = 64
+        self.out_dim = 48 + 16
+
+    @staticmethod
+    def _build_element_lut(ELEMENTS):
+        max_z = max(ELEMENTS)
+        lut = torch.zeros(max_z + 1, dtype=torch.long)
+        for i, z in enumerate(ELEMENTS):
+            lut[z] = i
+        return lut
+
+    def forward(self, atom_inputs: torch.Tensor) -> torch.Tensor:
+        """
+        Encode per-atom features into a dense embedding.
+
+        Parameters
+        ----------
+        atom_inputs : torch.Tensor
+            Shape [N, 79].
+
+            0 : Z
+            1 : degree
+            2 : charge
+            3 : hyb
+            4 : arom
+            5 : ring
+            6 : hcount
+            7-24  : func_flags (18)
+            25    : H-donor flag
+            26    : H-acceptor flag
+            27    : ringSize (0,3,4,5,6,7,8,...)
+            28    : #aromatic neighbors
+            29    : fused ring id (0..7)
+            30    : het27 (0..26)
+            31-78 : bond_env_raw (48)  float
+        Returns
+        -------
+        out : torch.Tensor
+            Shape [N, 64] = disc_emb(48) + bond_env_emb(16)
+        """
+        device = next(self.parameters()).device
+        x = atom_inputs.to(device=device, non_blocking=True)
+
+        if x.ndim != 2 or x.size(1) != 79:
+            raise ValueError(f"atom_inputs must be [N,79], got {tuple(x.shape)}")
+
+        # ----------------------------
+        # helpers
+        # ----------------------------
+        def clamp_idx(col: int, n_embed: int, lo: int = 0) -> torch.Tensor:
+            """Read integer column and clamp to valid embedding range."""
+            return x[:, col].long().clamp(lo, n_embed - 1)
+
+        def flag01(col: int) -> torch.Tensor:
+            """Read 0/1 flag column."""
+            return x[:, col].long().clamp(0, 1)
+
+        # ----------------------------
+        # core discrete features
+        # ----------------------------
+
+        # 0: Z -> element_lut -> element_embed
+        z_raw = x[:, 0].long()
+        max_z = int(self.element_lut.shape[0] - 1)
+        z_safe = torch.where((0 <= z_raw) & (z_raw <= max_z), z_raw, torch.zeros_like(z_raw))
+        idx0 = self.element_lut[z_safe].clamp(0, self.element_embed.num_embeddings - 1)
+        x0 = self.element_embed(idx0)
+
+        # 1: degree
+        x1 = self.degree_embed(clamp_idx(1, self.degree_embed.num_embeddings))
+
+        # 2: ring flag (+1) for ring_embed (0..)
+        ring_plus1 = (x[:, 5].long() + 1).clamp(0, self.ring_embed.num_embeddings - 1)
+        x2 = self.ring_embed(ring_plus1)
+
+        # 3: charge
+        x3 = self.charge_embed(clamp_idx(2, self.charge_embed.num_embeddings))
+
+        # 4: aromatic (0/1)
+        x4 = self.aromatic_embed(clamp_idx(4, self.aromatic_embed.num_embeddings))
+
+        # 5: hybrid
+        x5 = self.hybrid_embed(clamp_idx(3, self.hybrid_embed.num_embeddings))
+
+        # 6: #hydrogens
+        x6 = self.hydrogen_embed(clamp_idx(6, self.hydrogen_embed.num_embeddings))
+
+        # ----------------------------
+        # functional flags (7..24): 18 flags -> per-flag embed -> reduce
+        # ----------------------------
+        # assumes each func_embed_i is an Embedding(2, d_flag) (you used 2 dims each before)
+        func_embeds = [
+            self.func_embed_0,  self.func_embed_1,  self.func_embed_2,  self.func_embed_3,
+            self.func_embed_4,  self.func_embed_5,  self.func_embed_6,  self.func_embed_7,
+            self.func_embed_8,  self.func_embed_9,  self.func_embed_10, self.func_embed_11,
+            self.func_embed_12, self.func_embed_13, self.func_embed_14, self.func_embed_15,
+            self.func_embed_16, self.func_embed_17,
+        ]
+        flags = torch.cat([emb(flag01(7 + i)) for i, emb in enumerate(func_embeds)], dim=-1)  # [N, 18*d_flag]
+        flags4 = self.func_reduce(flags)  # [N, 4]
+
+        # 25,26: H-bond donor/acceptor flags
+        x25 = self.h_don_embed(flag01(25))
+        x26 = self.h_acc_embed(flag01(26))
+
+        # ----------------------------
+        # ring size mapping (27)
+        # ----------------------------
+        raw27 = x[:, 27].long()
+
+        # default: last index = "other/unknown"
+        mapped27 = torch.full_like(raw27, fill_value=self.ringsize_embed.num_embeddings - 1)
+
+        # map known values via dict {value:int_index}
+        # NOTE: this loop is small (few keys), so it's fine
+        for v, idx in self.ring_value_to_index.items():
+            mapped27[raw27 == int(v)] = int(idx)
+
+        mapped27 = mapped27.clamp(0, self.ringsize_embed.num_embeddings - 1)
+        x27 = self.ringsize_embed(mapped27)
+
+        # 28: #aromatic neighbors
+        x28 = self.aroma_num_embed(clamp_idx(28, self.aroma_num_embed.num_embeddings))
+
+        # 29: fused ring id
+        x29 = self.fused_if_embed(clamp_idx(29, self.fused_if_embed.num_embeddings))
+
+        # 30: het27
+        x30 = self.het27_embed(clamp_idx(30, self.het27_embed.num_embeddings))
+
+        # ----------------------------
+        # bond_env_raw (31..78): 48 floats -> proj -> 16
+        # ----------------------------
+        bond_env = x[:, 31:].to(dtype=torch.float32)
+        if bond_env.size(1) != 48:
+            raise ValueError(f"bond_env_raw must be 48 dims, got {bond_env.size(1)}")
+        bond_env_emb = self.bond_env_proj(bond_env)  # [N, 16]
+
+        # ----------------------------
+        # concatenate discrete, project, then concat with bond env
+        # ----------------------------
+        disc_cat = torch.cat(
+            [
+                x0, x1, x2, x3, x4, x5, x6,   # base discrete embeds
+                flags4,                       # [N,4]
+                x25, x26,                     # donor/acceptor
+                x27, x28, x29, x30,           # ringSize, aromNbrs, fusedId, het27
+            ],
+            dim=-1,
+        )  # expected [N, 52] in your original design
+
+        disc_emb = self.disc_proj(disc_cat)          # [N, 48]
+        out = torch.cat([disc_emb, bond_env_emb], dim=-1)  # [N, 64]
+        return out
+
+class EquivariantThreeHopGINE(nn.Module):
+    def __init__(self, in_feats, hidden_feats, out_feats, args):
+        super().__init__()
+        import torch
+        if args is None:
+            args = get_args()
+
+        self.feat_embed = AtomEmbedding()
+        # AtomEmbedding → 64 dims (48 from discrete + 16 from bond_env)
+        self.linear_0 = nn.Linear(64, args.hidden_dim)  # h0
+
+        edge_emb_dim = getattr(args, "edge_emb_dim", 32)
+        self.bond_emb = nn.Embedding(5, edge_emb_dim, padding_idx=0)
+
+        def mlp(in_f, out_f):
+            return nn.Sequential(
+                nn.Linear(in_f, out_f), nn.ReLU(),
+                nn.Linear(out_f, out_f), nn.ReLU()
+            )
+
+        nn1 = mlp(args.hidden_dim, hidden_feats)
+        nn2 = mlp(hidden_feats, hidden_feats)
+        nn3 = mlp(hidden_feats, hidden_feats)
+
+        self.gine1 = GINEConv(nn1, edge_dim=edge_emb_dim)
+        self.gine2 = GINEConv(nn2, edge_dim=edge_emb_dim)
+        self.gine3 = GINEConv(nn3, edge_dim=edge_emb_dim)
+
+        self.ln_in = nn.LayerNorm(args.hidden_dim)
+        self.ln1   = nn.LayerNorm(hidden_feats)
+        self.ln2   = nn.LayerNorm(hidden_feats)
+        self.ln3   = nn.LayerNorm(hidden_feats)
+
+        # Residual scales
+        self.res1 = nn.Parameter(torch.tensor(0.5))
+        self.res2 = nn.Parameter(torch.tensor(0.5))
+        self.res3 = nn.Parameter(torch.tensor(0.5))
+
+        # If args.hidden_dim != hidden_feats, project skip for hop1
+        self.skip0 = None
+        if args.hidden_dim != hidden_feats:
+            self.skip0 = nn.Linear(args.hidden_dim, hidden_feats, bias=False)
+
+        # JK: concat h0 + h1 + h2 + h3
+        jk_dim = args.hidden_dim + 3 * hidden_feats
+        self.mix = nn.Sequential(
+            nn.Linear(jk_dim, 2 * hidden_feats), nn.ReLU(),
+            nn.Linear(2 * hidden_feats, hidden_feats), nn.ReLU(),
+        )
+
+        # Project to VQ dim
+        self.out_proj   = nn.Linear(hidden_feats, args.hidden_dim)
+        self.pre_vq_ln  = nn.LayerNorm(args.hidden_dim)
+
+        self.vq = VectorQuantize(
+            dim=args.hidden_dim,
+            codebook_size=args.codebook_size,
+            decay=getattr(args, "ema_decay", 0.8),
+            threshold_ema_dead_code=2,
+        )
+
+    def reset_kmeans(self):
+        self.vq._codebook.reset_kmeans()
+
+    def forward(self, data, features, chunk_i, mask_dict=None, logger=None, epoch=None,
+                batched_graph_base=None, mode=None, attr_list=None):
+        import torch
+        dev = next(self.parameters()).device
+        if mode == "init_kmeans_final":
+            if hasattr(data, "to"):
+                data = data.to(dev)
+            if torch.is_tensor(features):
+                features = features.to(dev, non_blocking=True)
+            self.vq(data, attr_list, mask_dict, logger, chunk_i, epoch, mode)
+            return 0
+
+        # Edges (mirror for undirected) -> dev
+        s1, d1 = data.edges()
+        s1 = s1.to(dev, non_blocking=True); d1 = d1.to(dev, non_blocking=True)
+        src = torch.cat([s1, d1], 0); dst = torch.cat([d1, s1], 0)
+        edge_index = torch.stack([src, dst], 0)
+
+        # Edge attributes (bond types {1..4}, 0 otherwise)
+        eb = data.edata.get("weight", torch.zeros(data.num_edges(), dtype=torch.long, device=s1.device))
+        eb = eb.to(dev, non_blocking=True)
+        e  = torch.cat([eb, eb], 0)
+        e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
+        edge_attr = self.bond_emb(e.long())
+
+        # Node features -> h0
+        features = features.to(dev, non_blocking=True)
+        h0_raw = self.feat_embed(features)              # [N, 64]
+        h0 = self.ln_in(self.linear_0(h0_raw))          # [N, args.hidden_dim]
+
+        # Hop 1
+        h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
+        h1 = self.gine1(h0, edge_index, edge_attr)
+        h1 = self.ln1(h1 * self.res1 + h0_for1)
+
+        # Hop 2
+        h2 = self.gine2(h1, edge_index, edge_attr)
+        h2 = self.ln2(h2 * self.res2 + h1)
+        # Hop 3
+        h3 = self.gine3(h2, edge_index, edge_attr)
+        h3 = self.ln3(h3 * self.res3 + h2)
+
+        # JK concat
+        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
+        h_mid = self.mix(h_cat)
+        h_out = self.out_proj(h_mid)
+
+        # K-means 用のループ時は VQ を通さずにそのまま返す
+        if mode == "init_kmeans_loop":
+            return h_out
+        import torch.nn.functional as F
+        h_vq = self.pre_vq_ln(h_out)
+
+        # L2 normalize latents here
+        h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
+
+        quantize_output = self.vq(
+            h_vq,
+            attr_list,
+            mask_dict,
+            logger,
+            chunk_i,
+            epoch,
+            mode,
+        )
+        if mode == "infer":
+            # vq.infer returns: (kid_full, cid_full, gid_full, id2safe)
+            if isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 4:
+                kid_full, cid_full, gid_full, id2safe = quantize_output
+                # IMPORTANT: return format expected by evaluate/run_infer_after_restore
+                # (they later do: kid, cid, gid, id2safe = ids)
+                ids = (kid_full, cid_full, gid_full, id2safe)
+                # The rest of your forward might expect (loss, ids, id2safe) or similar.
+                # If you already return (_, ids, _) in evaluate, keep that structure.
+                return None, ids, None
+
+            # Backward compat (older vq): (gid, cid, id2safe)
+            if isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 3:
+                gid_full, cid_full, id2safe = quantize_output
+                kid_full = gid_full
+                ids = (kid_full, cid_full, gid_full, id2safe)
+                return None, ids, None
+
+            raise TypeError(f"[model.forward] infer expected vq to return 4-tuple, got {type(quantize_output)}")
+        # -------------------------
+        # INFER: return token IDs
+        # -------------------------
+        if mode == "infer":
+            # vq は infer のとき (key_id_full, cluster_id_full, id2safe) を返す設計にする
+            # ここで normalize は使わない（loss群とは別物なので）
+            if not (isinstance(quantize_output, (tuple, list)) and len(quantize_output) == 3):
+                raise TypeError(
+                    f"[model.forward] mode='infer' expects vq() -> (key_id_full, cluster_id_full, id2safe), "
+                    f"got {type(quantize_output)} with len={len(quantize_output) if isinstance(quantize_output,(tuple,list)) else 'NA'}"
+                )
+
+            key_id_full, cluster_id_full, id2safe = quantize_output
+
+            # shape guarantee
+            key_id_full = key_id_full.reshape(-1).long()
+            cluster_id_full = cluster_id_full.reshape(-1).long()
+
+            return key_id_full, cluster_id_full, id2safe
+
+        # quantizer の生の出力（2タプルなど）を正規化して loss 群だけ取り出す
+        loss, _embed_ignored, commit_loss, cb_loss, sil_loss, repel_loss, cb_repel_loss, ent_loss = _normalize_quantize_output(
+            quantize_output, logger,
+            device=h_vq.device if torch.is_tensor(h_vq) else None,
+            dtype=getattr(h_vq, "dtype", None)
+        )
+
+        # embed は今回は h_vq をそのまま使う（まだ本当の量子化はしていないバージョン）
+        embed = h_vq
+
+        # モデルが返すのは (total_loss, embed, loss_list)
+        # return loss, embed, [commit_loss, repel_loss, cb_repel_loss]
+        #         loss, cb, loss_list3 = outputs
+        return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss, ent_loss]
+
+
+class Model(nn.Module):
+    """
+    Wrapper of different models
+    """
+
+    def __init__(self, conf):
+        super(Model, self).__init__()
+        self.model_name = conf["model_name"]
+        if "MLP" in conf["model_name"]:
+            self.encoder = MLP(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                norm_type=conf["norm_type"],
+            ).to(conf["device"])
+        elif "SAGE" in conf["model_name"]:
+            self.encoder = SAGE(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+                codebook_size=conf["codebook_size"],
+                lamb_edge=conf["lamb_edge"],
+                lamb_node=conf["lamb_node"],
+                lamb_div_ele=conf["lamb_div_ele"]
+            ).to(conf["device"])
+        elif "GCN" in conf["model_name"]:
+            self.encoder = GCN(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+                codebook_size=conf["codebook_size"],
+                lamb_edge=conf["lamb_edge"],
+                lamb_node=conf["lamb_node"]
+            ).to(conf["device"])
+        elif "GAT" in conf["model_name"]:
+            self.encoder = GAT(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                attn_drop=conf["attn_dropout_ratio"],
+            ).to(conf["device"])
+        elif "APPNP" in conf["model_name"]:
+            self.encoder = APPNP(
+                num_layers=conf["num_layers"],
+                input_dim=conf["feat_dim"],
+                hidden_dim=conf["hidden_dim"],
+                output_dim=conf["label_dim"],
+                dropout_ratio=conf["dropout_ratio"],
+                activation=F.relu,
+                norm_type=conf["norm_type"],
+            ).to(conf["device"])
+
+    def forward(self, data, feats, epoch, logger):
+        """
+        data: a graph `g` or a `dataloader` of blocks
+        """
+        if "MLP" in self.model_name:
+            return self.encoder(feats)
+        else:
+            return self.encoder(data, feats, epoch, logger)
+
+    def forward_fitnet(self, data, feats):
+        """
+        Return a tuple (h_list, h)
+        h_list: intermediate hidden representation
+        h: final output
+        """
+        if "MLP" in self.model_name:
+            return self.encoder(feats)
+        else:
+            return self.encoder(data, feats)
+
+    def inference(self, data, feats):
+        if "SAGE" in self.model_name:
+            # return self.forward(data, feats)
+
+            return self.encoder.inference(data, feats)
+        else:
+            return self.forward(data, feats)
+
+
+# ==============================================================================
+# ORIGINAL MODULE: new_train_and_eval.py
+# ==============================================================================
+from torch.utils.data import Dataset, DataLoader
+import glob
+import numpy as np
+import copy
+import dgl.dataloading
+
+from collections import Counter
+
+DATAPATH = "../data/discret_final"
+DATAPATH_INFER = "../data/pretrain_no_id"
+
+def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
+               chunk_size=None, attr=None):
+    import torch
+    from contextlib import nullcontext
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = model.to(device)
+    model.train()
+
+    g = g.to(device)
+    if "feat" in g.ndata:
+        g.ndata["feat"] = g.ndata["feat"].to(device)
+    feats = feats.to(device)
+
+    if device.type == "cuda":
+        ctx = torch.amp.autocast("cuda")
+        scaler = torch.amp.GradScaler("cuda", init_scale=1e2)
+    else:
+        ctx = nullcontext()
+        scaler = None
+
+    optimizer.zero_grad(set_to_none=True)
+
+    with ctx:
+        outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
+        loss, cb, loss_list3 = outputs
+
+    # ---- sanity checks on loss ----
+    if not isinstance(loss, torch.Tensor):
+        raise RuntimeError(
+            f"[train_sage] model returned non-Tensor loss: {type(loss)}. "
+            "Do not use .item() / float() for the training loss."
+        )
+
+    if not loss.requires_grad:
+        raise RuntimeError(
+            f"[train_sage] loss.requires_grad=False (shape={loss.shape}, "
+            f"device={loss.device}). "
+            "Likely .detach() or .item() used on loss inside the model."
+        )
+
+    # ---- backward & step ----
+    if scaler is not None:
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+    optimizer.zero_grad(set_to_none=True)
+
+    # ---- convert outputs for logging ----
+    loss_scalar = float(loss.detach().cpu())
+
+    loss_list_out = []
+    for l in loss_list3:  # loss_list3 = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        # handle both Tensor and float / numpy
+        if isinstance(l, torch.Tensor):
+            loss_list_out.append(float(l.detach().cpu()))
+        else:
+            loss_list_out.append(float(l))
+    return loss_scalar, loss_list_out
+
+# evaluate(model, all_latents_tensor, first_batch_feat, epoch, all_masks_dict, logger, None, None, "init_kmeans_final")
+def evaluate(model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None, attr_list=None):
+    import torch
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        if mode == "init_kmeans_loop":
+            # returns latents
+            latents = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
+            return latents
+
+        if mode == "init_kmeans_final":
+            # just run once; side effects (init/dump) happen inside
+            model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
+            return 0
+
+        if mode == "infer":
+            out = model(g, feats, chunk_i, mask_dict, logger, epoch, g_base, mode, attr_list)
+
+            # model returns: (loss=None, ids=(kid,cid,gid,id2safe), extra=None)
+            if not (isinstance(out, (tuple, list)) and len(out) >= 2):
+                raise TypeError(f"[evaluate] infer expects model to return tuple>=2, got {type(out)}")
+
+            ids = out[1]
+
+            # ids contract:
+            # (key_id_full, cluster_id_full, global_id_full, id2safe)
+            if isinstance(ids, (tuple, list)) and len(ids) == 4:
+                key_id_full, cluster_id_full, global_id_full, id2safe = ids
+            elif isinstance(ids, (tuple, list)) and len(ids) == 3:
+                key_id_full, cluster_id_full, id2safe = ids
+                global_id_full = key_id_full  # fallback
+            else:
+                raise TypeError(
+                    f"[evaluate] infer expects ids 4-tuple (kid,cid,gid,id2safe) (or legacy 3-tuple), "
+                    f"got ids type={type(ids)} len={len(ids) if isinstance(ids, (tuple, list)) else 'n/a'}"
+                )
+
+            key_id_full = torch.as_tensor(key_id_full).reshape(-1).long()
+            cluster_id_full = torch.as_tensor(cluster_id_full).reshape(-1).long()
+            global_id_full = torch.as_tensor(global_id_full).reshape(-1).long()
+            if not isinstance(id2safe, dict):
+                id2safe = {}
+
+            return None, (key_id_full, cluster_id_full, global_id_full, id2safe), None
+
+
+class MoleculeGraphDataset(Dataset):
+    def __init__(self, adj_dir, attr_dir):
+        self.adj_files = sorted(glob.glob(f"{adj_dir}/adj_*.npy"))
+        self.attr_files = sorted(glob.glob(f"{attr_dir}/attr_*.npy"))
+        assert len(self.adj_files) == len(self.attr_files), "Mismatch in adjacency and attribute files"
+
+    def __len__(self):
+        return len(self.adj_files)
+
+    def __getitem__(self, idx):
+        attr = []
+        adj = []
+        adj_matrix = torch.tensor(np.load(self.adj_files[idx]))  # Load adjacency matrix
+
+        attr_matrix = torch.tensor(np.load(self.attr_files[idx]))  # Load atom features
+        return torch.tensor(adj_matrix, dtype=torch.float32), torch.tensor(attr_matrix, dtype=torch.float32)
+
+
+def collate_fn(batch):
+    """Pads adjacency matrices and attributes while handling size mismatches."""
+    adj_matrices, attr_matrices = zip(*batch)
+    # for item in adj_matrices:
+    #     print(item.shape)
+    return adj_matrices, attr_matrices
+
+
+import dgl
+import torch
+from collections import defaultdict
+import numpy as np
+
+# 許容パターン（表のルール）
+ALLOWED_Z      = {5, 6, 7, 8, 14, 15, 16}
+ALLOWED_CHARGE = {-1, 0, 1}
+ALLOWED_HYB    = {2, 3, 4}
+ALLOWED_BOOL   = {0, 1}   # aromatic / ring 共通
+
+def collect_global_indices_compact(
+    adj_batch,
+    attr_batch,
+    logger,
+    start_atom_id=0,
+    start_mol_id=0,
+    debug=True,
+    debug_max_print=1000,
+):
+    """
+    Runtime version:
+      - Keys are intrinsic only: (Z, charge, hyb, arom, ring, hnum)
+      - Environmental context (deg, ringSize, aromNbrs, fusedId, pos, func, het27)
+        is NOT part of the key anymore.
+      - Assumes env features are already present in attr_batch and will be used
+        by the GNN as node features, not for grouping.
+    """
+    from collections import defaultdict
+    import numpy as np
+    import torch
+
+    # columns in attr: must match your data layout
+    COL_Z, COL_DEG, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM = 0, 1, 2, 3, 4, 5, 6
+
+    def _to_cpu_np(x):
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+        return x
+
+    masks_dict = defaultdict(list)
+    atom_offset = int(start_atom_id)
+    mol_id = int(start_mol_id)
+
+    B = len(attr_batch)
+
+    for i in range(B):
+        D = attr_batch[i].shape[-1]
+        attr_mats = attr_batch[i].view(-1, 100, D)
+        adj_mats  = adj_batch[i].view(-1, 100, 100)
+
+        attr_np = _to_cpu_np(attr_mats)
+        adj_np  = _to_cpu_np(adj_mats)
+
+        M = attr_np.shape[0]
+
+        # just select intrinsic cols once
+        A_sel = attr_np[..., [COL_Z, COL_CHARGE, COL_HYB, COL_AROM, COL_RING, COL_HNUM]].astype(np.int32)
+        # after A_sel is created
+        # node existence mask
+        node_mask = (np.abs(attr_np).sum(axis=2) > 0)
+
+        for m in range(M):
+            nm = node_mask[m]
+            if not nm.any():
+                mol_id += 1
+                continue
+
+            z      = A_sel[m, :, 0][nm]
+            charge = A_sel[m, :, 1][nm]
+            hyb    = A_sel[m, :, 2][nm]
+            arom   = A_sel[m, :, 3][nm]
+            ring   = A_sel[m, :, 4][nm]
+            hnum   = A_sel[m, :, 5][nm]
+
+            # intrinsic fields only
+            fields = {
+                "Z": z,
+                "charge": charge,
+                "hyb": hyb,
+                "arom": arom,
+                "ring": ring,
+                "hnum": hnum,
+            }
+
+            include_keys = ("Z", "charge", "hyb", "arom", "ring", "hnum")
+            cols_to_stack = [fields[name] for name in include_keys]
+            keys = np.stack(cols_to_stack, axis=1).astype(np.int32)
+            if keys.ndim == 1:
+                keys = keys.reshape(1, -1)
+            N = keys.shape[0]
+
+            global_ids = np.arange(atom_offset, atom_offset + N, dtype=np.int64)
+
+            # build key strings but now they are short
+            ks = keys.astype(str)
+            key_strings = ks[:, 0]
+            for c in range(1, ks.shape[1]):
+                key_strings = np.char.add(np.char.add(key_strings, "_"), ks[:, c])
+
+            uniq_keys, inv = np.unique(key_strings, return_inverse=True)
+            buckets = [[] for _ in range(len(uniq_keys))]
+            inv_list = inv.tolist()
+            for row_idx, bucket_id in enumerate(inv_list):
+                buckets[bucket_id].append(int(global_ids[row_idx]))
+
+            for uk, ids in zip(uniq_keys.tolist(), buckets):
+                masks_dict[uk].extend(ids)
+
+            atom_offset += N
+            mol_id += 1
+
+    return masks_dict, atom_offset, mol_id
+
+def convert_to_dgl(
+    adj_batch,
+    attr_batch,
+    logger=None,
+    start_atom_id=0,
+    start_mol_id=0,
+    device=None,
+    two_hop_w=0.5,
+    three_hop_w=0.3,
+    make_base_bidirected=True,
+    add_self_loops=True,
+):
+    """
+    Faster GPU conversion:
+      - No dgl.to_simple / dgl.to_bidirected
+      - No torch.unique hashing
+      - Dense boolean k-hop via matmul (N<=100 assumed)
+      - No dgl.add_self_loop; we include diagonal edges directly (optional)
+    """
+    import torch
+    import dgl
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+
+    # masks likely CPU-centric; keep as-is
+    masks_dict, start_atom_id, start_mol_id = collect_global_indices_compact(
+        adj_batch, attr_batch, logger, start_atom_id, start_mol_id
+    )
+
+    base_graphs = []
+    extended_graphs = []
+    attr_matrices_all = []
+
+    B = len(adj_batch)
+    for i in range(B):
+        # move whole packed tensor once
+        adj_matrices  = adj_batch[i].view(-1, 100, 100).to(device, non_blocking=True)
+        attr_matrices = attr_batch[i].view(-1, 100, 79).to(device, non_blocking=True)
+
+        M = attr_matrices.shape[0]
+        for j in range(M):
+            adj_matrix  = adj_matrices[j]      # [100,100]
+            attr_matrix = attr_matrices[j]     # [100,79]
+
+            # depad
+            nonzero_mask = (attr_matrix.abs().sum(dim=1) > 0)
+            N = int(nonzero_mask.sum().item())
+            if N <= 0:
+                continue
+
+            X = attr_matrix[nonzero_mask]                    # [N,79]
+            W1 = adj_matrix[:N, :N].float()                  # [N,N] weights for 1-hop
+            A1 = (W1 > 0)                                    # [N,N] bool adjacency
+
+            if make_base_bidirected:
+                A1 = A1 | A1.T
+
+            if add_self_loops:
+                # include self edges directly
+                A1.fill_diagonal_(True)
+
+            # -------------------------
+            # base graph (1-hop only)
+            # -------------------------
+            bsrc, bdst = A1.nonzero(as_tuple=True)           # unique by construction
+            base_g = dgl.graph((bsrc, bdst), num_nodes=N, device=device)
+            base_g.ndata["feat"] = X
+
+            # base weights: use W1, but ensure diagonal weight=1 if self-loops on
+            if add_self_loops:
+                # cheap: just overwrite diag in a temp view
+                W1 = W1.clone()
+                W1.fill_diagonal_(1.0)
+
+            es, ed = base_g.edges()
+            base_g.edata["weight"] = W1[es, ed]
+            base_g.edata["edge_type"] = torch.ones(base_g.num_edges(), device=device, dtype=torch.int32)
+            base_graphs.append(base_g)
+
+            # -------------------------
+            # k-hop (dense boolean matmul)
+            # For N<=100 this is typically faster than sparse setup.
+            # -------------------------
+            # Use float matmul, threshold to bool.
+            A1f = A1.to(torch.float32)                        # [N,N]
+            A2 = (A1f @ A1f) > 0                              # 2-hop reachability (includes 1-hop paths too)
+            A3 = (A2.to(torch.float32) @ A1f) > 0             # 3-hop reachability
+
+            # If you want "exactly-2-hop" and "exactly-3-hop" classification:
+            one_hop = A1
+            two_hop_only = A2 & ~one_hop
+            three_hop_only = A3 & ~(one_hop | A2)
+
+            # -------------------------
+            # extended adjacency weights
+            # -------------------------
+            full_W = W1.clone()
+            full_W += two_hop_only.to(full_W.dtype) * float(two_hop_w)
+            full_W += three_hop_only.to(full_W.dtype) * float(three_hop_w)
+            if add_self_loops:
+                full_W.fill_diagonal_(1.0)
+
+            Afull = full_W > 0
+            if make_base_bidirected:
+                Afull = Afull | Afull.T
+            if add_self_loops:
+                Afull.fill_diagonal_(True)
+
+            sf, df = Afull.nonzero(as_tuple=True)
+
+            extended_g = dgl.graph((sf, df), num_nodes=N, device=device)
+            extended_g.ndata["feat"] = X
+
+            e_src, e_dst = extended_g.edges()
+            extended_g.edata["weight"] = full_W[e_src, e_dst]
+
+            # edge types:
+            # 1 = one-hop
+            # 2 = two-hop-only
+            # 3 = three-hop-only
+            # 0 = other (mostly self-loops)
+            et = torch.zeros(e_src.numel(), device=device, dtype=torch.int32)
+            et[one_hop[e_src, e_dst]] = 1
+            et[two_hop_only[e_src, e_dst]] = 2
+            et[three_hop_only[e_src, e_dst]] = 3
+            extended_g.edata["edge_type"] = et
+
+            extended_graphs.append(extended_g)
+            attr_matrices_all.append(X)
+
+    return base_graphs, extended_graphs, masks_dict, attr_matrices_all, start_atom_id, start_mol_id
+
+
+from torch.utils.data import Dataset
+import dgl
+class GraphDataset(Dataset):
+    def __init__(self, graphs):
+        self.graphs = graphs  # List of DGLGraphs
+    def __len__(self):
+        return len(self.graphs)
+    def __getitem__(self, idx):
+        return self.graphs[idx]
+
+import psutil
+import os
+
+def print_memory_usage(tag=""):
+    process = psutil.Process(os.getpid())
+    mem = process.memory_info().rss / (1024 ** 2)  # in MB
+    print(f"[{tag}] Memory Usage: {mem:.2f} MB")
+    allocated = torch.cuda.memory_allocated() / (1024 ** 2)  # MB
+    reserved = torch.cuda.memory_reserved() / (1024 ** 2)    # MB
+    print(f"[{tag}] GPU Allocated: {allocated:.2f} MB | GPU Reserved: {reserved:.2f} MB")
+
+def run_infer_after_restore(
+    conf,
+    model,
+    logger,
+    checkpoint_path: str,
+    *,
+    epoch: int | None = None,
+    only_save: bool = False,
+):
+    """
+    Restore checkpoint -> infer only -> save per-atom outputs.
+
+    Saves
+    -----
+    - only_save=False: full dump
+        key_id, cluster_id, global_id, id2safe
+        + provenance (graph_id_in_chunk, local_node_id, batch_id, chunk_start_in_batch)
+    - only_save=True: minimal dump
+        global_id, id2safe + meta + global_stats
+
+    Requires
+    --------
+    evaluate(..., mode="infer") returns:
+        (_, (kid, cid, global_id, id2safe), _)
+
+    Assumes in outer scope
+    ----------------------
+    DATAPATH, DATAPATH_INFER
+    MoleculeGraphDataset, collate_fn, convert_to_dgl, evaluate
+    """
+
+    import os
+    import re
+    import gc
+    import time
+    import torch
+    import dgl
+    from torch.utils.data import DataLoader
+
+    def _log(msg: str):
+        if logger is not None:
+            try:
+                logger.info(msg)
+                return
+            except Exception:
+                pass
+        print(msg)
+
+    # ----------------------------
+    # helper: pre-create dynamic codebooks so strict=True load can work
+    # ----------------------------
+    def _ensure_codebook_keys_if_possible(model, state_dict):
+        if not (hasattr(model, "vq") and hasattr(model.vq, "_codebook")):
+            return
+        cb = model.vq._codebook
+        if not hasattr(cb, "_get_or_create_safe_key"):
+            return
+
+        prefixes = ["vq._codebook.", ""]  # model-level vs cb-only sd
+
+        for prefix in prefixes:
+            ea_pat = re.compile(rf"^{re.escape(prefix)}embed_avg_(.+)$")
+            cs_pat = re.compile(rf"^{re.escape(prefix)}cluster_size_(.+)$")
+            emb_pat = re.compile(rf"^{re.escape(prefix)}embed\.(.+)$")
+
+            created_any = False
+
+            # (1) embed_avg_(orig) => (K,D)
+            for k, v in state_dict.items():
+                m = ea_pat.match(k)
+                if not m or (not torch.is_tensor(v)) or v.ndim != 2:
+                    continue
+                orig = m.group(1)
+                K, D = int(v.shape[0]), int(v.shape[1])
+
+                # buffers (best-effort; your impl may register with safe or orig)
+                if not hasattr(cb, f"cluster_size_{orig}"):
+                    cb.register_buffer(f"cluster_size_{orig}", torch.zeros((K,), dtype=torch.float32))
+                if not hasattr(cb, f"embed_avg_{orig}"):
+                    cb.register_buffer(f"embed_avg_{orig}", torch.zeros((K, D), dtype=torch.float32))
+
+                # create embed ParameterDict entry (safe)
+                cb._get_or_create_safe_key(orig, K_e=K, D=D, device="cpu")
+                created_any = True
+
+            # (2) cluster_size_(orig) only => create size buffer
+            for k, v in state_dict.items():
+                m = cs_pat.match(k)
+                if not m or (not torch.is_tensor(v)) or v.ndim != 1:
+                    continue
+                orig = m.group(1)
+                K = int(v.shape[0])
+                if not hasattr(cb, f"cluster_size_{orig}"):
+                    cb.register_buffer(f"cluster_size_{orig}", torch.zeros((K,), dtype=torch.float32))
+                    created_any = True
+
+            # (3) embed.<safe> directly => ensure ParameterDict has entry
+            for k, v in state_dict.items():
+                m = emb_pat.match(k)
+                if not m or (not torch.is_tensor(v)) or v.ndim != 2:
+                    continue
+                safe = m.group(1)
+                if safe not in cb.embed:
+                    K, D = int(v.shape[0]), int(v.shape[1])
+                    cb.embed[safe] = torch.nn.Parameter(torch.randn((K, D)) * 0.01, requires_grad=True)
+                    created_any = True
+
+            if created_any:
+                break
+
+    # ----------------------------
+    # 1) RESTORE
+    # ----------------------------
+    device = next(model.parameters()).device
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    if isinstance(ckpt, dict):
+        if "model" in ckpt:
+            state = ckpt["model"]
+        elif "state_dict" in ckpt:
+            state = ckpt["state_dict"]
+        else:
+            state = ckpt
+    else:
+        state = ckpt
+
+    _ensure_codebook_keys_if_possible(model, state)
+    strict = bool(conf.get("restore_strict", True))
+    # drop non-essential tracking buffers (older ckpt compatibility)
+    DROP_PREFIXES = (
+        "vq._codebook.usage_ema_k_",
+        "vq._codebook.split_cd_k_",
+        "vq._codebook.ever_used_k_",
+        "vq._codebook.last_used_ep_k_",
+    )
+
+    if isinstance(state, dict):
+        n0 = len(state)
+        state = {k: v for k, v in state.items() if not any(k.startswith(p) for p in DROP_PREFIXES)}
+        n1 = len(state)
+        if n1 != n0:
+            print(f"[restore] dropped {n0 - n1} tracking keys from ckpt for compatibility")
+
+    try:
+        model.load_state_dict(state, strict=strict)
+    except RuntimeError as e:
+        print("\n[RESTORE ERROR]")
+        print(e)  # ここで Missing/Unexpected が全部出るはず
+        # さらに state の先頭キーも出す
+        if isinstance(state, dict):
+            ks = list(state.keys())
+            print("\n[state keys head]", ks[:50])
+        raise
+
+    strict = bool(conf.get("restore_strict", True))
+    model.load_state_dict(state, strict=strict)
+    model.to(device)
+    model.eval()
+
+    # IMPORTANT: reset latent_size_sum (chunk consistency)
+    if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
+        cb = model.vq._codebook
+        if hasattr(cb, "latent_size_sum"):
+            cb.latent_size_sum = 0
+
+    # ----------------------------
+    # 2) DATA
+    # ----------------------------
+    datapath = DATAPATH if conf.get("train_or_infer") in ("hptune",) else DATAPATH_INFER
+    dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=int(conf.get("infer_batch_size", 16)),
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
+    chunk_size = int(conf["chunk_size"])
+
+    # ----------------------------
+    # 3) OUTPUT BUFFERS (CPU lists)
+    # ----------------------------
+    all_key_ids = []
+    all_cluster_ids = []
+    all_global_ids = []
+
+    all_graph_ids = []
+    all_local_node_ids = []
+    all_batch_ids = []
+    all_chunk_starts = []
+
+    last_id2safe = None
+
+    # ----------------------------
+    # 4) INFER (chunked)
+    # ----------------------------
+    with torch.no_grad():
+        for batch_idx, (adj_batch, attr_batch) in enumerate(dataloader):
+            glist_base, glist, masks_3, attr_matrices_all, _, _ = convert_to_dgl(
+                adj_batch, attr_batch, logger, 0, 0
+            )
+
+            for start in range(0, len(glist), chunk_size):
+                chunk = glist[start:start + chunk_size]
+
+                batched_graph = dgl.batch(chunk).to(device)
+                feats = batched_graph.ndata["feat"]
+                attr_list = attr_matrices_all[start:start + chunk_size]
+
+                _, ids, _ = evaluate(
+                    model=model,
+                    g=batched_graph,
+                    feats=feats,
+                    epoch=0 if epoch is None else int(epoch),
+                    mask_dict=masks_3,
+                    logger=logger,
+                    g_base=None,
+                    chunk_i=start,
+                    mode="infer",
+                    attr_list=attr_list,
+                )
+
+                # EXPECT: kid, cid, gid, id2safe
+                kid, cid, gid, id2safe = ids
+                last_id2safe = id2safe
+
+                kid = kid.reshape(-1).to(dtype=torch.long)
+                cid = cid.reshape(-1).to(dtype=torch.long)
+                gid = gid.reshape(-1).to(dtype=torch.long)
+
+                n_nodes = int(batched_graph.num_nodes())
+                if kid.numel() != n_nodes or cid.numel() != n_nodes or gid.numel() != n_nodes:
+                    raise RuntimeError(
+                        f"size mismatch: nodes={n_nodes} kid={kid.numel()} cid={cid.numel()} gid={gid.numel()}"
+                    )
+
+                if not only_save:
+                    # provenance
+                    num_nodes_per_g = [int(g.num_nodes()) for g in chunk]
+                    num_nodes_per_g_t = torch.tensor(num_nodes_per_g, device=device, dtype=torch.long)
+
+                    graph_ids = torch.repeat_interleave(
+                        torch.arange(len(chunk), device=device, dtype=torch.long),
+                        num_nodes_per_g_t
+                    )
+                    local_node_ids = torch.cat(
+                        [torch.arange(n, device=device, dtype=torch.long) for n in num_nodes_per_g],
+                        dim=0
+                    )
+
+                    batch_ids = torch.full((n_nodes,), int(batch_idx), device=device, dtype=torch.long)
+                    chunk_starts = torch.full((n_nodes,), int(start), device=device, dtype=torch.long)
+
+                    all_key_ids.append(kid.detach().cpu())
+                    all_cluster_ids.append(cid.detach().cpu())
+
+                    all_graph_ids.append(graph_ids.detach().cpu())
+                    all_local_node_ids.append(local_node_ids.detach().cpu())
+                    all_batch_ids.append(batch_ids.detach().cpu())
+                    all_chunk_starts.append(chunk_starts.detach().cpu())
+
+                all_global_ids.append(gid.detach().cpu())
+
+                # cleanup
+                del batched_graph, feats, attr_list, ids, kid, cid, gid
+                if not only_save:
+                    del graph_ids, local_node_ids, batch_ids, chunk_starts, num_nodes_per_g_t
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # cleanup per batch
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base, masks_3, attr_matrices_all
+            gc.collect()
+
+    if len(all_global_ids) == 0:
+        return None
+
+    # ----------------------------
+    # 5) CONCAT
+    # ----------------------------
+    global_id_all = torch.cat(all_global_ids, dim=0)
+
+    if not only_save:
+        key_id_all = torch.cat(all_key_ids, dim=0)
+        cluster_id_all = torch.cat(all_cluster_ids, dim=0)
+
+        graph_id_all = torch.cat(all_graph_ids, dim=0)
+        local_node_id_all = torch.cat(all_local_node_ids, dim=0)
+        batch_id_all = torch.cat(all_batch_ids, dim=0)
+        chunk_start_all = torch.cat(all_chunk_starts, dim=0)
+
+        n = int(global_id_all.numel())
+        if not (
+            key_id_all.numel() == cluster_id_all.numel() == graph_id_all.numel() ==
+            local_node_id_all.numel() == batch_id_all.numel() == chunk_start_all.numel() == n
+        ):
+            raise RuntimeError("final pack sanity check failed (numel mismatch)")
+
+    # ----------------------------
+    # 6) GLOBAL STATS
+    # ----------------------------
+    gmin = int(global_id_all.min().item())
+    gmax = int(global_id_all.max().item())
+    gunique = int(global_id_all.unique().numel())
+    gtotal = int(global_id_all.numel())
+
+    _log("--------------------------------------------------")
+    _log("[GLOBAL TOKEN STATS]")
+    _log(f"min: {gmin}")
+    _log(f"max: {gmax}")
+    _log(f"unique_count: {gunique}")
+    _log(f"total_tokens: {gtotal}")
+
+    gv = None
+    if hasattr(model, "vq") and hasattr(model.vq, "_codebook"):
+        cb = model.vq._codebook
+        if hasattr(cb, "_global_vocab_size"):
+            try:
+                gv = int(getattr(cb, "_global_vocab_size"))
+            except Exception:
+                gv = None
+    if gv is not None:
+        _log(f"global_vocab_size: {gv}")
+    _log("--------------------------------------------------")
+
+    # ----------------------------
+    # 7) SAVE
+    # ----------------------------
+    base = conf.get("infer_save_path") or "infer_token_ids.pt"
+    root, ext = os.path.splitext(base)
+    tag = "_min" if only_save else ""
+    if epoch is not None:
+        save_path = f"{root}{tag}_ep{int(epoch):04d}{ext}"
+    else:
+        save_path = f"{root}{tag}{ext}"
+
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+
+    meta = {
+        "checkpoint_path": checkpoint_path,
+        "chunk_size": int(chunk_size),
+        "epoch": None if epoch is None else int(epoch),
+        "saved_at": time.strftime("%Y%m%d_%H%M%S"),
+        "global_stats": {"min": gmin, "max": gmax, "unique": gunique, "total": gtotal, "global_vocab_size": gv},
+    }
+
+    if only_save:
+        out = {
+            "global_id": global_id_all,
+            "id2safe": last_id2safe or {},
+            **meta,
+        }
+    else:
+        out = {
+            "key_id": key_id_all,
+            "cluster_id": cluster_id_all,
+            "global_id": global_id_all,
+            "id2safe": last_id2safe or {},
+
+            "graph_id_in_chunk": graph_id_all,
+            "local_node_id": local_node_id_all,
+            "batch_id": batch_id_all,
+            "chunk_start_in_batch": chunk_start_all,
+            **meta,
+        }
+
+    torch.save(out, save_path)
+    _log(f"saved: {save_path}")
+
+    return out
+
+def run_inductive(conf, model, optimizer, scheduler, logger):
+    import gc, itertools, torch, os, copy
+    from collections import Counter, defaultdict
+    import numpy as np
+    def build_global_id_meta_from_model(model):
+        cb = model.vq._codebook
+        safe_keys = sorted(cb.embed.keys())
+
+        if not hasattr(cb, "_safe2id"):
+            cb._safe2id = {}
+        if not hasattr(cb, "_id2safe"):
+            cb._id2safe = {}
+
+        next_sid = (max(cb._id2safe.keys()) + 1) if cb._id2safe else 0
+        for safe in safe_keys:
+            if safe not in cb._safe2id:
+                sid = next_sid
+                next_sid += 1
+                cb._safe2id[safe] = sid
+                cb._id2safe[sid] = safe
+
+        offsets = {}
+        cur = 0
+        for safe in safe_keys:
+            K = int(cb.embed[safe].shape[0])
+            offsets[safe] = cur
+            cur += K
+
+        meta = {
+            "safe_keys": safe_keys,
+            "global_offsets": offsets,
+            "global_vocab_size": cur,
+            "pad_id": cur,
+            "mask_id": cur + 1,
+            "vocab_size": cur + 2,
+            "id2safe": dict(cb._id2safe),
+        }
+        return meta
+
+    def freeze_except_vq(model):
+        # freeze all
+        for p in model.parameters():
+            p.requires_grad = False
+        # unfreeze only vq
+        for p in model.vq.parameters():
+            p.requires_grad = True
+
+    def unfreeze_all(model):
+        for p in model.parameters():
+            p.requires_grad = True
+
+    def unfreeze_encoder(model):
+        for p in model.encoder.parameters():
+            p.requires_grad = True
+
+    # freeze_except_vq(model)
+
+    # ----------------------------
+    # helpers
+    # ----------------------------
+    def safe_mean(xs):
+        return float(sum(xs) / max(1, len(xs)))
+
+    def to_scalar(x):
+        """Logging 用に loss を安全に float に変換"""
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().item()
+        return float(x)
+
+    # ----------------------------
+    # dataset and dataloader
+    # ----------------------------
+    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+
+    # ここでの clip はほぼ意味がないので残すにしても一度だけ
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+    device = next(model.parameters()).device
+
+    for epoch in range(1, conf["max_epoch"] + 1):
+        print(f"\n====== epoch {epoch} ======")
+        # fresh containers per epoch
+        loss_list_list_train = [[] for _ in range(11)]
+        loss_list_list_test = [[] for _ in range(11)]
+        loss_list = []
+        test_loss_list = []
+
+        cb_unique_num_list = []
+        cb_unique_num_list_test = []
+
+        # ------------------------------------------
+        # init_kmeans_loop : collect latents
+        # ------------------------------------------
+        all_latents = []
+        all_attr = []
+
+        all_masks_dict = defaultdict(list)
+        masks_count = defaultdict(int)
+        first_batch_feat = None
+        start_atom_id = 0
+        start_mol_id = 0
+
+        # if (epoch - 1) % 3 == 0:
+        print("initial kmeans start ....")
+        logger.info(f"=== epoch {epoch} ==　initial kmeans start ....")
+        for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+
+            if idx == 12:
+                break
+
+            glist_base, glist, masks_dict, attr_matrices, start_atom_id, start_mol_id = convert_to_dgl(
+                adj_batch, attr_batch, logger, start_atom_id, start_mol_id
+            )  # 10000 molecules per glist
+            all_attr.append(attr_matrices)
+
+            # masks を集約
+            for atom_type, masks in masks_dict.items():
+                all_masks_dict[atom_type].extend(masks)
+                masks_count[atom_type] += len(masks)
+
+            chunk_size = conf["chunk_size"]  # in 10,000 molecules
+            for i in range(0, len(glist), chunk_size):
+                chunk = glist[i:i + chunk_size]
+                attr_chunk = attr_matrices[i:i + chunk_size]
+                chunk_base = glist_base[i:i + chunk_size]   # only 1-hop
+
+                batched_graph = dgl.batch(chunk)
+                batched_graph_base = dgl.batch(chunk_base)
+
+                with torch.no_grad():
+                    batched_feats = batched_graph.ndata["feat"].to(device)
+
+                # model, g, feats, epoch, mask_dict, logger, g_base, chunk_i, mode=None
+                latents = evaluate(
+                    model,
+                    batched_graph,
+                    batched_feats,
+                    epoch,
+                    all_masks_dict,
+                    logger,
+                    batched_graph_base,
+                    idx,
+                    "init_kmeans_loop",
+                    attr_chunk,
+                )
+                all_latents.append(latents.cpu())  # save on CPU
+
+                if i == 0 and idx == 0:
+                    first_batch_feat = batched_feats.clone().cpu()
+
+                # cleanup small stuff
+                del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
+                gc.collect()
+                torch.cuda.empty_cache()
+
+            # glist をクリーンアップ
+            for g in glist:
+                g.ndata.clear()
+                g.edata.clear()
+            for g in glist_base:
+                g.ndata.clear()
+                g.edata.clear()
+            del glist, glist_base
+            gc.collect()
+
+        # all_latents: [ (#atoms_chunk, D), ... ] -> (N, D)
+        all_latents_tensor = torch.cat(all_latents, dim=0)  # [N, D]
+
+        # attr を flatten: list[list[tensor (N_i,27)]] -> (N,27)
+        flat_attr_list = [t for batch in all_attr for t in batch]
+        all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
+
+        print("[KMEANS] all latents collected")
+        # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
+        print("[KMEANS] init_kmeans_final start")
+        logger.info("[KMEANS] init_kmeans_final start")
+
+        # ---------------------------------------------
+        # init_kmeans_final : run kmeans and calc. SS
+        # ---------------------------------------------
+        # first_batch_feat は CPU に戻してあるので GPU へ
+        first_batch_feat_dev = first_batch_feat.to(device) if first_batch_feat is not None else None
+        evaluate(
+            model,
+            all_latents_tensor.to(device),
+            first_batch_feat_dev,
+            epoch,
+            all_masks_dict,
+            logger,
+            None,
+            None,
+            "init_kmeans_final",
+            all_attr_tensor.to(device),
+        )
+        print("[KMEANS] initial kmeans done.")
+        logger.info("[KMEANS] initial kmeans done.")
+        model.vq._codebook.latent_size_sum = 0
+
+        # ---------------------------
+        # 2) TRAIN
+        # ---------------------------
+        if conf["train_or_infer"] in ("hptune", "train"):
+            # re-init codebook
+            model.vq._codebook.initted.data.copy_(
+                torch.tensor([False], device=model.vq._codebook.initted.device)
+            )
+            model.latent_size_sum = 0
+            print("TRAIN ---------------")
+            logger.info("TRAIN ---------------")
+            # dataloader は再利用可能（新しい iterator が作られる）
+            for idx, (adj_batch, attr_batch) in enumerate(dataloader):
+                if idx == 12:
+                    break
+                # print(f"[TRAIN] batch idx {idx}")
+                glist_base, glist, masks_2, attr_matrices_all, _, _ = convert_to_dgl(
+                    adj_batch, attr_batch, logger
+                )
+                chunk_size = conf["chunk_size"]
+
+                for i in range(0, len(glist), chunk_size):
+                    # print(f"[TRAIN]   chunk {i}")
+                    chunk = glist[i:i + chunk_size]
+                    batched_graph = dgl.batch(chunk).to(device)
+                    attr_chunk = attr_matrices_all[i:i + chunk_size]
+
+                    with torch.no_grad():
+                        batched_feats = batched_graph.ndata["feat"]
+
+                    # ここで train_sage は「学習込み（backward + optimizer.step）」までやる前提
+                    loss, loss_list_train = train_sage(
+                        model,
+                        batched_graph,
+                        batched_feats,
+                        optimizer,
+                        i,
+                        masks_2,
+                        logger,
+                        epoch,
+                        chunk_size,
+                        attr_chunk,
+                    )
+
+                    # ---- loss 安全チェック & ログ用整形 ----
+                    if loss is None:
+                        # print("[WARN][TRAIN] train_sage returned loss=None, skipping logging for this chunk")
+                        del batched_graph, batched_feats, chunk, attr_chunk
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                        continue
+
+                    # if isinstance(loss, torch.Tensor):
+                    #     print(
+                    #         "[DEBUG][TRAIN] loss:",
+                    #         type(loss),
+                    #         getattr(loss, "shape", None),
+                    #         getattr(loss, "requires_grad", None),
+                    #         getattr(loss, "device", None),
+                    #     )
+                    # else:
+                    #     print("[DEBUG][TRAIN] loss is not a Tensor:", type(loss))
+
+                    # record scalar losses
+                    clean_losses = [to_scalar(l) for l in loss_list_train]
+                    for j, val in enumerate(clean_losses):
+                        loss_list_list_train[j].append(val)
+                    loss_list.append(to_scalar(loss))
+
+                    # cleanup
+                    del batched_graph, batched_feats, chunk, attr_chunk, loss, loss_list_train
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                # cleanup per batch
+                for g in glist:
+                    g.ndata.clear()
+                    g.edata.clear()
+                for g in glist_base:
+                    g.ndata.clear()
+                    g.edata.clear()
+                del glist, glist_base, masks_2, attr_matrices_all
+                gc.collect()
+
+        # ---------------------------
+        # 3) SAVE MODEL
+        # ---------------------------
+        # if conf["train_or_infer"] != "analysis":
+        #     os.makedirs(".", exist_ok=True)
+        #     state = copy.deepcopy(model.state_dict())
+        #     torch.save(model.state_dict(), f"model_epoch_{epoch}.pth")
+        #     model.load_state_dict(state)
+        # ---------------------------
+        if conf["train_or_infer"] != "analysis":
+            os.makedirs(".", exist_ok=True)
+
+            global_id_meta = build_global_id_meta_from_model(model)
+
+            ckpt = {
+                "model": model.state_dict(),
+                "epoch": int(epoch),
+
+                # global vocab info (truth)
+                "global_id_meta": global_id_meta,
+                "base_vocab": int(global_id_meta["global_vocab_size"]),
+                "vocab_size": int(global_id_meta["vocab_size"]),
+                "pad_id": int(global_id_meta["pad_id"]),
+                "mask_id": int(global_id_meta["mask_id"]),
+
+                "config": conf,
+            }
+            torch.save(ckpt, f"model_epoch_{epoch}.pt")
+
+        # # ---------------------------
+        # # 4) TEST
+        # # ---------------------------
+        # print("TEST ---------------")
+        # logger.info("TEST ---------------")
+        # ind_counts = Counter()
+        #
+        # if conf['train_or_infer'] == "hptune":
+        #     start_num, end_num = 5, 6
+        # elif conf['train_or_infer'] == "analysis":
+        #     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
+        #     start_num, end_num = 0, 1
+        # else:  # infer
+        #     start_num, end_num = 6, 10
+        # for idx, (adj_batch, attr_batch) in enumerate(
+        #         itertools.islice(dataloader, start_num, end_num),
+        #         start=start_num
+        # ):
+        #     print(f"[TEST] batch idx {idx}")
+        #     glist_base, glist, masks_3, attr_matrices_all_test, _, _ = convert_to_dgl(
+        #         adj_batch, attr_batch, logger
+        #     )
+        #     chunk_size = conf["chunk_size"]
+        #
+        #     # ★ ここ：バッチ内のチャンク番号を 0,1,2,... で作る
+        #     for chunk_i_local, i in enumerate(range(0, len(glist), chunk_size)):
+        #         chunk = glist[i:i + chunk_size]
+        #         chunk_base = glist_base[i:i + chunk_size]
+        #
+        #         batched_graph = dgl.batch(chunk).to(device)
+        #         batched_graph_base = dgl.batch(chunk_base).to(device)
+        #         attr_chunk_test = attr_matrices_all_test[i:i + chunk_size]
+        #
+        #         # feats取得に no_grad は不要（evaluate 側が no_grad なので）
+        #         batched_feats = batched_graph.ndata["feat"]
+        #
+        #         # return loss, embed, [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        #         test_loss, test_emb, loss_list_test = evaluate(
+        #             model,
+        #             batched_graph,
+        #             batched_feats,
+        #             epoch,
+        #             masks_3,
+        #             logger,
+        #             batched_graph_base,
+        #             chunk_i_local,  # ★変更点：idx ではなく 0,1,2,... を渡す
+        #             "test",
+        #             attr_chunk_test,
+        #         )
+        #
+        #         # record scalar losses
+        #         clean_losses = [to_scalar(l) for l in loss_list_test]
+        #         for j, val in enumerate(clean_losses):
+        #             loss_list_list_test[j].append(val)
+        #         test_loss_list.append(to_scalar(test_loss))
+        #
+        #         # cleanup
+        #         del batched_graph, batched_graph_base, batched_feats, chunk, chunk_base
+        #         del test_loss, test_emb, loss_list_test, attr_chunk_test
+        #         gc.collect()
+        #         torch.cuda.empty_cache()
+        #
+        #     # cleanup graphs after idx
+        #     for g in glist:
+        #         g.ndata.clear()
+        #         g.edata.clear()
+        #     for g in glist_base:
+        #         g.ndata.clear()
+        #         g.edata.clear()
+        #     del glist, glist_base, masks_3, attr_matrices_all_test
+        #     gc.collect()
+
+        # ---------------------------
+        # 5) stats and save
+        # ---------------------------
+
+        # epoch end: save infer ids
+        # def run_infer_only_after_restore(
+        #         conf,
+        #         model,
+        #         logger,
+        #         checkpoint_path: str,
+        #         *,
+        #         epoch: int | None = None,
+        #         only_save: bool = False,
+        # ):
+        kw = f"{conf['codebook_size']}_{conf['hidden_dim']}"
+        os.makedirs(kw, exist_ok=True)
+        # commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss
+        train_commit = safe_mean(loss_list_list_train[0])
+        train_latrep = safe_mean(loss_list_list_train[2])
+        train_cbrep = safe_mean(loss_list_list_train[3])
+        train_ent = safe_mean(loss_list_list_train[4])
+        train_total = safe_mean(loss_list)
+
+        print(f"train - commit_loss: {train_commit:.6f}, "
+              f"train - lat_repel_loss: {train_latrep:.6f}, "
+              f"train - cb_repel_loss: {train_cbrep:.6f}",
+              f"train - ent_loss: {train_ent:.6f}")
+        logger.info(
+            "train - commit_loss: %.9f, lat_repel_loss: %.6f, cb_repel_loss: %.6f, ent_loss: %.6f",
+            train_commit, train_latrep, train_cbrep, train_ent
+        )
+        print(f"train - total_loss: {train_total:.6f}")
+        logger.info("train - total_loss: %.6f", train_total)
+
+        # test logs   loss_list_list_test = [commit_loss, cb_repel_loss, repel_loss, cb_loss, sil_loss]
+        test_commit = safe_mean(loss_list_list_test[0])
+        test_latrep = safe_mean(loss_list_list_test[2])
+        test_cbrep = safe_mean(loss_list_list_test[3])
+        test_ent = safe_mean(loss_list_list_test[4])
+        test_total = safe_mean(test_loss_list)
+
+        # print(f"test - commit_loss: {test_commit:.6f}, "
+        #       f"test - lat_repel_loss: {test_latrep:.6f}, "
+        #       f"test - cb_repel_loss: {test_cbrep:.6f}",
+        #       f"test - ent_loss: {test_ent:.6f}")
+        # logger.info(f"test - commit_loss: {test_commit:.6f}, "
+        #             f"test - lat_repel_loss: {test_latrep:.6f}, "
+        #             f"test - cb_repel_loss: {test_cbrep:.6f}",
+        #             f"test - ent_loss: {test_ent:.6f}")
+        # print(f"test - total_loss: {test_total:.6f}")
+        # logger.info(f"test - total_loss: {test_total:.6f}")
+
+        model.vq._codebook.latent_size_sum = 0
+
+        # cleanup big lists
+        loss_list_list_train.clear()
+        loss_list_list_test.clear()
+        loss_list.clear()
+        cb_unique_num_list.clear()
+        cb_unique_num_list_test.clear()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        scheduler.step()
+
+        # （optional）LR ログ
+        lr = optimizer.param_groups[0]["lr"]
+        logger.info(f"[LR] epoch={epoch} lr={lr:.6e}")
+
+    # 何か score を返したい場合はここで
+    # return test_total
+
+
+
+
+# ==============================================================================
+# ORIGINAL MODULE: train_teacher.py
+# ==============================================================================
+import argparse
+import numpy as np
+import torch
+import random
+import torch.optim as optim
+import torch.nn.functional as F
+from pathlib import Path
+
+torch.use_deterministic_algorithms(True)
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+torch.autograd.set_detect_anomaly(True)
+
+import multiprocessing
+
+# Set the number of threads for OpenMP
+os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
+
+# Set thread affinity to improve data loading performance
+os.environ['KMP_AFFINITY'] = 'granularity=fine,compact,1,0'
+
+
+def build_model(conf):
+    """
+    Reconstruct the exact model architecture used in training
+    """
+    args = conf["args"]   # we pass your training args through conf
+
+    model = EquivariantThreeHopGINE(
+        in_feats=args.hidden_dim,
+        hidden_feats=args.hidden_dim,
+        out_feats=args.hidden_dim,
+        args=args,
+    )
+    return model
+
+import sys
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["CUDA_DEBUG_INFO"] = "0"
+os.environ["CUDA_VERBOSE_LOGGING"] = "0"
+
+
+def run(args):
+
+    """ Set seed, device, and logger """
+    set_seed(args.seed)
+
+    if torch.cuda.is_available() and args.device >= 0:
+        device = torch.device("cuda:" + str(args.device))
+    else:
+        print(f"$$$$$$$$$$$$$$$$$$$  USING CPU ????? $$$$$$$$$$$$$$$$$$$")
+        device = "cpu"
+    torch.cuda.empty_cache()
+    if args.feature_noise != 0:
+        args.output_path = Path.cwd().joinpath(
+            args.output_path, "noisy_features", f"noise_{args.feature_noise}"
+        )
+    if args.feature_aug_k > 0:
+        args.output_path = Path.cwd().joinpath(
+            args.output_path, "aug_features", f"aug_hop_{args.feature_aug_k}"
+        )
+        args.teacher = f"GA{args.feature_aug_k}{args.teacher}"
+
+    if args.exp_setting == "tran":
+        output_dir = Path.cwd().joinpath(
+            args.output_path,
+            "transductive",
+            args.dataset,
+            args.teacher,
+            f"seed_{args.seed}",
+        )
+    elif args.exp_setting == "ind":
+        output_dir = Path.cwd().joinpath(
+            args.output_path
+        )
+    else:
+        raise ValueError(f"Unknown experiment setting! {args.exp_setting}")
+    args.output_dir = output_dir
+
+    check_writable(output_dir, overwrite=False)
+    logger = get_logger(output_dir.joinpath("log"), args.console_log, args.log_level)
+    args.feat_dim = args.hidden_dim
+    args.label_dim = 1
+
+    """ Model config """
+    conf = {}
+    conf = dict(args.__dict__, **conf)
+    conf["device"] = device
+
+    """ Model init """
+    # in_feats, hidden_feats, out_feats, args
+    model = EquivariantThreeHopGINE(in_feats=args.hidden_dim, hidden_feats=args.hidden_dim, out_feats=args.hidden_dim, args=args)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=conf['learning_rate'], weight_decay=1e-4)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+    from torch.optim.lr_scheduler import CosineAnnealingLR
+
+    T_max = conf["cosine_epochs"]  # 例: 50 or 100
+    eta_min = conf.get("min_lr", 5e-6)
+
+    scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=T_max,
+        eta_min=eta_min
+    )
+    if args.train_or_infer == "hptune":
+        run_inductive(
+            conf,
+            model,
+            optimizer,
+            scheduler,
+            logger
+        )
+    elif args.train_or_infer == "infer":
+        run_infer_after_restore(conf, model, logger, "../data/model_epoch_3.pt")
+
+def repeat_run(args):
+    scores = []
+    for seed in range(args.num_exp):
+        args.seed = seed
+        scores.append(run(args))
+    scores_np = np.array(scores)
+    return scores_np.mean(axis=0), scores_np.std(axis=0)
+
+
+def main():
+    args = get_args()
+    if args.num_exp == 1:
+        score = run(args)
+        score_str = ""
+        # score_str = "".join([f"{s : .4f}\t" for s in score])
+
+    elif args.num_exp > 1:
+        score_mean, score_std = repeat_run(args)
+        score_str = "".join(
+            [f"{s : .4f}\t" for s in score_mean] + [f"{s : .4f}\t" for s in score_std]
+        )
+
+    with open(args.output_dir.parent.joinpath("exp_results"), "a+") as f:
+        f.write(f"{score_str}\n")
+
+    # for collecting aggregated results
+    # print(score_str)
+
+
+import requests
+
+def stop_instance(instance_id, api_key):
+    url = f"https://console.vast.ai/api/v0/instances/{instance_id}/stop/"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    response = requests.post(url, headers=headers)
+    if response.status_code == 200:
+        print("Instance stopped successfully.")
+    else:
+        print(f"Failed to stop instance: {response.status_code}, {response.text}")
+
+
+
+    # # Replace with your Vast.ai instance ID and API key
+    # instance_id = "13941138"
+    # api_key = "2afa99317d40e9892f7f8b088a84641b4be2279be70103847bb480fb21997354"
+    # stop_instance(instance_id, api_key)
+
+# Standalone entrypoint
+if __name__ == "__main__":
+    main()
