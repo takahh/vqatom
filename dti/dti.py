@@ -134,12 +134,12 @@ def parse_lig_tokens(s: str) -> List[int]:
     return [int(x) for x in s.split()]
 
 def parse_vqamino_tokens(s: str) -> List[int]:
-    s = str(s).strip().replace(",", " ")
+    s = str(s).strip()
     if not s:
         return []
     if s.startswith("["):
         return [int(x) for x in json.loads(s)]
-    return [int(x) for x in s.split()]
+    return [int(x) for x in s.replace(",", " ").split()]
 
 def pad_1d(seqs: List[torch.Tensor], pad_value: int) -> torch.Tensor:
     if not seqs:
@@ -323,7 +323,7 @@ class DTIDataset(Dataset):
         return len(self.rows)
 
     def _parse_lig_tok(self, lig_tok: str) -> List[int]:
-        return [int(x) for x in lig_tok.split() if x.strip()]
+        return parse_vqamino_tokens(lig_tok)
 
     def __getitem__(self, idx):
         row = self.rows[idx]
