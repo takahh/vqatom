@@ -201,7 +201,43 @@ def load_model(
     ).to(dev)
 
     state = _load_state_dict_any(ckpt_path, map_location=dev)
-    model.load_state_dict(state, strict=strict)
+    # Restore the exact dynamic codebook structure from the checkpoint.
+    import torch
+    cb = model.vq._codebook
+    prefix = "vq._codebook."
+
+    # First register codebook groups missing from the initial model.
+    cb.ensure_from_state_dict(state, prefix=prefix)
+
+    # Restore all codebook buffers with their checkpoint shapes.
+    # This includes EMA statistics and dynamically created tracking buffers.
+    for full_key, tensor in state.items():
+        if not full_key.startswith(prefix):
+            continue
+
+        name = full_key[len(prefix):]
+
+        if name.startswith("embed."):
+            safe = name[len("embed."):]
+            if safe not in cb.embed:
+                cb.embed[safe] = torch.nn.Parameter(
+                    torch.empty_like(tensor),
+                    requires_grad=True,
+                )
+            elif tuple(cb.embed[safe].shape) != tuple(tensor.shape):
+                cb.embed[safe] = torch.nn.Parameter(
+                    torch.empty_like(tensor),
+                    requires_grad=cb.embed[safe].requires_grad,
+                )
+
+        elif "." not in name and name != "initted":
+            if name in cb._buffers:
+                if tuple(cb._buffers[name].shape) != tuple(tensor.shape):
+                    cb._buffers[name] = torch.empty_like(tensor)
+            elif name not in cb._parameters and name not in cb._modules:
+                cb.register_buffer(name, torch.empty_like(tensor))
+
+    model.load_state_dict(state, strict=True)
     model.eval()
     return model
 
