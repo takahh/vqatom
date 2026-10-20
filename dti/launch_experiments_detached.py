@@ -458,7 +458,7 @@ def main():
     models = [s.strip() for s in args.models.split(',')]
     if any(c not in ('protein_cold','ligand_cold','double_cold','scaffold_cold') for c in colds):
         p.error('Unknown cold type')
-    if any(m not in ('vqatom','continuous','morgan','smiles') for m in models):
+    if any(m not in ('vqatom','vqatom_cb5k','continuous','morgan','smiles') for m in models):
         p.error('Unknown model')
     for m in models:
         if not (HERE / f'run_{m}.sh').is_file():
