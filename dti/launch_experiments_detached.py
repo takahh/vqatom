@@ -501,6 +501,5 @@ def main():
     if args.auto_destroy:
         monitor(args)
 
-
 if __name__ == '__main__':
     main()
