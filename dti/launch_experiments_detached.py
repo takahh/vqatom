@@ -181,6 +181,25 @@ PYREMOTE''', timeout=40)
     return out.strip().splitlines()[-1] if out.strip() else 'WAITING'
 
 
+def save_remote_diagnostics(name, instance_id):
+    """Save a bounded, best-effort remote snapshot on the Mac before any cleanup."""
+    directory = HERE / 'experiment_logs'
+    directory.mkdir(parents=True, exist_ok=True)
+    dest = directory / f'{name}_instance{instance_id}_startup.log'
+    cmd = ("echo '=== UTC ==='; date -u; "
+           "echo '=== runner markers ==='; "
+           "ls -l /tmp/dti_run.log /tmp/dti_success /tmp/dti_failed 2>&1 || true; "
+           "echo '=== log tail ==='; tail -n 300 /tmp/dti_run.log 2>&1 || true; "
+           "echo '=== processes ==='; ps auxww | grep -E '[d]ti.py|[p]ip|[l]ftp|[g]it|[d]ti_run' || true")
+    try:
+        rc, out, err = remote_check(instance_id, cmd, timeout=60)
+        dest.write_text(f'SSH exit: {rc}\n{out}\nSTDERR:\n{err}\n')
+    except Exception as exc:
+        dest.write_text(f'Diagnostic collection unavailable: {exc}\n')
+    base.log(f'[STARTUP LOG SAVED] {dest}')
+    return str(dest)
+
+
 def verify_owned_and_destroy(name, instance_id):
     # Require exact ID and label match.
     matches = [i for i in instances() if str(i.get('id')) == str(instance_id)]
@@ -319,28 +338,27 @@ def launch(task, args, password, excluded, attempt=1):
     except Exception as exc:
         reason = str(exc)
         base.log(f'[START FAILURE] {name} attempt={attempt}: {reason}')
-        if offer is not None and instance_id is not None and ('SSH' in reason or 'not SSH-ready' in reason or 'train progress within' in reason):
+        # A startup timeout is not proof of a bad physical host.
+        # Preserve the VM for inspection; never delete a possibly running job.
+        if offer is not None and instance_id is not None and ('not SSH-ready' in reason or 'publickey' in reason):
             bad_host_record(offer, reason)
-        status = 'launch_failed' if instance_id is None else 'start_failed'
+        status = 'launch_failed' if instance_id is None else 'manual_required'
+        log_path = None
         if instance_id is not None:
+            log_path = save_remote_diagnostics(name, instance_id)
             try:
-                # A lost SSH reply is not proof that training did not start.
-                # Recheck immediately before destroying whenever SSH is available.
-                try:
-                    if training_started(instance_id) == 'STARTED':
-                        state_put(name, {'status': 'running', 'training_confirmed_at': time.time()})
-                        base.log(f'[RECOVERED] {name}: train progress confirmed during cleanup')
-                        return True
-                except Exception:
-                    pass
-                verify_owned_and_destroy(name, instance_id)
-            except Exception as cleanup_exc:
-                status = 'manual_required'
-                reason += f'; cleanup not verified: {cleanup_exc}'
+                if training_started(instance_id) == 'STARTED':
+                    state_put(name, {'status': 'running', 'training_confirmed_at': time.time(), 'startup_log': log_path})
+                    base.log(f'[RECOVERED] {name}: training progress confirmed')
+                    return True
+            except Exception as probe_exc:
+                base.log(f'[START PROBE UNAVAILABLE] {name}: {probe_exc}')
+            base.log(f'[INSTANCE RETAINED] {name}: {instance_id}; inspect logs and destroy manually only if safe')
         state_put(name, {'status': status, 'error': reason,
                          'attempt': attempt, 'failed_at': time.time(),
                          'id': instance_id, 'offer_id': offer.get('id') if offer else None,
-                         'host_key': host_key(offer) if offer else None})
+                         'host_key': host_key(offer) if offer else None,
+                         'startup_log': log_path})
         return False
 
 
@@ -422,7 +440,7 @@ def main():
     p.add_argument('--disk', type=int, default=35)
     p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
     p.add_argument('--startup-timeout', type=int, default=1200)
-    p.add_argument('--training-start-timeout', type=int, default=600, help='Seconds from instance creation until positive train progress')
+    p.add_argument('--training-start-timeout', type=int, default=1800, help='Seconds from instance creation until positive train progress')
     p.add_argument('--start-check-seconds', type=int, default=20)
     p.add_argument('--execute', action='store_true')
     p.add_argument('--auto-destroy', action='store_true')
@@ -500,6 +518,7 @@ def main():
     write_failed_csv(tasks)
     if args.auto_destroy:
         monitor(args)
+
 
 if __name__ == '__main__':
     main()
