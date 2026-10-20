@@ -58,6 +58,7 @@ def find_offer(args, excluded):
                   and args.min_price <= offer_price(o) <= args.max_price
                   and float(o.get('disk_space') or o.get('disk_space_total') or args.disk) >= args.disk]
 
+
     candidates.sort(key=lambda o: (
         -int(float(o.get('cpu_cores_effective') or 0) >= 32),
         offer_price(o),
@@ -203,7 +204,7 @@ def main():
     if not cold_types or any(c not in ('protein_cold', 'ligand_cold', 'double_cold', 'scaffold_cold') for c in cold_types):
         p.error('Unknown cold type')
     models = [s.strip() for s in args.models.split(',')]
-    if not models or any(m not in ('vqatom', 'continuous', 'morgan', 'smiles') for m in models):
+    if not models or any(m not in ('vqatom', 'vqatom_cb5k', 'continuous', 'morgan', 'smiles') for m in models):
         p.error('Unknown model')
     splits = [int(s) for s in args.splits.split(',')]
     seeds = [int(s) for s in args.seeds.split(',')]

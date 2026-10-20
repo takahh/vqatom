@@ -11,6 +11,7 @@ if [[ "$DATASET" == "metz" ]]; then
 else
   Y_THR="${Y_THR:-12.1}"
 fi
+
 case "$DATASET" in kiba|metz) ;; *) echo "Invalid DATASET" >&2; exit 1;; esac
 case "$COLD_TYPE" in protein_cold|ligand_cold|double_cold|scaffold_cold) ;; *) echo "Invalid COLD_TYPE" >&2; exit 1;; esac
 EPOCHS="${EPOCHS:-20}"
