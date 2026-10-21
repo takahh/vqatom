@@ -102,7 +102,10 @@ def resolve_pytorch_vast_template():
 
     Reject missing or ambiguous matches: renting the wrong template is costly.
     """
-    data = base.cli('search', 'templates', 'PyTorch', '--raw', timeout=60)
+    # `search templates PyTorch` is parsed as a query expression by Vast CLI,
+    # and bare `PyTorch` is not a valid operator. List templates without
+    # a query, then match the exact display name locally.
+    data = base.cli('search', 'templates', '--raw', timeout=60)
     if isinstance(data, dict):
         for key in ('templates', 'results', 'offers'):
             if isinstance(data.get(key), list):
@@ -126,7 +129,7 @@ def resolve_pytorch_vast_template():
         raise RuntimeError(
             f'Expected one PyTorch (Vast) template with hash_id; found {len(unique)}. '
             f'Available template names: {names[:30]}. '
-            'Supply --template-hash explicitly after inspecting `vastai search templates "PyTorch" --raw`.'
+            'Supply --template-hash explicitly after inspecting `vastai search templates --raw`.'
         )
     return next(iter(unique))
 
