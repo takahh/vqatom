@@ -448,7 +448,7 @@ def monitor(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--dataset', choices=['kiba', 'metz'], default='metz')
+    p.add_argument('--dataset', default='kiba,metz')
     p.add_argument('--cold-types', default='protein_cold,ligand_cold,scaffold_cold')
     p.add_argument('--models', default='vqatom,continuous,morgan,smiles')
     p.add_argument('--splits', default='1,2,3')
@@ -505,8 +505,18 @@ def main():
     for m in models:
         if not (HERE / f'run_{m}.sh').is_file():
             p.error(f'Missing run_{m}.sh in {HERE}')
-    tasks = [(args.dataset, c, m, int(sp), int(sd))
-             for c in colds for m in models for sp in args.splits.split(',') for sd in args.seeds.split(',')]
+    datasets = [d.strip() for d in args.dataset.split(',')]
+    if any(d not in ('kiba', 'metz') for d in datasets):
+        p.error('Unknown dataset')
+
+    tasks = [
+        (d, c, m, int(sp), int(sd))
+        for d in datasets
+        for c in colds
+        for m in models
+        for sp in args.splits.split(',')
+        for sd in args.seeds.split(',')
+    ]
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
     # Avoid duplicating active or previously launched jobs. Check Vast.ai account too.
