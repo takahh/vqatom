@@ -97,6 +97,41 @@ def choose_offer(args, excluded):
     raise RuntimeError('No eligible offers with a distinct, verified, reliable physical host')
 
 
+def resolve_pytorch_vast_template():
+    """Find the exact official PyTorch (Vast) template, without guessing a hash.
+
+    Reject missing or ambiguous matches: renting the wrong template is costly.
+    """
+    data = base.cli('search', 'templates', 'PyTorch', '--raw', timeout=60)
+    if isinstance(data, dict):
+        for key in ('templates', 'results', 'offers'):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+    if not isinstance(data, list):
+        raise RuntimeError(f'Unexpected Vast template search response: {str(data)[:500]}')
+    matches = []
+    for t in data:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get('name') or t.get('template_name') or '').strip()
+        # Exact template name from the user's screenshot; do not match similarly named images.
+        if name.casefold() == 'pytorch (vast)':
+            template_hash = t.get('hash_id') or t.get('template_hash')
+            if template_hash:
+                matches.append((str(template_hash), t))
+    unique = {h: t for h, t in matches}
+    if len(unique) != 1:
+        names = [str(t.get('name') or t.get('template_name')) for t in data]
+        raise RuntimeError(
+            f'Expected one PyTorch (Vast) template with hash_id; found {len(unique)}. '
+            f'Available template names: {names[:30]}. '
+            'Supply --template-hash explicitly after inspecting `vastai search templates "PyTorch" --raw`.'
+        )
+    return next(iter(unique))
+
+
+
 def instances():
     data = base.cli('show', 'instances', '--raw')
     if isinstance(data, dict):
@@ -282,9 +317,9 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
             return True
-        if not args.image or '@vastai-automatic-tag' in args.image:
-            raise RuntimeError('Specify a tested, version-pinned Docker image with --image')
-        res = base.cli('create', 'instance', offer['id'], '--image', args.image,
+        if not args.template_hash:
+            raise RuntimeError('PyTorch (Vast) template hash not resolved')
+        res = base.cli('create', 'instance', offer['id'], '--template_hash', args.template_hash,
                        '--disk', args.disk, '--ssh', '--direct', '--label', name,
                        '--cancel-unavail', '--raw', timeout=120)
         if not res.get('success') or not res.get('new_contract'):
@@ -311,6 +346,7 @@ def launch(task, args, password, excluded, attempt=1):
             'if ! command -v python >/dev/null 2>&1; then',
             '  PY3=$(command -v python3) || exit 127',
             '  ln -sf "$PY3" /usr/local/bin/python', 'fi',
+            'if test -x /venv/main/bin/python; then export PATH=/venv/main/bin:$PATH; fi',
             'python --version',
             '# Fail before data downloads or training if the rented GPU is unusable.',
             'python -c \'import torch; print("Torch:", torch.__version__, "CUDA build:", torch.version.cuda, flush=True); assert torch.cuda.is_available(), "CUDA unavailable"; a=torch.ones((32,32),device="cuda"); torch.cuda.synchronize(); print("CUDA PREFLIGHT OK:",torch.cuda.get_device_name(0),flush=True)\'',
@@ -466,8 +502,8 @@ def main():
     p.add_argument('--epochs', type=int, default=1, help='Epochs for each job; default 1 for pilot')
     p.add_argument('--ftp-results-dir', default='dti_results', help='Existing FTP root (dti_results/<dataset>)')
     p.add_argument('--disk', type=int, default=35)
-    p.add_argument('--image', default=None,
-                   help='REQUIRED for --execute: tested version-pinned Docker image (no automatic tag)')
+    p.add_argument('--template-hash', default=None,
+                   help='Override PyTorch (Vast) template hash; auto-discovered by default')
     p.add_argument('--startup-timeout', type=int, default=1200)
     p.add_argument('--training-start-timeout', type=int, default=1800, help='Seconds from instance creation until positive train progress')
     p.add_argument('--start-check-seconds', type=int, default=20)
@@ -522,8 +558,13 @@ def main():
              not in existing and name not in running_labels]
     base.log(f'{len(tasks)} new tasks (skipped {original-len(tasks)} tracked/running); '
              f'concurrency={args.max_parallel}, ${args.min_price:.2f}-${args.max_price:.2f}/GPU-hour')
-    if args.execute and (not args.image or '@vastai-automatic-tag' in args.image):
-        p.error('For --execute, specify a tested fixed Docker image with --image; automatic tags are unsafe')
+    if args.execute and tasks and not args.template_hash:
+        try:
+            args.template_hash = resolve_pytorch_vast_template()
+        except Exception as exc:
+            p.error(f'Cannot resolve PyTorch (Vast) template: {exc}')
+    if args.execute and tasks:
+        base.log(f'[TEMPLATE] PyTorch (Vast), hash_id={args.template_hash}')
     if not args.execute:
         base.log('DRY RUN; no rental. Add --execute --auto-destroy for launch.')
         return
