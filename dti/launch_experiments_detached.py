@@ -73,6 +73,22 @@ def bad_host_record(offer, reason):
     base.log(f'[HOST BLACKLISTED] {key}: {reason}')
 
 
+# PyTorch 2.6.0+cu124 supports up to sm_90; reject unknown GPUs too.
+# Fail closed: avoid paying for an untested GPU architecture.
+SUPPORTED_GPU_NAMES = (
+    re.compile(r"^A100(?:\b|[-_ ])", re.I),
+    re.compile(r"^H100(?:\b|[-_ ])", re.I),
+    re.compile(r"^H200(?:\b|[-_ ])", re.I),
+    re.compile(r"^(?:NVIDIA\s+)?(?:RTX\s+)?(?:4090|4080|4070|3090|3080)(?:\b|[-_ ])", re.I),
+    re.compile(r"^(?:NVIDIA\s+)?(?:RTX\s+)?(?:A6000|A5000)(?:\b|[-_ ])", re.I),
+)
+
+
+def gpu_supported(offer):
+    name = str(offer.get('gpu_name') or '').strip()
+    return any(pattern.search(name) for pattern in SUPPORTED_GPU_NAMES)
+
+
 def choose_offer(args, excluded):
     # Physical host uniqueness, including other active account instances.
     # Reject offers without a stable host ID rather than silently bypassing safety.
@@ -80,6 +96,9 @@ def choose_offer(args, excluded):
     for _ in range(100):
         offer = base.find_offer(args, excluded)
         excluded.add(str(offer['id']))
+        if not gpu_supported(offer):
+            base.log(f'[SKIP UNSUPPORTED GPU] {offer.get("gpu_name")!r} offer={offer.get("id")}')
+            continue
         key = host_key(offer)
         if not key:
             base.log(f'[SKIP UNKNOWN HOST] offer={offer.get("id")}')
@@ -102,10 +121,7 @@ def resolve_pytorch_vast_template():
 
     Reject missing or ambiguous matches: renting the wrong template is costly.
     """
-    # `search templates PyTorch` is parsed as a query expression by Vast CLI,
-    # and bare `PyTorch` is not a valid operator. List templates without
-    # a query, then match the exact display name locally.
-    data = base.cli('search', 'templates', '--raw', timeout=60)
+    data = base.cli('search', 'templates', 'PyTorch', '--raw', timeout=60)
     if isinstance(data, dict):
         for key in ('templates', 'results', 'offers'):
             if isinstance(data.get(key), list):
@@ -129,7 +145,7 @@ def resolve_pytorch_vast_template():
         raise RuntimeError(
             f'Expected one PyTorch (Vast) template with hash_id; found {len(unique)}. '
             f'Available template names: {names[:30]}. '
-            'Supply --template-hash explicitly after inspecting `vastai search templates --raw`.'
+            'Supply --template-hash explicitly after inspecting `vastai search templates "PyTorch" --raw`.'
         )
     return next(iter(unique))
 
