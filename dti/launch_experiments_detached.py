@@ -282,6 +282,8 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
             return True
+        if not args.image or '@vastai-automatic-tag' in args.image:
+            raise RuntimeError('Specify a tested, version-pinned Docker image with --image')
         res = base.cli('create', 'instance', offer['id'], '--image', args.image,
                        '--disk', args.disk, '--ssh', '--direct', '--label', name,
                        '--cancel-unavail', '--raw', timeout=120)
@@ -310,6 +312,8 @@ def launch(task, args, password, excluded, attempt=1):
             '  PY3=$(command -v python3) || exit 127',
             '  ln -sf "$PY3" /usr/local/bin/python', 'fi',
             'python --version',
+            '# Fail before data downloads or training if the rented GPU is unusable.',
+            'python -c \'import torch; print("Torch:", torch.__version__, "CUDA build:", torch.version.cuda, flush=True); assert torch.cuda.is_available(), "CUDA unavailable"; a=torch.ones((32,32),device="cuda"); torch.cuda.synchronize(); print("CUDA PREFLIGHT OK:",torch.cuda.get_device_name(0),flush=True)\'',
             '# lftp may not exist yet: run_*.sh installs it later, but preflight needs it now.',
             'if ! command -v lftp >/dev/null 2>&1; then',
             '  export DEBIAN_FRONTEND=noninteractive',
@@ -448,7 +452,7 @@ def monitor(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--dataset', default='kiba,metz')
+    p.add_argument('--dataset', choices=['kiba', 'metz'], default='metz')
     p.add_argument('--cold-types', default='protein_cold,ligand_cold,scaffold_cold')
     p.add_argument('--models', default='vqatom,continuous,morgan,smiles')
     p.add_argument('--splits', default='1,2,3')
@@ -462,7 +466,8 @@ def main():
     p.add_argument('--epochs', type=int, default=1, help='Epochs for each job; default 1 for pilot')
     p.add_argument('--ftp-results-dir', default='dti_results', help='Existing FTP root (dti_results/<dataset>)')
     p.add_argument('--disk', type=int, default=35)
-    p.add_argument('--image', default='vastai/pytorch:@vastai-automatic-tag')
+    p.add_argument('--image', default=None,
+                   help='REQUIRED for --execute: tested version-pinned Docker image (no automatic tag)')
     p.add_argument('--startup-timeout', type=int, default=1200)
     p.add_argument('--training-start-timeout', type=int, default=1800, help='Seconds from instance creation until positive train progress')
     p.add_argument('--start-check-seconds', type=int, default=20)
@@ -505,18 +510,8 @@ def main():
     for m in models:
         if not (HERE / f'run_{m}.sh').is_file():
             p.error(f'Missing run_{m}.sh in {HERE}')
-    datasets = [d.strip() for d in args.dataset.split(',')]
-    if any(d not in ('kiba', 'metz') for d in datasets):
-        p.error('Unknown dataset')
-
-    tasks = [
-        (d, c, m, int(sp), int(sd))
-        for d in datasets
-        for c in colds
-        for m in models
-        for sp in args.splits.split(',')
-        for sd in args.seeds.split(',')
-    ]
+    tasks = [(args.dataset, c, m, int(sp), int(sd))
+             for c in colds for m in models for sp in args.splits.split(',') for sd in args.seeds.split(',')]
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
     # Avoid duplicating active or previously launched jobs. Check Vast.ai account too.
@@ -527,6 +522,8 @@ def main():
              not in existing and name not in running_labels]
     base.log(f'{len(tasks)} new tasks (skipped {original-len(tasks)} tracked/running); '
              f'concurrency={args.max_parallel}, ${args.min_price:.2f}-${args.max_price:.2f}/GPU-hour')
+    if args.execute and (not args.image or '@vastai-automatic-tag' in args.image):
+        p.error('For --execute, specify a tested fixed Docker image with --image; automatic tags are unsafe')
     if not args.execute:
         base.log('DRY RUN; no rental. Add --execute --auto-destroy for launch.')
         return

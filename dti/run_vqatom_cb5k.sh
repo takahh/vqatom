@@ -64,6 +64,16 @@ for kind in train valid test; do
 done
 CKPT="$BASE/data/model_epoch_6_5k.pt"
 fetch_file "$FTP_REMOTE_DIR/model_epoch_6_5k.pt" "$CKPT"
+# Verify again AFTER pip installs, because dependencies may replace PyTorch.
+python - <<'PYCUDACHECK'
+import torch
+print(f"[CUDA CHECK] torch={torch.__version__}, build={torch.version.cuda}", flush=True)
+if not torch.cuda.is_available():
+    raise SystemExit("[CUDA CHECK FAILED] CUDA unavailable after dependency installation")
+x = torch.ones((32, 32), device="cuda")
+torch.cuda.synchronize()
+print(f"[CUDA CHECK OK] {torch.cuda.get_device_name(0)}", flush=True)
+PYCUDACHECK
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 cd "$DTI"
