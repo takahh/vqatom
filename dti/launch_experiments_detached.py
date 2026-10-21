@@ -73,20 +73,10 @@ def bad_host_record(offer, reason):
     base.log(f'[HOST BLACKLISTED] {key}: {reason}')
 
 
-# PyTorch 2.6.0+cu124 supports up to sm_90; reject unknown GPUs too.
-# Fail closed: avoid paying for an untested GPU architecture.
-SUPPORTED_GPU_NAMES = (
-    re.compile(r"^A100(?:\b|[-_ ])", re.I),
-    re.compile(r"^H100(?:\b|[-_ ])", re.I),
-    re.compile(r"^H200(?:\b|[-_ ])", re.I),
-    re.compile(r"^(?:NVIDIA\s+)?(?:RTX\s+)?(?:4090|4080|4070|3090|3080)(?:\b|[-_ ])", re.I),
-    re.compile(r"^(?:NVIDIA\s+)?(?:RTX\s+)?(?:A6000|A5000)(?:\b|[-_ ])", re.I),
-)
-
-
+# Restrict rental to the GPU family tested with PyTorch 2.7.1+cu128.
 def gpu_supported(offer):
     name = str(offer.get('gpu_name') or '').strip()
-    return any(pattern.search(name) for pattern in SUPPORTED_GPU_NAMES)
+    return bool(re.search(r'RTX\s+PRO\s+5000(?:\s+Blackwell)?', name, re.I))
 
 
 def choose_offer(args, excluded):
@@ -336,9 +326,7 @@ def launch(task, args, password, excluded, attempt=1):
         base.log(f'[OFFER] {name}: {offer.get("gpu_name")}, ${base.offer_price(offer):.3f}/h')
         if not args.execute:
             return True
-        if not args.template_hash:
-            raise RuntimeError('PyTorch (Vast) template hash not resolved')
-        res = base.cli('create', 'instance', offer['id'], '--template_hash', args.template_hash,
+        res = base.cli('create', 'instance', offer['id'], '--image', args.image,
                        '--disk', args.disk, '--ssh', '--direct', '--label', name,
                        '--cancel-unavail', '--raw', timeout=120)
         if not res.get('success') or not res.get('new_contract'):
@@ -512,17 +500,17 @@ def main():
     p.add_argument('--models', default='vqatom,continuous,morgan,smiles')
     p.add_argument('--splits', default='1,2,3')
     p.add_argument('--seeds', default='0,1,2')
-    p.add_argument('--min-price', type=float, default=.8)
-    p.add_argument('--max-price', type=float, default=1.5)
+    p.add_argument('--min-price', type=float, default=0.0)
+    p.add_argument('--max-price', type=float, default=1.2)
     p.add_argument('--min-vram', type=float, default=40)
     p.add_argument('--min-reliability', type=float, default=.97)
     p.add_argument('--max-parallel', type=int, default=25)
     p.add_argument('--max-tasks', type=int)
-    p.add_argument('--epochs', type=int, default=1, help='Epochs for each job; default 1 for pilot')
+    p.add_argument('--epochs', type=int, default=20)
     p.add_argument('--ftp-results-dir', default='dti_results', help='Existing FTP root (dti_results/<dataset>)')
     p.add_argument('--disk', type=int, default=35)
-    p.add_argument('--template-hash', default=None,
-                   help='Override PyTorch (Vast) template hash; auto-discovered by default')
+    p.add_argument('--image', default='pytorch/pytorch:2.7.1-cuda12.8-cudnn9-devel')
+    p.add_argument('--tasks-file', required=False, help='CSV: dataset,cold_type,model,split,seed; required for launches')
     p.add_argument('--startup-timeout', type=int, default=1200)
     p.add_argument('--training-start-timeout', type=int, default=1800, help='Seconds from instance creation until positive train progress')
     p.add_argument('--start-check-seconds', type=int, default=20)
@@ -565,27 +553,39 @@ def main():
     for m in models:
         if not (HERE / f'run_{m}.sh').is_file():
             p.error(f'Missing run_{m}.sh in {HERE}')
-    tasks = [(args.dataset, c, m, int(sp), int(sd))
-             for c in colds for m in models for sp in args.splits.split(',') for sd in args.seeds.split(',')]
+    if not args.tasks_file and not args.monitor_only:
+        p.error('--tasks-file is required to avoid accidentally launching a full task grid')
+    tasks = []
+    with open(args.tasks_file, newline='') as f:
+        reader = csv.DictReader(f)
+        required = {'dataset', 'cold_type', 'model', 'split', 'seed'}
+        if not required.issubset(reader.fieldnames or []):
+            p.error(f'Tasks CSV needs columns: {sorted(required)}')
+        for row in reader:
+            task = (row['dataset'].strip(), row['cold_type'].strip(), row['model'].strip(),
+                    int(row['split']), int(row['seed']))
+            if task[0] not in ('kiba','metz') or task[1] not in ('protein_cold','ligand_cold','scaffold_cold','double_cold') or task[2] != 'vqatom_cb5k' or task[3] not in (1,2,3) or task[4] not in (0,1,2):
+                p.error(f'Invalid task: {task}')
+            tasks.append(task)
+    if len(tasks) != len(set(tasks)):
+        p.error('Duplicate tasks in CSV')
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
     # Avoid duplicating active or previously launched jobs. Check Vast.ai account too.
     existing = state_read()
     running_labels = {str(i.get('label') or '') for i in instances()}
     original = len(tasks)
+    active_status = {'running', 'created', 'starting', 'manual_required', 'success_retained', 'destroyed'}
     tasks = [t for t in tasks if (name := f'{t[0]}_{t[1]}_{t[2]}_split{t[3]}_seed{t[4]}')
-             not in existing and name not in running_labels]
+             not in running_labels and existing.get(name, {}).get('status') not in active_status]
     base.log(f'{len(tasks)} new tasks (skipped {original-len(tasks)} tracked/running); '
              f'concurrency={args.max_parallel}, ${args.min_price:.2f}-${args.max_price:.2f}/GPU-hour')
-    if args.execute and tasks and not args.template_hash:
-        try:
-            args.template_hash = resolve_pytorch_vast_template()
-        except Exception as exc:
-            p.error(f'Cannot resolve PyTorch (Vast) template: {exc}')
+    for task in tasks:
+        base.log('[PLANNED]', '_'.join(map(str, task)))
     if args.execute and tasks:
-        base.log(f'[TEMPLATE] PyTorch (Vast), hash_id={args.template_hash}')
+        base.log(f'[IMAGE] {args.image}')
     if not args.execute:
-        base.log('DRY RUN; no rental. Add --execute --auto-destroy for launch.')
+        base.log('DRY RUN; no rental. Confirm task list and add --execute --auto-destroy for launch.')
         return
     if not sys.stdin.isatty():
         p.error('Interactive confirmation required')
