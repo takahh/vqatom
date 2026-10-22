@@ -73,10 +73,22 @@ def bad_host_record(offer, reason):
     base.log(f'[HOST BLACKLISTED] {key}: {reason}')
 
 
-# Restrict rental to the GPU family tested with PyTorch 2.7.1+cu128.
-def gpu_supported(offer):
+# Explicit, mutually exclusive GPU families. Unknown GPU names are rejected.
+# "standard" is an allowlist, not an unrestricted fallback.
+def gpu_supported(offer, mode='blackwell'):
     name = str(offer.get('gpu_name') or '').strip()
-    return bool(re.search(r'RTX\s+PRO\s+5000(?:\s+Blackwell)?', name, re.I))
+    blackwell = bool(re.search(r'\bRTX\s+PRO\s+(?:5000|6000)(?:\s+(?:Blackwell|S|WS|Server|Workstation))?\b', name, re.I))
+    if mode == 'blackwell':
+        return blackwell
+    if mode == 'standard':
+        if blackwell:
+            return False
+        return bool(re.search(
+            r'^(?:A100(?:\s|$)|A800(?:\s|$)|H100(?:\s|$)|H200(?:\s|$)|'
+            r'L40S?$|A40$|RTX\s+6000\s*Ada(?:\s|$)|RTX\s+5880\s*Ada(?:\s|$)|'
+            r'RTX\s+A6000(?:\s|$)|RTX\s+4090(?:\s|$))',
+            name, re.I))
+    raise ValueError(f'Unknown GPU mode: {mode}')
 
 
 def choose_offer(args, excluded):
@@ -86,7 +98,7 @@ def choose_offer(args, excluded):
     for _ in range(100):
         offer = base.find_offer(args, excluded)
         excluded.add(str(offer['id']))
-        if not gpu_supported(offer):
+        if not gpu_supported(offer, args.gpu_mode):
             base.log(f'[SKIP UNSUPPORTED GPU] {offer.get("gpu_name")!r} offer={offer.get("id")}')
             continue
         key = host_key(offer)
@@ -503,6 +515,8 @@ def main():
     p.add_argument('--min-price', type=float, default=0.0)
     p.add_argument('--max-price', type=float, default=1.2)
     p.add_argument('--min-vram', type=float, default=40)
+    p.add_argument('--gpu-mode', choices=['blackwell', 'standard'], default='blackwell',
+                   help='blackwell: RTX PRO 5000/6000; standard: allowlisted non-Blackwell GPUs')
     p.add_argument('--min-reliability', type=float, default=.97)
     p.add_argument('--max-parallel', type=int, default=25)
     p.add_argument('--max-tasks', type=int)
