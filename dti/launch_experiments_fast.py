@@ -134,13 +134,55 @@ def run_task(task, args, password, excluded):
         instance_id = int(response['new_contract'])
         log(f'[CREATED] {name}: instance={instance_id}')
         connection = wait_ready(instance_id, args.startup_timeout)
-        script = HERE / f'run_{model}.sh'
+        script = (HERE / 'scripts' / f'run_{model}.sh') if (HERE / 'scripts' / f'run_{model}.sh').is_file() else HERE / f'run_{model}.sh'
         upload = subprocess.run(ssh_cmd(connection, 'cat > /tmp/dti_run.sh && chmod 700 /tmp/dti_run.sh'),
                                 input=script.read_bytes(), capture_output=True, timeout=60)
         if upload.returncode:
             raise RuntimeError(f'Script upload failed: {upload.stderr.decode(errors="replace")}')
-        # Secret travels only through SSH stdin, not command-line arguments or disk files.
+        # Credentials are passed via SSH stdin; do not print or commit them.
+        if args.self_destroy and not os.environ.get('VAST_API_KEY'):
+            raise RuntimeError('--self-destroy requires VAST_API_KEY in the Mac environment')
+        self_destroy_setup = (
+            f'export VAST_API_KEY={shlex.quote(os.environ.get("VAST_API_KEY", ""))}\n'
+            f'export EXPECTED_INSTANCE_ID={instance_id}\n'
+            f'export FTP_RESULTS_DIR={shlex.quote(args.ftp_results_dir)}\n'
+        ) if args.self_destroy else ''
+        self_destroy_finish = r'''
+set -euo pipefail
+# Verify the archives uploaded to Lolipop before authorizing self-destruction.
+# Run from the directory where the training script produced the archives.
+RUN_NAME="${DATASET}_${COLD_TYPE}_${MODEL}_split${SPLIT}_seed${SEED}"
+REMOTE_DIR="${FTP_RESULTS_DIR}/${DATASET}"
+command -v lftp >/dev/null || { echo '[NO LFTP] Self-destroy disabled'; exit 1; }
+verify_archive() {
+  local filename="$1" remote_copy="/tmp/${1}.selfverify"
+  test -s "$filename" || { echo "[LOCAL ARCHIVE MISSING] $filename"; return 1; }
+  rm -f "$remote_copy"
+  lftp -u 'chicappa.jp-wakou',"$FTP_PASS" ftp.lolipop.jp -e "set cmd:fail-exit yes; set net:max-retries 10; set net:timeout 30; cd "$REMOTE_DIR"; get "$filename" -o "$remote_copy"; bye"
+  test -s "$remote_copy" || return 1
+  local local_hash remote_hash
+  local_hash=$(sha256sum "$filename"); local_hash=${local_hash%% *}
+  remote_hash=$(sha256sum "$remote_copy"); remote_hash=${remote_hash%% *}
+  test "$local_hash" = "$remote_hash" || { echo "[HASH MISMATCH] $filename"; return 1; }
+  rm -f "$remote_copy"
+  echo "[FTP VERIFIED] $filename $local_hash"
+}
+cd /vqatom/dti
+verify_archive "${RUN_NAME}.tar.gz"
+if test -f "${RUN_NAME}_qkmaps.tar.gz"; then
+  verify_archive "${RUN_NAME}_qkmaps.tar.gz"
+fi
+# Never delete an instance whose runtime identity differs from the launch ID.
+[[ "${VAST_CONTAINERLABEL:-}" =~ ^C\.[0-9]+$ ]] || { echo '[BAD VAST_CONTAINERLABEL]'; exit 1; }
+INSTANCE_ID="${VAST_CONTAINERLABEL#C.}"
+[[ "$INSTANCE_ID" = "$EXPECTED_INSTANCE_ID" ]] || { echo '[INSTANCE ID MISMATCH]'; exit 1; }
+command -v vastai >/dev/null || { echo '[VASTAI CLI MISSING]'; exit 1; }
+# Allow SSH to exit successfully before the instance deletes itself.
+nohup bash -c 'sleep 15; vastai destroy instance "$1" -y >>/tmp/dti_self_destroy.log 2>&1' _ "$INSTANCE_ID" </dev/null >/tmp/dti_self_destroy.log 2>&1 &
+echo "[SELF DESTROY SCHEDULED] instance=$INSTANCE_ID"
+'''
         wrapper = (f'export FTP_PASS={shlex.quote(password)}\n'
+                   + self_destroy_setup + f'export MODEL={shlex.quote(model)}\n'
                    f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} '
                    f'SPLIT={split} SEED={seed}\n'
                    'set -o pipefail\n'
@@ -151,7 +193,9 @@ def run_task(task, args, password, excluded):
                    'fi\n'
                    'python --version\n'
                    'bash /tmp/dti_run.sh 2>&1 | tee /tmp/dti_run.log\n'
-                   'exit ${PIPESTATUS[0]}\n')
+                   'rc=${PIPESTATUS[0]}\n'
+                   'if (( rc != 0 )); then exit "$rc"; fi\n'
+                   + (self_destroy_finish if args.self_destroy else '') + '\n')
         log(f'[START] {name}: instance={instance_id}')
         logs = HERE / 'experiment_logs'
         logs.mkdir(exist_ok=True)
@@ -167,7 +211,9 @@ def run_task(task, args, password, excluded):
         if proc.returncode:
             raise RuntimeError(f'SSH/training exited {proc.returncode}; inspect experiment_logs/{name}.log')
         log(f'[SUCCESS] {name}: FTP upload command completed')
-        if args.auto_destroy:
+        if args.self_destroy:
+            log(f'[SELF DESTROY SCHEDULED] {name}: instance={instance_id}; verify removal separately')
+        elif args.auto_destroy:
             cli('destroy', 'instance', instance_id, '-y', '--raw', timeout=90)
             log(f'[DESTROYED] {name}: instance={instance_id}')
         else:
@@ -197,8 +243,12 @@ def main():
     p.add_argument('--startup-timeout', type=int, default=1200)
     p.add_argument('--task-timeout-hours', type=float, default=24)
     p.add_argument('--execute', action='store_true', help='Actually rent GPUs (default is dry-run)')
+    p.add_argument('--self-destroy', action='store_true', help='After FTP SHA-256 verification, have GPU destroy itself (requires VAST_API_KEY and vastai CLI on GPU)')
+    p.add_argument('--ftp-results-dir', default='dti_results', help='FTP result directory relative to FTP login root')
     p.add_argument('--auto-destroy', action='store_true', help='Destroy instance only after successful training and FTP upload')
     args = p.parse_args()
+    if args.self_destroy and args.auto_destroy:
+        p.error('Choose --self-destroy OR --auto-destroy, not both')
     cold_types = [args.cold_type] if args.cold_type else [s.strip() for s in args.cold_types.split(',')]
     if not cold_types or any(c not in ('protein_cold', 'ligand_cold', 'double_cold', 'scaffold_cold') for c in cold_types):
         p.error('Unknown cold type')
@@ -210,8 +260,8 @@ def main():
     if args.max_parallel < 1 or args.min_price < 0 or args.max_price < args.min_price or args.disk < 10 or (args.max_tasks is not None and args.max_tasks < 1):
         p.error('Invalid parallelism, max-price, or disk')
     for model in models:
-        if not (HERE / f'run_{model}.sh').is_file():
-            p.error(f'Missing {HERE / f"run_{model}.sh"}')
+        if not any(path.is_file() for path in (HERE / 'scripts' / f'run_{model}.sh', HERE / f'run_{model}.sh')):
+            p.error(f'Missing run_{model}.sh in dti/ or dti/scripts/')
     tasks = [(args.dataset, cold, m, sp, sd) for cold in cold_types for m in models for sp in splits for sd in seeds]
     if args.max_tasks is not None:
         tasks = tasks[:args.max_tasks]
@@ -241,4 +291,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
