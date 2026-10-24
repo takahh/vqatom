@@ -84,14 +84,14 @@ python dti.py \
   --batch_size 8 \
   --cls_lambda 0.05 \
   --contact_lambda 0 \
-  --cross_lr 1e-4 \
+  --cross_lr 5e-5 \
   --dropout 0.3 \
   --epochs "$EPOCHS" \
   --final_eval_csv "$TEST" \
   --finetune_esm \
   --finetune_lig \
   --freeze_esm_bottom 28 \
-  --lig_lr 1e-5 \
+  --lig_lr 5e-6 \
   --ligand_mode vqatom \
   --ligand_token_dropout 0.1 \
   --llrd \
@@ -99,7 +99,7 @@ python dti.py \
   --n_heads 8 \
   --out_dir "$OUT_DIR" \
   --pl_lp_overlap both \
-  --protein_lr 5e-6 \
+  --protein_lr 2.5e-6 \
   --protein_token_dropout 0.1 \
   --rank_lambda 0.05 \
   --rank_loss pairwise \
