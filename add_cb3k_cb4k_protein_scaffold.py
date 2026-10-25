@@ -21,7 +21,7 @@ MODELS = [
 
 files = [
     ROOT / f"split_{i}" /
-    f"kiba_protein_scaffold_cold_split_{i}_{part}_morgan.csv"
+    f"kiba_protein_scaffold_cold_split_{i}_{part}_morgan_cb5k_cb10k_cb15k.csv"
     for i in (1, 2, 3)
     for part in ("train", "valid", "test")
 ]
@@ -108,8 +108,8 @@ for path in files:
 
     output = path.with_name(
         path.name.replace(
-            "_morgan.csv",
-            "_morgan_cb3k_cb4k.csv"
+            "_morgan_cb5k_cb10k_cb15k.csv",
+            "_morgan_cb5k_cb10k_cb15k_cb3k_cb4k.csv"
         )
     )
 
