@@ -541,9 +541,12 @@ def init_tokenizer(
 ):
     import torch
 
-    dev = torch.device(
-        f"cuda:{device}" if device >= 0 and torch.cuda.is_available() else "cpu"
-    )
+    if device >= 0 and torch.cuda.is_available():
+        dev = torch.device(f"cuda:{device}")
+    elif device >= 0 and torch.backends.mps.is_available():
+        dev = torch.device("mps")
+    else:
+        dev = torch.device("cpu")
 
     meta = _load_global_id_meta_any(ckpt_path, map_location="cpu")
     if meta is not None:

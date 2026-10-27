@@ -49,7 +49,7 @@ for column, size, filename in MODELS:
 
     init_tokenizer(
         ckpt_path=str(ckpt),
-        device=0,
+        device=-1,
         hidden_dim=16,
         codebook_size=size,
         strict=True,
