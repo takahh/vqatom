@@ -258,9 +258,11 @@ class DTIDataset(Dataset):
             elif ligand_input_type == "continuous":
                 # Continuous GNN uses atom_feat, not VQ-Atom token IDs.
                 lig_text = (r.get("atom_feat") or "").strip()
-            elif ligand_input_type in ("vqatom", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k"):
+            elif ligand_input_type in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k"):
                 col = {
                     "vqatom": "lig_tok",
+                    "vqatom_cb500": "lig_tok",
+                    "vqatom_cb1000": "lig_tok",
                     "vqatom_cb3k": "lig_tok_cb3k",
                     "vqatom_cb4k": "lig_tok_cb4k",
                     "vqatom_cb5k": "lig_tok_cb5k",
@@ -340,7 +342,7 @@ class DTIDataset(Dataset):
             # Actual ligand features come from atom_feat in ContinuousGNNEncoder.
             atom_features = json.loads(row["lig_text"])
             lig_ids = [self.lig_cls_id] + [0] * len(atom_features)
-        elif self.ligand_input_type in ("vqatom", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
+        elif self.ligand_input_type in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
             lig_ids = [self.lig_cls_id] + self._parse_lig_tok(row["lig_text"])
         else:
             lig_ids = self.smiles_tokenizer.encode(row["lig_text"], add_cls=True)
@@ -2294,7 +2296,7 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
-        if self.ligand_input_type in ("vqatom", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
+        if self.ligand_input_type in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
             pair_map = ligand_adj_smooth_pairmap(
                 pair_map,
                 edge_index=edge_index,
@@ -2598,7 +2600,7 @@ def main():
             "continuous",
             "continuous_pretrained",
             "vqatom",
-            "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k",
+            "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k",
             "vqatom_cb10k",
             "vqatom_cb15k",
             "vqatom_pretrained",
@@ -2783,7 +2785,7 @@ def main():
         ligand_input_type = "continuous"
 
 
-    elif args.ligand_mode in ("vqatom", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k"):
+    elif args.ligand_mode in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k"):
         print("[lig] mode = vqatom (transformer scratch)")
 
         vm = load_vocab_meta_from_vq_ckpt(args.vq_ckpt)

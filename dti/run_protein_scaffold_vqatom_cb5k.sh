@@ -23,9 +23,9 @@ FTP_RESULTS_DIR="${FTP_RESULTS_DIR:-dti_results}/${DATASET}"
 BASE="/vqatom"
 DATA="$BASE/data/${DATASET}/${COLD_TYPE}/split_${SPLIT}"
 DTI="$BASE/dti"
-TRAIN="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_train_morgan_cb5k_cb10k_cb15k.csv"
-VALID="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_valid_morgan_cb5k_cb10k_cb15k.csv"
-TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test_morgan_cb5k_cb10k_cb15k.csv"
+TRAIN="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_train_morgan_cb5k_cb10k_cb15k_cb3k_cb4k.csv"
+VALID="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_valid_morgan_cb5k_cb10k_cb15k_cb3k_cb4k.csv"
+TEST="$DATA/${DATASET}_${COLD_TYPE}_split_${SPLIT}_test_morgan_cb5k_cb10k_cb15k_cb3k_cb4k.csv"
 RUN="${DATASET}_${COLD_TYPE}_vqatom_cb5k_split${SPLIT}_seed${SEED}"
 OUT_DIR="$DTI/$RUN"
 
@@ -59,7 +59,7 @@ fetch_file() {
 # Refresh dataset CSVs by default; set FORCE_REFRESH_CSV=0 to reuse cached copies.
 FORCE_REFRESH_CSV="${FORCE_REFRESH_CSV:-0}"
 for kind in train valid test; do
-  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}_cb5k.csv"
+  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}_morgan_cb5k_cb10k_cb15k_cb3k_cb4k.csv"
   fetch_file "$REMOTE/$name" "$DATA/$name" "$FORCE_REFRESH_CSV"
 done
 CKPT="$BASE/data/model_epoch_6_5k.pt"
