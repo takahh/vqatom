@@ -92,6 +92,8 @@ def get_args():
     # VQ
     # --------------
     parser.add_argument("--codebook_size", type=int, default=1500, help="Codebook size of VQGraph")
+    parser.add_argument("--fixed_encoder_ema", action="store_true",
+                        help="Freeze encoder; run IVF/K-means + EMA without gradient losses")
     parser.add_argument("--kmeans_iters", type=int, default=20,
                         help="Global Lloyd iterations after k-means++ initialization")
     parser.add_argument("--lamb_edge",  type=float, default=0.003)  # default=0.03)
@@ -3344,6 +3346,7 @@ class VectorQuantize(nn.Module):
 
         self.eps = eps
         self.tau_ema = 0.9
+        self.fixed_encoder_ema = bool(get_args().fixed_encoder_ema)
         self.commitment_weight = commitment_weight
         self.codebook_weight = codebook_weight
 
@@ -4049,8 +4052,13 @@ class VectorQuantize(nn.Module):
                         "Fix _codebook() to return that structure."
                     )
 
-            # ---- commitment loss uses assignments from embed_ind_dict
-            commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
+            # Fixed-encoder ablation: assignments and EMA have already run.
+            # Skip all gradient-based losses, including commitment and repel.
+            if getattr(self, "fixed_encoder_ema", False):
+                commit_loss = codebook_loss = repel_loss = cb_repel_loss = z0
+                ent_loss = z0
+            else:
+                commit_loss, codebook_loss, repel_loss, cb_repel_loss = self.commitment_loss(
                 encoder_outputs=encoder_outputs,
                 mask_dict=mask_dict,
                 codebook=codebook_container,  # <-- IMPORTANT: must support codebook[safe]
@@ -4074,7 +4082,8 @@ class VectorQuantize(nn.Module):
         # -----------------------------
         # (あなたの今の return に合わせて: total_loss = commit + ent)
         total_loss = self.commitment_weight * commit_loss + ent_loss
-        logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
+        if logger is not None and not getattr(self, "fixed_encoder_ema", False):
+            logger.info(f"commit loss {commit_loss}, ent_loss {ent_loss}, total_loss {total_loss}")
         return total_loss, (commit_loss, codebook_loss, repel_loss, cb_repel_loss, ent_loss)
 
 
@@ -4756,7 +4765,16 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = model.to(device)
-    model.train()
+    model.train()  # EMA codebook updates require training mode
+    fixed_encoder_ema = bool(get_args().fixed_encoder_ema)
+    if fixed_encoder_ema:
+        # Preserve training mode for codebook EMA, but disable stochastic dropout.
+        # No parameter updates are performed; no gradient graph is constructed.
+        for module in model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.eval()
+        for param in model.parameters():
+            param.requires_grad_(False)
 
     g = g.to(device)
     if "feat" in g.ndata:
@@ -4769,6 +4787,15 @@ def train_sage(model, g, feats, optimizer, chunk_i, mask_dict, logger, epoch,
     else:
         ctx = nullcontext()
         scaler = None
+
+    if fixed_encoder_ema:
+        with torch.no_grad():
+            outputs = model(g, feats, chunk_i, mask_dict, logger, epoch, g, "train", attr)
+            loss, cb, loss_list3 = outputs
+        loss_scalar = float(loss.detach().cpu()) if isinstance(loss, torch.Tensor) else float(loss)
+        loss_list_out = [float(v.detach().cpu()) if isinstance(v, torch.Tensor) else float(v)
+                         for v in loss_list3]
+        return loss_scalar, loss_list_out
 
     optimizer.zero_grad(set_to_none=True)
 

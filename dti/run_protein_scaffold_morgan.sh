@@ -60,7 +60,7 @@ fetch_file() {
 }
 
 for kind in train valid test; do
-  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}.csv"
+  name="${DATASET}_${COLD_TYPE}_split_${SPLIT}_${kind}_morgan_cb5k_cb10k_cb15k.csv"
   local_csv="$DATA/$name"
   if [[ -s "$local_csv" ]] && ! head -n 1 "$local_csv" | grep -q 'morgan_atom_r2_token'; then
     echo "[STALE CSV] Missing Morgan column; re-downloading $local_csv"
