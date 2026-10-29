@@ -92,11 +92,8 @@ def get_args():
     # VQ
     # --------------
     parser.add_argument("--codebook_size", type=int, default=1500, help="Codebook size of VQGraph")
-    parser.add_argument("--spatial_ivf", action="store_true", help="Use spatial IVF for large atom groups")
-    parser.add_argument("--ivf_min_samples", type=int, default=100000)
-    parser.add_argument("--ivf_nlist", type=int, default=64)
-    parser.add_argument("--ivf_fit_samples", type=int, default=200000)
-    parser.add_argument("--ivf_fine_iters", type=int, default=5)
+    parser.add_argument("--kmeans_iters", type=int, default=20,
+                        help="Global Lloyd iterations after k-means++ initialization")
     parser.add_argument("--lamb_edge",  type=float, default=0.003)  # default=0.03)
     parser.add_argument("--lamb_node", type=float, default=0.00008)  # default=0.001)
     parser.add_argument("--lamb_div_ele",  type=float, default=0.002)  # default=0.03)
@@ -624,8 +621,8 @@ def kmeans(
     eps: float = 1e-12,
     max_iters: int = 20,
     tol: float = 0.0,
-    n_block: int = 131072,          # tile size over N (points)
-    k_block: int = 4096,            # tile size over K (centers)
+    n_block: int = 4096,            # bounded N tile; avoids giant [N,K] matrices
+    k_block: int = 1024,            # bounded K tile
     element_names=None,             # optional labels for heads (e.g., ["C","N","O",...])
 ):
     """
@@ -847,8 +844,10 @@ def kmeans(
         for k in range(1, K):
             # stabilized probs from closest distances
             prob = closest
-            prob = (prob - prob.amin(dim=1, keepdim=True)).clamp_min_(0) + eps
-            prob = prob * prob  # standard kmeans++ uses d^2 weighting
+            # Euclidean closest already holds squared distances: do NOT square again.
+            # For cosine, 1-cosine is proportional to squared Euclidean distance
+            # on the unit sphere.
+            prob = prob.clamp_min(0)
 
             idxk = sample_idx(prob)  # [H] long on GPU
             C[:, k, :] = X[torch.arange(H, device=dev), idxk, :]
@@ -982,132 +981,6 @@ def kmeans(
 
     return means, bins, used_per_head, used_per_label
 
-
-
-@torch.no_grad()
-def spatial_ivf_kmeans(samples, num_clusters, *, nlist=64, fit_samples=200000,
-                       coarse_batch=8192, fine_iters=5, block=8192,
-                       use_cosine_sim=False, seed=0):
-    """Spatial IVF -> local fine KMeans -> full-data Lloyd refinement.
-
-    Input [N,D]; returns [1,K,D] centers and [1,K] counts, compatible with kmeans().
-    The IVF regions are fixed; no global nearest-center search across regions.
-    """
-    from sklearn.cluster import MiniBatchKMeans
-    import numpy as np
-    import torch.nn.functional as F
-
-    x = samples.detach().float()
-    device = x.device
-    N, D = x.shape
-    K = min(int(num_clusters), N)
-    if K <= 0:
-        raise ValueError("Empty samples")
-    if use_cosine_sim:
-        x = F.normalize(x, dim=-1)
-    nlist = min(int(nlist), K, N)
-    fit_n = min(N, max(int(fit_samples), K, nlist))
-    rng = torch.Generator(device='cpu').manual_seed(int(seed))
-    # Sampling indices on CPU avoids a full GPU randperm of millions of items.
-    if fit_n < N:
-        idx = torch.randint(N, (fit_n,), generator=rng).to(device)
-        fit = x.index_select(0, idx)
-    else:
-        fit = x
-    fit_np = fit.cpu().numpy()
-    coarse_km = MiniBatchKMeans(n_clusters=nlist, batch_size=max(coarse_batch, nlist),
-                                n_init=1, random_state=seed, reassignment_ratio=0.01)
-    coarse_km.fit(fit_np)
-    coarse = torch.tensor(coarse_km.cluster_centers_, device=device, dtype=torch.float32)
-    if use_cosine_sim:
-        coarse = F.normalize(coarse, dim=-1)
-
-    def assign(z, centers):
-        out = torch.empty(z.shape[0], device=device, dtype=torch.long)
-        c2 = (centers * centers).sum(dim=-1)
-        for a in range(0, len(z), block):
-            v = z[a:a+block]
-            score = v @ centers.T
-            if not use_cosine_sim:
-                score = 2 * score - c2.unsqueeze(0)
-            out[a:a+block] = score.argmax(dim=-1)
-        return out
-
-    # Count regions on all N points, not merely on the fitting sample.
-    coarse_ids = assign(x, coarse)
-    region_counts = torch.bincount(coarse_ids, minlength=nlist).cpu()
-    # Only occupied regions can receive centers; reserve one per occupied region.
-    occupied = torch.where(region_counts > 0)[0]
-    weights = region_counts[occupied].double()
-    budget = K - len(occupied)
-    raw = weights / weights.sum() * budget
-    alloc = torch.floor(raw).long() + 1
-    rem = K - int(alloc.sum())
-    if rem:
-        alloc[torch.argsort(raw - torch.floor(raw), descending=True)[:rem]] += 1
-    # A region cannot contain more unique centers than points.
-    capacity = region_counts[occupied]
-    excess = (alloc - capacity).clamp_min(0)
-    alloc = torch.minimum(alloc, capacity)
-    missing = int(excess.sum())
-    while missing:
-        free = capacity - alloc
-        candidates = torch.where(free > 0)[0]
-        if not len(candidates):
-            raise RuntimeError('Not enough distinct points for codebook')
-        take = min(missing, len(candidates))
-        alloc[candidates[:take]] += 1
-        missing -= take
-
-    fit_ids = assign(fit, coarse).cpu()
-    centers_parts = []
-    region_to_slice = {}
-    offset = 0
-    for r, kr in zip(occupied.tolist(), alloc.tolist()):
-        pool = fit[fit_ids.to(device) == r]
-        if len(pool) < kr:
-            # Add real samples from the full region when fit sample is too small.
-            full_region = x[coarse_ids == r]
-            pool = full_region
-        if kr == 1:
-            local = pool.mean(0, keepdim=True)
-        else:
-            km = MiniBatchKMeans(n_clusters=kr, batch_size=max(1024, kr),
-                                 n_init=1, random_state=seed, reassignment_ratio=0.0)
-            km.fit(pool.cpu().numpy())
-            local = torch.tensor(km.cluster_centers_, device=device, dtype=torch.float32)
-        if use_cosine_sim:
-            local = F.normalize(local, dim=-1)
-        centers_parts.append(local)
-        region_to_slice[r] = (offset, offset + kr)
-        offset += kr
-    centers = torch.cat(centers_parts, dim=0)
-    assert centers.shape == (K, D)
-    counts = torch.zeros(K, device=device, dtype=torch.long)
-    for iteration in range(int(fine_iters)):
-        sums = torch.zeros_like(centers)
-        counts.zero_()
-        for r in occupied.tolist():
-            start, end = region_to_slice[r]
-            # Process only points assigned to this coarse spatial region.
-            ix = torch.where(coarse_ids == r)[0]
-            c = centers[start:end]
-            c2 = (c*c).sum(-1)
-            for a in range(0, len(ix), block):
-                indices = ix[a:a+block]
-                v = x[indices]
-                score = v @ c.T
-                if not use_cosine_sim:
-                    score = 2*score - c2.unsqueeze(0)
-                labels = score.argmax(-1) + start
-                sums.index_add_(0, labels, v)
-                counts.index_add_(0, labels, torch.ones_like(labels))
-        used = counts > 0
-        centers[used] = sums[used] / counts[used, None]
-        if use_cosine_sim:
-            centers = F.normalize(centers, dim=-1)
-    # counts correspond to last assignment pass (as in ordinary Lloyd updates).
-    return centers.unsqueeze(0), counts.unsqueeze(0)
 
 
 def compact_clusters(means: torch.Tensor, bins: torch.Tensor, pad_to_max: bool = True):
@@ -1516,11 +1389,7 @@ class EuclideanCodebook(nn.Module):
         # Interpret --codebook_size as the TOTAL initial number of centers.
         # CBDICT supplies only relative weights, not absolute center counts.
         self.cb_dict = allocate_codebook_budget(CBDICT, int(codebook_size))
-        self.spatial_ivf = bool(args.spatial_ivf)
-        self.ivf_min_samples = int(args.ivf_min_samples)
-        self.ivf_nlist = int(args.ivf_nlist)
-        self.ivf_fit_samples = int(args.ivf_fit_samples)
-        self.ivf_fine_iters = int(args.ivf_fine_iters)
+        self.kmeans_iters = int(args.kmeans_iters)
         print(f"[CODEBOOK-BUDGET] requested={codebook_size} "
               f"allocated={sum(self.cb_dict.values())} groups={len(self.cb_dict)}")
 
@@ -2123,22 +1992,14 @@ class EuclideanCodebook(nn.Module):
                     f"samples_var={samples.float().var(dim=-1, correction=0).mean().item():.4e}"
                 )
 
-                if self.spatial_ivf and N_i >= self.ivf_min_samples and K_run > 1:
-                    logger.info(f"[IVF] key={skey} N={N_i} K={K_run} "
-                                f"nlist={self.ivf_nlist} fit={self.ivf_fit_samples}")
-                    means_1kd, counts_1k = spatial_ivf_kmeans(
-                        samples, num_clusters=K_run, nlist=self.ivf_nlist,
-                        fit_samples=self.ivf_fit_samples,
-                        fine_iters=self.ivf_fine_iters,
-                        use_cosine_sim=use_cosine_sim,
-                        seed=int(getattr(self, 'ivf_seed', 0)),
-                    )
-                else:
-                    means_1kd, counts_1k, *_ = kmeans(
-                        samples.unsqueeze(0),
-                        num_clusters=K_run,
-                        use_cosine_sim=use_cosine_sim,
-                    )
+                logger.info(f"[KMEANS++] key={skey} N={N_i} K={K_run} "
+                            f"iters={self.kmeans_iters} global_no_ivf=True")
+                means_1kd, counts_1k, *_ = kmeans(
+                    samples.unsqueeze(0),
+                    num_clusters=K_run,
+                    use_cosine_sim=use_cosine_sim,
+                    max_iters=self.kmeans_iters,
+                )
 
                 ds = _stats(masked)
                 means_kd, counts_k = _pad_to_K(means_1kd, counts_1k, K_req, data_stats=ds)
