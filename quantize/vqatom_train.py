@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 """Single-file consolidation of the six uploaded VQAtom modules.
 
@@ -92,6 +93,8 @@ def get_args():
     # VQ
     # --------------
     parser.add_argument("--codebook_size", type=int, default=1500, help="Codebook size of VQGraph")
+    parser.add_argument("--chem_fusion_alpha", type=float, default=0.0,
+                        help="0=legacy GNN only; >0: concatenate 16D fixed chemistry and 48D frozen GNN")
     parser.add_argument("--fixed_encoder_ema", action="store_true",
                         help="Freeze encoder; run IVF/K-means + EMA without gradient losses")
     parser.add_argument("--kmeans_iters", type=int, default=20,
@@ -4238,12 +4241,12 @@ class AtomEmbedding(nn.Module):
         self.hybrid_embed   = nn.Embedding(num_embeddings=6,   embedding_dim=4)   # 0..5
         self.hydrogen_embed = nn.Embedding(num_embeddings=5,   embedding_dim=4)   # 0..4
 
-        ELEMENTS = [5, 6, 7, 8, 14, 15, 16]
+        ELEMENTS = [5, 6, 7, 8, 9, 14, 15, 16, 17, 34, 35, 53]
         self.register_buffer(
             "element_lut",
             self._build_element_lut(ELEMENTS)
         )
-        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS), embedding_dim=4)
+        self.element_embed = nn.Embedding(num_embeddings=len(ELEMENTS) + 1, embedding_dim=4)  # last index: unknown
 
         # 0/1 フラグ系は全部 2 クラス想定
         def flag_emb():
@@ -4275,7 +4278,7 @@ class AtomEmbedding(nn.Module):
 
         # ring size / aromatic neighbors / fused-id (27, 28, 29)
         # ringSize のユニーク値: ['0', '3', '4', '5', '6', '7', '8'] → 7種類
-        self.ringsize_embed  = nn.Embedding(num_embeddings=7, embedding_dim=4)
+        self.ringsize_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)
         self.aroma_num_embed = nn.Embedding(num_embeddings=5, embedding_dim=4)  # 0..4
         self.fused_if_embed  = nn.Embedding(num_embeddings=8, embedding_dim=4)  # 0..7
 
@@ -4283,7 +4286,7 @@ class AtomEmbedding(nn.Module):
         self.het27_embed = nn.Embedding(num_embeddings=27, embedding_dim=4)
 
         # 官能基フラグ 18 個 (各 2 次元) → 36 次元を 4 次元に圧縮
-        self.func_reduce = nn.Linear(18 * 2, 4)
+        self.func_reduce = nn.Linear(18 * 2, 8)
 
         # ringSize の元の値 → index の対応（0,3,4,5,6,7,8 → 0..6）
         uniq = ['0', '3', '4', '5', '6', '7', '8']
@@ -4305,7 +4308,7 @@ class AtomEmbedding(nn.Module):
         #   x25,x26: 2+2 = 4
         #   x27,x28,x29,x30: 4*4 = 16
         #   合計 = 28 + 4 + 4 + 16 = 52
-        self.disc_proj = nn.Linear(52, 48)
+        self.disc_proj = nn.Linear(56, 48)
 
         # このクラスの最終出力次元:
         #   離散部 (disc_proj 後) : 48
@@ -4316,7 +4319,7 @@ class AtomEmbedding(nn.Module):
     @staticmethod
     def _build_element_lut(ELEMENTS):
         max_z = max(ELEMENTS)
-        lut = torch.zeros(max_z + 1, dtype=torch.long)
+        lut = torch.full((max_z + 1,), len(ELEMENTS), dtype=torch.long)
         for i, z in enumerate(ELEMENTS):
             lut[z] = i
         return lut
@@ -4375,18 +4378,19 @@ class AtomEmbedding(nn.Module):
         z_raw = x[:, 0].long()
         max_z = int(self.element_lut.shape[0] - 1)
         z_safe = torch.where((0 <= z_raw) & (z_raw <= max_z), z_raw, torch.zeros_like(z_raw))
-        idx0 = self.element_lut[z_safe].clamp(0, self.element_embed.num_embeddings - 1)
+        idx0 = self.element_lut[z_safe].clone()
+        idx0[(z_raw < 0) | (z_raw > max_z)] = self.element_embed.num_embeddings - 1
         x0 = self.element_embed(idx0)
 
         # 1: degree
         x1 = self.degree_embed(clamp_idx(1, self.degree_embed.num_embeddings))
 
         # 2: ring flag (+1) for ring_embed (0..)
-        ring_plus1 = (x[:, 5].long() + 1).clamp(0, self.ring_embed.num_embeddings - 1)
+        ring_plus1 = x[:, 5].long().clamp(0, self.ring_embed.num_embeddings - 1)
         x2 = self.ring_embed(ring_plus1)
 
         # 3: charge
-        x3 = self.charge_embed(clamp_idx(2, self.charge_embed.num_embeddings))
+        x3 = self.charge_embed((x[:, 2].long() + 2).clamp(0, self.charge_embed.num_embeddings - 1))
 
         # 4: aromatic (0/1)
         x4 = self.aromatic_embed(clamp_idx(4, self.aromatic_embed.num_embeddings))
@@ -4465,6 +4469,53 @@ class AtomEmbedding(nn.Module):
         out = torch.cat([disc_emb, bond_env_emb], dim=-1)  # [N, 64]
         return out
 
+class FixedChemicalFeatures16(nn.Module):
+    """Deterministic 16D chemical features from the existing 79-column atom input.
+
+    This is a conservative baseline: no learnable parameters, no hidden
+    embedding tables, no external RDKit dependency. Input schema is unchanged.
+    16 dimensions: 7 elemental groups + 3 charge + 2 hybridization +
+    aromatic + ring + H donor + H acceptor.
+    The categories and numeric scales are explicit, but not a claim that
+    Euclidean distance is a perfect chemical similarity metric.
+    """
+    def forward(self, x):
+        z = x[:, 0].long()
+        charge = x[:, 2].float()
+        hyb = x[:, 3].float()
+        # Seven coarse elemental groups, including an explicit other group.
+        element = torch.stack([
+            (z == 6).float(),                   # C
+            (z == 7).float(),                   # N
+            (z == 8).float(),                   # O
+            (z == 16).float(),                  # S
+            (z == 15).float(),                  # P
+            ((z == 9) | (z == 17) | (z == 35) | (z == 53)).float(),
+            (~((z == 6) | (z == 7) | (z == 8) | (z == 16) |
+               (z == 15) | (z == 9) | (z == 17) |
+               (z == 35) | (z == 53))).float(),
+        ], dim=1)
+        # Charge retains sign; hybridization retains original ordinal encoding
+        # only as an ablation baseline (not an invariant physical metric).
+        charge3 = torch.stack([
+            (charge < 0).float(),
+            (charge == 0).float(),
+            (charge > 0).float(),
+        ], dim=1)
+        hybrid2 = torch.stack([
+            (hyb / 5.0).clamp(0, 1),
+            (x[:, 1].float() / 6.0).clamp(0, 1), # degree
+        ], dim=1)
+        flags4 = torch.stack([
+            x[:, 4].float().clamp(0, 1),  # aromatic
+            x[:, 5].float().clamp(0, 1),  # in ring
+            x[:, 25].float().clamp(0, 1), # H-bond donor
+            x[:, 26].float().clamp(0, 1), # H-bond acceptor
+        ], dim=1)
+        # 7 + 3 + 2 + 4 = 16
+        return torch.cat([element, charge3, hybrid2, flags4], dim=1)
+
+
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
@@ -4473,6 +4524,12 @@ class EquivariantThreeHopGINE(nn.Module):
             args = get_args()
 
         self.feat_embed = AtomEmbedding()
+        self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
+        if not 0.0 <= self.chem_fusion_alpha <= 1.0:
+            raise ValueError("chem_fusion_alpha must be between 0 and 1")
+        if self.chem_fusion_alpha > 0 and args.hidden_dim != 64:
+            raise ValueError("chemical fusion currently requires hidden_dim=64")
+        self.fixed_chem = FixedChemicalFeatures16()
         # AtomEmbedding → 64 dims (48 from discrete + 16 from bond_env)
         self.linear_0 = nn.Linear(64, args.hidden_dim)  # h0
 
@@ -4576,14 +4633,24 @@ class EquivariantThreeHopGINE(nn.Module):
         h_mid = self.mix(h_cat)
         h_out = self.out_proj(h_mid)
 
-        # K-means 用のループ時は VQ を通さずにそのまま返す
-        if mode == "init_kmeans_loop":
-            return h_out
+        # Use identical latent geometry for K-means initialization and VQ inference.
         import torch.nn.functional as F
         h_vq = self.pre_vq_ln(h_out)
-
-        # L2 normalize latents here
         h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
+        if self.chem_fusion_alpha > 0:
+            # Both branches have unit L2 norm before weighted concatenation.
+            # The 48D GNN branch is the first 48 coordinates of the frozen
+            # 64D representation. This is an explicit ablation, not a
+            # trained dimensionality reduction.
+            alpha = self.chem_fusion_alpha
+            chem = F.normalize(self.fixed_chem(features), p=2, dim=-1, eps=1e-12)
+            gnn48 = F.normalize(h_vq[:, :48], p=2, dim=-1, eps=1e-12)
+            h_vq = torch.cat([
+                chem * math.sqrt(alpha),
+                gnn48 * math.sqrt(1.0 - alpha),
+            ], dim=-1)
+        if mode == "init_kmeans_loop":
+            return h_vq
 
         quantize_output = self.vq(
             h_vq,
