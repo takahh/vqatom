@@ -93,6 +93,7 @@ def get_args():
     # VQ
     # --------------
     parser.add_argument("--codebook_size", type=int, default=1500, help="Codebook size of VQGraph")
+    parser.add_argument("--gnn_hops", type=int, choices=[2, 3], default=3, help="GINE message-passing hops (default 3 for legacy compatibility)")
     parser.add_argument("--chem_fusion_alpha", type=float, default=0.0,
                         help="0=legacy GNN only; >0: concatenate 16D fixed chemistry and 48D frozen GNN")
     parser.add_argument("--fixed_encoder_ema", action="store_true",
@@ -4523,6 +4524,7 @@ class EquivariantThreeHopGINE(nn.Module):
         if args is None:
             args = get_args()
 
+        self.gnn_hops = int(getattr(args, "gnn_hops", 3))
         self.feat_embed = AtomEmbedding()
         self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
         if not 0.0 <= self.chem_fusion_alpha <= 1.0:
@@ -4569,6 +4571,12 @@ class EquivariantThreeHopGINE(nn.Module):
         jk_dim = args.hidden_dim + 3 * hidden_feats
         self.mix = nn.Sequential(
             nn.Linear(jk_dim, 2 * hidden_feats), nn.ReLU(),
+            nn.Linear(2 * hidden_feats, hidden_feats), nn.ReLU(),
+        )
+
+        # Separate JK projection for the 2-hop ablation.
+        self.mix2 = nn.Sequential(
+            nn.Linear(args.hidden_dim + 2 * hidden_feats, 2 * hidden_feats), nn.ReLU(),
             nn.Linear(2 * hidden_feats, hidden_feats), nn.ReLU(),
         )
 
@@ -4624,13 +4632,15 @@ class EquivariantThreeHopGINE(nn.Module):
         # Hop 2
         h2 = self.gine2(h1, edge_index, edge_attr)
         h2 = self.ln2(h2 * self.res2 + h1)
-        # Hop 3
-        h3 = self.gine3(h2, edge_index, edge_attr)
-        h3 = self.ln3(h3 * self.res3 + h2)
-
-        # JK concat
-        h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
-        h_mid = self.mix(h_cat)
+        # JK uses only representations within the selected receptive field.
+        if self.gnn_hops == 2:
+            h_cat = torch.cat([h0, h1, h2], dim=-1)
+            h_mid = self.mix2(h_cat)
+        else:
+            h3 = self.gine3(h2, edge_index, edge_attr)
+            h3 = self.ln3(h3 * self.res3 + h2)
+            h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
+            h_mid = self.mix(h_cat)
         h_out = self.out_proj(h_mid)
 
         # Use identical latent geometry for K-means initialization and VQ inference.
