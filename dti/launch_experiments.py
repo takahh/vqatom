@@ -644,7 +644,7 @@ def main():
     models = [s.strip() for s in args.models.split(',')]
     if any(c not in ('protein_cold','ligand_cold','double_cold','scaffold_cold','protein_scaffold_cold') for c in colds):
         p.error('Unknown cold type')
-    if any(m not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','continuous','morgan','smiles') for m in models):
+    if any(m not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','continuous','morgan','smiles') for m in models):
         p.error('Unknown model')
     for m in models:
         if not all(resolve_run_script(c, m).is_file() for c in colds):
@@ -660,7 +660,7 @@ def main():
         for row in reader:
             task = (row['dataset'].strip(), row['cold_type'].strip(), row['model'].strip(),
                     int(row['split']), int(row['seed']))
-            if task[0] not in ('kiba','metz') or task[1] not in ('protein_cold','ligand_cold','scaffold_cold','double_cold','protein_scaffold_cold') or task[2] not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','continuous','morgan','smiles') or task[3] not in (1,2,3) or task[4] not in (0,1,2):
+            if task[0] not in ('kiba','metz') or task[1] not in ('protein_cold','ligand_cold','scaffold_cold','double_cold','protein_scaffold_cold') or task[2] not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','continuous','morgan','smiles') or task[3] not in (1,2,3) or task[4] not in (0,1,2):
                 p.error(f'Invalid task: {task}')
             tasks.append(task)
     if len(tasks) != len(set(tasks)):
