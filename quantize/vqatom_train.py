@@ -5638,7 +5638,7 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
     # ----------------------------
     # dataset and dataloader
     # ----------------------------
-    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
+    datapath = DATAPATH if conf['train_or_infer'] in ("hptune", "kmeans_only", "infer", "use_nonredun_cb_infer") else DATAPATH_INFER
     dataset = MoleculeGraphDataset(adj_dir=datapath, attr_dir=datapath)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False, collate_fn=collate_fn)
 
@@ -5765,6 +5765,26 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         print("[KMEANS] initial kmeans done.")
         logger.info("[KMEANS] initial kmeans done.")
         model.vq._codebook.latent_size_sum = 0
+
+        # K-means only: save before EMA/training.
+        if conf["train_or_infer"] == "kmeans_only":
+            global_id_meta = build_global_id_meta_from_model(model)
+            ckpt = {
+                "model": model.state_dict(),
+                "epoch": int(epoch),
+                "global_id_meta": global_id_meta,
+                "base_vocab": int(global_id_meta["global_vocab_size"]),
+                "vocab_size": int(global_id_meta["vocab_size"]),
+                "pad_id": int(global_id_meta["pad_id"]),
+                "mask_id": int(global_id_meta["mask_id"]),
+                "config": conf,
+            }
+            path = f"model_kmeans_only_cb{conf['codebook_size']}.pt"
+            torch.save(ckpt, path)
+            print(f"[KMEANS_ONLY] saved: {path}")
+            logger.info(f"[KMEANS_ONLY] saved: {path}")
+            return
+
 
         # ---------------------------
         # 2) TRAIN
@@ -6141,7 +6161,7 @@ def run(args):
         T_max=T_max,
         eta_min=eta_min
     )
-    if args.train_or_infer == "hptune":
+    if args.train_or_infer in ("hptune", "kmeans_only"):
         run_inductive(
             conf,
             model,
