@@ -96,6 +96,10 @@ def get_args():
     parser.add_argument("--gnn_hops", type=int, choices=[2, 3], default=3, help="GINE message-passing hops (default 3 for legacy compatibility)")
     parser.add_argument("--chem_fusion_alpha", type=float, default=0.0,
                         help="0=legacy GNN only; >0: concatenate 16D fixed chemistry and 48D frozen GNN")
+    parser.add_argument("--semantic_atom_features", action="store_true",
+                        help="Use fixed, interpretable chemical coordinates directly as the VQ latent (no learned atom encoder/GNN)")
+    parser.add_argument("--semantic_neighbor_weight", type=float, default=0.0,
+                        help="Add this weight times the mean semantic feature vector of directly bonded neighbors")
     parser.add_argument("--fixed_encoder_ema", action="store_true",
                         help="Freeze encoder; run IVF/K-means + EMA without gradient losses")
     parser.add_argument("--kmeans_iters", type=int, default=20,
@@ -4517,6 +4521,60 @@ class FixedChemicalFeatures16(nn.Module):
         return torch.cat([element, charge3, hybrid2, flags4], dim=1)
 
 
+class SemanticChemicalAtomFeatures(nn.Module):
+    """Fixed chemical coordinates for interpretable Euclidean VQ.
+
+    The 49 coordinates preserve explicit meanings and scales:
+      element group (7), charge sign (3), degree/6 (1), hybridization (6),
+      aromatic/ring (2), hydrogen count/4 (1), functional flags (18),
+      H-bond donor/acceptor (2), ring-size category (8), aromatic neighbors/4 (1).
+
+    Features whose semantics/scales are not established in the 79-column schema
+    (fused-ring ID, het27, and bond_env_raw) are deliberately excluded from this
+    first controlled baseline. There are no learned embeddings or projections.
+    """
+    out_dim = 49
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 2 or x.size(1) != 79:
+            raise ValueError(f"atom_inputs must be [N,79], got {tuple(x.shape)}")
+        x = x.to(dtype=torch.float32)
+        z = x[:, 0].long()
+
+        element = torch.stack([
+            (z == 6), (z == 7), (z == 8), (z == 16), (z == 15),
+            ((z == 9) | (z == 17) | (z == 35) | (z == 53)),
+            (~((z == 6) | (z == 7) | (z == 8) | (z == 16) |
+               (z == 15) | (z == 9) | (z == 17) | (z == 35) | (z == 53))),
+        ], dim=1).to(torch.float32)
+
+        charge = x[:, 2]
+        charge_sign = torch.stack([charge < 0, charge == 0, charge > 0], dim=1).to(torch.float32)
+
+        degree = (x[:, 1:2] / 6.0).clamp(0.0, 1.0)
+        hyb_idx = x[:, 3].long().clamp(0, 5)
+        hybridization = torch.nn.functional.one_hot(hyb_idx, num_classes=6).to(torch.float32)
+        aromatic_ring = x[:, 4:6].clamp(0.0, 1.0)
+        h_count = (x[:, 6:7] / 4.0).clamp(0.0, 1.0)
+        functional = x[:, 7:25].clamp(0.0, 1.0)
+        hbond = x[:, 25:27].clamp(0.0, 1.0)
+
+        raw_ring = x[:, 27].long()
+        ring_idx = torch.full_like(raw_ring, 7)
+        for idx, value in enumerate((0, 3, 4, 5, 6, 7, 8)):
+            ring_idx[raw_ring == value] = idx
+        ring_size = torch.nn.functional.one_hot(ring_idx, num_classes=8).to(torch.float32)
+        aromatic_neighbors = (x[:, 28:29] / 4.0).clamp(0.0, 1.0)
+
+        out = torch.cat([
+            element, charge_sign, degree, hybridization, aromatic_ring,
+            h_count, functional, hbond, ring_size, aromatic_neighbors,
+        ], dim=1)
+        if out.size(1) != self.out_dim:
+            raise RuntimeError(f"semantic feature dimension mismatch: {out.size(1)} != {self.out_dim}")
+        return out
+
+
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
@@ -4526,9 +4584,21 @@ class EquivariantThreeHopGINE(nn.Module):
 
         self.gnn_hops = int(getattr(args, "gnn_hops", 3))
         self.feat_embed = AtomEmbedding()
+        self.semantic_atom_features = bool(getattr(args, "semantic_atom_features", False))
+        self.semantic_neighbor_weight = float(getattr(args, "semantic_neighbor_weight", 0.0))
+        if self.semantic_neighbor_weight < 0.0:
+            raise ValueError("semantic_neighbor_weight must be non-negative")
+        if self.semantic_atom_features and not bool(getattr(args, "fixed_encoder_ema", False)):
+            raise ValueError("semantic_atom_features requires --fixed_encoder_ema")
+        if self.semantic_neighbor_weight > 0.0 and not self.semantic_atom_features:
+            raise ValueError("semantic_neighbor_weight requires --semantic_atom_features")
+        self.semantic_feat = SemanticChemicalAtomFeatures()
+        self.vq_dim = self.semantic_feat.out_dim if self.semantic_atom_features else args.hidden_dim
         self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
         if not 0.0 <= self.chem_fusion_alpha <= 1.0:
             raise ValueError("chem_fusion_alpha must be between 0 and 1")
+        if self.semantic_atom_features and self.chem_fusion_alpha > 0.0:
+            raise ValueError("chem_fusion_alpha cannot be combined with semantic_atom_features")
         if self.chem_fusion_alpha > 0 and args.hidden_dim != 64:
             raise ValueError("chemical fusion currently requires hidden_dim=64")
         self.fixed_chem = FixedChemicalFeatures16()
@@ -4585,7 +4655,7 @@ class EquivariantThreeHopGINE(nn.Module):
         self.pre_vq_ln  = nn.LayerNorm(args.hidden_dim)
 
         self.vq = VectorQuantize(
-            dim=args.hidden_dim,
+            dim=self.vq_dim,
             codebook_size=args.codebook_size,
             decay=getattr(args, "ema_decay", 0.8),
             threshold_ema_dead_code=2,
@@ -4619,35 +4689,49 @@ class EquivariantThreeHopGINE(nn.Module):
         e  = torch.where((e >= 1) & (e <= 4), e, torch.zeros_like(e))
         edge_attr = self.bond_emb(e.long())
 
-        # Node features -> h0
+        # Node features -> latent. The semantic ablation bypasses learned
+        # embeddings, projections, normalization, and message passing so that
+        # Euclidean distances remain tied to the explicit feature coordinates.
         features = features.to(dev, non_blocking=True)
-        h0_raw = self.feat_embed(features)              # [N, 64]
-        h0 = self.ln_in(self.linear_0(h0_raw))          # [N, args.hidden_dim]
-
-        # Hop 1
-        h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
-        h1 = self.gine1(h0, edge_index, edge_attr)
-        h1 = self.ln1(h1 * self.res1 + h0_for1)
-
-        # Hop 2
-        h2 = self.gine2(h1, edge_index, edge_attr)
-        h2 = self.ln2(h2 * self.res2 + h1)
-        # JK uses only representations within the selected receptive field.
-        if self.gnn_hops == 2:
-            h_cat = torch.cat([h0, h1, h2], dim=-1)
-            h_mid = self.mix2(h_cat)
-        else:
-            h3 = self.gine3(h2, edge_index, edge_attr)
-            h3 = self.ln3(h3 * self.res3 + h2)
-            h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
-            h_mid = self.mix(h_cat)
-        h_out = self.out_proj(h_mid)
-
-        # Use identical latent geometry for K-means initialization and VQ inference.
         import torch.nn.functional as F
-        h_vq = self.pre_vq_ln(h_out)
-        h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
-        if self.chem_fusion_alpha > 0:
+        if self.semantic_atom_features:
+            h_vq = self.semantic_feat(features)
+            if self.semantic_neighbor_weight > 0.0:
+                # data edges were made undirected above; compute mean one-hop
+                # context while retaining the center atom's own coordinates.
+                neighbor_sum = torch.zeros_like(h_vq)
+                neighbor_sum.index_add_(0, dst, h_vq[src])
+                degree = torch.zeros((h_vq.size(0), 1), device=dev, dtype=h_vq.dtype)
+                degree.index_add_(0, dst, torch.ones((dst.numel(), 1), device=dev, dtype=h_vq.dtype))
+                neighbor_mean = neighbor_sum / degree.clamp_min(1.0)
+                h_vq = h_vq + self.semantic_neighbor_weight * neighbor_mean
+        else:
+            h0_raw = self.feat_embed(features)              # [N, 64]
+            h0 = self.ln_in(self.linear_0(h0_raw))          # [N, args.hidden_dim]
+
+            # Hop 1
+            h0_for1 = self.skip0(h0) if self.skip0 is not None else h0
+            h1 = self.gine1(h0, edge_index, edge_attr)
+            h1 = self.ln1(h1 * self.res1 + h0_for1)
+
+            # Hop 2
+            h2 = self.gine2(h1, edge_index, edge_attr)
+            h2 = self.ln2(h2 * self.res2 + h1)
+            # JK uses only representations within the selected receptive field.
+            if self.gnn_hops == 2:
+                h_cat = torch.cat([h0, h1, h2], dim=-1)
+                h_mid = self.mix2(h_cat)
+            else:
+                h3 = self.gine3(h2, edge_index, edge_attr)
+                h3 = self.ln3(h3 * self.res3 + h2)
+                h_cat = torch.cat([h0, h1, h2, h3], dim=-1)
+                h_mid = self.mix(h_cat)
+            h_out = self.out_proj(h_mid)
+
+            # Use identical latent geometry for K-means initialization and VQ inference.
+            h_vq = self.pre_vq_ln(h_out)
+            h_vq = F.normalize(h_vq, p=2, dim=-1, eps=1e-12)
+        if self.chem_fusion_alpha > 0 and not self.semantic_atom_features:
             # Both branches have unit L2 norm before weighted concatenation.
             # The 48D GNN branch is the first 48 coordinates of the frozen
             # 64D representation. This is an explicit ablation, not a
