@@ -5940,7 +5940,12 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
                 "mask_id": int(global_id_meta["mask_id"]),
                 "config": conf,
             }
-            path = f"model_kmeans_only_cb{conf['codebook_size']}.pt"
+            from pathlib import Path
+
+            output_dir = Path(conf["output_dir"])
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            path = output_dir / f"model_kmeans_only_cb{conf['codebook_size']}.pt"
             torch.save(ckpt, path)
             print(f"[KMEANS_ONLY] saved: {path}")
             logger.info(f"[KMEANS_ONLY] saved: {path}")
