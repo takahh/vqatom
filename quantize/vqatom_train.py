@@ -100,6 +100,10 @@ def get_args():
                         help="Use fixed, interpretable chemical coordinates directly as the VQ latent (no learned atom encoder/GNN)")
     parser.add_argument("--semantic_neighbor_weight", type=float, default=0.0,
                         help="Add this weight times the mean semantic feature vector of directly bonded neighbors")
+    parser.add_argument("--semantic_hop_mode", choices=["legacy", "separate"], default="legacy",
+                        help="legacy: 49D additive 1-hop; separate: concatenate center/1-hop/exact-2-hop (147D)")
+    parser.add_argument("--semantic_hop1_weight", type=float, default=0.1)
+    parser.add_argument("--semantic_hop2_weight", type=float, default=0.1)
     parser.add_argument("--fixed_encoder_ema", action="store_true",
                         help="Freeze encoder; run IVF/K-means + EMA without gradient losses")
     parser.add_argument("--kmeans_iters", type=int, default=20,
@@ -4575,6 +4579,37 @@ class SemanticChemicalAtomFeatures(nn.Module):
         return out
 
 
+def semantic_exact_hop_means(s: torch.Tensor, src: torch.Tensor, dst: torch.Tensor):
+    """Unique graph-distance 1 and 2 neighbors, excluding center and distance-1 nodes.
+
+    Assumes src/dst represent edges of disjoint molecular graphs. Deduplicates
+    undirected edges and two-step paths; no walk-count weighting or backtracking.
+    Returns [N,D] means with zero vectors for empty neighborhoods.
+    """
+    n = s.size(0)
+    adjacency = [set() for _ in range(n)]
+    for a, b in zip(src.detach().cpu().tolist(), dst.detach().cpu().tolist()):
+        if a != b:
+            adjacency[a].add(b)
+            adjacency[b].add(a)
+    first = torch.zeros_like(s)
+    second = torch.zeros_like(s)
+    # Small molecules: loop only over local graph topology, vectorize feature sums.
+    for i, one in enumerate(adjacency):
+        if one:
+            ix1 = torch.tensor(sorted(one), dtype=torch.long, device=s.device)
+            first[i] = s.index_select(0, ix1).mean(0)
+        two = set()
+        for j in one:
+            two.update(adjacency[j])
+        two.difference_update(one)
+        two.discard(i)
+        if two:
+            ix2 = torch.tensor(sorted(two), dtype=torch.long, device=s.device)
+            second[i] = s.index_select(0, ix2).mean(0)
+    return first, second
+
+
 class EquivariantThreeHopGINE(nn.Module):
     def __init__(self, in_feats, hidden_feats, out_feats, args):
         super().__init__()
@@ -4592,8 +4627,17 @@ class EquivariantThreeHopGINE(nn.Module):
             raise ValueError("semantic_atom_features requires --fixed_encoder_ema")
         if self.semantic_neighbor_weight > 0.0 and not self.semantic_atom_features:
             raise ValueError("semantic_neighbor_weight requires --semantic_atom_features")
+        self.semantic_hop_mode = getattr(args, "semantic_hop_mode", "legacy")
+        self.semantic_hop1_weight = float(getattr(args, "semantic_hop1_weight", 0.1))
+        self.semantic_hop2_weight = float(getattr(args, "semantic_hop2_weight", 0.1))
+        if self.semantic_hop1_weight < 0 or self.semantic_hop2_weight < 0:
+            raise ValueError("semantic hop weights must be non-negative")
+        if self.semantic_hop_mode == "separate" and not self.semantic_atom_features:
+            raise ValueError("--semantic_hop_mode separate requires --semantic_atom_features")
         self.semantic_feat = SemanticChemicalAtomFeatures()
-        self.vq_dim = self.semantic_feat.out_dim if self.semantic_atom_features else args.hidden_dim
+        self.vq_dim = (3 * self.semantic_feat.out_dim if self.semantic_atom_features and
+                       self.semantic_hop_mode == "separate" else
+                       self.semantic_feat.out_dim if self.semantic_atom_features else args.hidden_dim)
         self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
         if not 0.0 <= self.chem_fusion_alpha <= 1.0:
             raise ValueError("chem_fusion_alpha must be between 0 and 1")
@@ -4696,7 +4740,11 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch.nn.functional as F
         if self.semantic_atom_features:
             h_vq = self.semantic_feat(features)
-            if self.semantic_neighbor_weight > 0.0:
+            if self.semantic_hop_mode == "separate":
+                m1, m2 = semantic_exact_hop_means(h_vq, src, dst)
+                h_vq = torch.cat([h_vq, self.semantic_hop1_weight * m1,
+                                  self.semantic_hop2_weight * m2], dim=-1)
+            elif self.semantic_neighbor_weight > 0.0:
                 # data edges were made undirected above; compute mean one-hop
                 # context while retaining the center atom's own coordinates.
                 neighbor_sum = torch.zeros_like(h_vq)
