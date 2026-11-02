@@ -603,11 +603,17 @@ def monitor(args):
 
 
 def resolve_run_script(cold, model):
-    """Prefer the cold-specific runner when it exists."""
+    """Resolve runners from scripts/ first, then the legacy dti/ root."""
     if cold == 'protein_scaffold_cold':
-        candidate = HERE / f'run_protein_scaffold_{model}.sh'
-        return candidate
-    return HERE / f'run_{model}.sh'
+        name = f'run_protein_scaffold_{model}.sh'
+    else:
+        name = f'run_{model}.sh'
+
+    for path in (HERE / 'scripts' / name, HERE / name):
+        if path.is_file():
+            return path
+
+    raise FileNotFoundError(f'Runner not found: {name}')
 
 
 def main():
@@ -675,7 +681,12 @@ def main():
     if not args.tasks_file and not args.monitor_only:
         p.error('--tasks-file is required to avoid accidentally launching a full task grid')
     tasks = []
-    with open(args.tasks_file, newline='') as f:
+    task_path = Path(args.tasks_file)
+    if not task_path.is_file():
+        candidate = HERE / 'task_lists' / task_path.name
+        if candidate.is_file():
+            task_path = candidate
+    with open(task_path, newline='') as f:
         reader = csv.DictReader(f)
         required = {'dataset', 'cold_type', 'model', 'split', 'seed'}
         if not required.issubset(reader.fieldnames or []):
