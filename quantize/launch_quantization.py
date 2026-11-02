@@ -164,6 +164,9 @@ def choose(args, excluded):
             if not key:
                 continue
 
+            if key == "machine_id:152108":
+                log("[SKIP STALLED HOST]", key)
+                continue
             if key in blacklist or key in base.RESERVED_HOSTS:
                 continue
 
@@ -327,6 +330,8 @@ def main():
         key=base.host_key(inst)
         if key: base.RESERVED_HOSTS.add(key)
     excluded=set()
+    excluded.add("machine_id:152108")  # Docker image pull stalled
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
         results=list(pool.map(lambda cb:launch(cb,args,password,excluded),tasks))
     log('[LAUNCH RESULT]',sum(results),'/',len(tasks))
