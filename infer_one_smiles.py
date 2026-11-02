@@ -55,12 +55,13 @@ def _build_args_for_ckpt(
     ema_decay: float = 0.8,
 ):
     return SimpleNamespace(
-        hidden_dim=64,
+        hidden_dim=hidden_dim,
         codebook_size=codebook_size,
         edge_emb_dim=edge_emb_dim,
         ema_decay=ema_decay,
         gnn_hops=2,
         semantic_atom_features=True,
+        semantic_hop_mode="separate",
         semantic_neighbor_weight=0.1,
         fixed_encoder_ema=True,
         chem_fusion_alpha=0.0,
