@@ -100,7 +100,7 @@ def get_args():
                         help="Use fixed, interpretable chemical coordinates directly as the VQ latent (no learned atom encoder/GNN)")
     parser.add_argument("--semantic_neighbor_weight", type=float, default=0.0,
                         help="Add this weight times the mean semantic feature vector of directly bonded neighbors")
-    parser.add_argument("--semantic_hop_mode", choices=["legacy", "separate"], default="legacy",
+    parser.add_argument("--semantic_hop_mode", choices=["legacy", "separate", "integrated16", "recursive16"], default="legacy",
                         help="legacy: 49D additive 1-hop; separate: concatenate center/1-hop/exact-2-hop (147D)")
     parser.add_argument("--semantic_hop1_weight", type=float, default=0.1)
     parser.add_argument("--semantic_hop2_weight", type=float, default=0.1)
@@ -4622,8 +4622,17 @@ class EquivariantThreeHopGINE(nn.Module):
         if self.semantic_hop_mode == "separate" and not self.semantic_atom_features:
             raise ValueError("--semantic_hop_mode separate requires --semantic_atom_features")
         self.semantic_feat = SemanticChemicalAtomFeatures()
+        # Fixed random orthonormal projection: 49D semantic features -> 16D.
+        # The same projection is applied to center, exact-hop1, and exact-hop2.
+        # Seed is fixed independently of experiment seed for comparability.
+        if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16"):
+            gen = torch.Generator(device="cpu").manual_seed(20261103)
+            mat = torch.randn(self.semantic_feat.out_dim, 16, generator=gen)
+            proj, _ = torch.linalg.qr(mat, mode="reduced")
+            self.register_buffer("semantic_proj16", proj.contiguous())
         self.vq_dim = (3 * self.semantic_feat.out_dim if self.semantic_atom_features and
                        self.semantic_hop_mode == "separate" else
+                       16 if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16") else
                        self.semantic_feat.out_dim if self.semantic_atom_features else args.hidden_dim)
         self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
         if not 0.0 <= self.chem_fusion_alpha <= 1.0:
@@ -4727,7 +4736,27 @@ class EquivariantThreeHopGINE(nn.Module):
         import torch.nn.functional as F
         if self.semantic_atom_features:
             h_vq = self.semantic_feat(features)
-            if self.semantic_hop_mode == "separate":
+            if self.semantic_hop_mode == "integrated16":
+                # Calculate exact graph-distance hop means in 49D, then project
+                # all three components into one shared 16D coordinate system.
+                m1, m2 = semantic_exact_hop_means(h_vq, src, dst)
+                p = self.semantic_proj16.to(device=h_vq.device, dtype=h_vq.dtype)
+                h_vq = (h_vq + self.semantic_hop1_weight * m1
+                        + self.semantic_hop2_weight * m2) @ p
+            elif self.semantic_hop_mode == "recursive16":
+                # Fixed two-round recursive mean message passing (no learned weights).
+                # Round 2 sees neighbors whose features already include round 1.
+                def neighbor_mean(x):
+                    total = torch.zeros_like(x)
+                    total.index_add_(0, dst, x[src])
+                    degree = torch.zeros((x.size(0), 1), device=x.device, dtype=x.dtype)
+                    degree.index_add_(0, dst, torch.ones((dst.numel(), 1), device=x.device, dtype=x.dtype))
+                    return total / degree.clamp_min(1.0)
+                h1 = h_vq + self.semantic_hop1_weight * neighbor_mean(h_vq)
+                h2 = h1 + self.semantic_hop2_weight * neighbor_mean(h1)
+                p = self.semantic_proj16.to(device=h_vq.device, dtype=h_vq.dtype)
+                h_vq = h2 @ p
+            elif self.semantic_hop_mode == "separate":
                 m1, m2 = semantic_exact_hop_means(h_vq, src, dst)
                 h_vq = torch.cat([h_vq, self.semantic_hop1_weight * m1,
                                   self.semantic_hop2_weight * m2], dim=-1)
