@@ -73,6 +73,16 @@ a=torch.randn(32,32,device='cuda'); torch.cuda.synchronize()
 print('GPU:',torch.cuda.get_device_name(0),'Torch:',torch.__version__,flush=True)
 PYGPU
 # Reuse working DGL. Do not reinstall DGL when a shared library is missing.
+# Install Python dependencies required by vqatom_train.py.
+python -m pip install \
+  numpy \
+  psutil \
+  pytz \
+  requests \
+  PyYAML \
+  einops \
+  ogb \
+  torch-geometric
 python - <<'PYDGL'
 import torch,dgl
 g=dgl.graph(([0,1],[1,2]),device='cuda')
@@ -114,6 +124,29 @@ test "$(sha256sum "$OUT/$FILE" | cut -d' ' -f1)" = "$(sha256sum "$VERIFY" | cut 
 echo '[FTP VERIFIED] SHA256 MATCH'
 rm -f "$VERIFY"
 '''
+def quant_gpu_supported(offer, mode):
+    import re
+
+    name = str(offer.get("gpu_name") or "").strip()
+
+    blackwell = bool(re.search(
+        r"^(?:RTX\s+5090|RTX\s+PRO\s+(?:5000|6000))\b",
+        name, re.I
+    ))
+
+    standard = bool(re.search(
+        r"^(?:RTX\s+4090|RTX\s+4080S?|A100|H100|H200|L40S|A40)\b",
+        name, re.I
+    ))
+
+    if mode == "blackwell":
+        return blackwell
+
+    if mode == "standard":
+        return blackwell or standard
+
+    raise ValueError(f"Unknown GPU mode: {mode}")
+
 
 def choose(args, excluded):
     # Reuse existing DTI offer ranking, GPU allowlists, blacklist and host reservations.
