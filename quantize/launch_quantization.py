@@ -147,11 +147,40 @@ def quant_gpu_supported(offer, mode):
 
     raise ValueError(f"Unknown GPU mode: {mode}")
 
-
 def choose(args, excluded):
-    # Reuse existing DTI offer ranking, GPU allowlists, blacklist and host reservations.
     with LOCK:
-        return base.choose_offer(args, excluded)
+        blacklist = base.bad_hosts_read()
+
+        for _ in range(100):
+            offer = base.find_offer(args, excluded)
+            excluded.add(str(offer["id"]))
+
+            if not quant_gpu_supported(offer, args.gpu_mode):
+                log("[SKIP GPU]", offer.get("gpu_name"))
+                continue
+
+            key = base.host_key(offer)
+
+            if not key:
+                continue
+
+            if key in blacklist or key in base.RESERVED_HOSTS:
+                continue
+
+            if offer.get("verification") != "verified" and offer.get("verified") is not True:
+                continue
+
+            if float(offer.get("reliability") or 0) < args.min_reliability:
+                continue
+
+            if int(offer.get("num_gpus") or 0) != 1:
+                continue
+
+            base.RESERVED_HOSTS.add(key)
+            return offer
+
+        raise RuntimeError("No eligible quantization GPU offers")
+
 
 def wait_ssh(iid, timeout): return base.wait_ready_with_auth_diagnostics(iid, timeout)
 
