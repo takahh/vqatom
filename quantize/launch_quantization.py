@@ -108,7 +108,7 @@ python -u vqatom_train.py \
   --patience 5 --device 0 --get_umap_data --codebook_size "$CB" \
   --hidden_dim "$DIM" --gnn_hops 2 --chem_fusion_alpha 0 \
   --chunk_size 1000 --chunk_size2 1000 --ss_max_total_latent_count 40000 \
-  --semantic_atom_features --semantic_hop_mode separate \
+  --semantic_atom_features --semantic_hop_mode "$HOP_MODE" \
   --semantic_hop1_weight 1.0 --semantic_hop2_weight 1.0 \
   --fixed_encoder_ema --kmeans_iters 20
 test -s "$OUT/$FILE"
@@ -219,6 +219,7 @@ def launch(cb,args,password,excluded):
             '#!/usr/bin/env bash','set -Eeuo pipefail','umask 077',
             "trap 'rc=$?; rm -f /tmp/quant_runner.sh; if ((rc==0)); then touch /tmp/quant_success; else echo \"$rc\" >/tmp/quant_failed; fi' EXIT",
             f'export CB={cb} DIM={args.hidden_dim} TAG={shlex.quote(args.tag)}',
+            f'export HOP_MODE={shlex.quote(args.semantic_hop_mode)}',
             f'export DATA_ID={shlex.quote(args.data_id)}',
             f'export FTP_PASS={shlex.quote(password)}',
             REMOTE_SCRIPT,
@@ -289,7 +290,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--codebook-sizes',nargs='+',type=int,default=[1000,5000,10000])
     p.add_argument('--hidden-dim',type=int,default=64)
-    p.add_argument('--tag',default='semantic147_w1')
+    p.add_argument('--tag',default='semantic16_integrated_w1')
+    p.add_argument('--semantic-hop-mode',choices=['integrated16','recursive16'],default='integrated16')
     p.add_argument('--data-id',default='17vq0OVvV1zks2Q2_zBlExYe7sX91n68F',help='Google Drive dataset ID; confirm before renting')
     p.add_argument('--min-price',type=float,default=0.0)
     p.add_argument('--max-price',type=float,default=1.5)
@@ -307,6 +309,8 @@ def main():
     p.add_argument('--monitor-only',action='store_true')
     p.add_argument('--poll-seconds',type=int,default=60)
     args=p.parse_args()
+    if args.semantic_hop_mode == 'recursive16' and 'recursive' not in args.tag:
+        p.error('Use a unique --tag containing recursive for recursive16')
     if args.monitor_only: monitor(args); return
     if args.max_parallel<1 or args.disk<45 or args.min_price>args.max_price or any(c<=0 for c in args.codebook_sizes): p.error('Invalid parameters')
     if len(set(args.codebook_sizes))!=len(args.codebook_sizes): p.error('Duplicate codebook size')
