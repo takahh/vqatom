@@ -2123,57 +2123,44 @@ class EuclideanCodebook(nn.Module):
     import torch.nn.functional as F
 
     @torch.no_grad()
-    def argmax_sim_blockwise(self, x: torch.Tensor, code: torch.Tensor, k_block: int = 1024, eps: float = 1e-12):
-        """
-        x:    [N, D]
-        code: [K, D]
-        return best_idx: [N]  (argmax dot similarity)
-
-        A方針なら、呼び出し側で x/code を unit-norm に揃えるのが基本。
-        ただし安全のためここでも正規化オプションを入れたいなら後述。
-        """
+    def argmax_sim_blockwise(
+        self, x: torch.Tensor, code: torch.Tensor,
+        k_block: int = 1024, eps: float = 1e-12,
+        n_block: int = 4096,
+    ):
+        """Memory-efficient argmax over codebook similarities."""
         x_f = x.float()
         c_f = code.float()
+        N, K = x_f.size(0), c_f.size(0)
 
-        # 早期診断（必要ならコメントアウト）
-        if not torch.isfinite(x_f).all():
-            bad = (~torch.isfinite(x_f)).sum().item()
-            print(f"[argmax] non-finite x: {bad}")
-        if not torch.isfinite(c_f).all():
-            bad = (~torch.isfinite(c_f)).sum().item()
-            print(f"[argmax] non-finite code: {bad}")
+        best_idx = torch.zeros(N, device=x.device, dtype=torch.long)
 
-        # 念のため：ゼロノルムがあると dot が全部0になったりするのでチェック
-        # （Aなら本来あり得ないはず）
-        x_norm = x_f.norm(dim=1)
-        c_norm = c_f.norm(dim=1)
-        if (x_norm <= 0).any():
-            print(f"[argmax] WARNING: {(x_norm <= 0).sum().item()} zero-norm x rows.")
-        if (c_norm <= 0).any():
-            print(f"[argmax] WARNING: {(c_norm <= 0).sum().item()} zero-norm code rows.")
+        for n0 in range(0, N, n_block):
+            n1 = min(n0 + n_block, N)
+            xb = x_f[n0:n1]
 
-        best_val = torch.full((x_f.size(0),), -float("inf"), device=x.device, dtype=torch.float32)
-        best_idx = torch.zeros((x_f.size(0),), device=x.device, dtype=torch.long)
+            block_val = torch.full(
+                (n1 - n0,), -float("inf"),
+                device=x.device, dtype=torch.float32,
+            )
+            block_idx = torch.zeros(
+                n1 - n0, device=x.device, dtype=torch.long,
+            )
 
-        K = c_f.size(0)
-        for k0 in range(0, K, k_block):
-            k1 = min(k0 + k_block, K)
-            ck = c_f[k0:k1]  # [kb, D]
+            for k0 in range(0, K, k_block):
+                ck = c_f[k0:min(k0 + k_block, K)]
+                sims = xb @ ck.t()
+                sims.nan_to_num_(
+                    nan=-float("inf"),
+                    posinf=float("inf"),
+                    neginf=-float("inf"),
+                )
+                vals, idxs = sims.max(dim=1)
+                update = vals > block_val
+                block_val = torch.where(update, vals, block_val)
+                block_idx = torch.where(update, idxs + k0, block_idx)
 
-            sims = x_f @ ck.t()  # [N, kb]
-
-            # ★ NaN/Inf を潰す：NaNは -inf、inf はそのままでもいいが、保守的に posinfも大きくしてOK
-            sims = torch.nan_to_num(sims, nan=-float("inf"), posinf=float("inf"), neginf=-float("inf"))
-
-            vals, idxs = sims.max(dim=1)
-
-            update = vals > best_val
-            best_val = torch.where(update, vals, best_val)
-            best_idx = torch.where(update, idxs + k0, best_idx)
-
-        if torch.isneginf(best_val).any():
-            n_bad = torch.isneginf(best_val).sum().item()
-            print(f"[argmax] WARNING: {n_bad} points never updated (all sims non-finite).")
+            best_idx[n0:n1] = block_idx
 
         return best_idx
 
