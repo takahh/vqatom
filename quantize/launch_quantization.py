@@ -222,8 +222,32 @@ def launch(cb,args,password,excluded):
         ])
         p=subprocess.run(base.ssh_cmd(conn,'umask 077; cat > /tmp/quant_runner.sh; chmod 700 /tmp/quant_runner.sh'),input=run_script,text=True,capture_output=True,timeout=90)
         if p.returncode: raise RuntimeError(f'Runner upload failed: {p.stderr[-300:]}')
-        rc,out,err=remote(iid,'nohup setsid bash /tmp/quant_runner.sh </dev/null >/tmp/quant_run.log 2>&1 & echo STARTED',timeout=45)
-        if rc or 'STARTED' not in out: raise RuntimeError(f'Start failed: {err[-300:]} {out[-300:]}')
+        # SSH切断時にも既存プロセスを確認し、未起動の場合だけ起動する。
+        start_cmd = (
+            "if test -f /tmp/quant_success; then echo SUCCESS; "
+            "elif test -f /tmp/quant_failed; then echo FAILED; "
+            "elif pgrep -f '^bash /tmp/quant_runner.sh$' >/dev/null; then echo RUNNING; "
+            "elif test -s /tmp/quant_runner.sh; then "
+            "nohup setsid bash /tmp/quant_runner.sh </dev/null >/tmp/quant_run.log 2>&1 & "
+            "echo STARTED; "
+            "else echo MISSING_RUNNER; fi"
+        )
+        confirmed = False
+        for attempt in range(5):
+            try:
+                rc,out,err = remote(iid, start_cmd, timeout=45)
+                if rc == 0:
+                    state = out.strip().splitlines()[-1] if out.strip() else ""
+                    if state in ("STARTED", "RUNNING", "SUCCESS"):
+                        confirmed = True
+                        break
+                    if state in ("FAILED", "MISSING_RUNNER"):
+                        raise RuntimeError(f"Runner state: {state}")
+            except Exception as e:
+                log("[SSH RETRY]", name, attempt + 1, str(e))
+            time.sleep(5)
+        if not confirmed:
+            raise RuntimeError("Could not confirm runner startup after retries")
         update(name,status='running',started_at=time.time())
         log('[STARTED]',name,'instance',iid)
         return True
