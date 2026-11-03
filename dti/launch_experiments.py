@@ -116,9 +116,9 @@ def ssh_cmd(connection, remote_cmd):
     return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
             '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30',
             '-o', 'ServerAliveCountMax=6', '-p', port, target, remote_cmd]
-STATE = HERE / 'detached_jobs.json'
-BAD_HOSTS = HERE / 'failed_vast_hosts.json'
-FAILED_CSV = HERE / 'detached_start_failures.csv'
+STATE = HERE / 'json' / 'detached_jobs.json'
+BAD_HOSTS = HERE / 'json' / 'failed_vast_hosts.json'
+FAILED_CSV = HERE / 'state' / 'detached_start_failures.csv'
 LOCK = threading.Lock()
 # Reserved physical hosts for this launch, including already-running instances.
 RESERVED_HOSTS = set()
@@ -457,7 +457,7 @@ def launch(task, args, password, excluded, attempt=1):
             'trap \'rc=$?; rm -f /tmp/dti_runner.sh; if (( rc == 0 )); then touch /tmp/dti_success; else echo "$rc" > /tmp/dti_failed; fi\' EXIT',
             f'export FTP_PASS={shlex.quote(password)}',
             f'export DATASET={shlex.quote(dataset)} COLD_TYPE={shlex.quote(cold)} SPLIT={split} SEED={seed}',
-            f'export EPOCHS={dict(vqatom=20, vqatom_cb300=20, vqatom_cb400=20, vqatom_cb500=20, vqatom_cb500_d64=20, vqatom_cb1000=20, vqatom_cb1000_noivf=20, vqatom_cb3k=20, vqatom_cb4k=20, vqatom_cb5k=20, vqatom_cb5k_kmeans_only=20, vqatom_cb5000_noivf=20, vqatom_cb10k=20, vqatom_cb15k=20, vqatom_semantic_cb1000=20, vqatom_semantic_cb5000=20, continuous=40, morgan=40, smiles=5).get(model, args.epochs)}',
+            f'export EPOCHS={dict(vqatom=20, vqatom_cb300=20, vqatom_cb400=20, vqatom_cb500=20, vqatom_cb500_d64=20, vqatom_cb1000=20, vqatom_cb1000_noivf=20, vqatom_cb3k=20, vqatom_cb4k=20, vqatom_cb5k=20, vqatom_cb5k_kmeans_only=20, vqatom_cb5000_noivf=20, vqatom_cb10k=20, vqatom_cb15k=20, vqatom_semantic_cb1000=20, vqatom_semantic_cb5000=20, vqatom_recursive16_cb5000_d64_w1=20, continuous=40, morgan=40, smiles=5).get(model, args.epochs)}',
             f'export FTP_RESULTS_DIR={shlex.quote(args.ftp_results_dir)}',
             'if ! command -v python >/dev/null 2>&1; then',
             '  PY3=$(command -v python3) || exit 127',
@@ -673,7 +673,7 @@ def main():
     models = [s.strip() for s in args.models.split(',')]
     if any(c not in ('protein_cold','ligand_cold','double_cold','scaffold_cold','protein_scaffold_cold') for c in colds):
         p.error('Unknown cold type')
-    if any(m not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','vqatom_semantic_cb1000','vqatom_semantic_cb5000','vqatom_sem147_cb1000','vqatom_sem147_d64_cb1000','vqatom_sem147_cb5000','vqatom_sem147_d64_cb5000', 'vqatom_sem147_d64_cb10000','vqatom_sem147_cb10000','continuous','morgan','smiles') for m in models):
+    if any(m not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','vqatom_semantic_cb1000','vqatom_semantic_cb5000','vqatom_sem147_cb1000','vqatom_sem147_d64_cb1000','vqatom_sem147_cb5000','vqatom_sem147_d64_cb5000','vqatom_recursive16_cb5000_d64_w1', 'vqatom_sem147_d64_cb10000','vqatom_sem147_cb10000','continuous','morgan','smiles') for m in models):
         p.error('Unknown model')
     for m in models:
         if not all(resolve_run_script(c, m).is_file() for c in colds):
@@ -694,7 +694,7 @@ def main():
         for row in reader:
             task = (row['dataset'].strip(), row['cold_type'].strip(), row['model'].strip(),
                     int(row['split']), int(row['seed']))
-            if task[0] not in ('kiba','metz') or task[1] not in ('protein_cold','ligand_cold','scaffold_cold','double_cold','protein_scaffold_cold') or task[2] not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','vqatom_semantic_cb1000','vqatom_semantic_cb5000','vqatom_sem147_cb1000','vqatom_sem147_d64_cb1000','vqatom_sem147_cb5000','vqatom_sem147_d64_cb5000', 'vqatom_sem147_d64_cb10000','vqatom_sem147_cb10000','continuous','morgan','smiles') or task[3] not in (1,2,3) or task[4] not in (0,1,2):
+            if task[0] not in ('kiba','metz') or task[1] not in ('protein_cold','ligand_cold','scaffold_cold','double_cold','protein_scaffold_cold') or task[2] not in ('vqatom','vqatom_cb300','vqatom_cb400','vqatom_cb500','vqatom_cb500_d64','vqatom_cb1000','vqatom_cb1000_noivf','vqatom_cb3k','vqatom_cb4k','vqatom_cb5k','vqatom_cb5k_kmeans_only','vqatom_cb1000_d16_nolearn','vqatom_cb10000_d16_nolearn','vqatom_cb5000_noivf','vqatom_cb10k','vqatom_cb15k','vqatom_semantic_cb1000','vqatom_semantic_cb5000','vqatom_sem147_cb1000','vqatom_sem147_d64_cb1000','vqatom_sem147_cb5000','vqatom_sem147_d64_cb5000','vqatom_recursive16_cb5000_d64_w1', 'vqatom_sem147_d64_cb10000','vqatom_sem147_cb10000','continuous','morgan','smiles') or task[3] not in (1,2,3) or task[4] not in (0,1,2):
                 p.error(f'Invalid task: {task}')
             tasks.append(task)
     if len(tasks) != len(set(tasks)):

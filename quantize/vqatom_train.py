@@ -100,7 +100,7 @@ def get_args():
                         help="Use fixed, interpretable chemical coordinates directly as the VQ latent (no learned atom encoder/GNN)")
     parser.add_argument("--semantic_neighbor_weight", type=float, default=0.0,
                         help="Add this weight times the mean semantic feature vector of directly bonded neighbors")
-    parser.add_argument("--semantic_hop_mode", choices=["legacy", "separate", "integrated16", "recursive16"], default="legacy",
+    parser.add_argument("--semantic_hop_mode", choices=["legacy", "separate", "integrated16", "recursive16", "multiradius_recursive16"], default="legacy",
                         help="legacy: 49D additive 1-hop; separate: concatenate center/1-hop/exact-2-hop (147D)")
     parser.add_argument("--semantic_hop1_weight", type=float, default=0.1)
     parser.add_argument("--semantic_hop2_weight", type=float, default=0.1)
@@ -4619,20 +4619,20 @@ class EquivariantThreeHopGINE(nn.Module):
         self.semantic_hop2_weight = float(getattr(args, "semantic_hop2_weight", 0.1))
         if self.semantic_hop1_weight < 0 or self.semantic_hop2_weight < 0:
             raise ValueError("semantic hop weights must be non-negative")
-        if self.semantic_hop_mode == "separate" and not self.semantic_atom_features:
+        if self.semantic_hop_mode in ("separate", "multiradius_recursive16") and not self.semantic_atom_features:
             raise ValueError("--semantic_hop_mode separate requires --semantic_atom_features")
         self.semantic_feat = SemanticChemicalAtomFeatures()
         # Fixed random orthonormal projection: 49D semantic features -> 16D.
         # The same projection is applied to center, exact-hop1, and exact-hop2.
         # Seed is fixed independently of experiment seed for comparability.
-        if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16"):
+        if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16", "multiradius_recursive16"):
             gen = torch.Generator(device="cpu").manual_seed(20261103)
             mat = torch.randn(self.semantic_feat.out_dim, 16, generator=gen)
             proj, _ = torch.linalg.qr(mat, mode="reduced")
             self.register_buffer("semantic_proj16", proj.contiguous())
         self.vq_dim = (3 * self.semantic_feat.out_dim if self.semantic_atom_features and
                        self.semantic_hop_mode == "separate" else
-                       16 if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16") else
+                       16 if self.semantic_atom_features and self.semantic_hop_mode in ("integrated16", "recursive16", "multiradius_recursive16") else
                        self.semantic_feat.out_dim if self.semantic_atom_features else args.hidden_dim)
         self.chem_fusion_alpha = float(getattr(args, "chem_fusion_alpha", 0.0))
         if not 0.0 <= self.chem_fusion_alpha <= 1.0:
@@ -4743,6 +4743,23 @@ class EquivariantThreeHopGINE(nn.Module):
                 p = self.semantic_proj16.to(device=h_vq.device, dtype=h_vq.dtype)
                 h_vq = (h_vq + self.semantic_hop1_weight * m1
                         + self.semantic_hop2_weight * m2) @ p
+            elif self.semantic_hop_mode == "multiradius_recursive16":
+                # Three recursive radii, one shared VQ codebook.
+                # Interleave node-major: [atom0-hop0, atom0-hop1, atom0-hop2, ...].
+                def neighbor_mean(x):
+                    total = torch.zeros_like(x)
+                    total.index_add_(0, dst, x[src])
+                    degree = torch.zeros((x.size(0), 1), device=x.device, dtype=x.dtype)
+                    degree.index_add_(0, dst, torch.ones((dst.numel(), 1), device=x.device, dtype=x.dtype))
+                    return total / degree.clamp_min(1.0)
+                h0 = h_vq
+                h1 = h0 + self.semantic_hop1_weight * neighbor_mean(h0)
+                h2 = h1 + self.semantic_hop2_weight * neighbor_mean(h1)
+                p = self.semantic_proj16.to(device=h0.device, dtype=h0.dtype)
+                h_vq = torch.stack((h0 @ p, h1 @ p, h2 @ p), dim=1).reshape(-1, 16)
+                # VQ grouping depends on per-atom attributes. Repeat in the same order.
+                if mode != "init_kmeans_loop" and attr_list is not None:
+                    attr_list = [a.repeat_interleave(3, dim=0) for a in attr_list]
             elif self.semantic_hop_mode == "recursive16":
                 # Fixed two-round recursive mean message passing (no learned weights).
                 # Round 2 sees neighbors whose features already include round 1.
@@ -5644,9 +5661,11 @@ def run_infer_after_restore(
                 gid = gid.reshape(-1).to(dtype=torch.long)
 
                 n_nodes = int(batched_graph.num_nodes())
-                if kid.numel() != n_nodes or cid.numel() != n_nodes or gid.numel() != n_nodes:
+                multiradius = conf.get("semantic_hop_mode") == "multiradius_recursive16"
+                expected_tokens = n_nodes * (3 if multiradius else 1)
+                if kid.numel() != expected_tokens or cid.numel() != expected_tokens or gid.numel() != expected_tokens:
                     raise RuntimeError(
-                        f"size mismatch: nodes={n_nodes} kid={kid.numel()} cid={cid.numel()} gid={gid.numel()}"
+                        f"size mismatch: expected={expected_tokens} kid={kid.numel()} cid={cid.numel()} gid={gid.numel()}"
                     )
 
                 if not only_save:
@@ -5663,8 +5682,11 @@ def run_infer_after_restore(
                         dim=0
                     )
 
-                    batch_ids = torch.full((n_nodes,), int(batch_idx), device=device, dtype=torch.long)
-                    chunk_starts = torch.full((n_nodes,), int(start), device=device, dtype=torch.long)
+                    if multiradius:
+                        graph_ids = graph_ids.repeat_interleave(3)
+                        local_node_ids = local_node_ids.repeat_interleave(3)
+                    batch_ids = torch.full((expected_tokens,), int(batch_idx), device=device, dtype=torch.long)
+                    chunk_starts = torch.full((expected_tokens,), int(start), device=device, dtype=torch.long)
 
                     all_key_ids.append(kid.detach().cpu())
                     all_cluster_ids.append(cid.detach().cpu())
@@ -5766,6 +5788,12 @@ def run_infer_after_restore(
         "global_stats": {"min": gmin, "max": gmax, "unique": gunique, "total": gtotal, "global_vocab_size": gv},
     }
 
+    multiradius = conf.get("semantic_hop_mode") == "multiradius_recursive16"
+    if multiradius:
+        if global_id_all.numel() % 3:
+            raise RuntimeError("Multi-radius global IDs are not divisible by three")
+        meta["num_radii"] = 3
+        meta["radius_order"] = [0, 1, 2]
     if only_save:
         out = {
             "global_id": global_id_all,
@@ -5786,6 +5814,9 @@ def run_infer_after_restore(
             **meta,
         }
 
+    if multiradius:
+        out["global_id_by_radius"] = global_id_all.reshape(-1, 3)
+        out["radius_index"] = torch.arange(3).repeat(global_id_all.numel() // 3)
     torch.save(out, save_path)
     _log(f"saved: {save_path}")
 
@@ -5964,6 +5995,11 @@ def run_inductive(conf, model, optimizer, scheduler, logger):
         # attr を flatten: list[list[tensor (N_i,27)]] -> (N,27)
         flat_attr_list = [t for batch in all_attr for t in batch]
         all_attr_tensor = torch.cat(flat_attr_list, dim=0)  # (N, 27)
+        if conf.get("semantic_hop_mode") == "multiradius_recursive16":
+            # init_kmeans_loop returns 3*N latent vectors; match the group attributes.
+            all_attr_tensor = all_attr_tensor.repeat_interleave(3, dim=0)
+        if all_latents_tensor.size(0) != all_attr_tensor.size(0):
+            raise RuntimeError(f"KMeans latent/attribute mismatch: {all_latents_tensor.size(0)} vs {all_attr_tensor.size(0)}")
 
         print("[KMEANS] all latents collected")
         # print(f"[KMEANS] latents shape: {all_latents_tensor.shape}, attr shape: {all_attr_tensor.shape}")
