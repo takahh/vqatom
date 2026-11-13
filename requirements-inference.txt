@@ -1,0 +1,6 @@
+# CPU token inference verified in a fresh macOS Python 3.11.13 environment.
+# The recorded GPU DTI environment is in dti/docs/requirements_matched_20261113.txt.
+torch==2.6.0
+numpy==2.0.2
+scipy==1.13.1
+rdkit==2025.9.2
