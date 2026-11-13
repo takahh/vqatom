@@ -648,6 +648,35 @@ class VQAtomGraphEncoder(nn.Module):
         l_dense, l_mask = to_dense_batch(x, edge_batch)
         return l_dense, ~l_mask  # l_h, l_pad
 
+
+def build_morgan_encoder(vocab_path, device, *, encoder="transformer",
+                         d_model=256, n_layers=6, dropout=0.3, debug_index_check=False):
+    with open(vocab_path, newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows or not all("mapped_id" in row for row in rows):
+        raise ValueError("Morgan vocabulary requires a mapped_id column")
+    mapped = [int(row["mapped_id"]) for row in rows]
+    if sorted(mapped) != list(range(1, len(mapped) + 1)):
+        raise ValueError("Morgan mapped IDs must be consecutive from 1")
+    n = len(mapped)
+    if encoder == "transformer":
+        # Use the identical scratch class/defaults as ligand_mode=vqatom:
+        # 256D, 6 layers, 8 heads, FF=1024, internal dropout=0.1.
+        # Morgan atom IDs remain 1..N; 0 is PAD, N+1 MASK, N+2 CLS.
+        model = PretrainedLigandEncoder(
+            ckpt_path=None, device=device, finetune=True, vq_ckpt=None,
+            base_vocab=n + 1, vocab_size=n + 3, pad_id=0,
+            mask_id=n + 1, cls_id=n + 2, verbose_load=False,
+            debug_index_check=debug_index_check)
+    elif encoder == "gin":
+        model = VQAtomGraphEncoder(
+            vocab_size=n + 2, pad_id=0, cls_id=n + 1,
+            d_model=d_model, n_layers=n_layers, dropout=dropout).to(device)
+    else:
+        raise ValueError(f"Unknown Morgan encoder: {encoder}")
+    model.vocab_source = f"morgan:{vocab_path}"
+    return model
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -684,6 +713,9 @@ def visualize_one_qk_map(
     prefix: str = "sample",
     save_headwise: bool = True,
 ):
+    # The manuscript pooling ablation has no cross-attention maps.
+    if getattr(model, "interaction_mode", None) == "independent_pool":
+        return
     import os
     import torch
     import numpy as np
@@ -1974,6 +2006,7 @@ class DualStreamDTIClassifier(nn.Module):
         pl_lp_overlap: str = "both",
         ligand_input_type: str = None,
         interaction_mode: str = "pairmap",
+        matched_ligand_transformer: bool = False,
     ):
         super().__init__()
         self.prot = protein_encoder
@@ -1991,11 +2024,24 @@ class DualStreamDTIClassifier(nn.Module):
         self.protein_only = bool(protein_only)
         self.p_proj = None
         self.interaction_mode = interaction_mode
+        self.matched_ligand_transformer = matched_ligand_transformer
         if self.prot.hidden_size != d_model:
             self.p_proj = nn.Linear(self.prot.hidden_size, d_model)
 
         self.p_ln = nn.LayerNorm(d_model)
         self.l_ln = nn.LayerNorm(d_model)
+
+        if interaction_mode == "independent_pool":
+            # Manuscript Simple: independently pool the encoder outputs.
+            # Do not instantiate cross-attention or the pair-map CNN.
+            self.cls_head = nn.Sequential(
+                nn.Linear(d_model * 4, 256),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(256, 1),
+            )
+            self.reg_head = nn.Linear(d_model * 4, 1)
+            return
 
         self.interaction = DualStreamBlock(
             d_model=self.d_model,
@@ -2150,6 +2196,22 @@ class DualStreamDTIClassifier(nn.Module):
             p_tok_ids = p_input_ids[:, 1:]
             p_pad = p_pad | (p_tok_ids == eos_id)
 
+        if self.interaction_mode == "independent_pool":
+            # Pool content tokens only; CLS is a special token, not an atom.
+            if l_ids is not None and l_ids.shape == l_pad.shape:
+                cls_id = getattr(self.lig, "cls_id", None)
+                if cls_id is not None:
+                    l_pad = l_pad | l_ids.eq(cls_id)
+            feat = torch.cat([
+                self._masked_mean(p_tok, p_pad),
+                self._masked_max(p_tok, p_pad),
+                self._masked_mean(l_tok, l_pad),
+                self._masked_max(l_tok, l_pad),
+            ], dim=-1)
+            logit = self.cls_head(feat).squeeze(-1)
+            yhat_reg = self.reg_head(feat).squeeze(-1) if self.use_reg_head else None
+            return logit, yhat_reg, {"p_pad": p_pad, "l_pad": l_pad}
+
         # Option Cでは pair_ctx が必要
         p_ctx, l_ctx, inter_aux = self.interaction(
             p_h=p_tok,
@@ -2296,7 +2358,7 @@ class DualStreamDTIClassifier(nn.Module):
 
             return out
 
-        if self.ligand_input_type in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
+        if not self.matched_ligand_transformer and self.ligand_input_type in ("vqatom", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb500", "vqatom_cb1000", "vqatom_cb3k", "vqatom_cb4k", "vqatom_cb5k", "vqatom_cb10k", "vqatom_cb15k", "morgan"):
             pair_map = ligand_adj_smooth_pairmap(
                 pair_map,
                 edge_index=edge_index,
@@ -2584,7 +2646,9 @@ def main():
         "--interaction_mode",
         type=str,
         default="pairmap",
-        choices=["pairmap", "simple_pool"],
+        choices=["pairmap", "simple_pool", "independent_pool"],
+        help="pairmap: full interaction; simple_pool: pooling after cross-attention; "
+             "independent_pool: manuscript Simple (no cross-attention)",
     )
     ap.add_argument(
         "--attn_activation",
@@ -2611,6 +2675,10 @@ def main():
     )
     ap.add_argument("--morgan_vocab_path", type=str, default=None,
                     help="morgan_vocab.csv generated from the training split")
+    ap.add_argument("--morgan_encoder", choices=["transformer", "gin"], default="transformer",
+                    help="Transformer matches VQAtom scratch encoder; gin reproduces legacy Morgan")
+    ap.add_argument("--matched_ligand_transformer",action="store_true",
+                    help="Use the same Transformer body for every representation; disable atom-only pair smoothing")
     ap.add_argument("--lig_lr", type=float, default=None)
     ap.add_argument("--cross_lr", type=float, default=None)
     ap.add_argument("--protein_lr", type=float, default=None)
@@ -2698,6 +2766,10 @@ def main():
     ap.add_argument("--protein_n_layers", type=int, default=3)
     ap.add_argument("--protein_n_heads", type=int, default=None)
     args = ap.parse_args()
+    if args.interaction_mode == "independent_pool" and (
+        args.contact_lambda != 0.0 or args.sym_lambda != 0.0
+    ):
+        ap.error("independent_pool has no interaction maps; contact_lambda and sym_lambda must be zero")
     if args.protein_input_type == "vqamino":
         meta_csv = args.train_csv or args.valid_csv or args.test_csv
         if meta_csv is not None:
@@ -2869,30 +2941,17 @@ def main():
 
 
     elif args.ligand_mode == "morgan":
-        print("[lig] mode = morgan (atom-wise radius-2, GIN scratch)")
+        print(f"[lig] mode = morgan (atom-wise radius-2, {args.morgan_encoder} scratch)")
         if not args.morgan_vocab_path:
             raise ValueError("--morgan_vocab_path is required for morgan mode")
-        with open(args.morgan_vocab_path, newline="", encoding="utf-8") as f:
-            vocab_rows = list(csv.DictReader(f))
-        if not vocab_rows or not all("mapped_id" in r for r in vocab_rows):
-            raise ValueError("Morgan vocabulary requires a mapped_id column")
-        mapped = [int(r["mapped_id"]) for r in vocab_rows]
-        if sorted(mapped) != list(range(1, len(mapped) + 1)):
-            raise ValueError("Morgan mapped IDs must be consecutive from 1")
-        # PAD=0, CLS=vocab+1. IDs 1..vocab are atom tokens.
-        morgan_pad = 0
-        morgan_cls = len(mapped) + 1
-        lig_enc = VQAtomGraphEncoder(
-            vocab_size=morgan_cls + 1,
-            pad_id=morgan_pad,
-            cls_id=morgan_cls,
+        lig_enc = build_morgan_encoder(
+            args.morgan_vocab_path, device, encoder=args.morgan_encoder,
             d_model=args.d_model,
             n_layers=args.lig_n_layers,
             dropout=args.dropout,
-        ).to(device)
-        lig_enc.vocab_source = f"morgan:{args.morgan_vocab_path}"
+            debug_index_check=bool(args.lig_debug_index))
         ligand_input_type = "morgan"
-        print(f"[morgan] atom_vocab={len(mapped)} PAD=0 CLS={morgan_cls}")
+        print(f"[morgan] vocab_size={lig_enc.vocab_size} PAD={lig_enc.pad_id} CLS={lig_enc.cls_id}")
 
     elif args.ligand_mode == "smiles":
         smiles_tokenizer = SimpleSmilesTokenizer(args.smiles_vocab_path)
@@ -2962,6 +3021,18 @@ def main():
             f"unknown protein_input_type={args.protein_input_type}"
         )
 
+    if args.matched_ligand_transformer:
+        try:from matched_ligand_encoder import MatchedLigandEncoder
+        except ImportError:from dti.matched_ligand_encoder import MatchedLigandEncoder
+        if args.ligand_mode=='continuous':
+            lig_enc=MatchedLigandEncoder(atom_feat_dim=args.atom_feat_dim).to(device)
+        elif args.ligand_mode in ('morgan','vqatom','smiles'):
+            lig_enc=MatchedLigandEncoder(vocab_size=lig_enc.vocab_size,
+                base_vocab=lig_enc.base_vocab,pad_id=lig_enc.pad_id,cls_id=lig_enc.cls_id,
+                mask_id=lig_enc.mask_id,position_encoding=args.ligand_mode=='smiles').to(device)
+        else:raise ValueError('Matched scratch comparison does not support pretrained ligand modes')
+        print('[lig] shared Transformer: 256D / 6 layers / 8 heads / FF1024 / dropout0.1 / ReLU / postnorm; graph smoothing disabled')
+
     model = DualStreamDTIClassifier(
         protein_encoder=prot_enc,
         ligand_encoder=lig_enc,
@@ -2983,6 +3054,7 @@ def main():
         pl_lp_overlap=args.pl_lp_overlap,
         ligand_input_type=ligand_input_type,
         interaction_mode=args.interaction_mode,
+        matched_ligand_transformer=args.matched_ligand_transformer,
     ).to(device)
 
     if args.dti_ckpt is not None:

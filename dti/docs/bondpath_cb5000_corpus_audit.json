@@ -1,0 +1,979 @@
+{
+  "input_sha256": "34f3d11623034027663f82fa9548ef2f7ab11a82b88a072b7bf4997793d1a246",
+  "checkpoint_sha256": "1ef7017740f12d6b7855d8d91c9a2c7ae544ea6135f618a9d20485b6eb078fee",
+  "input_records": 208812,
+  "input_unique_strings": 208812,
+  "filtered_records": 208524,
+  "selected_records": 191524,
+  "selected_unique_strings": 191524,
+  "selected_atom_records": 5418504,
+  "shuffle_seed": 7,
+  "batch_size": 1000,
+  "selection": "checkpoint reference_sources order; lexicographically selected adjacency shards",
+  "parser_counts": {
+    "size_excluded": 288,
+    "permissive_parser_records": 1
+  },
+  "shards": [
+    {
+      "file": "smiles_0.txt",
+      "sha256": "f544efccfebdd1155c706aa2bea37fa410ad78d78fe18287d23cf7676b62a97c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_1.txt",
+      "sha256": "bb7f4d057456a1a43a31fccb1a3bef91b97b96327bd874ae9791e13092a9db78",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_10.txt",
+      "sha256": "2ef4a69e68fd7cf656d0ef89520317ff0f860f2b06b69054865b745ae19352e6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_100.txt",
+      "sha256": "0e38d737ad91de888ed037b8859f1a75c2712182d3b986d662a31bd36d0f0853",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_101.txt",
+      "sha256": "cb43e6756551634a50f4f374882eefd30102a3b7c060525e62d3b30e8040a22a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_102.txt",
+      "sha256": "6c5ab0828f3375289509f08dfe48c974adf9d10544d615030935aa6e4b873435",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_103.txt",
+      "sha256": "2eaad7865dcdd9e788f3240811428ca24257a8620dca3b85123669a87197a8c7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_104.txt",
+      "sha256": "f5add860e82e102ef1c41270d53d57279ea5ee844fa0e21bbcac593a6aa29bb2",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_105.txt",
+      "sha256": "a377386632514b96d2a4275847d940fdd6101d3314edb9c87be29fe643aa917c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_106.txt",
+      "sha256": "3eda94e4c7d2613f37a475a98ab9920ee04e60174cdc63e6f448e9bc095b7446",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_107.txt",
+      "sha256": "03fd5f46825bdb470bbfcbc2b3e76fc007415d85fbd696ff0a0e01422b5a0909",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_108.txt",
+      "sha256": "802481989427dd2fb116779ac7477ece6ff7523ff7aacb939182c63708f9a35c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_109.txt",
+      "sha256": "c662fe4c0b4504c277958cc02fdfbc289d7c4234b541fff4c23ca761125a4782",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_11.txt",
+      "sha256": "e0c0041c8fdf72d73480c3a6dd8203149225d49d12a8c6053214b45e7be2eb75",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_110.txt",
+      "sha256": "700644c65017a859044a80743bb28ade4bd2033b2950844cac2900df67fa43b3",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_111.txt",
+      "sha256": "eb46978c1613e4cde951ebf117c4ab9ae4bb2cce0ea5ab9fdc2483604eb47693",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_112.txt",
+      "sha256": "fc094ce63c53bcb6a588981f21b78b75b30819373804bb71bd8803556c561945",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_113.txt",
+      "sha256": "75f8a73ab8460ae7d868778b5ab866bc0935c7ecd335cac5821b76b6f91a3ce9",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_114.txt",
+      "sha256": "963363c3acd6c847aa51be3852ba9d30efeeb4a95ed6637259b47f9b70548fee",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_115.txt",
+      "sha256": "97ec64895a6120cdd33c3960db701d43fea1886175f4baf59417f68a160e3dcf",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_116.txt",
+      "sha256": "babb779b3cbd6f04ca191a3a5fa4de744b0d17237c7b758a6312e1183e670c60",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_117.txt",
+      "sha256": "6c291ae791696b22a16be269f57e9ef3b5d5c09532410bb2fa5103b341f5ff66",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_118.txt",
+      "sha256": "b060beedb3ca17c2ab1072eb7e4648d920828a5568f6cd47d0328b3fe80fadbc",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_119.txt",
+      "sha256": "7d8ffa0d2f0f4ac5bba8c86d396912fa160a75a5141762efdd059fed03c5700d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_12.txt",
+      "sha256": "6bc4fdd5cf942b49bb8198233ba8401c4265fe746e78480fa07e28815e019b5f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_120.txt",
+      "sha256": "422b7744214951c98edf31ebb2ce8cbc6de29b357cb9ac4ee8852041cf520d32",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_121.txt",
+      "sha256": "01bd2828a6dae87a48c46ac979d78eaccd2494e20be080fffc0e871206c3de24",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_122.txt",
+      "sha256": "679887b54fd296b6c07557399b46f8bd43d75965bd56fcfc2849ecf321b0a733",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_123.txt",
+      "sha256": "e3cd6f63d60423e0472554dfab58684b0a12f82a7f6e56aa5e2f9a564d153911",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_124.txt",
+      "sha256": "8a9e73b3f32114ce54b5e760e8fe74e3e88590e905e93f1efae067477a1f1c6e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_125.txt",
+      "sha256": "c0bd1988840ed838c395746e253fede1ec079082a806f1cf60a7f48dd2e8758b",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_126.txt",
+      "sha256": "2d96ee101341e0381ef3a11c724ef12f37231d005d9dd8c2e942e1994c6779d5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_127.txt",
+      "sha256": "dd23ca48a3b17e49c2b9262ce4e8679f69818dcebfa390d0d812dbd8972dc1b0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_128.txt",
+      "sha256": "8fa9f2a3050b4b6c6fd91f212fc6dfd61cd88b7fe06f2d57ddc9b3e5fa7f7971",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_129.txt",
+      "sha256": "7aad76ee785305af50b784671c5dc5ecd3e3c158c5b02f937869f1075bd96a5e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_13.txt",
+      "sha256": "67e28999e32a740f02239d707a4d8b3d1b4eaf483ea64af145b74c8094454c5d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_130.txt",
+      "sha256": "f917ae4b2edb74ab889a4a537727c8d9cac3358c16f53e9b0a893bb55995ac16",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_131.txt",
+      "sha256": "658855dd5378a1fae23c98985d3442cf60fa66ae1dd370e4559bc02458a27823",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_132.txt",
+      "sha256": "364e4a84878a8a83c6cdc31b12861f3e89d7dee7c07c97b189e65495c21b891d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_133.txt",
+      "sha256": "9f608bb9f2c2fd4dc385e3cda39fa8a2649622c089935f5dd685f843be97852a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_134.txt",
+      "sha256": "ce8701b8fcd0e7cbf6698e430d0841717e532dfe209c1db0b6a80952f41f2899",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_135.txt",
+      "sha256": "7210841abefcd5d3ae00397641695d1d46ca26298bda0576392255803ee7271f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_136.txt",
+      "sha256": "6df9f1e7143c8092f5fe1452a75239910772ef2ed12e7900ea126932b2eab6f7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_137.txt",
+      "sha256": "c3e491c9149806d3951b34ac6975316caa63791590b09e942345c9a412a32384",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_138.txt",
+      "sha256": "a1fe19e4a0e754f3e3d3df27ae9ae92d79f5935d67c6e4fefb3ae3f55b06452e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_139.txt",
+      "sha256": "cdde002a7bbd3938d3637ae66303477e58303f04366450c9be578f7ae4a178d3",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_14.txt",
+      "sha256": "2b6083dcebb40b6c544311ce514f43d31f2ab307fa6fe6ac696d047b307474f9",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_140.txt",
+      "sha256": "9b6fb3d0e919229f5c9d66a0c1219c4e437bb0f2ce262db0dde50015f9becb78",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_141.txt",
+      "sha256": "789837532c9f7b99aee2bbf1c604e7c718384ad449ceda7f5c801bc9469da8b4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_142.txt",
+      "sha256": "7ab597ca84ffab087f38b4e399ceee2d1cd5e58cbf041a079138ce0a92d90719",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_143.txt",
+      "sha256": "a0bbc2a93726dc9b06e498b4ed5d9feae214d7c54657585774235bb600298f04",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_144.txt",
+      "sha256": "8b4e92ce659cfc5e439def0d599e7b954dbc6dd05924296c36aad4a8c313c020",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_145.txt",
+      "sha256": "c9553efedcea6da6a687bedb7018ebc852824dd28d744bdbf33b029d10b5cb04",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_146.txt",
+      "sha256": "78f0a5832f3636e7a38f6f46f07a037b8ca4a850b82333245612d2b7314b10ba",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_147.txt",
+      "sha256": "3bbe5b975528a3162603acc3e3de2c790c4be2857c44640ede58cd502338d6dc",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_148.txt",
+      "sha256": "b5c365f3b2ed030d3155bc7cd0caef32a4389c292076f750ffa40feb5b32d2c0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_149.txt",
+      "sha256": "74f982dea70111c3d7d37da31a8f5139e147ad6231fea94f688116dd30eed44b",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_15.txt",
+      "sha256": "341cdec946d0c2196cf2e31fac25c410a8ca988305f90fa45cdddf222340afd5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_150.txt",
+      "sha256": "841a6cd39b7aaacf40583b936c7d669b2ee522fc0485a190df389a47e961983d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_151.txt",
+      "sha256": "9284e02ba4fd8523b243d372cd0fe18cdd117aff417977c0962db469411f7493",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_152.txt",
+      "sha256": "ba20ed2714f8f8dbdadb7f074fe0d09b171e1e0b509cca8f0ae1b6f79710a0ab",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_153.txt",
+      "sha256": "f2be9fd26c3c2559b5de684b8e020063796f991889262f0348917c7724b96c11",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_154.txt",
+      "sha256": "e155476d4d0794f92ce7b9237d6cdbfe9440956ff69917de5fbb292e053ca2d6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_155.txt",
+      "sha256": "733e527d37b63bb7c3c54735987fad3584380d91820aa3db0143a3f484060757",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_156.txt",
+      "sha256": "dfa4a40e511fd634e7df16b8f6ec963ec5ee372981d1e1937b1855a8a1bd7623",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_157.txt",
+      "sha256": "6794f2bb2a216c89dc89e15e39b97285d330a9c370e51c91de5b8adfe3fe6006",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_158.txt",
+      "sha256": "8141a4919b79a973033b4de9f694acf5ac0c269aafdf631bcc98d2e669a8a999",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_159.txt",
+      "sha256": "b27d1c2dc3e92ec5e7343ca8f9df69937b63a7effaa03f8a2be8bd53c3659fc4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_16.txt",
+      "sha256": "d75a409c5afaa5f86c50ae0117384de8a324d81601cd0ad664f36e0505f778b4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_160.txt",
+      "sha256": "1082bbac3b3bb966c9f85c9a91dcf176eb70710d844da141c65b8b4c5869fa6f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_161.txt",
+      "sha256": "37e30737d809bc7fc802bd10ab0c2eb06df5a78fe4f5deaab15a2e2973afc401",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_162.txt",
+      "sha256": "5b13e9e0f905b1e68785feeafefccba98f9be6686af5b72c1d40d75ad62ca37f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_163.txt",
+      "sha256": "84dcaea051ed8baff849c4c8d6c02c92d417a812bfedd75c9a624783e5e0cf83",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_164.txt",
+      "sha256": "b5d4696d1096b1da60840049c21cd2287080e24bdeb94bb4b0d5efa37fdbfce4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_165.txt",
+      "sha256": "0c4d351424116d9a66cf2a9d908b610c754c5f6f30b0267310965337f99636e6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_166.txt",
+      "sha256": "89201e214e94f51a1303d02e13110f85ac45d91ad8a496ba466ff91099f7c6b4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_167.txt",
+      "sha256": "b9ed86cedd21385c3405844050852919ecdd8b84fbe27a227c5c6690b39e5b92",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_168.txt",
+      "sha256": "d209f8ed6544479cde43a46ec9186d44e7e25f54106f94beb0972cdefff3ecc9",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_169.txt",
+      "sha256": "491844fe99dbde0b3b53db7d1f7f1b6acb0e6862f6dfa1afa63dc3cf2a26653c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_17.txt",
+      "sha256": "b70598ead1a401791d9b67a177846b67533a23f5bbe365aeac21000ff92fec54",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_170.txt",
+      "sha256": "b5f157b88d6044960ee582c8786fd93dfb99c60b64b6e30d72322b50b7363d1a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_171.txt",
+      "sha256": "b02b974239f8874a45e3dea526b583ab98ec1b2df5261aed4e662fb0a524caad",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_172.txt",
+      "sha256": "d01fec7a2c1a5a13f842c2670c62fbe02736df71c6208f8fb9c2592cbe599439",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_173.txt",
+      "sha256": "27b0eca28d17b472917af036a8e2432e506e71129fb4ee3fd0c1e79b782994c5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_174.txt",
+      "sha256": "6574c7e52d71f65756526599e83f0b7b2e42054e99a056d1d8e3ba65469630d7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_175.txt",
+      "sha256": "769348fa78bf0dec1215ec422cbbee99f866548be657b33c7b0dd7f632a3dcca",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_176.txt",
+      "sha256": "63846487ebd12c0f54e2050bdf90212e2b3b7886be9b3d27c78749a47a069f6e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_177.txt",
+      "sha256": "cfe27a7d54d50d572ccf1ca3fa08f42e03dfdf8f0592e0a3460cdb0c09bd4f85",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_178.txt",
+      "sha256": "6a22a71f95d3fd410e55973bc673a1d0fa1def09b1899d8056e358603dd7bd44",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_179.txt",
+      "sha256": "81403bac658a0307364240e66fdf05d8fbd68afcd9003c015f2a7c67583c739c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_18.txt",
+      "sha256": "efb0aa3a91eb8da96cfc2874a82452dc491fc33e44639ec060d2fea408ee2ef8",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_180.txt",
+      "sha256": "b148e730cd3a06697177cc02a3525591cad38af646f397de53abfb29a672aad0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_181.txt",
+      "sha256": "f563fd77b9a0c0f97ffd38527379beacd5f7c1867730964a08de6a6b77658f0f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_182.txt",
+      "sha256": "bd504c23c5480309f3986c39b7e3f50db66ce63615885cbc14965b87fa06dc2a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_183.txt",
+      "sha256": "cae94917da83a6a5b5286b722ea047e832519256cd7c1348986eed63ac291169",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_184.txt",
+      "sha256": "093cb3076b44676b77cafb78d527d5e86859ce02e7659d75864e750ce5811829",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_185.txt",
+      "sha256": "81c290d782bc9ad9cd04a0006c2c461eb9bfdfc59886a9747ce6b884c68eff61",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_186.txt",
+      "sha256": "7a5320d6db2037d88fa6feb5ce7187b0a33f583f7c3ed0bf0a55482f2aa0f72c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_187.txt",
+      "sha256": "0f864810807a8473a0383dfa33d761b4a83c75bc0630e0061d3085e5e123bbdb",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_188.txt",
+      "sha256": "4dd4d4c54f37eff7752adf1765f8dc1e69423881f710239354b7d68e6fddb86e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_189.txt",
+      "sha256": "b0b8d21af97bc966be794ed74cfd3b1241047d60d6262c6c887e12dc5936294a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_19.txt",
+      "sha256": "338b9688ec6c45642c7b4e4f8d5d2b02dd60ffa31394b6d3ec132380b0efef44",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_190.txt",
+      "sha256": "e48ae021223ea6f891955fa0aa5d34f34cfe519354c834e6474337d70b90124d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_191.txt",
+      "sha256": "2c98dfb5d6fef8d006ead5fc07ba3e9c68284190550ed8cbe899bd1c407d919a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_192.txt",
+      "sha256": "64191ab1fd2cb11f068f0012f8682bd2dc57184b9f2b6c40d2a9a5ba2b66b226",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_193.txt",
+      "sha256": "93348a18e4e1669e09e1d647cb9abea62864d7e5ab62a8fc69d44ba94f6bf120",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_194.txt",
+      "sha256": "19c2ea0f7050b80039a5ba610a61466a0130cafbc63acc40262fcd272d51def9",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_195.txt",
+      "sha256": "5cca80950842c6900af2b044ab2c39120bb2fb630ec84009adfab9c5a9572890",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_196.txt",
+      "sha256": "8ffb94ff135b031bc62623f29b766270160458b36a9b278b03559d9451268101",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_197.txt",
+      "sha256": "f7cedfd342363cba168b2304de7518a6d57dc5aa64b420e85e6c847667abcb4f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_198.txt",
+      "sha256": "fd248bcf81c2899bcef8fc0e1652044fdd217fa25b40dd2d8816bc3de383adb6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_199.txt",
+      "sha256": "ee6fa1b02f85ca3f006ad747f11c6cea08324cb96e4e2dc87c47b757a35f405b",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_2.txt",
+      "sha256": "d8d995467f530e936fb49c0947c89a7e763c98a3e91ad5f67eb9381728eb4889",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_20.txt",
+      "sha256": "cecc952c946ea87c3fb743a507647fcccb584d5f892552193ae810dddcc03f13",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_200.txt",
+      "sha256": "f36fdbfc080825cae4a3ce6d3b98a5aee13cc369be75add480286e1fa98d83a4",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_201.txt",
+      "sha256": "d46917a6b3d2be806545cf4d07a130206f39bf3d1d32d2f26ff3087603a88b3e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_202.txt",
+      "sha256": "21aaa7afd62ea0d01af448b7fb110b8f8e220486691a3ca40c43c0c834f56a28",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_203.txt",
+      "sha256": "f52172ef6ec553242dd147ed8563e8391e5ad7f2bd68863cce9b9ea834b87f74",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_204.txt",
+      "sha256": "831f4f79825b5ea715aec48d68555e24a99e73a99bdcf75c7b76560ce62aa8ac",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_205.txt",
+      "sha256": "03a1d3830a74b0564fe4d62e557d09e58a689b4187c87f121c6431fd46375456",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_206.txt",
+      "sha256": "37900cbf669fdef6d81ea534106c2c8d7f63b9631882c9b8caabf28e4d21cf88",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_207.txt",
+      "sha256": "f657772bb8006f14f594525a4bc72684e025e68002d70c6c993b96347091de7c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_208.txt",
+      "sha256": "4f52c0280fd317881124d85d53eb4c4e4e271e0639659b8f2f2a846649a9db46",
+      "molecules": 524
+    },
+    {
+      "file": "smiles_21.txt",
+      "sha256": "c2b95397a54b121d4ef05f0588537a59a7e9a4dadebcd4cb5adf4c153a9f4655",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_22.txt",
+      "sha256": "2225a655514594bdc70afdac39ca60bdd6f5742c91d47cefa750627ad6abbdd7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_23.txt",
+      "sha256": "d4339a4c434e0bc5ee35b895ce5469b88d3abffd74571e7c1f65c84053bd0ae0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_24.txt",
+      "sha256": "4f0e544a855f357a44a272f1e67c484398bfa055e3ee586d376b8ff5489167e5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_25.txt",
+      "sha256": "b58f79e370fd4cbcdccbf611060a1d3829a87bac849339ba134bb12c4d8c695d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_26.txt",
+      "sha256": "c973e87e8707eac9a6c1e4b470329a5aed8c927dd253cef5bfe4b2c03f6cc9e0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_27.txt",
+      "sha256": "0bccc7f0ceafbbd25b53aac6a6fc7c917393bfc7f1e43ef3f141e440623866c6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_28.txt",
+      "sha256": "5aa8b2c1772e7fe355c6f62fa001db0e21e358a1e3872a98c8d7039a899b70dd",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_29.txt",
+      "sha256": "cc2e647231a1dd7e2f41d6c62c1e125d16043d99deb3dbd918c0968629f4293d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_3.txt",
+      "sha256": "869425adf580e4f3d3bd4ea223f7d6a6c9cbda75708237981a57cb21f1b51637",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_30.txt",
+      "sha256": "f32b7b26ef3e99d175398db122d4b64c6437dda5067dcfdab6c73878cf389d10",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_31.txt",
+      "sha256": "2e58d6abb8b2d498311a15db31b991b42185488ccdf223c30d2d651ab5e1fea7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_32.txt",
+      "sha256": "e336a903cf3b63d14f69c60c522db508e93a97efe590950a99ad92b02faed498",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_33.txt",
+      "sha256": "45d1b1511e5f6535ca6c21138bbf42238b45abcf6318b18b423e480b2e9d7ae8",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_34.txt",
+      "sha256": "99085818a31c04e745130d6effc1fbded611c68932619ca994cc9ee972b95625",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_35.txt",
+      "sha256": "7290f6fc160fa8b1857701ad98bdd2a821289ddbcc8dcc0fead93e618c5a25e2",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_36.txt",
+      "sha256": "9096cf1d7cc97519afbe2fd44a304470d1f9bd0bb04dc083c70f98e2c02487af",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_37.txt",
+      "sha256": "276fca297993cd7f3741eaffa76413cc210bf8e88cb8819026fa4a540461fbf7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_38.txt",
+      "sha256": "e0558b633d3ed044b2977862eb3b91e2b0b2b3fba4301a669e544bf8c99ba50e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_39.txt",
+      "sha256": "8da1805634b5df405d2f0b37c1ea333c8b25bfd70d2319562c3d65fd877c474b",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_4.txt",
+      "sha256": "f4a05fd27bdfc530c2fc18c04cb275ca1040167f7fea6d5de9c744964de3495c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_40.txt",
+      "sha256": "b2706bb98a779e7ab8e047413bfd2c803aba617a691b5b8a9b7e588d62e36aff",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_41.txt",
+      "sha256": "42f24ce3015f5a71387af7e6f8bf9307dd334a31901b770c413dcbb45ae1155f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_42.txt",
+      "sha256": "a19fea9a4b0f85b053f6cc0e8900632238b2a09890658a8f7a60eec495e5d458",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_43.txt",
+      "sha256": "c9988e959f56c987284732d0ac5607d8bcd5692c114dd567c3c1f94f698d2938",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_44.txt",
+      "sha256": "4f87c5866a95e9b12ac6acd83ceff3ca0ab8dadb8485473cac9bb29814c23a2e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_45.txt",
+      "sha256": "6297ef11739ac1075ed6fa4d643659ddd42ade44ecae6c849dd4649a3117bd8d",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_46.txt",
+      "sha256": "bd4cd08196740dc44f5d608bbda28645cd3e639b958afe531409c3fc1e9d96e8",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_47.txt",
+      "sha256": "2d34c4de05a21593eaefacf2702e41714c35759949610c5781efcedfdb9aead9",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_48.txt",
+      "sha256": "506080781844e16b03c73b6f76c1b1d0eaba1268a258d9f88cb80b460d87bc9f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_49.txt",
+      "sha256": "2f2150dad7801590f3675bf0563299d5cc3957acc50a4a618d2708e707648080",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_5.txt",
+      "sha256": "32b5efac8cdd59f26bbc30c71b85a3977464fd62fbc101827fc67eb27d9fce16",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_50.txt",
+      "sha256": "134fcc08e44a9a71f5907fba52421f31e37f976b3734be8e0ec1eeaf148b7a6c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_51.txt",
+      "sha256": "13246f9a8116e2dd1a5a63b58e2fba1e3425fde21f383e371c4aa40c173d95de",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_52.txt",
+      "sha256": "ada86eae92cb237ab7e5b4b6376152c13046a285394ac9c044a6df786ded87b2",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_53.txt",
+      "sha256": "c9226c4a5ce74730b1c53007ca71e2dc011dd4e7a3f167d851535027dc9bb1cd",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_54.txt",
+      "sha256": "056f2fd4c9d345d1b26ca78c97410c411508303e5bada39c05c3dd04853dfff5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_55.txt",
+      "sha256": "d92434971a3e3d637ffc8606185fe9ca29b4b22ec61b1dfce1e22a4d78d7b274",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_56.txt",
+      "sha256": "850564d889ffcefd2887c1646d47d5cd48bc6718d8589c205ae3bf553ffd92c6",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_57.txt",
+      "sha256": "ffa79582e6b5d3907b538bb34bbe7b7dfdbe612e50c642f6bdd5dc525fb5b2cf",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_58.txt",
+      "sha256": "2ea35a6df9e94fcdf965d5e957924aebf7ec874f4f3180ddbf356a0a6b76f0cb",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_59.txt",
+      "sha256": "1e927c781fdd2b9c9eff41e77d7dcce25fbb6cce5e28aca72dbc849d4814ab80",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_6.txt",
+      "sha256": "2e27e2b7972012f73bec65c69b9b073b7717085b4ea053a2c5c8b1cf850d4b08",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_60.txt",
+      "sha256": "bcb56878d36aeaed071f0dd9125eee9b06fd3ca3f2f3081540e51d6a31bc4e6c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_61.txt",
+      "sha256": "f62d8d76451524d03a4085d3db3a305a21b46194fca67b932d01a63e554ddeec",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_62.txt",
+      "sha256": "5877279c6bed3af92c480d3449a2901b24ccaf2592e42282cf44a39d0db09f42",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_63.txt",
+      "sha256": "e1e9bcc25d7e1db1f6dcd995bf8ca692897632d471d6ceb6d477880b0d800fe5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_64.txt",
+      "sha256": "2f714509e02bcbe66f090be236841ff2103d6ad3819f343c6559659813cafe7a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_65.txt",
+      "sha256": "40744f5427ad50a4b47ccc69b95273e6d9c6592b9bdb15c8e48df8ec5627e444",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_66.txt",
+      "sha256": "6706081481b076952e4cbf2266b82929e91c5060f8dd13b1f9f787ea0ead01b2",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_67.txt",
+      "sha256": "61eaf5b873cca0cbfb93c667358367c96043688fdaa1b31c0f428587c885a47e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_68.txt",
+      "sha256": "6d7d8c18be6cf915a6868bd506c6ac2d9c9a888842c8d4c66bb6782c40bbb405",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_69.txt",
+      "sha256": "ea49532d34ff9a1468a53b91fd6717fd410a1d31e612a3ec67eba12c9bebf2ed",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_7.txt",
+      "sha256": "a83fe626741db1413c4fa36b0c4b376b2f8ee10407fb14111e8d29e4fe0c70b0",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_70.txt",
+      "sha256": "f79e8a50423d8d0fe864afe22ddeeb5014a31c0fe408c9eefeda757af34bf494",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_71.txt",
+      "sha256": "eba45b28d40c63bafa408b5bad20fed99a1d3d2676d6f7df78c3e45797a68158",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_72.txt",
+      "sha256": "14ae1cbcd21e6287c92ded664bde02d52e1ccf29568909063e61dcbca48b87c5",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_73.txt",
+      "sha256": "3b7f82ffdd472804e4c0f0a454762d1a562841e25893d76be6ebbf0bccf34400",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_74.txt",
+      "sha256": "f7ac73f74a81707144caeb37c4f1e7cbb7ab67ff8878cc6bd488696638b56563",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_75.txt",
+      "sha256": "809a00b509cc8fb490fc8913ffaf6f5ec5ac7d939dc700704b1a4589e2e1eaaa",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_76.txt",
+      "sha256": "72335f1ffdad8034482d5786248401846d8bc8b515eeca052bedc762b0718b68",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_77.txt",
+      "sha256": "2238cfe7f050ca4393336bf465bb7aa391ac7e20e66c54d28110bb64484e444c",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_78.txt",
+      "sha256": "14dc8a5798faac9039350780d5935424f1395a6bbe07024ae8fc3cb6281330b7",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_79.txt",
+      "sha256": "ef305a8259faeee4927598b197b9022a13b9703c0273e1933ba5bd7d122c7a1e",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_8.txt",
+      "sha256": "d5b7f630cb5a204505697c4f975cbab604dcb92e8b1d9f11715ca368464e0413",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_80.txt",
+      "sha256": "b57ad716c659db7588a5944d49186de114fed35dcf0ad9dc19b041ee3a43794f",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_81.txt",
+      "sha256": "67190ea784dd1e1500a593be0fba47fbec69964c6d8463c73e2afbbdd74e4e2a",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_82.txt",
+      "sha256": "f33b1cb516727b7681247777e5da1ab3134a704bb28fc2e0c53db71e8e811bcd",
+      "molecules": 1000
+    },
+    {
+      "file": "smiles_83.txt",
+      "sha256": "7e9bffea29d3f10f9dd26b6babdc09307c767257c05d83e72bad854df069ee36",
+      "molecules": 1000
+    }
+  ]
+}

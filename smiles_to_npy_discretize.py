@@ -28,7 +28,6 @@ DISCRETIZE_SMI = "/Users/taka/Documents/DTI/discretize.noleak.final.smi"
 # OUTPUT
 # ============================================================
 SAVE_DIR_DISC = "/Users/taka/Documents/DTI/data/"
-os.makedirs(SAVE_DIR_DISC, exist_ok=True)
 
 # ============================================================
 # Params
@@ -371,7 +370,7 @@ def atom_to_feature_vector(atom: Chem.Atom,
 # ============================================================
 # SMILES -> (adj, features, labels)
 # ============================================================
-def smiles_to_graph_with_labels(smiles: str, idx: int):
+def smiles_to_graph_with_labels(smiles: str, idx: int, *, hydrogen_count_version="total_h_v2"):
     base_mol = Chem.MolFromSmiles(smiles)
     if base_mol is None:
         raise ValueError("Invalid SMILES at idx=%d: %s" % (idx, smiles))
@@ -379,7 +378,10 @@ def smiles_to_graph_with_labels(smiles: str, idx: int):
     # Count Hs using AddHs (align heavy atom indices)
     mol_with_H = Chem.AddHs(base_mol)
     n_heavy = base_mol.GetNumAtoms()
-    hcount_list = [mol_with_H.GetAtomWithIdx(i).GetTotalNumHs() for i in range(n_heavy)]
+    if hydrogen_count_version not in ("total_h_v2", "legacy_v1"):
+        raise ValueError("Unknown hydrogen-count schema")
+    hcount_list = [mol_with_H.GetAtomWithIdx(i).GetTotalNumHs(
+        includeNeighbors=hydrogen_count_version == "total_h_v2") for i in range(n_heavy)]
 
     mol = base_mol
     Chem.SanitizeMol(mol)
@@ -539,6 +541,7 @@ def save_batch(adj_list, feat_list, smi_list, save_dir, idx):
 # main batch runner (DISCRETIZE only)
 # ============================================================
 def run_discretize_only():
+    os.makedirs(SAVE_DIR_DISC, exist_ok=True)
     rng = random.Random(SEED_SAMPLE)
 
     print("Loading SMILES:", DISCRETIZE_SMI)
