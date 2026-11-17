@@ -13,7 +13,7 @@ from quantize.bondpath_features import FeatureConfig,MODE,smiles_features,l2_nor
 class BondpathTokenizer:
     def __init__(self,path):
         self.path=Path(path);raw=self.path.read_bytes();self.checkpoint_sha256=hashlib.sha256(raw).hexdigest()
-        ckpt=torch.load(self.path,map_location='cpu',weights_only=False)
+        ckpt=torch.load(self.path,map_location='cpu',weights_only=True)
         self.config=ckpt['config'];
         if self.config.get('normalization','none') not in ('none','l2'):raise ValueError('Unknown normalization')
         self.feature_config=FeatureConfig.from_dict(self.config['feature_config'])
