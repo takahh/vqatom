@@ -6,8 +6,8 @@ VQ-Atom converts a molecule into one discrete token per atom. The current paper 
 
 | Task | Required artifact | Public download |
 |---|---|---|
-| Tokenize a SMILES string | Corrected, normalized CB5k checkpoint | Pending |
-| Reproduce a DTI experiment | Frozen bundle containing CSVs, model sources, and `manifest.json` | Pending |
+| Tokenize a SMILES string | Corrected, normalized CB5k checkpoint | [Download](https://github.com/takahh/vqatom/releases/download/repro-cb5k-20261119/bondpath_full_v1_h2l2_cb5000.pt) |
+| Reproduce a DTI experiment | Frozen bundle containing CSVs, model sources, and `manifest.json` | [Release: all 36 CB5k tasks](https://github.com/takahh/vqatom/releases/tag/repro-cb5k-20261119) |
 
 The commands below require these artifacts. Checkpoint identity and bundle contents are documented in the [reproduction guide](dti/docs/reproduction.md#artifact-availability).
 
@@ -25,7 +25,15 @@ python -m pip install -r requirements-inference.txt
 
 ## 2. Tokenize one molecule
 
-Place the corrected CB5k checkpoint at the path shown below, then run inference on methyl tert-butyl ether.
+Download the checkpoint, then run inference on methyl tert-butyl ether.
+
+```bash
+mkdir -p checkpoints/bondpath_full_v1
+curl -fL https://github.com/takahh/vqatom/releases/download/repro-cb5k-20261119/bondpath_full_v1_h2l2_cb5000.pt \
+  -o checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt
+```
+
+Verify downloads against the release's `SHA256SUMS`.
 
 ```bash
 python infer_one_smiles_bondpath.py \
@@ -41,12 +49,40 @@ The JSON output contains `tokens` with the following IDs in input atom order.
 
 Descriptor settings and normalization are restored from the checkpoint. Inference checks atom counts, token-ID ranges, and vocabulary consistency.
 
+### Convert a SMILES list
+
+The Python API loads the checkpoint once and accepts one SMILES at a time. For a UTF-8 `smiles.txt` with one molecule per line:
+
+```python
+import json
+from infer_one_smiles_bondpath import BondpathTokenizer
+
+tokenizer = BondpathTokenizer("checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt")
+with open("smiles.txt") as source, open("tokens.jsonl", "w") as output:
+    for line_number, line in enumerate(source, 1):
+        smiles = line.strip()
+        if not smiles:
+            continue
+        record = {"line": line_number, "smiles": smiles}
+        try:
+            record["tokens"] = tokenizer.encode(smiles)
+        except ValueError as error:
+            record["error"] = str(error)
+        output.write(json.dumps(record) + "\n")
+```
+
+Token order follows RDKit's parsed input atom order. Invalid molecules and intrinsic atom groups absent from the fitted codebook cannot be encoded; the example records these errors rather than dropping the molecules silently. Token IDs are categorical and meaningful only with the same checkpoint.
+
 ## 3. Run one DTI experiment
 
 DTI uses a separate GPU environment with Python 3.11 and at least 40 GiB of VRAM. Follow the [GPU environment setup](dti/docs/reproduction.md#environment), then unpack the matching experiment bundle and set its path below.
 
 ```bash
-BUNDLE=/path/to/bondpath_h2l2_cb5000_kiba_split1
+mkdir -p artifacts
+curl -fL https://github.com/takahh/vqatom/releases/download/repro-cb5k-20261119/bondpath_h2l2_cb5000_kiba_split1.tar.gz \
+  -o artifacts/bondpath_h2l2_cb5000_kiba_split1.tar.gz
+tar -xzf artifacts/bondpath_h2l2_cb5000_kiba_split1.tar.gz -C artifacts
+BUNDLE=artifacts/bondpath_h2l2_cb5000_kiba_split1
 python dti/tools/run_matched_v2.py \
   --bundle "$BUNDLE" \
   --dataset kiba --cold-type protein_cold --method vq_cb5000 \
@@ -55,9 +91,11 @@ python dti/tools/run_matched_v2.py \
 
 This verifies the bundle and prints the training command. To start training, repeat it with `--execute` appended. Results are written under `results/<task-name>/`.
 
+The release contains seven immutable bundles covering all 36 VQ-Atom CB5k tasks. The original `bondpath_h2l2_cb5000_kiba_split1` bundle contains protein-cold seed 0; `bondpath_h2l2_cb5000_full_kiba_split1` contains the other two protein-cold seeds and all three scaffold-cold seeds. The other five `full` bundles each contain both cold conditions and all three seeds. Baseline and other-codebook bundles are not part of this release.
+
 ## Read the results
 
-Select the epoch with the highest `valid_metrics.auroc`, using the earliest epoch in a tie. From that same `epoch_*.json`, read `final_eval_metrics.auroc` and `final_eval_rank_metrics.adjusted_ndcg10`. The paper includes runs that finish their assigned budget and pairs methods by dataset, cold condition, split, and seed.
+Select the epoch with the highest `valid_metrics.auroc`, using the earliest epoch in a tie. From that same `epoch_*.json`, read `final_eval_metrics.auroc` `final_eval_rank_metrics.adjusted_ndcg10`, and `final_eval_metrics.ef10` (EF@10%). The paper includes runs that finish their assigned budget and pairs methods by dataset, cold condition, split, and seed.
 
 ## Benchmark and further details
 

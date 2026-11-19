@@ -20,8 +20,8 @@ The shared ligand Transformer has six layers, width 256, eight heads, and intern
 |---|---|
 | Current tokenizer implementation | `infer_one_smiles_bondpath.py` and `quantize/bondpath_*.py` |
 | Current matched DTI runner | `dti/tools/run_matched_v2.py` and its hash-verified experiment bundle |
-| Corrected normalized CB5k checkpoint | Retained experiment artifact `bondpath_full_v1_h2l2_cb5000.pt`, SHA256 `1ef7017740f12d6b7855d8d91c9a2c7ae544ea6135f618a9d20485b6eb078fee`. Public distribution remains to be completed. |
-| Exact current DTI CSVs and frozen bundles | Retained with experiment manifests and file hashes. Public distribution remains to be completed. |
+| Corrected normalized CB5k checkpoint | Retained experiment artifact `bondpath_full_v1_h2l2_cb5000.pt`, SHA256 `1ef7017740f12d6b7855d8d91c9a2c7ae544ea6135f618a9d20485b6eb078fee`. Public download: [reproduction release](https://github.com/takahh/vqatom/releases/tag/repro-cb5k-20261119). |
+| Exact current DTI CSVs and frozen bundles | Retained with experiment manifests and file hashes. Public download: [reproduction release](https://github.com/takahh/vqatom/releases/tag/repro-cb5k-20261119). |
 | Reference array-file manifest and initial group layout | `dti/docs/bondpath_cb5000_adj_attr_manifest.json` and `dti/docs/bondpath_cb5000_legacy_layout.json` |
 | Reference molecule-list and shard audit | Procedure and measured counts in `dti/docs/corpus_provenance.md` |
 | Earlier published DTI data | KIBA/Metz protein-cold, ligand-cold, and double-cold CSVs. These are the earlier release. The current scaffold-cold files and normalized-tokenizer artifacts require the current frozen bundles. |
@@ -47,6 +47,8 @@ GPU experiments used at least 40 GiB of VRAM. Token inference can run on CPU. MM
 ## Execution order
 
 ### 1. Obtain the matching artifacts
+
+Download the checkpoint and seven frozen CB5k bundles from the [public release](https://github.com/takahh/vqatom/releases/tag/repro-cb5k-20261119). `artifact-index.json` lists archive hashes and task counts; `SHA256SUMS` verifies downloads. These bundles cover 36 CB5k tasks, not the baseline or other-codebook tasks. For KIBA split 1, protein-cold seed 0 uses `bondpath_h2l2_cb5000_kiba_split1`; the `full_kiba_split1` bundle contains the other five tasks. All other `full` bundles contain six tasks. The README gives download and extraction commands.
 
 Place the trusted corrected CB5k checkpoint at `checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt`. Obtain the exact prepared bundle for the dataset and split being evaluated. Each bundle contains `manifest.json`, the training sources, vocabularies or checkpoint metadata, and its CSVs. The manifest records every required file hash and task definition.
 
@@ -84,7 +86,7 @@ Add `--execute` to start training after verification. Use an empty output direct
 
 ### 4. Collect the selected checkpoint metrics
 
-Each task writes `epoch_*.json` files. In the expanded benchmark, select the epoch with maximum `valid_metrics.auroc` within the method's assigned budget, taking the earliest epoch in a tie. Read test AUROC from `final_eval_metrics.auroc` and adjusted NDCG@10 from `final_eval_rank_metrics.adjusted_ndcg10` at that same epoch. Main tables include runs with complete training histories. Paired comparisons require the same dataset, cold condition, split, and seed for both methods. Seeds within a split share test examples.
+Each task writes `epoch_*.json` files. In the expanded benchmark, select the epoch with maximum `valid_metrics.auroc` within the method's assigned budget, taking the earliest epoch in a tie. Read test AUROC from `final_eval_metrics.auroc` and adjusted NDCG@10 from `final_eval_rank_metrics.adjusted_ndcg10`, and EF@10% from `final_eval_metrics.ef10` at that same epoch. Main tables include runs with complete training histories. Paired comparisons require the same dataset, cold condition, split, and seed for both methods. Seeds within a split share test examples.
 
 ## Refit the codebook
 
