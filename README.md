@@ -51,27 +51,42 @@ Descriptor settings and normalization are restored from the checkpoint. Inferenc
 
 ### Convert a SMILES list
 
-The Python API loads the checkpoint once and accepts one SMILES at a time. For a UTF-8 `smiles.txt` with one molecule per line:
+Create `smiles.txt` with **one SMILES per line, without a header**:
 
-```python
-import json
-from infer_one_smiles_bondpath import BondpathTokenizer
-
-tokenizer = BondpathTokenizer("checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt")
-with open("smiles.txt") as source, open("tokens.jsonl", "w") as output:
-    for line_number, line in enumerate(source, 1):
-        smiles = line.strip()
-        if not smiles:
-            continue
-        record = {"line": line_number, "smiles": smiles}
-        try:
-            record["tokens"] = tokenizer.encode(smiles)
-        except ValueError as error:
-            record["error"] = str(error)
-        output.write(json.dumps(record) + "\n")
+```text
+COC(C)(C)C
+CCO
+c1ccccc1
 ```
 
-Token order follows RDKit's parsed input atom order. Invalid molecules and intrinsic atom groups absent from the fitted codebook cannot be encoded; the example records these errors rather than dropping the molecules silently. Token IDs are categorical and meaningful only with the same checkpoint.
+Run the batch script; the checkpoint is loaded once for the whole list:
+
+```bash
+python tokenize_smiles_list.py \
+  --ckpt checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt \
+  --input smiles.txt \
+  --output tokens.jsonl
+```
+
+Alternatively, use a CSV with a `smiles` header and an optional molecule ID:
+
+```csv
+id,smiles
+mol_001,COC(C)(C)C
+mol_002,CCO
+mol_003,c1ccccc1
+```
+
+```bash
+python tokenize_smiles_list.py \
+  --ckpt checkpoints/bondpath_full_v1/bondpath_full_v1_h2l2_cb5000.pt \
+  --input molecules.csv --smiles-column smiles --id-column id \
+  --output tokens.jsonl
+```
+
+Output is JSONL: one record per input row, with `smiles`, `tokens`, `n_atoms`, `status`, original line number, checkpoint SHA256, and the ID when supplied. For the first example, `tokens` is `[3028, 4863, 2547, 3261, 3261, 3261]`. The script prints converted/error counts to stderr and refuses to overwrite an existing output file.
+
+Token order follows RDKit's parsed input atom order. Invalid or empty SMILES and intrinsic atom groups absent from the fitted codebook are recorded with `status: "error"` rather than silently dropped. Token IDs are categorical and meaningful only with the same checkpoint.
 
 ## 3. Run one DTI experiment
 
